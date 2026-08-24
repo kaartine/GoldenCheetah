@@ -311,6 +311,15 @@ def appdir_relative_lib_rpath(appdir, output):
     return "$ORIGIN/" + relative
 
 
+def has_only_appdir_relative_lib_rpaths(appdir, output, rpath):
+    expected = appdir_relative_lib_rpath(appdir, output)
+    entries = rpath.split(":")
+    allowed = {"$ORIGIN", expected}
+    return bool(entries) and expected in entries and all(
+        entry in allowed for entry in entries
+    )
+
+
 def build_transformed_entries(
     appdir,
     snapshot,
@@ -384,8 +393,9 @@ def build_transformed_entries(
         if (
             source_identity.get("build_id") != output_identity.get("build_id")
             or source_identity.get("soname") != output_soname
-            or output_identity.get("rpath")
-            != appdir_relative_lib_rpath(root, output)
+            or not has_only_appdir_relative_lib_rpaths(
+                root, output, output_identity.get("rpath", "")
+            )
         ):
             continue
         transformed.append(

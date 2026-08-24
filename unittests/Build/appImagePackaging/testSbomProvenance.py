@@ -1217,7 +1217,11 @@ class SbomProvenanceTests(unittest.TestCase):
         def elf_identity(path):
             return {
                 "build_id": "0123456789abcdef",
-                "rpath": "$ORIGIN/../../../lib",
+                "rpath": (
+                    "$ORIGIN:$ORIGIN/../../../lib:$ORIGIN/../../../lib"
+                    if path == output
+                    else "$ORIGIN/../../../lib"
+                ),
                 "soname": "",
             }
 
@@ -1241,6 +1245,24 @@ class SbomProvenanceTests(unittest.TestCase):
         self.assertEqual(
             entries[0]["transformation"],
             f"linuxdeployqt-no-strip:{'d' * 64}:rpath=relative-lib",
+        )
+
+        def untrusted_rpath_identity(path):
+            identity = elf_identity(path)
+            if path == output:
+                identity["rpath"] += ":/tmp/untrusted"
+            return identity
+
+        self.assertEqual(
+            capture.build_transformed_entries(
+                self.appdir,
+                snapshot,
+                "d" * 64,
+                qt_root=self.qt_root,
+                elf_identity=untrusted_rpath_identity,
+                authenticate_source=lambda path: None,
+            ),
+            [],
         )
 
     def test_linuxdeployqt_capture_accepts_plugin_without_soname(self):
