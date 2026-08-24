@@ -101,6 +101,7 @@
         <file>images/workout-game-rider-chase-sheet.png</file>
         <file>images/workout-game-trail-props.png</file>
         <file>images/workout-game-trail-surface.png</file>
+        <file alias="qml/WorkoutGame3D.qml">../Train/qml/WorkoutGame3D.qml</file>
         <file>images/metadata.png</file>
         <file>images/stopwatch.png</file>
         <file>images/toolbar/main/measures.png</file>

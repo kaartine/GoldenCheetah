@@ -547,6 +547,8 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     result.distanceMeters = distance;
     result.pieceProgress = progress;
     result.center = connectorAt(piece, progress);
+    result.baseElevationMeters = result.center.elevationMeters;
+    result.baseGradePercent = result.center.gradePercent;
     result.surfaceOffsetMeters = surfaceOffsetAt(course, distance);
     result.nonPhysicalFeatureOffsetMeters =
             nonPhysicalFeatureOffsetAt(course, distance);

@@ -91,6 +91,7 @@ run_linuxdeployqt_with_keychain_probe \
     "$BINARY" "$APPDIR" \
     "./$LINUXDEPLOYQT_FILE" "$APPDIR/GoldenCheetah" \
     -verbose=2 -bundle-non-qt-libs -no-strip \
+    -qmldir="$SOURCE_DIR/Train/qml" \
     -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 \
     -unsupported-allow-new-glibc
 python3 "$LINUXDEPLOYQT_CAPTURE" finalize \

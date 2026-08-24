@@ -14,6 +14,7 @@
 #include "Context.h"
 #include "ErgFile.h"
 #include "ChartSpace.h"
+#include "WorkoutGame3DWindow.h"
 #include "WorkoutGameCanvas.h"
 #include "WorkoutGameCourse.h"
 #include "WorkoutGameOpenGLCanvas.h"
@@ -76,12 +77,22 @@ QString ghostSeedText(std::uint32_t seed)
     return QStringLiteral("%1").arg(seed, 8, 16, QLatin1Char('0'));
 }
 
+bool threeDRendererRequested()
+{
+    return qEnvironmentVariableIntValue("GC_WORKOUT_GAME_3D") != 0
+            && qEnvironmentVariableIntValue(
+                    "GC_WORKOUT_GAME_FORCE_PAINTER") == 0;
+}
+
 }
 
 WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     GcChartWindow(context),
     context(context),
     renderStack(new QStackedWidget(this)),
+    threeDWindow(new WorkoutGame3DWindow(threeDRendererRequested())),
+    threeDContainer(QWidget::createWindowContainer(
+            threeDWindow, renderStack)),
     sceneGraphWindow(new WorkoutGameSceneGraphWindow),
     sceneGraphContainer(QWidget::createWindowContainer(
             sceneGraphWindow, renderStack)),
@@ -100,11 +111,14 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     setChartLayout(layout);
     painterCanvas->setAccessibleName(tr("Workout game canvas"));
     openGLCanvas->setAccessibleName(tr("Workout game canvas"));
+    threeDContainer->setAccessibleName(tr("Workout game 3D canvas"));
+    threeDContainer->setMinimumSize(320, 180);
     sceneGraphContainer->setAccessibleName(tr("Workout game canvas"));
     sceneGraphContainer->setMinimumSize(320, 180);
     renderStack->addWidget(painterCanvas);
     renderStack->addWidget(openGLCanvas);
     renderStack->addWidget(sceneGraphContainer);
+    renderStack->addWidget(threeDContainer);
     layout->addWidget(renderStack);
 
     const bool forcePainter = qEnvironmentVariableIntValue(
@@ -122,7 +136,11 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
             << WorkoutGameRendererPolicy::reasonName(rendererDecision.reason)
             << "platform=" << QGuiApplication::platformName()
             << "OpenGL=" << gl_major;
-    switch (backend) {
+    const bool useThreeD = threeDRendererRequested();
+    if (useThreeD) {
+        renderStack->setCurrentWidget(threeDContainer);
+        qInfo().noquote() << "Workout Game renderer selection: Qt Quick 3D";
+    } else switch (backend) {
     case WorkoutGameRendererBackend::SceneGraph:
         renderStack->setCurrentWidget(sceneGraphContainer);
         break;
@@ -135,8 +153,13 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     }
     connect(sceneGraphWindow, &WorkoutGameSceneGraphWindow::rendererFailed,
             this, &WorkoutGameWindow::useOpenGLFallback);
+    connect(threeDWindow, &WorkoutGame3DWindow::rendererFailed,
+            this, &WorkoutGameWindow::useSceneGraphFallback);
     connect(openGLCanvas, &WorkoutGameOpenGLCanvas::rendererFailed,
             this, &WorkoutGameWindow::usePainterFallback);
+    if (useThreeD && !threeDWindow->rendererAvailable()) {
+        useSceneGraphFallback();
+    }
 
     connect(context, qOverload<ErgFile *>(&Context::ergFileSelected),
             this, &WorkoutGameWindow::ergFileSelected);
@@ -169,11 +192,15 @@ void WorkoutGameWindow::showEvent(QShowEvent *event)
     sceneGraphWindow->setSessionRunning(
             sessionActive && !paused
             && renderStack->currentWidget() == sceneGraphContainer);
+    threeDWindow->setSessionRunning(
+            sessionActive && !paused
+            && renderStack->currentWidget() == threeDContainer);
 }
 
 void WorkoutGameWindow::hideEvent(QHideEvent *event)
 {
     frameDrainTimer->stop();
+    threeDWindow->setSessionRunning(false);
     sceneGraphWindow->setSessionRunning(false);
     if (sessionActive && !paused && !presentationSuspended) {
         drainRunnerFrame();
@@ -292,6 +319,9 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     painterCanvas->setCourse(currentCourse);
     openGLCanvas->setCourse(currentCourse);
     sceneGraphWindow->setCourse(currentCourse, ftpWatts);
+    if (renderStack->currentWidget() == threeDContainer) {
+        threeDWindow->setCourse(currentCourse, ftpWatts);
+    }
     hasTelemetry = false;
     hasFrame = false;
     lastFrame = WorkoutGameEngineFrame();
@@ -331,6 +361,8 @@ void WorkoutGameWindow::start()
     sessionActive = true;
     sceneGraphWindow->setSessionRunning(
             isVisible() && renderStack->currentWidget() == sceneGraphContainer);
+    threeDWindow->setSessionRunning(
+            isVisible() && renderStack->currentWidget() == threeDContainer);
     updateAtWorkoutPosition(context->getNow());
     runner.start(currentWorkoutTimeMs, currentAnchorRate);
     if (!isVisible()) {
@@ -345,6 +377,7 @@ void WorkoutGameWindow::pause()
 {
     drainRunnerFrame();
     paused = true;
+    threeDWindow->setSessionRunning(false);
     sceneGraphWindow->setSessionRunning(false);
     updateAtWorkoutPosition(context->getNow());
     runner.pause(currentWorkoutTimeMs);
@@ -356,6 +389,9 @@ void WorkoutGameWindow::unpause()
     sceneGraphWindow->setSessionRunning(
             sessionActive && isVisible()
             && renderStack->currentWidget() == sceneGraphContainer);
+    threeDWindow->setSessionRunning(
+            sessionActive && isVisible()
+            && renderStack->currentWidget() == threeDContainer);
     updateAtWorkoutPosition(context->getNow());
     if (isVisible()) {
         runner.resume(currentWorkoutTimeMs, currentAnchorRate);
@@ -368,6 +404,7 @@ void WorkoutGameWindow::unpause()
 void WorkoutGameWindow::stop()
 {
     sessionState.stopped();
+    threeDWindow->setSessionRunning(false);
     sceneGraphWindow->setSessionRunning(false);
     WorkoutGameEngineFrame finalFrame;
     if (runner.stopAndTakeLatest(currentWorkoutTimeMs, finalFrame)) {
@@ -379,6 +416,17 @@ void WorkoutGameWindow::stop()
     sessionActive = false;
     presentationSuspended = false;
     storeGhost();
+}
+
+void WorkoutGameWindow::useSceneGraphFallback()
+{
+    if (renderStack->currentWidget() != threeDContainer) return;
+    qWarning().noquote()
+            << "Workout Game renderer fallback: Qt Quick 3D -> SceneGraph";
+    threeDWindow->setSessionRunning(false);
+    renderStack->setCurrentWidget(sceneGraphContainer);
+    sceneGraphWindow->setSessionRunning(sessionActive && !paused && isVisible());
+    if (hasFrame) displayFrame(lastFrame);
 }
 
 void WorkoutGameWindow::usePainterFallback()
@@ -491,6 +539,10 @@ void WorkoutGameWindow::displayFrame(const WorkoutGameEngineFrame &frame)
                 frame.cadenceRpm, frame.heartRate, frame.virtualGear);
     } else if (renderer == sceneGraphContainer) {
         sceneGraphWindow->setFrame(
+                frame.visual, frame.watts, frame.targetWatts,
+                frame.cadenceRpm, frame.heartRate, frame.virtualGear);
+    } else if (renderer == threeDContainer) {
+        threeDWindow->setFrame(
                 frame.visual, frame.watts, frame.targetWatts,
                 frame.cadenceRpm, frame.heartRate, frame.virtualGear);
     }

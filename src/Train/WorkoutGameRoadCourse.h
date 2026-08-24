@@ -92,6 +92,8 @@ struct WorkoutGameRoadSample
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
     double distanceMeters = 0.0;
     double pieceProgress = 0.0;
+    double baseElevationMeters = 0.0;
+    double baseGradePercent = 0.0;
     double surfaceOffsetMeters = 0.0;
     double nonPhysicalFeatureOffsetMeters = 0.0;
     WorkoutGameRoadConnector center;

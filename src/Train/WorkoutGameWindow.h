@@ -20,6 +20,7 @@
 
 class Context;
 class ErgFile;
+class WorkoutGame3DWindow;
 class WorkoutGameCanvas;
 class WorkoutGameOpenGLCanvas;
 class WorkoutGameSceneGraphWindow;
@@ -48,6 +49,7 @@ private slots:
     void pause();
     void unpause();
     void stop();
+    void useSceneGraphFallback();
     void useOpenGLFallback();
     void usePainterFallback();
 
@@ -65,6 +67,8 @@ private:
 
     Context *context;
     QStackedWidget *renderStack;
+    WorkoutGame3DWindow *threeDWindow;
+    QWidget *threeDContainer;
     WorkoutGameSceneGraphWindow *sceneGraphWindow;
     QWidget *sceneGraphContainer;
     WorkoutGameCanvas *painterCanvas;

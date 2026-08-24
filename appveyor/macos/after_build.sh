@@ -379,7 +379,9 @@ echo "Manually copying QtDBus framework..."
 cp -R "${QTDIR}/lib/QtDBus.framework" GoldenCheetah.app/Contents/Frameworks/
 
 # Deployment using macdeployqt - prepare bundle only
-macdeployqt GoldenCheetah.app -verbose=2 -executable=GoldenCheetah.app/Contents/MacOS/GoldenCheetah
+macdeployqt GoldenCheetah.app -verbose=2 \
+    -executable=GoldenCheetah.app/Contents/MacOS/GoldenCheetah \
+    -qmldir=Train/qml
 
 ### MANUAL LEAK PATCHING ###
 echo "Starting manual leak patching..."

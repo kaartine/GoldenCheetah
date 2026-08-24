@@ -61,7 +61,7 @@ CONFIG(debug, debug|release) { QMAKE_CXXFLAGS += -DGC_DEBUG }
 ###========================================================================
 
 # always
-QT += xml sql network svg widgets quick concurrent serialport multimedia multimediawidgets \
+QT += xml sql network svg widgets quick quick3d concurrent serialport multimedia multimediawidgets \
       webenginecore webenginewidgets webchannel positioning webenginequick core5compat
 CONFIG += c++17
 
@@ -912,6 +912,10 @@ SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/Computraine
            Train/TrainerDayAPIQuery.cpp Train/TrainerDayAPIDialog.cpp Train/ElevationChartWindow.cpp
 
 HEADERS += Train/WorkoutGameRiderVisual.h
+HEADERS += Train/WorkoutGame3DGeometry.h Train/WorkoutGame3DViewModel.h \
+           Train/WorkoutGame3DWindow.h
+SOURCES += Train/WorkoutGame3DGeometry.cpp Train/WorkoutGame3DViewModel.cpp \
+           Train/WorkoutGame3DWindow.cpp
 
 SOURCES += Train/TrainBottom.cpp Train/TrainDB.cpp Train/TrainSidebar.cpp \
            Train/VideoLayoutParser.cpp Train/VideoSyncFile.cpp Train/WorkoutPlotWindow.cpp Train/WebPageWindow.cpp \

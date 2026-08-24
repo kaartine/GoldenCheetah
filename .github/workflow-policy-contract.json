@@ -70,7 +70,7 @@
         }
       },
       "semantic_sha256": [
-        "21befa7cd9ef0ddb19d6da8d49e779a4df447d60550d200a9f0e4087e17a6686"
+        "54856e52ec72f89e08beae4641d2927f381ce895e6cbc6c73b269c472c1e0bc5"
       ],
       "trusted_run_sha256": {
         "report-final": "69e43e6387d779b8f1f330e83971285e707ce9fc32e0184c85421f61ee5f2dc6",
@@ -215,12 +215,12 @@
     }
   },
   "protected_files": {
-    ".devcontainer/Dockerfile": "bcf97c914c009d61b66bc5235ab5f0ffc147cefd90656a10a9267ac2a4384dc7",
+    ".devcontainer/Dockerfile": "2a3845e14a794b8add72932ad9f69e24756a684a68c8d23512df6f34874bd29e",
     ".devcontainer/aqt-requirements.lock": "998f801a3be4edb22d47a9dd8243fbebd1c38357fa2bea4492a8fe6506458f1f",
     ".devcontainer/gcconfig.pri": "a64b6fac25788d43cc3d7d2d018adf9deaa73e32383011894d1f92dce650ab30",
     ".devcontainer/install-verified-qt.py": "86bc2ffb5a6d76e6c8b4fafb96a4e798a24063198929e9aa1ba44f8069125ec0",
     ".devcontainer/package-appimage.sh": "7c5705c415aea513ef80e99b7fe12022e7e21b8b21b365c01c1d69411c942764",
-    ".devcontainer/qt-6.8.3-linux-gcc64.lock": "a746f47856b2db1de06653e0ed5736a7fc91a48fe1ef5637aef87453ea6f4118",
+    ".devcontainer/qt-6.8.3-linux-gcc64.lock": "d46fb86de46322095180c3ae70f6d553799de5784cbc8671ef5e1915c7f84461",
     ".devcontainer/ubuntu-snapshot.sources.list": "955498b3465f476535b1f94b956155dc15e20b6e3845a8df0d74bced813f674d",
     ".github/CODEOWNERS": "d278ac997d09ac4a9b23b48e500c42050a41dea9cdf17711a2d417a7e204e830",
     ".github/actions.lock": "c2cb267618e6b2587d3e2ac5ace498ce2e64f44eba1712e4bdfa6aa14a71c89b",
@@ -242,18 +242,18 @@
     "appveyor/linux/build-appimage-pass.sh": "7c414b9894ddfa4393e3d9f78b8cd9332c5837a6a39515c3466178d4700c1a8f",
     "appveyor/linux/build-input-paths.sh": "7c3cf8a0c1e9b32c882aeb1072d8a1a39837700d3e8fbe0d60c36efb2c3d9b5c",
     "appveyor/linux/install.sh": "998a96674d6bcab0cf662934a68f93e8189e22eb382fb36e59d97002eb7a8dca",
-    "appveyor/linux/package-appimage-pass.sh": "fd0bc03a511e72f90183a31baf34ea681c104f82ff8dfa1d2cd99aae6a76ff45",
+    "appveyor/linux/package-appimage-pass.sh": "80a87474398977241e8d99a1a62662cf3f3b6ca57aa5c56a3a472771a32ede11",
     "appveyor/linux/reproduce-appimage.sh": "1e8af63bf5be3073e8e32a89e67a38c2d87a45dae0db8f7966ebd0a5d7d59645",
     "appveyor/linux/ubuntu-snapshot.sources.list": "090781d92edbdda63f40316d22859542961c91f927f469e0cf5421503ccddae1",
     "appveyor/linux/verify-apt-snapshot-bootstrap.sh": "bc46556b890f703a1a63c7ef3a988504f87aef07f6a88264b33f73c16bb262bd",
     "appveyor/linux/verify-apt-snapshot.py": "6d4d551f17cd742a2ce49f1dd3ac823f57fd2386064ca7a71dce14da0f93894f",
-    "appveyor/macos/after_build.sh": "36a9f5f32c9614a3160333b756c7f8ff776f47c3f53cb9fe54bf12879bfab8d2",
+    "appveyor/macos/after_build.sh": "39d9ec210d1eff8ce6c08bc04f91423e2318951aab636da6ec57306dbcb0d42f",
     "appveyor/macos/before_build.sh": "0718221688aff0944be0d107351ff9b65066f093bcd96fc642fe04db7acbf113",
     "appveyor/macos/install.sh": "a9510b3f0a251b36ed61c9d09734014d0f6e4852268e67bd84af892ad9978079",
     "appveyor/macos/run-build-regressions.sh": "a60fe00b301f0fee1b95d948d97c54cdad2dd2b75b32448c323895a2ebb9488a",
     "appveyor/macos/validate-payload.py": "7630d708e86a84a73e34235ecc08090ff2b3cb00252906bb2b8786272848073d",
     "appveyor/safe-extract.py": "66cf455f5656d2a6442b8332d7c67edb5ccea3e0587bb5e34913ea0fd6ccec28",
-    "appveyor/windows/after_build.ps1": "ed81c1f46208e65c93a9d1bc38eacf15c0738a47e523cf3885cb03cec2631b69",
+    "appveyor/windows/after_build.ps1": "520d62cb13d535509488abe6a2dcd97e85db700587a2f50422f064204a0bcd1d",
     "appveyor/windows/before_build.ps1": "5f9d9787ff7388503060269e700e6b1d22301637848e1a30d2a41664202af4f1",
     "appveyor/windows/install.ps1": "d9ef29b46a3c2462edad553fcc338e3c6d57808b3267cc542088023cb7a7561d",
     "appveyor/windows/run-build-regressions.ps1": "7375ad60bf3aba53a9ec14bcad43f06516c026efbd4b3ad32c63c4daa28c6995",
@@ -286,8 +286,8 @@
     "unittests/Build/appImagePackaging/testWindowsPackaging.ps1": "6fc97e5353b278f573e3d5f555d610e0d0e10bd58f4c3bccbee055670d15d06f",
     "unittests/Build/ciTestRunner/ciTestRunner.pro": "2f0afcc5fea392caf3c728960171159afbe1464404a30e9da65256968a284234",
     "unittests/Build/ciTestRunner/testCiTestRunner.py": "67cfb90f74c2683210b3e4b85bf361ed577bbfcd8d082c38083efe9d1f9864a8",
-    "unittests/ci-required-tests.txt": "510d92f4bdff73a62a729948ffaa67cbb7ab6f0be21e2e519bb016246c879409",
+    "unittests/ci-required-tests.txt": "7665cca6fd6071ffc87c70bd8d38e01a3ea2565283d0ac75bd6b75fa5d871a00",
     "unittests/unittests.pri.in": "58c1673c4ed201bb91b0c82375265dfa10011c3401f9529c59bd5ef4691ca69d",
-    "unittests/unittests.pro": "eb2fe67bd6d001d9bc0d1cdf1d26e020540fbae84f404c8fc8dd19e23e4f6e1a"
+    "unittests/unittests.pro": "a16c81b52a3abdbb4c00cf52d63558b2de8f8fce984bb2a4bf432ddb2d027c77"
   }
 }

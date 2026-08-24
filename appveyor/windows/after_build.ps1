@@ -569,7 +569,9 @@ Invoke-NativeCommand -FilePath 'python.exe' -ArgumentList @(
   $oauthChecker, (Join-Path $repositoryRoot 'src\release\GoldenCheetah.exe')
 )
 Set-Location 'src\release'
-Invoke-NativeCommand -FilePath 'windeployqt.exe' -ArgumentList @('--release', 'GoldenCheetah.exe')
+Invoke-NativeCommand -FilePath 'windeployqt.exe' -ArgumentList @(
+  '--release', '--qmldir', '..\Train\qml', 'GoldenCheetah.exe'
+)
 Use-WindowsSchannelTlsBackend -Destination (Get-Location).Path
 Copy-Item 'C:\LIBS\10_Precompiled_DLL\usbexpress_3.5.1\USBXpress\USBXpress_API\Host\x64\SiUSBXp.dll' .
 Copy-Item 'C:\LIBS\10_Precompiled_DLL\libsamplerate64\lib\libsamplerate-0.dll' .

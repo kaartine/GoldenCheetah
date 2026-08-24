@@ -155,9 +155,10 @@ RUN python3 -m venv /opt/aqt \
     && /opt/aqt/bin/python /usr/local/libexec/install-verified-qt.py \
         --lock /tmp/qt-archives.lock --output /opt/Qt \
         --base https://download.qt.io --version "${QT_VERSION}" \
-        --arch linux_gcc_64 --expected-count 15 \
+        --arch linux_gcc_64 --expected-count 18 \
         --module qt5compat --module qtcharts --module qtconnectivity \
-        --module qtmultimedia --module qtpositioning --module qtserialport \
+        --module qtmultimedia --module qtpositioning --module qtquick3d \
+        --module qtquicktimeline --module qtserialport --module qtshadertools \
         --module qtwebchannel --module qtwebengine \
     && rm -f /aqtinstall.log /tmp/aqt-requirements.lock \
         /tmp/qt-archives.lock

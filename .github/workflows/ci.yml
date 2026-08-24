@@ -20,7 +20,8 @@ env:
   PYTHON_VERSION: "3.11"
   QT_MODULES: >-
     qtmultimedia qtwebengine qtwebchannel qtpositioning qtcharts
-    qtserialport qtconnectivity qt5compat
+    qtserialport qtconnectivity qt5compat qtquick3d qtquicktimeline
+    qtshadertools
 
 jobs:
   validated-candidate:
