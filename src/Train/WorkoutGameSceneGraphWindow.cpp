@@ -16,6 +16,7 @@
 #include "WorkoutGameRoadProjection.h"
 #include "WorkoutGameForestFloor.h"
 #include "WorkoutGameMesh.h"
+#include "WorkoutGameOcclusion.h"
 #include "WorkoutGamePowerCueGeometry.h"
 #include "WorkoutGameTrailTile.h"
 
@@ -178,6 +179,35 @@ void appendQuad(
     appendTriangle(triangles,
                    farLeft, farY, nearRight, nearY, farRight, farY,
                    color, (farDepthMeters * 2.0 + nearDepthMeters) / 3.0);
+}
+
+template<std::size_t Size>
+void appendOcclusionClippedPolygon(
+        std::vector<SceneTriangle> &geometry,
+        const std::array<WorkoutGameRoadProjectedPoint, Size> &projected,
+        const QColor &color)
+{
+    std::array<WorkoutGameOcclusionVertex, Size> polygon;
+    for (std::size_t index = 0; index < Size; ++index) {
+        const WorkoutGameRoadProjectedPoint &point = projected[index];
+        if (!point.ready) return;
+        polygon[index] = {
+            point.x, point.y, point.depthMeters, point.occlusionY
+        };
+    }
+    const auto clipped = WorkoutGameOcclusion::clip(polygon);
+    for (std::size_t index = 1; index + 1 < clipped.size(); ++index) {
+        const WorkoutGameOcclusionVertex &a = clipped[0];
+        const WorkoutGameOcclusionVertex &b = clipped[index];
+        const WorkoutGameOcclusionVertex &c = clipped[index + 1];
+        appendTriangle(
+                geometry,
+                float(a.x), float(a.y),
+                float(b.x), float(b.y),
+                float(c.x), float(c.y),
+                color,
+                (a.depthMeters + b.depthMeters + c.depthMeters) / 3.0);
+    }
 }
 
 WorkoutGameRoadProjectedSlice interpolateSlice(
@@ -525,6 +555,9 @@ void buildForestGeometry(
         std::vector<SceneTriangle> &geometry)
 {
     if (projection.slices.size() < 2u) return;
+    const WorkoutGameForestFloorProjection forestProjection =
+            WorkoutGameForestFloorProjection::build(projection);
+    if (!forestProjection.isReady()) return;
     constexpr double SpacingMeters = 6.5;
     const double nearDistance =
             projection.slices.back().worldDistanceMeters + 2.0;
@@ -552,9 +585,18 @@ void buildForestGeometry(
                     + WorkoutGameForestFloor::offsetMeters(
                         distance, lateral, slice.halfWidthMeters);
             const auto point = [&](double right, double up) {
-                return WorkoutGameRoadProjection::projectPoint(
+                WorkoutGameRoadProjectedPoint projected =
+                        WorkoutGameRoadProjection::projectPoint(
                         projection, distance, right,
                         baseElevation + up, true);
+                if (projected.ready) {
+                    projected.occlusionY =
+                            forestProjection.occlusionY(
+                                distance, projected.x);
+                    projected.visible = projected.y
+                            <= projected.occlusionY + 1e-6;
+                }
+                return projected;
             };
             const WorkoutGameRoadProjectedPoint trunkLeft = point(
                     lateral - trunkWidth, 0.0);
@@ -574,43 +616,29 @@ void buildForestGeometry(
                     lateral + crownWidth * 0.72, height * 0.58);
             const WorkoutGameRoadProjectedPoint crownTop = point(
                     lateral, height);
-            if (!trunkLeft.ready || !trunkRight.ready
-                    || !trunkTopLeft.ready || !trunkTopRight.ready
-                    || !crownLeft.ready || !crownRight.ready
-                    || !crownMiddleLeft.ready || !crownMiddleRight.ready
-                    || !crownTop.ready
-                    || !trunkLeft.visible || !trunkRight.visible
-                    || !trunkTopLeft.visible || !trunkTopRight.visible
-                    || !crownLeft.visible || !crownRight.visible
-                    || !crownMiddleLeft.visible || !crownMiddleRight.visible
-                    || !crownTop.visible) {
-                continue;
-            }
             const QColor trunk(76, 52, 35);
             const QColor lowerCrown = side == 0
                     ? QColor(31, 91, 57) : QColor(37, 105, 61);
             const QColor upperCrown = side == 0
                     ? QColor(43, 119, 67) : QColor(49, 131, 72);
-            appendTriangle(geometry,
-                    float(trunkLeft.x), float(trunkLeft.y),
-                    float(trunkRight.x), float(trunkRight.y),
-                    float(trunkTopRight.x), float(trunkTopRight.y),
-                    trunk, slice.depthMeters);
-            appendTriangle(geometry,
-                    float(trunkLeft.x), float(trunkLeft.y),
-                    float(trunkTopRight.x), float(trunkTopRight.y),
-                    float(trunkTopLeft.x), float(trunkTopLeft.y),
-                    trunk, slice.depthMeters);
-            appendTriangle(geometry,
-                    float(crownLeft.x), float(crownLeft.y),
-                    float(crownRight.x), float(crownRight.y),
-                    float(crownTop.x), float(crownTop.y),
-                    lowerCrown, slice.depthMeters - 0.02);
-            appendTriangle(geometry,
-                    float(crownMiddleLeft.x), float(crownMiddleLeft.y),
-                    float(crownMiddleRight.x), float(crownMiddleRight.y),
-                    float(crownTop.x), float(crownTop.y),
-                    upperCrown, slice.depthMeters - 0.03);
+            appendOcclusionClippedPolygon(
+                    geometry,
+                    std::array<WorkoutGameRoadProjectedPoint, 4>{
+                        trunkLeft, trunkRight, trunkTopRight, trunkTopLeft
+                    },
+                    trunk);
+            appendOcclusionClippedPolygon(
+                    geometry,
+                    std::array<WorkoutGameRoadProjectedPoint, 3>{
+                        crownLeft, crownRight, crownTop
+                    },
+                    lowerCrown);
+            appendOcclusionClippedPolygon(
+                    geometry,
+                    std::array<WorkoutGameRoadProjectedPoint, 3>{
+                        crownMiddleLeft, crownMiddleRight, crownTop
+                    },
+                    upperCrown);
         }
     }
 }
@@ -848,7 +876,9 @@ void buildFeatureGeometry(
         for (const WorkoutGameMeshInstance &instance : tile.mainLine) {
             appendProjectedMesh(
                     instance, projection, false,
-                    instance.clipToRoadOcclusion ? props : trailSurfaces);
+                    instance.renderLayer
+                            == WorkoutGameMeshRenderLayer::TrailSurface
+                        ? trailSurfaces : props);
         }
         appendProjectedMesh(
                 tile.bypass, projection, selectedBypass, trailSurfaces);

@@ -75,6 +75,12 @@ struct WorkoutGameMesh
     std::vector<WorkoutGameCollisionBox> colliders;
 };
 
+enum class WorkoutGameMeshRenderLayer
+{
+    TrailSurface,
+    RaisedProp
+};
+
 struct WorkoutGameMeshInstance
 {
     WorkoutGameMesh mesh;
@@ -87,6 +93,8 @@ struct WorkoutGameMeshInstance
     double exitRightScale = 1.0;
     double upScale = 1.0;
     double occlusionAllowancePixels = 0.0;
+    WorkoutGameMeshRenderLayer renderLayer =
+            WorkoutGameMeshRenderLayer::RaisedProp;
     bool anchorToBaseSurface = false;
     bool clipToRoadOcclusion = true;
 };

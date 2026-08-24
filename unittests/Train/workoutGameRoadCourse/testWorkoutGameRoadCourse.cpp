@@ -473,6 +473,10 @@ private slots:
                 });
         QVERIFY(piece != road.pieces.end());
         const double obstacle = piece->challenge.obstacleDistanceMeters;
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    piece->terrain, piece->difficulty);
+        QVERIFY(profile.ready);
         const WorkoutGameRoadProjectionFrame frame =
                 WorkoutGameRoadProjection::project(road, obstacle - 8.0);
         bool sawFeatureSurface = false;
@@ -483,7 +487,8 @@ private slots:
             QCOMPARE(slice.surfaceElevationMeters,
                      sample.surfaceElevationMeters());
             sawFeatureSurface = sawFeatureSurface
-                    || sample.surfaceOffsetMeters > 0.5;
+                    || sample.surfaceOffsetMeters
+                        >= profile.heightMeters * 0.95;
         }
         QVERIFY(sawFeatureSurface);
         QVERIFY(frame.slices.size() >= 16u);
@@ -610,47 +615,41 @@ private slots:
 
     void featureSurfaceContinuesAcrossPieceBoundary()
     {
-        WorkoutGameRoadCourse selected;
-        const WorkoutGameRoadPiece *challengePiece = nullptr;
-        WorkoutGameFeatureGeometryProfile profile;
-        for (std::int64_t durationMs = 10000;
-             durationMs <= 180000 && !challengePiece; durationMs += 1000) {
-            WorkoutGameCourse source;
-            source.status = WorkoutGameCourseStatus::Ready;
-            source.seed = 667u;
-            source.durationMs = durationMs;
-            WorkoutGameSection section;
-            section.feature = WorkoutGameFeature::SprintJump;
-            section.terrain = WorkoutGameTerrainKind::Tabletop;
-            section.durationMs = durationMs;
-            section.targetWatts = 280.0;
-            section.difficulty = 0.7;
-            section.challengeCount = 1;
-            source.sections.push_back(section);
-            WorkoutGameRoadCourse candidate =
-                    WorkoutGameRoadCourseBuilder::build(source, 200.0);
-            for (std::size_t index = 0; index + 1 < candidate.pieces.size(); ++index) {
-                const WorkoutGameRoadPiece &piece = candidate.pieces[index];
-                if (!piece.challenge.enabled) continue;
-                const WorkoutGameFeatureGeometryProfile candidateProfile =
-                        WorkoutGameFeatureGeometry::profile(
-                            piece.terrain, piece.difficulty);
-                const double boundary = piece.startDistanceMeters
-                        + piece.lengthMeters;
-                if (piece.challenge.obstacleDistanceMeters
-                        + candidateProfile.endMeters > boundary + 0.2) {
-                    selected = std::move(candidate);
-                    challengePiece = &selected.pieces[index];
-                    profile = candidateProfile;
-                    break;
-                }
-            }
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 667u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::Tabletop;
+        section.durationMs = source.durationMs;
+        section.targetWatts = 280.0;
+        section.difficulty = 0.7;
+        section.challengeCount = 1;
+        source.sections.push_back(section);
+        WorkoutGameRoadCourse selected =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        QVERIFY(selected.pieces.size() >= 2u);
+        const auto generatedChallenge = std::find_if(
+                selected.pieces.begin(), selected.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.challenge.enabled;
+                });
+        QVERIFY(generatedChallenge != selected.pieces.end());
+        WorkoutGameRoadChallengeGate challenge = generatedChallenge->challenge;
+        for (WorkoutGameRoadPiece &piece : selected.pieces) {
+            piece.challenge.enabled = false;
         }
-        QVERIFY2(challengePiece,
-                 "could not construct a feature crossing a piece boundary");
+        WorkoutGameRoadPiece &challengePiece = selected.pieces.front();
+        challengePiece.challenge = challenge;
+        challengePiece.challenge.enabled = true;
+        const double boundary = challengePiece.startDistanceMeters
+                + challengePiece.lengthMeters;
+        challengePiece.challenge.obstacleDistanceMeters = boundary;
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    challengePiece.terrain, challengePiece.difficulty);
         QVERIFY(profile.ready);
-        const double boundary = challengePiece->startDistanceMeters
-                + challengePiece->lengthMeters;
         const WorkoutGameRoadSample before =
                 WorkoutGameRoadCourseBuilder::sample(selected, boundary - 0.01);
         const WorkoutGameRoadSample after =

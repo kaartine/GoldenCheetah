@@ -32,6 +32,7 @@ HEADERS = ../../../src/Train/WorkoutGameFeatureChallenge.h \
           ../../../src/Train/WorkoutGameHorizon.h \
           ../../../src/Train/WorkoutGameMesh.h \
           ../../../src/Train/WorkoutGameForestFloor.h \
+          ../../../src/Train/WorkoutGameOcclusion.h \
           ../../../src/Train/WorkoutGameTrailBranch.h \
           ../../../src/Train/WorkoutGameTrailTile.h \
           ../../../src/Train/WorkoutGamePowerCueGeometry.h \

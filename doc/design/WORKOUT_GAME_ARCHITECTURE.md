@@ -1,5 +1,8 @@
 # Workout Game Architecture
 
+The offline geometry and AI-assisted art workflow is documented in
+`WORKOUT_GAME_ASSET_PIPELINE.md`.
+
 ## Goals
 
 Workout Game adds a lightweight 2D riding game to Train view without changing

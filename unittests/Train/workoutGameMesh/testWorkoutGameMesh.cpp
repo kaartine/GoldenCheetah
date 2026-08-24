@@ -10,14 +10,18 @@
 #include "Train/WorkoutGameMesh.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameForestFloor.h"
+#include "Train/WorkoutGameOcclusion.h"
 #include "Train/WorkoutGameTrailBranch.h"
 #include "Train/WorkoutGameTrailTile.h"
 
 #include <QTest>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -199,6 +203,36 @@ private slots:
                     Distance, middle, TrailHalfWidth), outerHeight * 0.5);
         QCOMPARE(WorkoutGameForestFloor::offsetMeters(
                     Distance, outer + 2.0, TrailHalfWidth), outerHeight);
+
+        WorkoutGameRoadProjectionFrame projection;
+        projection.ready = true;
+        projection.verticalExaggeration = 1.7;
+        WorkoutGameRoadProjectedSlice far;
+        far.worldDistanceMeters = 100.0;
+        far.centerX = 700.0;
+        far.centerY = 1000.0;
+        far.halfWidthMeters = TrailHalfWidth;
+        far.pixelsPerMeter = 2.0;
+        WorkoutGameRoadProjectedSlice near = far;
+        near.worldDistanceMeters = 20.0;
+        near.centerX = 500.0;
+        near.centerY = 400.0;
+        near.pixelsPerMeter = 10.0;
+        projection.slices = {far, near};
+        const double screenX = 700.0;
+        const double sightlineLateral =
+                (screenX - near.centerX) / near.pixelsPerMeter;
+        const double expected = near.centerY
+                - WorkoutGameForestFloor::offsetMeters(
+                    near.worldDistanceMeters,
+                    sightlineLateral,
+                    near.halfWidthMeters)
+                    * near.pixelsPerMeter * projection.verticalExaggeration;
+        const WorkoutGameForestFloorProjection forestProjection =
+                WorkoutGameForestFloorProjection::build(projection);
+        QVERIFY(forestProjection.isReady());
+        QCOMPARE(forestProjection.occlusionY(
+                    far.worldDistanceMeters, screenX), expected);
     }
 
     void challengeTileUsesOneSocketPairForFeatureAndBypass()
@@ -236,7 +270,9 @@ private slots:
                  tile.exitHalfWidthMeters);
         QCOMPARE(tile.bypass.anchorDistanceMeters,
                  tile.entryDistanceMeters);
-        QVERIFY(!tile.bypass.clipToRoadOcclusion);
+        QCOMPARE(tile.bypass.renderLayer,
+                 WorkoutGameMeshRenderLayer::TrailSurface);
+        QVERIFY(tile.bypass.clipToRoadOcclusion);
 
         double featureHalfWidth = 0.0;
         for (const WorkoutGameMeshInstance &instance : tile.mainLine) {
@@ -259,6 +295,124 @@ private slots:
         }
         QVERIFY2(bypassCenter - featureHalfWidth >= 0.55,
                  "bypass does not clear the feature and rider envelope");
+    }
+
+    void challengeTileKeepsAContinuousTrailSurfaceUnderAnObstacle()
+    {
+        const WorkoutGameRoadCourse course = featureCourse(
+                WorkoutGameTerrainKind::LogOver, 0.7);
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const WorkoutGameTrailTile tile =
+                WorkoutGameTrailTileAssembler::challenge(course, *piece);
+        QVERIFY(tile.ready);
+
+        std::vector<std::pair<double, double>> dirtSpans;
+        for (const WorkoutGameMeshInstance &instance : tile.mainLine) {
+            const bool hasDirt = std::any_of(
+                    instance.mesh.triangles.begin(),
+                    instance.mesh.triangles.end(),
+                    [](const WorkoutGameMeshTriangle &triangle) {
+                        return triangle.material == WorkoutGameMeshMaterial::Dirt
+                                || triangle.material
+                                    == WorkoutGameMeshMaterial::DirtHighlight;
+                    });
+            if (!hasDirt) continue;
+            QCOMPARE(instance.renderLayer,
+                     WorkoutGameMeshRenderLayer::TrailSurface);
+            QVERIFY(instance.clipToRoadOcclusion);
+            dirtSpans.emplace_back(
+                    instance.anchorDistanceMeters
+                        + instance.mesh.entry.forwardMeters
+                            * instance.forwardScale,
+                    instance.anchorDistanceMeters
+                        + instance.mesh.exit.forwardMeters
+                            * instance.forwardScale);
+        }
+        std::sort(dirtSpans.begin(), dirtSpans.end());
+        QVERIFY(!dirtSpans.empty());
+        QVERIFY(dirtSpans.front().first <= tile.entryDistanceMeters + 1e-9);
+        double coveredUntil = dirtSpans.front().second;
+        for (std::size_t index = 1; index < dirtSpans.size(); ++index) {
+            QVERIFY2(dirtSpans[index].first <= coveredUntil + 1e-9,
+                     "feature tile leaves a hole through to the background");
+            coveredUntil = std::max(coveredUntil, dirtSpans[index].second);
+        }
+        QVERIFY(coveredUntil >= tile.exitDistanceMeters - 1e-9);
+
+        WorkoutGameRoadProjectionFrame hidden;
+        hidden.ready = true;
+        hidden.verticalExaggeration = 1.0;
+        WorkoutGameRoadProjectedSlice far;
+        far.worldDistanceMeters = tile.exitDistanceMeters + 1.0;
+        far.depthMeters = 100.0;
+        far.centerX = 640.0;
+        far.centerY = 500.0;
+        far.halfWidthPixels = 12.0;
+        far.halfWidthMeters = 0.7;
+        far.pixelsPerMeter = 4.0;
+        far.occlusionY = 100.0;
+        WorkoutGameRoadProjectedSlice near = far;
+        near.worldDistanceMeters = tile.entryDistanceMeters - 1.0;
+        near.depthMeters = 1.0;
+        near.halfWidthPixels = 120.0;
+        hidden.slices = {far, near};
+        const auto underlay = std::find_if(
+                tile.mainLine.begin(), tile.mainLine.end(),
+                [](const WorkoutGameMeshInstance &instance) {
+                    return instance.renderLayer
+                            == WorkoutGameMeshRenderLayer::TrailSurface;
+                });
+        QVERIFY(underlay != tile.mainLine.end());
+        QVERIFY2(WorkoutGameMeshProjector::project(*underlay, hidden).empty(),
+                 "trail underlay renders through foreground terrain");
+    }
+
+    void occludedPropsAreClippedInsteadOfPoppingAsAWholeObject()
+    {
+        const std::array<WorkoutGameOcclusionVertex, 4> tree = {{
+            {10.0, 130.0, 22.0, 100.0},
+            {30.0, 130.0, 22.0, 100.0},
+            {30.0, 70.0, 22.0, 100.0},
+            {10.0, 70.0, 22.0, 100.0}
+        }};
+        const auto clipped = WorkoutGameOcclusion::clip(tree);
+        QVERIFY(clipped.size() >= 4u);
+        for (const WorkoutGameOcclusionVertex &vertex : clipped) {
+            QVERIFY(vertex.y <= vertex.occlusionY + 1e-9);
+        }
+        const auto boundary = std::count_if(
+                clipped.begin(), clipped.end(),
+                [](const WorkoutGameOcclusionVertex &vertex) {
+                    return std::abs(vertex.y - vertex.occlusionY) < 1e-9;
+                });
+        QCOMPARE(boundary, 2);
+
+        const std::array<WorkoutGameOcclusionVertex, 3> invalid = {{
+            {0.0, 0.0, 1.0, 1.0},
+            {1.0, std::numeric_limits<double>::quiet_NaN(), 1.0, 1.0},
+            {2.0, 0.0, 1.0, 1.0}
+        }};
+        QVERIFY(WorkoutGameOcclusion::clip(invalid).empty());
+
+        const std::array<WorkoutGameOcclusionVertex, 4> boundaryVertex = {{
+            {0.0, 100.0, 1.0, 100.0},
+            {1.0, 120.0, 1.0, 100.0},
+            {2.0, 80.0, 1.0, 100.0},
+            {3.0, 80.0, 1.0, 100.0}
+        }};
+        const auto boundaryClipped =
+                WorkoutGameOcclusion::clip(boundaryVertex);
+        for (std::size_t index = 1; index < boundaryClipped.size(); ++index) {
+            QVERIFY(std::abs(boundaryClipped[index - 1].x
+                        - boundaryClipped[index].x) > 1e-9
+                    || std::abs(boundaryClipped[index - 1].y
+                        - boundaryClipped[index].y) > 1e-9);
+        }
     }
 
     void logObstacleClearsButDoesNotDwarfTheSingletrack()
@@ -294,14 +448,64 @@ private slots:
                 (profile.startMeters + profile.plateauStartMeters) * 0.5;
         const double landingMiddle =
                 (profile.plateauEndMeters + profile.endMeters) * 0.5;
-        QVERIFY(profile.surfaceOffset(takeoffMiddle)
-                < profile.heightMeters * 0.45);
-        QVERIFY(profile.surfaceOffset(landingMiddle)
-                > profile.heightMeters * 0.55);
+        const double takeoffMiddleHeight =
+                profile.surfaceOffset(takeoffMiddle);
+        const double landingMiddleHeight =
+                profile.surfaceOffset(landingMiddle);
+        QVERIFY(takeoffMiddleHeight > profile.heightMeters * 0.35);
+        QVERIFY(takeoffMiddleHeight < profile.heightMeters * 0.50);
+        QCOMPARE(landingMiddleHeight, takeoffMiddleHeight);
         QCOMPARE(profile.surfaceOffset(profile.plateauStartMeters),
                  profile.heightMeters);
         QCOMPARE(profile.surfaceOffset(profile.plateauEndMeters),
                  profile.heightMeters);
+    }
+
+    void tabletopFitsTheGradeTwoReferenceEnvelope()
+    {
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::Tabletop, 0.7);
+        QVERIFY(profile.ready);
+        const double takeoffRun = profile.plateauStartMeters
+                - profile.startMeters;
+        const double tabletopLength = profile.plateauEndMeters
+                - profile.plateauStartMeters;
+        const double landingRun = profile.endMeters
+                - profile.plateauEndMeters;
+        QVERIFY(profile.heightMeters <= 0.5 + 1e-9);
+        QVERIFY(takeoffRun >= profile.heightMeters * 3.0);
+        QVERIFY(takeoffRun <= 2.0);
+        QVERIFY(tabletopLength >= 1.0);
+        QVERIFY(tabletopLength <= 3.0);
+        QVERIFY(landingRun >= profile.heightMeters * 3.0);
+        QVERIFY(landingRun <= 2.0);
+        QVERIFY(profile.endMeters - profile.startMeters <= 5.0);
+        const WorkoutGameMesh tabletop = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::Tabletop, 0.7);
+        const auto highlightCount = std::count_if(
+                tabletop.triangles.begin(), tabletop.triangles.end(),
+                [](const WorkoutGameMeshTriangle &triangle) {
+                    return triangle.material
+                            == WorkoutGameMeshMaterial::DirtHighlight;
+                });
+        QVERIFY(highlightCount >= 4);
+        QVERIFY(highlightCount <= 8);
+
+        const double linearStart = profile.startMeters + takeoffRun * 0.3;
+        const double linearMiddle = profile.startMeters + takeoffRun * 0.6;
+        const double linearEnd = profile.startMeters + takeoffRun * 0.9;
+        const double firstSlope =
+                (profile.surfaceOffset(linearMiddle)
+                 - profile.surfaceOffset(linearStart))
+                / (linearMiddle - linearStart);
+        const double secondSlope =
+                (profile.surfaceOffset(linearEnd)
+                 - profile.surfaceOffset(linearMiddle))
+                / (linearEnd - linearMiddle);
+        QVERIFY(std::abs(firstSlope - secondSlope) < 1e-9);
+        constexpr double Pi = 3.14159265358979323846;
+        QVERIFY(std::atan(secondSlope) * 180.0 / Pi <= 15.0 + 1e-9);
     }
 
     void logUsesAReadableRoundedCrossSection()
@@ -514,6 +718,7 @@ private slots:
                 WorkoutGameTerrainKind::Tabletop, 0.5);
         instance.anchorDistanceMeters =
                 projection.slices.back().worldDistanceMeters + 0.2;
+        instance.clipToRoadOcclusion = false;
         const std::vector<WorkoutGameProjectedMeshTriangle> triangles =
                 WorkoutGameMeshProjector::project(instance, projection);
         QVERIFY(!triangles.empty());

@@ -74,7 +74,8 @@ void addSculptedStrip(
         WorkoutGameMeshMaterial top,
         WorkoutGameMeshMaterial highlight,
         WorkoutGameMeshMaterial side,
-        bool fillToGround = false)
+        bool fillToGround = false,
+        int highlightStride = 3)
 {
     if (samples.size() < 2u) return;
     const std::uint32_t start = std::uint32_t(mesh.vertices.size());
@@ -97,7 +98,8 @@ void addSculptedStrip(
                   bottomUp, progress, 1.0);
         if (index == 0u) continue;
         const std::uint32_t current = start + std::uint32_t(index * 4u);
-        const WorkoutGameMeshMaterial topMaterial = index % 3u == 0u
+        const WorkoutGameMeshMaterial topMaterial = highlightStride > 0
+                && index % std::size_t(highlightStride) == 0u
                 ? highlight : top;
         addQuad(mesh, current - 4, current - 3,
                 current + 1, current, topMaterial);
@@ -313,9 +315,10 @@ WorkoutGameMesh tabletopModel(double difficulty)
     addSculptedStrip(
             mesh, samples, 0.24,
             WorkoutGameMeshMaterial::Dirt,
-            WorkoutGameMeshMaterial::Dirt,
+            WorkoutGameMeshMaterial::DirtHighlight,
             WorkoutGameMeshMaterial::DirtEdge,
-            true);
+            true,
+            8);
     mesh.colliders.push_back({
         0.0, 0.0, height * 0.5,
         (profile.endMeters - profile.startMeters) * 0.5,

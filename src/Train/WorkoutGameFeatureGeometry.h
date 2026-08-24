@@ -68,12 +68,34 @@ struct WorkoutGameFeatureGeometryProfile
             return radius;
         }
         if (shape == WorkoutGameFeatureGeometryShape::CurvedTabletop) {
+            const auto rampRise = [](double requestedProgress) {
+                const double progress = std::clamp(
+                        requestedProgress, 0.0, 1.0);
+                // Leave at least five sixths of the ramp visibly planar while
+                // easing the trail datum into it without a sharp hinge.
+                constexpr double Transition = 1.0 / 6.0;
+                constexpr double TransitionHeight = Transition * 0.375;
+                constexpr double LinearSlope =
+                        (1.0 - TransitionHeight) / (1.0 - Transition);
+                if (progress >= Transition) {
+                    return TransitionHeight
+                            + (progress - Transition) * LinearSlope;
+                }
+                const double amount = progress / Transition;
+                const double amount2 = amount * amount;
+                const double amount3 = amount2 * amount;
+                const double value = (-2.0 * amount3 + 3.0 * amount2)
+                        * TransitionHeight
+                        + (amount3 - amount2)
+                            * Transition * LinearSlope;
+                return std::clamp(value, 0.0, TransitionHeight);
+            };
             if (localDistanceMeters < plateauStartMeters) {
                 const double progress = std::clamp(
                         (localDistanceMeters - startMeters)
                             / (plateauStartMeters - startMeters),
                         0.0, 1.0);
-                return heightMeters * std::pow(progress, 1.65);
+                return heightMeters * rampRise(progress);
             }
             if (localDistanceMeters <= plateauEndMeters) {
                 return heightMeters;
@@ -82,7 +104,7 @@ struct WorkoutGameFeatureGeometryProfile
                     (localDistanceMeters - plateauEndMeters)
                         / (endMeters - plateauEndMeters),
                     0.0, 1.0);
-            return heightMeters * (1.0 - std::pow(progress, 1.35));
+            return heightMeters * rampRise(1.0 - progress);
         }
         if (localDistanceMeters < plateauStartMeters) {
             return heightMeters * (
@@ -118,11 +140,27 @@ public:
             };
             break;
         }
-        case WorkoutGameTerrainKind::Tabletop:
-            result = {true, -4.2, -0.9, 1.7, 5.2,
-                      0.75 + 0.40 * difficulty,
-                      WorkoutGameFeatureGeometryShape::CurvedTabletop};
+        case WorkoutGameTerrainKind::Tabletop: {
+            constexpr double Pi = 3.14159265358979323846;
+            const double height = 0.32 + 0.18 * difficulty;
+            // rampRise's eased entry makes its planar normalized slope 1.125.
+            // Include that factor so the physical planar ramp remains 15 deg.
+            constexpr double PlanarSlopeFactor = 1.125;
+            const double rampRun = height * PlanarSlopeFactor
+                    / std::tan(15.0 * Pi / 180.0);
+            const double deckLength = 1.0 + 0.14 * difficulty;
+            const double halfDeck = deckLength * 0.5;
+            result = {
+                true,
+                -halfDeck - rampRun,
+                -halfDeck,
+                halfDeck,
+                halfDeck + rampRun,
+                height,
+                WorkoutGameFeatureGeometryShape::CurvedTabletop
+            };
             break;
+        }
         case WorkoutGameTerrainKind::RockSlab:
             result = {true, -3.0, 0.0, 3.0, 6.0,
                       0.30 + 0.25 * difficulty};

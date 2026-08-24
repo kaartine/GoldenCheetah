@@ -45,8 +45,8 @@ void appendTrailSpan(
                 halfWidthAt(course, end),
                 0.0);
         instance.anchorDistanceMeters = start;
+        instance.renderLayer = WorkoutGameMeshRenderLayer::TrailSurface;
         instance.anchorToBaseSurface = false;
-        instance.clipToRoadOcclusion = false;
         tile.mainLine.push_back(std::move(instance));
     }
 }
@@ -84,6 +84,9 @@ WorkoutGameTrailTile WorkoutGameTrailTileAssembler::challenge(
             course, result.exitDistanceMeters);
 
     appendTrailSpan(result, course, result.entryDistanceMeters, featureStart);
+    // The feature mesh may contain only the obstacle itself. Keep a complete
+    // dirt bed underneath it so narrow props cannot reveal the background.
+    appendTrailSpan(result, course, featureStart, featureEnd);
     WorkoutGameMeshInstance featureInstance;
     featureInstance.mesh = std::move(feature);
     featureInstance.anchorDistanceMeters =
@@ -104,8 +107,8 @@ WorkoutGameTrailTile WorkoutGameTrailTileAssembler::challenge(
             result.entryHalfWidthMeters,
             result.exitHalfWidthMeters);
     result.bypass.anchorDistanceMeters = result.entryDistanceMeters;
+    result.bypass.renderLayer = WorkoutGameMeshRenderLayer::TrailSurface;
     result.bypass.anchorToBaseSurface = false;
-    result.bypass.clipToRoadOcclusion = false;
     result.ready = !result.mainLine.empty()
             && WorkoutGameMeshLibrary::valid(result.bypass.mesh);
     return result;
