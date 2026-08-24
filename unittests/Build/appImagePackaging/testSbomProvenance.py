@@ -1193,6 +1193,128 @@ class SbomProvenanceTests(unittest.TestCase):
                 authenticate_source=lambda path: None,
             )
 
+    def test_linuxdeployqt_capture_binds_transformed_qml_plugin_to_qt_sdk(self):
+        capture = load_python_module(
+            "capture_linuxdeployqt_qml_plugin", LINUXDEPLOYQT_CAPTURE
+        )
+        source = (
+            self.qt_root
+            / "qml/QtQml/Models/libmodelsplugin.so"
+        )
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"authenticated Qt QML plugin")
+        output = (
+            self.appdir
+            / "qml/QtQml/Models/libmodelsplugin.so"
+        )
+        output.parent.mkdir(parents=True)
+        output.write_bytes(b"linuxdeployqt transformed Qt QML plugin")
+        snapshot = {
+            "format": "goldencheetah-linuxdeployqt-source-snapshot-1",
+            "libraries": [],
+        }
+
+        def elf_identity(path):
+            return {
+                "build_id": "0123456789abcdef",
+                "rpath": "$ORIGIN/../../../lib",
+                "soname": "",
+            }
+
+        entries = capture.build_transformed_entries(
+            self.appdir,
+            snapshot,
+            "d" * 64,
+            qt_root=self.qt_root,
+            elf_identity=elf_identity,
+            authenticate_source=lambda path: self.fail(
+                f"Qt SDK source was treated as a Debian payload: {path}"
+            ),
+        )
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(
+            entries[0]["path"],
+            "qml/QtQml/Models/libmodelsplugin.so",
+        )
+        self.assertEqual(entries[0]["source_path"], str(source.resolve()))
+        self.assertEqual(
+            entries[0]["transformation"],
+            f"linuxdeployqt-no-strip:{'d' * 64}:rpath=relative-lib",
+        )
+
+    def test_linuxdeployqt_capture_accepts_plugin_without_soname(self):
+        capture = load_python_module(
+            "capture_linuxdeployqt_sonameless_plugin", LINUXDEPLOYQT_CAPTURE
+        )
+        plugin = self.root / "libmodelsplugin.so"
+        plugin.write_bytes(b"ELF fixture")
+
+        def command_text(arguments):
+            if arguments[0].endswith("readelf"):
+                return "Build ID: 0123456789abcdef"
+            if "--print-soname" in arguments:
+                return ""
+            if "--print-rpath" in arguments:
+                return "$ORIGIN/../../../lib"
+            self.fail(f"unexpected ELF identity command: {arguments}")
+
+        with mock.patch.object(capture.shutil, "which", side_effect=lambda name: name), \
+             mock.patch.object(capture, "command_text", side_effect=command_text):
+            identity = capture.default_elf_identity(plugin)
+
+        self.assertEqual(identity["soname"], "")
+        self.assertEqual(identity["build_id"], "0123456789abcdef")
+
+    def test_transformed_qml_plugin_keeps_qt_provenance(self):
+        source = self.qt_root / "qml/QtQml/Models/libmodelsplugin.so"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"authenticated Qt QML plugin")
+        output = self.appdir / "qml/QtQml/Models/libmodelsplugin.so"
+        output.parent.mkdir(parents=True)
+        output.write_bytes(b"linuxdeployqt transformed Qt QML plugin")
+        source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        output_digest = hashlib.sha256(output.read_bytes()).hexdigest()
+        transformation = (
+            f"linuxdeployqt-no-strip:{'d' * 64}:rpath=relative-lib"
+        )
+        self.transformed_runtime_manifest.write_text(
+            json.dumps(
+                {
+                    "format": "goldencheetah-transformed-runtime-1",
+                    "libraries": [
+                        {
+                            "output_sha256": output_digest,
+                            "path": "qml/QtQml/Models/libmodelsplugin.so",
+                            "source_path": str(source.resolve()),
+                            "source_sha256": source_digest,
+                            "transformation": transformation,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(
+            self.runtime_generator,
+            "resolve_debian_package",
+            side_effect=AssertionError("Qt QML plugin used Debian provenance"),
+        ):
+            document = self.runtime_generator.build_document(
+                self.runtime_arguments(), fixture_index=self.fixture_entries()
+            )
+
+        plugin = next(
+            entry
+            for entry in document["libraries"]
+            if entry["path"] == "qml/QtQml/Models/libmodelsplugin.so"
+        )
+        self.assertEqual(plugin["name"], "Qt-distributed-libmodelsplugin")
+        self.assertIn(f"qt-source-sha256={source_digest}", plugin["provenance"])
+        self.assertIn(f"transformation={transformation}", plugin["provenance"])
+        self.assertIn(f"output-sha256={output_digest}", plugin["provenance"])
+
     def test_linuxdeployqt_capture_accepts_soname_alias_output(self):
         capture = load_python_module(
             "capture_linuxdeployqt_soname_alias", LINUXDEPLOYQT_CAPTURE

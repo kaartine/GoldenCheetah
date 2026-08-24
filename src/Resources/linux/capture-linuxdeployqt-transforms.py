@@ -237,8 +237,7 @@ def default_elf_identity(path):
     soname = command_text([patchelf, "--print-soname", str(path)])
     rpath = command_text([patchelf, "--print-rpath", str(path)])
     if (
-        not soname
-        or not soname.isascii()
+        not soname.isascii()
         or "/" in soname
         or "\\" in soname
         or "\x00" in soname
@@ -258,18 +257,58 @@ def appdir_libraries(appdir):
     if library_root.is_symlink() or not library_root.is_dir():
         raise ValueError("AppDir library root is unsafe")
     libraries = []
-    for path in library_root.rglob("*"):
-        if path.is_symlink() or not path.is_file():
+    for relative_root in ("lib", "plugins", "qml"):
+        payload_root = root / relative_root
+        if not payload_root.exists():
             continue
-        if not (path.name.endswith(".so") or ".so." in path.name):
-            continue
-        resolved = path.resolve(strict=True)
-        if resolved != path.absolute():
-            raise ValueError("AppDir library path is not canonical")
-        libraries.append(resolved)
+        if payload_root.is_symlink() or not payload_root.is_dir():
+            raise ValueError("AppDir library root is unsafe")
+        for path in payload_root.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            if not (path.name.endswith(".so") or ".so." in path.name):
+                continue
+            resolved = path.resolve(strict=True)
+            if resolved != path.absolute():
+                raise ValueError("AppDir library path is not canonical")
+            libraries.append(resolved)
     return root, sorted(
         libraries, key=lambda item: item.relative_to(root).as_posix()
     )
+
+
+def qt_source_for_output(qt_root, appdir, output):
+    if qt_root is None:
+        return None
+    root_argument = Path(qt_root)
+    if root_argument.is_symlink():
+        raise ValueError("Qt SDK root is a symlink")
+    root = root_argument.resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("Qt SDK root is not a directory")
+    relative = output.relative_to(appdir)
+    if relative.parts[0] not in {"plugins", "qml"}:
+        return None
+    candidate = root / relative
+    if candidate.is_symlink() or not candidate.is_file():
+        return None
+    source = candidate.resolve(strict=True)
+    try:
+        source.relative_to(root)
+    except ValueError as error:
+        raise ValueError("Qt SDK runtime path escapes its root") from error
+    if source != candidate.absolute():
+        raise ValueError("Qt SDK runtime path is not canonical")
+    return source
+
+
+def appdir_relative_lib_rpath(appdir, output):
+    relative = os.path.relpath(appdir / "lib", output.parent)
+    if relative == ".":
+        return "$ORIGIN"
+    if relative.startswith("/") or "\\" in relative:
+        raise ValueError("cannot derive AppDir-relative library RPATH")
+    return "$ORIGIN/" + relative
 
 
 def build_transformed_entries(
@@ -277,6 +316,7 @@ def build_transformed_entries(
     snapshot,
     linuxdeployqt_sha256,
     *,
+    qt_root=None,
     elf_identity=default_elf_identity,
     authenticate_source,
 ):
@@ -299,8 +339,6 @@ def build_transformed_entries(
         output_identity = elf_identity(output)
         output_soname = output_identity.get("soname")
         candidates = by_soname.get(output_soname, [])
-        if not candidates:
-            continue
         output_digest = stable_sha256(output)
         if any(entry["sha256"] == output_digest for entry in candidates):
             continue
@@ -315,23 +353,50 @@ def build_transformed_entries(
             ):
                 matching.append(entry)
         digests = {entry["sha256"] for entry in matching}
-        if not matching:
-            continue
-        if len(digests) != 1:
-            raise ValueError(
-                f"linuxdeployqt source identity is ambiguous: {output.name}"
+        if matching:
+            if len(digests) != 1:
+                raise ValueError(
+                    f"linuxdeployqt source identity is ambiguous: {output.name}"
+                )
+            source = sorted(matching, key=lambda entry: str(entry["path"]))[0]
+            authenticate_source(source["path"])
+            transformed.append(
+                {
+                    "output_sha256": output_digest,
+                    "path": output.relative_to(root).as_posix(),
+                    "source_path": str(source["path"]),
+                    "source_sha256": source["sha256"],
+                    "transformation": (
+                        f"linuxdeployqt-no-strip:{linuxdeployqt_sha256}:"
+                        "rpath=$ORIGIN"
+                    ),
+                }
             )
-        source = sorted(matching, key=lambda entry: str(entry["path"]))[0]
-        authenticate_source(source["path"])
+            continue
+
+        qt_source = qt_source_for_output(qt_root, root, output)
+        if qt_source is None:
+            continue
+        source_digest = stable_sha256(qt_source)
+        if source_digest == output_digest:
+            continue
+        source_identity = elf_identity(qt_source)
+        if (
+            source_identity.get("build_id") != output_identity.get("build_id")
+            or source_identity.get("soname") != output_soname
+            or output_identity.get("rpath")
+            != appdir_relative_lib_rpath(root, output)
+        ):
+            continue
         transformed.append(
             {
                 "output_sha256": output_digest,
                 "path": output.relative_to(root).as_posix(),
-                "source_path": str(source["path"]),
-                "source_sha256": source["sha256"],
+                "source_path": str(qt_source),
+                "source_sha256": source_digest,
                 "transformation": (
                     f"linuxdeployqt-no-strip:{linuxdeployqt_sha256}:"
-                    "rpath=$ORIGIN"
+                    "rpath=relative-lib"
                 ),
             }
         )
@@ -370,6 +435,7 @@ def main():
     finalize_parser.add_argument("--output", required=True, type=Path)
     finalize_parser.add_argument("--linuxdeployqt-sha256", required=True)
     finalize_parser.add_argument("--provenance-tool", required=True, type=Path)
+    finalize_parser.add_argument("--qt-root", required=True, type=Path)
     arguments = parser.parse_args()
 
     if arguments.command == "snapshot":
@@ -385,6 +451,7 @@ def main():
         arguments.appdir,
         snapshot,
         arguments.linuxdeployqt_sha256,
+        qt_root=arguments.qt_root,
         authenticate_source=provenance.resolve_debian_package,
     )
     atomic_json(

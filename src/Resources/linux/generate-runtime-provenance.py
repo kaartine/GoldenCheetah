@@ -163,6 +163,10 @@ def load_transformed_runtime_manifest(
             "linuxdeployqt-no-strip:"
             f"{expected_linuxdeployqt_sha256}:rpath=$ORIGIN"
         )
+        allowed_transformations.add(
+            "linuxdeployqt-no-strip:"
+            f"{expected_linuxdeployqt_sha256}:rpath=relative-lib"
+        )
     source = Path(path)
     if source.is_symlink() or not source.is_file():
         raise ValueError("transformed runtime manifest must be a regular file")
@@ -1257,6 +1261,84 @@ def transformed_runtime_component(path, appdir, entry):
     return component(path, appdir, **metadata)
 
 
+def qt_runtime_component(
+    path,
+    appdir,
+    source,
+    qt_root,
+    qt_evidence,
+    qt_version,
+    qt_provenance,
+    extra_provenance="",
+):
+    relative = path.relative_to(appdir).as_posix()
+    if not (
+        path.name.startswith("libQt6")
+        or relative.startswith("plugins/")
+        or relative.startswith("qml/")
+    ):
+        raise ValueError(f"Qt SDK runtime library has no supported provenance: {relative}")
+    qt_match = re.match(r"lib(Qt6[A-Za-z0-9]+)\.so", path.name)
+    qt_name = (
+        qt_match.group(1)
+        if qt_match
+        else "Qt-distributed-" + re.sub(r"\.so(?:\..*)?$", "", path.name)
+    )
+    qt_purl_name = re.sub(r"[^a-z0-9.+-]+", "-", qt_name.lower())
+    return component(
+        path,
+        appdir,
+        qt_name,
+        qt_version,
+        "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+        f"pkg:generic/{qt_purl_name}@{qt_version}",
+        qt_provenance
+        + ";"
+        + qt_source_provenance(qt_root, source, qt_evidence)
+        + extra_provenance,
+    )
+
+
+def transformed_qt_runtime_component(
+    path,
+    appdir,
+    entry,
+    qt_root,
+    qt_evidence,
+    qt_version,
+    qt_provenance,
+):
+    relative = path.relative_to(appdir).as_posix()
+    if not (relative.startswith("plugins/") or relative.startswith("qml/")):
+        raise ValueError(f"unsupported transformed Qt runtime path: {relative}")
+    source = entry["source_path"]
+    try:
+        source_relative = source.relative_to(qt_root).as_posix()
+    except ValueError as error:
+        raise ValueError(f"transformed Qt source escapes its SDK: {relative}") from error
+    if source_relative != relative:
+        raise ValueError(f"transformed Qt source path mismatch: {relative}")
+    if sha256_file(source) != entry["source_sha256"]:
+        raise ValueError(f"transformed runtime source digest mismatch: {relative}")
+    if sha256_file(path) != entry["output_sha256"]:
+        raise ValueError(f"transformed runtime output digest mismatch: {relative}")
+    extra_provenance = (
+        f";transformation={entry['transformation']}"
+        f";runtime-path={relative}"
+        f";output-sha256={entry['output_sha256']}"
+    )
+    return qt_runtime_component(
+        path,
+        appdir,
+        source,
+        qt_root,
+        qt_evidence,
+        qt_version,
+        qt_provenance,
+        extra_provenance,
+    )
+
+
 def build_document(arguments, fixture_index=None):
     appdir = arguments.appdir.resolve(strict=True)
     if arguments.appdir.is_symlink() or not appdir.is_dir():
@@ -1314,9 +1396,26 @@ def build_document(arguments, fixture_index=None):
                 raise ValueError(
                     f"transformed runtime conflicts with Python ownership: {relative}"
                 )
-            entry = transformed_runtime_component(
-                path, appdir, transformed_metadata
-            )
+            transformed_source = transformed_metadata["source_path"]
+            try:
+                transformed_source.relative_to(qt_root)
+                is_qt_transformation = True
+            except ValueError:
+                is_qt_transformation = False
+            if is_qt_transformation:
+                entry = transformed_qt_runtime_component(
+                    path,
+                    appdir,
+                    transformed_metadata,
+                    qt_root,
+                    qt_evidence,
+                    arguments.qt_version,
+                    arguments.qt_provenance,
+                )
+            else:
+                entry = transformed_runtime_component(
+                    path, appdir, transformed_metadata
+                )
         elif path in python_owners:
             entry = component(path, appdir, **python_owners[path])
         elif "site-packages/" in relative:
@@ -1356,23 +1455,14 @@ def build_document(arguments, fixture_index=None):
             or relative.startswith("plugins/")
             or relative.startswith("qml/")
         ):
-            qt_match = re.match(r"lib(Qt6[A-Za-z0-9]+)\.so", path.name)
-            qt_name = (
-                qt_match.group(1)
-                if qt_match
-                else "Qt-distributed-" + re.sub(r"\.so(?:\..*)?$", "", path.name)
-            )
-            qt_purl_name = re.sub(r"[^a-z0-9.+-]+", "-", qt_name.lower())
-            entry = component(
+            entry = qt_runtime_component(
                 path,
                 appdir,
-                qt_name,
+                qt_source,
+                qt_root,
+                qt_evidence,
                 arguments.qt_version,
-                "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
-                f"pkg:generic/{qt_purl_name}@{arguments.qt_version}",
-                arguments.qt_provenance + ";" + qt_source_provenance(
-                    qt_root, qt_source, qt_evidence
-                ),
+                arguments.qt_provenance,
             )
         elif qt_source is not None:
             raise ValueError(

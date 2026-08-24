@@ -84,6 +84,11 @@ download_linuxdeployqt
 download_appimagetool
 download_appimage_runtime
 chmod a+x "$LINUXDEPLOYQT_FILE" "$APPIMAGETOOL_FILE"
+QT_INSTALL_PREFIX=$("$QMAKE_COMMAND" -query QT_INSTALL_PREFIX)
+if [ ! -d "$QT_INSTALL_PREFIX" ] || [ -L "$QT_INSTALL_PREFIX" ]; then
+    echo "Qt installation prefix is missing or unsafe: $QT_INSTALL_PREFIX" >&2
+    exit 1
+fi
 
 python3 "$LINUXDEPLOYQT_CAPTURE" snapshot \
     --output "$LINUXDEPLOYQT_SOURCE_SNAPSHOT"
@@ -99,6 +104,7 @@ python3 "$LINUXDEPLOYQT_CAPTURE" finalize \
     --snapshot "$LINUXDEPLOYQT_SOURCE_SNAPSHOT" \
     --output "$RUNTIME_TRANSFORM_MANIFEST" \
     --linuxdeployqt-sha256 "$LINUXDEPLOYQT_SHA256" \
+    --qt-root "$QT_INSTALL_PREFIX" \
     --provenance-tool \
         "$SOURCE_DIR/Resources/linux/generate-runtime-provenance.py"
 
@@ -114,7 +120,6 @@ install_box2d_license \
 
 patchelf --set-rpath '$ORIGIN/../lib' \
     "$APPDIR/libexec/QtWebEngineProcess"
-QT_INSTALL_PREFIX=$("$QMAKE_COMMAND" -query QT_INSTALL_PREFIX)
 if [ ! -d "$QT_INSTALL_PREFIX/resources" ]; then
     echo "Qt resources directory is missing: $QT_INSTALL_PREFIX/resources" >&2
     exit 1

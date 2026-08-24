@@ -554,6 +554,10 @@ class PipelineIsolationTests(unittest.TestCase):
         self.assertLess(finalize, keychain)
         self.assertLess(keychain, sbom)
         self.assertIn("-no-strip", package[deployment:finalize])
+        self.assertIn(
+            '--qt-root "$QT_INSTALL_PREFIX"',
+            package[finalize:keychain],
+        )
 
     def test_compiler_environment_is_allowlisted(self):
         build_pass = REPOSITORY_ROOT / "appveyor/linux/build-appimage-pass.sh"
