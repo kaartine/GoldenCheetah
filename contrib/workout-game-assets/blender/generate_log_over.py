@@ -19,7 +19,6 @@ from generate_tabletop import canonical_to_blender, create_empty, make_material
 
 ASSET_NAME = "LogOver_Greybox"
 ROOT_NAME = "ROOT_LogOver"
-TERRAIN_MESH_NAME = "GEO_LogOverTile_LOD0"
 LOG_MESH_NAME = "GEO_LogOverObstacle_LOD0"
 
 SOCKET_HALF_WIDTH_M = 0.68
@@ -31,18 +30,13 @@ LOG_HALF_LENGTH_M = 1.12
 CORE_LENGTH_M = LOG_RADIUS_Z_M * 2.0
 TILE_LENGTH_M = DEAD_ZONE_M * 2.0 + CORE_LENGTH_M
 LOG_CENTER_Z_M = TILE_LENGTH_M * 0.5
-BYPASS_HALF_WIDTH_M = 0.42
-BYPASS_OFFSET_M = 1.68
-BYPASS_RISE_M = 0.02
 RADIAL_SEGMENTS = 16
 
-MAT_BYPASS = "MAT_LogOverBypass_Grey"
 MAT_BARK = "MAT_LogOverBark_Grey"
 MAT_END = "MAT_LogOverEndGrain_Grey"
 
 REQUIRED_NAMES = {
     ROOT_NAME,
-    TERRAIN_MESH_NAME,
     LOG_MESH_NAME,
     "SOCKET_IN",
     "SOCKET_OUT",
@@ -83,38 +77,6 @@ def log_surface_height(z_forward: float) -> float:
             to_y = math.sin(to_angle) * LOG_HEIGHT_M
             return from_y + (to_y - from_y) * amount
     return LOG_HEIGHT_M * 0.5
-
-
-def profile_sections() -> list[float]:
-    sections = [0.0, DEAD_ZONE_M]
-    for segment in range(RADIAL_SEGMENTS // 2 + 1):
-        angle = math.pi - segment * 2.0 * math.pi / RADIAL_SEGMENTS
-        sections.append(LOG_CENTER_Z_M + math.cos(angle) * LOG_RADIUS_Z_M)
-    sections.extend((TILE_LENGTH_M - DEAD_ZONE_M, TILE_LENGTH_M))
-    return sorted(set(sections))
-
-
-def smooth_step(progress: float) -> float:
-    amount = min(1.0, max(0.0, progress))
-    return amount * amount * (3.0 - 2.0 * amount)
-
-
-def bypass_center_x(z_forward: float) -> float:
-    decision_z = DEAD_ZONE_M * 0.5
-    split_z = DEAD_ZONE_M
-    merge_z = TILE_LENGTH_M - DEAD_ZONE_M * 0.5
-    join_z = TILE_LENGTH_M - DEAD_ZONE_M
-    if z_forward <= decision_z or z_forward >= merge_z:
-        return 0.0
-    if z_forward < split_z:
-        return BYPASS_OFFSET_M * smooth_step(
-            (z_forward - decision_z) / (split_z - decision_z)
-        )
-    if z_forward <= join_z:
-        return BYPASS_OFFSET_M
-    return BYPASS_OFFSET_M * (1.0 - smooth_step(
-        (z_forward - join_z) / (merge_z - join_z)
-    ))
 
 
 def add_quad(
@@ -164,42 +126,6 @@ def create_mesh_object(
     return result
 
 
-def build_tile(root, materials):
-    sections = profile_sections()
-    vertices: list[tuple[float, float, float]] = []
-    faces: list[tuple[int, int, int]] = []
-    material_indices: list[int] = []
-    bypass_sections = sorted(set(
-        [DEAD_ZONE_M * 0.5, DEAD_ZONE_M,
-         TILE_LENGTH_M - DEAD_ZONE_M,
-         TILE_LENGTH_M - DEAD_ZONE_M * 0.5]
-        + [value for value in sections
-           if DEAD_ZONE_M * 0.5 < value
-           < TILE_LENGTH_M - DEAD_ZONE_M * 0.5]
-    ))
-    bypass_rows: list[tuple[int, int]] = []
-    for z_forward in bypass_sections:
-        center = bypass_center_x(z_forward)
-        base = len(vertices)
-        vertices.extend(
-            (
-                (center - BYPASS_HALF_WIDTH_M, BYPASS_RISE_M, z_forward),
-                (center + BYPASS_HALF_WIDTH_M, BYPASS_RISE_M, z_forward),
-            )
-        )
-        bypass_rows.append((base, base + 1))
-    for previous, current in zip(bypass_rows, bypass_rows[1:]):
-        add_quad(
-            faces,
-            material_indices,
-            previous[0], previous[1], current[0], current[1], 0,
-        )
-    return create_mesh_object(
-        root, TERRAIN_MESH_NAME, vertices, faces, material_indices,
-        [materials[0]]
-    ), vertices
-
-
 def build_log(root, materials):
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
@@ -238,7 +164,7 @@ def build_log(root, materials):
             faces.append(tuple(reversed(triangle)) if reverse else triangle)
             material_indices.append(1)
     return create_mesh_object(
-        root, LOG_MESH_NAME, vertices, faces, material_indices, materials[1:]
+        root, LOG_MESH_NAME, vertices, faces, material_indices, materials
     ), vertices
 
 
@@ -261,11 +187,9 @@ def build_scene():
     root["physics_authority"] = "external"
 
     materials = [
-        make_material(MAT_BYPASS, (0.47, 0.34, 0.16, 1.0)),
         make_material(MAT_BARK, (0.28, 0.14, 0.055, 1.0)),
         make_material(MAT_END, (0.52, 0.32, 0.13, 1.0)),
     ]
-    tile, tile_vertices = build_tile(root, materials)
     log, log_vertices = build_log(root, materials)
 
     socket_properties = {
@@ -291,10 +215,10 @@ def build_scene():
     create_empty(root, "MARKER_LAND",
                  (0.0, 0.0, TILE_LENGTH_M - DEAD_ZONE_M),
                  0.22, marker_properties)
-    return root, tile, log, tile_vertices, log_vertices
+    return root, log, log_vertices
 
 
-def self_check(root, tile, log, tile_vertices, log_vertices) -> None:
+def self_check(root, log, log_vertices) -> None:
     if bpy.app.version[0] != 4:
         raise RuntimeError(f"Blender 4.x is required, found {bpy.app.version_string}")
     names = {obj.name for obj in bpy.context.scene.objects}
@@ -313,9 +237,9 @@ def self_check(root, tile, log, tile_vertices, log_vertices) -> None:
         raise RuntimeError("The log must remain visibly buried in the tread")
     if LOG_HALF_LENGTH_M <= SOCKET_HALF_WIDTH_M + 0.30:
         raise RuntimeError("The log must extend clearly beyond both trail edges")
-    for point in [*tile_vertices, *log_vertices]:
+    for point in log_vertices:
         assert_finite(point, "Non-finite canonical mesh coordinate")
-    for mesh_object in (tile, log):
+    for mesh_object in (log,):
         if mesh_object.location.length > EPSILON \
                 or any(abs(value) > EPSILON for value in mesh_object.rotation_euler) \
                 or any(abs(value - 1.0) > EPSILON for value in mesh_object.scale):
@@ -325,7 +249,7 @@ def self_check(root, tile, log, tile_vertices, log_vertices) -> None:
         if any(polygon.loop_total != 3 or polygon.area <= EPSILON
                for polygon in mesh_object.data.polygons):
             raise RuntimeError(f"{mesh_object.name} has invalid triangles")
-    if len(tile.data.polygons) > 160 or len(log.data.polygons) != 64:
+    if len(log.data.polygons) != 64:
         raise RuntimeError("Unexpected log-over topology")
     for socket_name, socket_z in (("SOCKET_IN", 0.0),
                                   ("SOCKET_OUT", TILE_LENGTH_M)):
@@ -335,12 +259,6 @@ def self_check(root, tile, log, tile_vertices, log_vertices) -> None:
         expected = canonical_to_blender((0.0, 0.0, socket_z))
         for actual, target in zip(socket.location, expected):
             assert_close(float(actual), target, f"{socket_name} location")
-    bypass_min_z = min(point[2] for point in tile_vertices)
-    bypass_max_z = max(point[2] for point in tile_vertices)
-    assert_close(bypass_min_z, DEAD_ZONE_M * 0.5,
-                 "Bypass visual entry")
-    assert_close(bypass_max_z, TILE_LENGTH_M - DEAD_ZONE_M * 0.5,
-                 "Bypass visual exit")
     if root.location.length > EPSILON \
             or any(abs(value) > EPSILON for value in root.rotation_euler) \
             or any(abs(value - 1.0) > EPSILON for value in root.scale):
@@ -378,13 +296,13 @@ def main() -> None:
     output_path = Path(os.path.expanduser(parse_arguments().output)).resolve()
     if output_path.suffix.lower() != ".glb":
         raise RuntimeError("--output must end in .glb")
-    root, tile, log, tile_vertices, log_vertices = build_scene()
-    self_check(root, tile, log, tile_vertices, log_vertices)
+    root, log, log_vertices = build_scene()
+    self_check(root, log, log_vertices)
     export_glb(output_path)
     print(
         "Generated", output_path,
-        f"({len(tile.data.vertices) + len(log.data.vertices)} vertices, "
-        f"{len(tile.data.polygons) + len(log.data.polygons)} triangles)",
+        f"({len(log.data.vertices)} vertices, "
+        f"{len(log.data.polygons)} triangles)",
     )
 
 

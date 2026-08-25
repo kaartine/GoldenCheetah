@@ -21,14 +21,6 @@ Node {
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque
     }
-    PrincipledMaterial {
-        id: mat_LogOverBypass_Grey_material
-        objectName: "MAT_LogOverBypass_Grey"
-        baseColor: "#ff785729"
-        roughness: 1
-        cullMode: PrincipledMaterial.NoCulling
-        alphaMode: PrincipledMaterial.Opaque
-    }
 
     // Nodes:
     Node {
@@ -41,14 +33,6 @@ Node {
             materials: [
                 mat_LogOverBark_Grey_material,
                 mat_LogOverEndGrain_Grey_material
-            ]
-        }
-        Model {
-            id: geo_LogOverTile_LOD0
-            objectName: "GEO_LogOverTile_LOD0"
-            source: "meshes/geo_LogOverTile_LOD0_mesh.mesh"
-            materials: [
-                mat_LogOverBypass_Grey_material
             ]
         }
         Node {

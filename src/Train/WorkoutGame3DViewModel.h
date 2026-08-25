@@ -26,6 +26,7 @@ class WorkoutGame3DViewModel : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QObject *trailGeometry READ trailGeometry CONSTANT)
+    Q_PROPERTY(QObject *bypassGeometry READ bypassGeometry CONSTANT)
     Q_PROPERTY(QObject *floorGeometry READ floorGeometry
                NOTIFY floorGeometryChanged)
     Q_PROPERTY(bool ready READ ready NOTIFY sceneChanged)
@@ -109,6 +110,7 @@ public:
     void setFps(double value);
 
     QObject *trailGeometry() const { return trail.get(); }
+    QObject *bypassGeometry() const { return bypass.get(); }
     QObject *floorGeometry() const
     {
         return floorBuffers[std::size_t(activeFloorBuffer)].get();
@@ -207,6 +209,7 @@ private:
     void updateCameraPose(double distanceMeters);
 
     std::unique_ptr<WorkoutGame3DGeometry> trail;
+    std::unique_ptr<WorkoutGame3DGeometry> bypass;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
     int activeFloorBuffer = 0;
     WorkoutGameRoadCourse roadCourse;

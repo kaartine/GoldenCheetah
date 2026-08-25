@@ -85,6 +85,20 @@ Item {
             receivesShadows: false
         }
 
+        Model {
+            objectName: "bypassGeometryModel"
+            geometry: workoutGame3D.bypassGeometry
+            materials: PrincipledMaterial {
+                baseColor: "white"
+                roughness: 0.95
+                vertexColorsEnabled: true
+                lighting: PrincipledMaterial.FragmentLighting
+                cullMode: Material.NoCulling
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
         Repeater3D {
             model: workoutGame3D.trees
             delegate: Node {
@@ -199,6 +213,7 @@ Item {
 
         Node {
             id: rider
+            objectName: "riderNode"
             position: Qt.vector3d(
                 workoutGame3D.riderX,
                 workoutGame3D.riderY,

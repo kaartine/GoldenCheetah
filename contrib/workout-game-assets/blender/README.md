@@ -15,8 +15,9 @@ partly buried log-over tile without downloading or embedding external assets.
   edges and has a small buried lower hull. Its upper 16-segment chords use the
   same normalized profile as `WorkoutGameFeatureGeometry`.
 - The continuous runtime trail and forest floor remain the only ground meshes.
-  The asset contributes the obstacle and a narrow raised safe-bypass ribbon,
-  avoiding coplanar trail geometry and a broad terrain wedge.
+  The asset contributes only the obstacle; shared runtime branch geometry
+  follows the canonical bypass curve and terrain surface. This avoids
+  coplanar trail geometry, floating bypasses and broad terrain wedges.
 - Exact socket nodes plus named prepare, decision, action, apex and land
   markers remain visual metadata. The script validates topology, finite
   coordinates, socket placement, profile continuity, buried volume, material

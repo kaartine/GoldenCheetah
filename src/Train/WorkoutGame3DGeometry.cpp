@@ -11,11 +11,13 @@
 
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameTrailBranch.h"
 
 #include <QByteArray>
 #include <QVector3D>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -27,6 +29,8 @@ namespace {
 
 constexpr int MaximumSamples = 16000;
 constexpr double MinimumSampleSpacingMeters = 0.75;
+constexpr double BypassHalfWidthMeters = 0.38;
+constexpr double BypassEdgeWidthMeters = 0.08;
 constexpr double Pi = 3.14159265358979323846;
 
 struct Vertex
@@ -136,6 +140,7 @@ void WorkoutGame3DGeometry::build(
         double requestedEndDistanceMeters)
 {
     clear();
+    update();
     geometryReady = false;
     generatedSampleCount = 0;
     if (!course.ready || course.totalLengthMeters <= 0.0) return;
@@ -147,6 +152,10 @@ void WorkoutGame3DGeometry::build(
     if (!std::isfinite(startDistanceMeters)
             || !std::isfinite(endDistanceMeters)
             || endDistanceMeters <= startDistanceMeters) {
+        return;
+    }
+    if (layer == Layer::Bypass) {
+        buildBypasses(course, startDistanceMeters, endDistanceMeters);
         return;
     }
     const double rangeMeters = endDistanceMeters - startDistanceMeters;
@@ -327,4 +336,169 @@ void WorkoutGame3DGeometry::build(
     setBounds(boundsMin, boundsMax);
     geometryReady = true;
     generatedSampleCount = count;
+    update();
+}
+
+void WorkoutGame3DGeometry::buildBypasses(
+        const WorkoutGameRoadCourse &course,
+        double startDistanceMeters,
+        double endDistanceMeters)
+{
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    QVector3D boundsMin(
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max());
+    QVector3D boundsMax(
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest());
+    int totalSamples = 0;
+
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled
+                || !std::isfinite(piece.challenge.bypassStartDistanceMeters)
+                || !std::isfinite(piece.challenge.bypassEndDistanceMeters)
+                || !std::isfinite(piece.challenge.bypassLateralMeters)) {
+            continue;
+        }
+        const double branchStart =
+                piece.challenge.bypassStartDistanceMeters;
+        const double branchEnd = piece.challenge.bypassEndDistanceMeters;
+        const double start = std::max(startDistanceMeters, branchStart);
+        const double end = std::min(endDistanceMeters, branchEnd);
+        if (end <= start || branchEnd <= branchStart) continue;
+        const int remaining = MaximumSamples - totalSamples;
+        if (remaining < 2) break;
+        const int count = std::clamp(
+                int(std::ceil((end - start) /
+                              MinimumSampleSpacingMeters)) + 1,
+                2, remaining);
+        const std::uint32_t branchVertexStart =
+                std::uint32_t(vertices.size());
+
+        for (int index = 0; index < count; ++index) {
+            const double distance = index + 1 == count
+                    ? end
+                    : start + (end - start) * double(index)
+                        / double(count - 1);
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(course, distance);
+            const WorkoutGame3DTerrainProfileSnapshot terrain =
+                    WorkoutGame3DTerrainProfile::build(
+                        sample, distance, course.seed);
+            if (!sample.ready || !terrain.ready) {
+                clear();
+                return;
+            }
+            const double pulse = WorkoutGameTrailBranch::blend(
+                    (distance - branchStart) / (branchEnd - branchStart));
+            const double center = WorkoutGameTrailBranch::lateralAt(
+                    distance, branchStart, branchEnd,
+                    piece.challenge.bypassLateralMeters);
+            const double connectorTreadHalfWidth = std::max(
+                    0.01, sample.center.halfWidthMeters
+                        - BypassEdgeWidthMeters);
+            const double treadHalfWidth = connectorTreadHalfWidth
+                    + (BypassHalfWidthMeters - connectorTreadHalfWidth)
+                        * pulse;
+            const std::array<double, 4> laterals = {{
+                center - treadHalfWidth - BypassEdgeWidthMeters,
+                center - treadHalfWidth,
+                center + treadHalfWidth,
+                center + treadHalfWidth + BypassEdgeWidthMeters
+            }};
+            const double rightX = std::cos(sample.center.headingRadians);
+            const double rightZ = -std::sin(sample.center.headingRadians);
+            for (int vertexIndex = 0; vertexIndex < 4; ++vertexIndex) {
+                const double lateral = laterals[std::size_t(vertexIndex)];
+                const double sampleRadius = 0.04;
+                const double lowElevation =
+                        WorkoutGame3DTerrainProfile::elevationAtLateral(
+                            terrain, lateral - sampleRadius);
+                const double highElevation =
+                        WorkoutGame3DTerrainProfile::elevationAtLateral(
+                            terrain, lateral + sampleRadius);
+                const double crossSlope = (highElevation - lowElevation)
+                        / (2.0 * sampleRadius);
+                const QVector3D forward(
+                        float(std::sin(sample.center.headingRadians)),
+                        float(sample.baseGradePercent / 100.0),
+                        float(std::cos(sample.center.headingRadians)));
+                const QVector3D right{
+                        float(rightX), float(crossSlope), float(rightZ)};
+                QVector3D normal = QVector3D::crossProduct(forward, right);
+                normal.normalize();
+                const bool tread = vertexIndex == 1 || vertexIndex == 2;
+                const double elevation =
+                        WorkoutGame3DTerrainProfile::elevationAtLateral(
+                            terrain, lateral)
+                        + (tread
+                            ? WorkoutGameTrailBranch::treadLiftMeters(pulse)
+                            : WorkoutGameTrailBranch::edgeLiftMeters(pulse));
+                const float x = float(sample.center.xMeters
+                        + lateral * rightX);
+                const float y = float(elevation);
+                const float z = float(sample.center.zMeters
+                        + lateral * rightZ);
+                vertices.push_back({
+                    x, y, z,
+                    normal.x(), normal.y(), normal.z(),
+                    tread ? 0.50f : 0.25f,
+                    tread ? 0.32f : 0.32f,
+                    tread ? 0.16f : 0.17f,
+                    1.0f,
+                    float(vertexIndex) / 3.0f,
+                    float(distance * 0.22)
+                });
+                boundsMin.setX(std::min(boundsMin.x(), x));
+                boundsMin.setY(std::min(boundsMin.y(), y));
+                boundsMin.setZ(std::min(boundsMin.z(), z));
+                boundsMax.setX(std::max(boundsMax.x(), x));
+                boundsMax.setY(std::max(boundsMax.y(), y));
+                boundsMax.setZ(std::max(boundsMax.z(), z));
+            }
+            if (index > 0) {
+                const std::uint32_t base = branchVertexStart
+                        + std::uint32_t(index * 4);
+                for (std::uint32_t strip = 0; strip < 3; ++strip) {
+                    indices.insert(indices.end(), {
+                        base - 4u + strip,
+                        base + strip,
+                        base - 3u + strip,
+                        base - 3u + strip,
+                        base + strip,
+                        base + 1u + strip
+                    });
+                }
+            }
+        }
+        totalSamples += count;
+    }
+
+    if (vertices.empty() || indices.empty()) return;
+    QByteArray vertexData;
+    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
+    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
+    QByteArray indexData;
+    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
+    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
+    setStride(sizeof(Vertex));
+    setVertexData(vertexData);
+    setIndexData(indexData);
+    setPrimitiveType(PrimitiveType::Triangles);
+    addAttribute(Attribute::PositionSemantic,
+                 offsetof(Vertex, x), Attribute::F32Type);
+    addAttribute(Attribute::NormalSemantic,
+                 offsetof(Vertex, nx), Attribute::F32Type);
+    addAttribute(Attribute::ColorSemantic,
+                 offsetof(Vertex, r), Attribute::F32Type);
+    addAttribute(Attribute::TexCoordSemantic,
+                 offsetof(Vertex, u), Attribute::F32Type);
+    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
+    setBounds(boundsMin, boundsMax);
+    geometryReady = true;
+    generatedSampleCount = totalSamples;
+    update();
 }

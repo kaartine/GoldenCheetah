@@ -12,6 +12,7 @@
 #include "WorkoutGame3DFeatureAsset.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureChallenge.h"
+#include "WorkoutGameTrailBranch.h"
 
 #include <QByteArray>
 #include <QVariantMap>
@@ -78,7 +79,9 @@ std::uint32_t mix(std::uint32_t value)
 WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     QObject(parent),
     trail(std::make_unique<WorkoutGame3DGeometry>(
-            WorkoutGame3DGeometry::Layer::Trail))
+            WorkoutGame3DGeometry::Layer::Trail)),
+    bypass(std::make_unique<WorkoutGame3DGeometry>(
+            WorkoutGame3DGeometry::Layer::Bypass))
 {
     for (std::unique_ptr<WorkoutGame3DGeometry> &buffer : floorBuffers) {
         buffer = std::make_unique<WorkoutGame3DGeometry>(
@@ -109,6 +112,7 @@ void WorkoutGame3DViewModel::setCourse(
     roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
     rebuildPowerProfile(course);
     trail->setCourse(roadCourse);
+    bypass->setCourse(roadCourse);
     floorBucket = std::numeric_limits<int>::min();
     featureBucket = std::numeric_limits<int>::min();
     treeBucket = std::numeric_limits<int>::min();
@@ -162,9 +166,39 @@ void WorkoutGame3DViewModel::setFrame(
             ? std::max(0.0,
                 finiteOrZero(frame.world.rider.airHeightMeters()))
             : featureAir;
-    const double visualGround = sample.center.elevationMeters
-            - (frame.feature.route == WorkoutGameRoute::SafeBypass
-                ? sample.nonPhysicalFeatureOffsetMeters : 0.0);
+    double visualGround = sample.center.elevationMeters;
+    if (frame.feature.route == WorkoutGameRoute::SafeBypass) {
+        const WorkoutGame3DTerrainProfileSnapshot terrain =
+                WorkoutGame3DTerrainProfile::build(
+                    sample, distanceMeters, roadCourse.seed);
+        double treadLift = WorkoutGameTrailBranch::treadLiftMeters(0.0);
+        for (const WorkoutGameRoadPiece &piece : roadCourse.pieces) {
+            if (piece.challenge.enabled
+                    && distanceMeters
+                        >= piece.challenge.bypassStartDistanceMeters
+                    && distanceMeters
+                        <= piece.challenge.bypassEndDistanceMeters) {
+                const double length =
+                        piece.challenge.bypassEndDistanceMeters
+                        - piece.challenge.bypassStartDistanceMeters;
+                if (length > 0.0) {
+                    const double branchBlend =
+                            WorkoutGameTrailBranch::blend(
+                                (distanceMeters
+                                 - piece.challenge
+                                    .bypassStartDistanceMeters)
+                                / length);
+                    treadLift = WorkoutGameTrailBranch::treadLiftMeters(
+                            branchBlend);
+                }
+                break;
+            }
+        }
+        visualGround = terrain.ready
+                ? WorkoutGame3DTerrainProfile::elevationAtLateral(
+                    terrain, lateral) + treadLift
+                : sample.visualGroundElevationMeters();
+    }
     riderPositionY = visualGround + authoritativeAir;
     riderPositionZ = sample.center.zMeters + lateral * rightZ;
     riderHeadingDegrees = sample.center.headingRadians * 180.0 / Pi;

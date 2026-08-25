@@ -11,6 +11,7 @@
 #include "Train/WorkoutGameRoadProjection.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameHorizon.h"
+#include "Train/WorkoutGameTrailBranch.h"
 
 #include <QTest>
 
@@ -148,14 +149,22 @@ private slots:
                 - jump->challenge.prepareDistanceMeters <= 6.0 + 1e-9);
         QVERIFY(jump->challenge.decisionDistanceMeters
                 < jump->challenge.obstacleDistanceMeters);
-        QVERIFY(jump->challenge.decisionDistanceMeters
-                < jump->challenge.bypassStartDistanceMeters);
+        QCOMPARE(jump->challenge.decisionDistanceMeters,
+                 jump->challenge.bypassStartDistanceMeters);
         QVERIFY(jump->challenge.bypassStartDistanceMeters
                 < jump->challenge.obstacleDistanceMeters);
         QVERIFY(jump->challenge.bypassEndDistanceMeters
                 > jump->challenge.obstacleDistanceMeters);
         QVERIFY(jump->challenge.bypassEndDistanceMeters
                 - jump->challenge.bypassStartDistanceMeters >= 18.0 - 1e-9);
+        const double obstacleBypassLateral = std::abs(
+                WorkoutGameTrailBranch::lateralAt(
+                    jump->challenge.obstacleDistanceMeters,
+                    jump->challenge.bypassStartDistanceMeters,
+                    jump->challenge.bypassEndDistanceMeters,
+                    jump->challenge.bypassLateralMeters));
+        QVERIFY2(obstacleBypassLateral >= 1.67,
+                 "bypass does not clear the log and rider at the obstacle");
         const WorkoutGameFeatureGeometryProfile featureGeometry =
                 WorkoutGameFeatureGeometry::profile(
                     jump->terrain, jump->difficulty);

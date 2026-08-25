@@ -188,11 +188,10 @@ class TestWorkoutGameAssets(unittest.TestCase):
             {
                 "MAT_LogOverBark_Grey",
                 "MAT_LogOverEndGrain_Grey",
-                "MAT_LogOverBypass_Grey",
             },
         )
         bounds = manifest["technical"]["boundsMeters"]
-        self.assertLessEqual(bounds["maximum"][0] - bounds["minimum"][0], 3.22)
+        self.assertLessEqual(bounds["maximum"][0] - bounds["minimum"][0], 2.24)
 
     def test_malformed_glb_structure_fails_cleanly(self) -> None:
         document, size = assets.read_glb(GLB_PATH)

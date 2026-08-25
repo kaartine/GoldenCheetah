@@ -440,18 +440,11 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     : measuredPreparationDistance;
                 piece.challenge.decisionDistanceMeters = challengeDistance;
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;
-                const double featureStart = obstacleDistance
-                        + (featureGeometry.ready
-                            ? featureGeometry.startMeters : -4.0);
                 const double featureEnd = obstacleDistance
                         + (featureGeometry.ready
                             ? featureGeometry.endMeters : 4.0);
-                piece.challenge.bypassStartDistanceMeters = std::max(
-                        challengeDistance + 0.5,
-                        featureStart - 2.0);
-                piece.challenge.bypassStartDistanceMeters = std::min(
-                        featureStart - 0.25,
-                        piece.challenge.bypassStartDistanceMeters);
+                piece.challenge.bypassStartDistanceMeters =
+                        challengeDistance;
                 constexpr double MinimumBypassLengthMeters = 18.0;
                 constexpr double BypassExitRunoutMeters = 10.0;
                 piece.challenge.bypassEndDistanceMeters = std::min(

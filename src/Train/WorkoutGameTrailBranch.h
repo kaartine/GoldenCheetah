@@ -50,6 +50,24 @@ public:
         return lateralMeters * blend(
                 (distanceMeters - startDistanceMeters) / length);
     }
+
+    static double treadLiftMeters(double requestedBranchBlend)
+    {
+        const double branchBlend = std::clamp(
+                std::isfinite(requestedBranchBlend)
+                    ? requestedBranchBlend : 0.0,
+                0.0, 1.0);
+        return 0.035 + 0.045 * branchBlend;
+    }
+
+    static double edgeLiftMeters(double requestedBranchBlend)
+    {
+        const double branchBlend = std::clamp(
+                std::isfinite(requestedBranchBlend)
+                    ? requestedBranchBlend : 0.0,
+                0.0, 1.0);
+        return 0.020 + 0.030 * branchBlend;
+    }
 };
 
 #endif

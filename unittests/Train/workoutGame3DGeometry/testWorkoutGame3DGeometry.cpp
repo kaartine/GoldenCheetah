@@ -8,6 +8,8 @@
  */
 
 #include "WorkoutGame3DGeometry.h"
+#include "WorkoutGame3DTerrainProfile.h"
+#include "WorkoutGameTrailBranch.h"
 
 #include <QTest>
 
@@ -288,6 +290,91 @@ private slots:
                 floor.vertexData(), floor.stride(), middleVertex + 3,
                 sizeof(float));
         QVERIFY(std::abs(outerY - trailEdgeY) > 0.10f);
+    }
+
+    void bypassUsesTheRuntimeBranchCurveAndTerrainSurface()
+    {
+        WorkoutGameRoadCourse course = straightCourse(40.0);
+        WorkoutGameRoadPiece &piece = course.pieces.front();
+        piece.challenge.enabled = true;
+        piece.challenge.obstacleDistanceMeters = 20.0;
+        piece.challenge.bypassStartDistanceMeters = 10.0;
+        piece.challenge.bypassEndDistanceMeters = 30.0;
+        piece.challenge.bypassLateralMeters = 2.2;
+
+        WorkoutGame3DGeometry bypass(
+                WorkoutGame3DGeometry::Layer::Bypass);
+        bypass.setCourse(course);
+
+        QVERIFY(bypass.ready());
+        QVERIFY(bypass.sampleCount() >= 20);
+        QCOMPARE(bypass.vertexData().size(),
+                 bypass.sampleCount() * 4 * bypass.stride());
+        QCOMPARE(bypass.indexData().size(),
+                 (bypass.sampleCount() - 1) * 18
+                    * int(sizeof(quint32)));
+        double maximumCenter = 0.0;
+        for (int row = 0; row < bypass.sampleCount(); ++row) {
+            const int base = row * 4;
+            const double distance = vertexFloat(
+                    bypass.vertexData(), bypass.stride(), base, 8);
+            const double left = vertexFloat(
+                    bypass.vertexData(), bypass.stride(), base + 1, 0);
+            const double right = vertexFloat(
+                    bypass.vertexData(), bypass.stride(), base + 2, 0);
+            const double center = (left + right) * 0.5;
+            const double expectedCenter = WorkoutGameTrailBranch::lateralAt(
+                    distance,
+                    piece.challenge.bypassStartDistanceMeters,
+                    piece.challenge.bypassEndDistanceMeters,
+                    piece.challenge.bypassLateralMeters);
+            QVERIFY(std::abs(center - expectedCenter) < 0.001);
+            maximumCenter = std::max(maximumCenter, std::abs(center));
+
+            const WorkoutGameRoadSample road =
+                    WorkoutGameRoadCourseBuilder::sample(course, distance);
+            const WorkoutGame3DTerrainProfileSnapshot profile =
+                    WorkoutGame3DTerrainProfile::build(
+                        road, distance, course.seed);
+            QVERIFY(road.ready && profile.ready);
+            const double branchBlend = WorkoutGameTrailBranch::blend(
+                    (distance
+                     - piece.challenge.bypassStartDistanceMeters)
+                    / (piece.challenge.bypassEndDistanceMeters
+                       - piece.challenge.bypassStartDistanceMeters));
+            for (int vertex = 0; vertex < 4; ++vertex) {
+                const double lateral = vertexFloat(
+                        bypass.vertexData(), bypass.stride(), base + vertex, 0);
+                const double y = vertexFloat(
+                        bypass.vertexData(), bypass.stride(), base + vertex, 4);
+                const double expected =
+                        WorkoutGame3DTerrainProfile::elevationAtLateral(
+                            profile, lateral)
+                        + (vertex == 1 || vertex == 2
+                            ? WorkoutGameTrailBranch::treadLiftMeters(
+                                branchBlend)
+                            : WorkoutGameTrailBranch::edgeLiftMeters(
+                                branchBlend));
+                QVERIFY(std::abs(y - expected) < 0.001);
+                const double nx = vertexFloat(
+                        bypass.vertexData(), bypass.stride(), base + vertex, 12);
+                const double ny = vertexFloat(
+                        bypass.vertexData(), bypass.stride(), base + vertex, 16);
+                const double nz = vertexFloat(
+                        bypass.vertexData(), bypass.stride(), base + vertex, 20);
+                QVERIFY(ny > 0.0);
+                QVERIFY(std::abs(std::sqrt(nx * nx + ny * ny + nz * nz)
+                                 - 1.0) < 0.001);
+            }
+        }
+        QVERIFY(maximumCenter > 2.1);
+        const double firstOuter = vertexFloat(
+                bypass.vertexData(), bypass.stride(), 0, 0);
+        const double lastOuter = vertexFloat(
+                bypass.vertexData(), bypass.stride(),
+                (bypass.sampleCount() - 1) * 4 + 3, 0);
+        QVERIFY(std::abs(firstOuter + 0.68) < 0.001);
+        QVERIFY(std::abs(lastOuter - 0.68) < 0.001);
     }
 };
 

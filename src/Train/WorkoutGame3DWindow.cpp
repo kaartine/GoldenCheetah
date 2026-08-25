@@ -71,6 +71,10 @@ void WorkoutGame3DWindow::setFrame(
     cadenceRpm = newCadenceRpm;
     heartRate = newHeartRate;
     virtualGear = newVirtualGear;
+    if (!sessionRunning) {
+        visualSmoother.reset();
+        hasFrame = false;
+    }
     const bool firstFrame = !hasFrame;
     visualSmoother.setTarget(
             frame, monotonicClock.elapsed());

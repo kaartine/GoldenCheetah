@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_log_over.py",
     "retrievedAt": "2026-08-25",
     "originalFileName": "generate_log_over.py",
-    "originalSha256": "2d93877a7414bbab128966ed9b0c5bce161f85dfaf223253d599cfb5279f900f",
+    "originalSha256": "dbd52f0310e120d5a8be1584b0d7a8e8d1b3a4e372e8edda1584a9d9f658a88e",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_log_over.py"
@@ -35,27 +35,22 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_log_over.py",
       "purpose": "source",
-      "sha256": "2d93877a7414bbab128966ed9b0c5bce161f85dfaf223253d599cfb5279f900f"
+      "sha256": "dbd52f0310e120d5a8be1584b0d7a8e8d1b3a4e372e8edda1584a9d9f658a88e"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_LogOver_Greybox.glb",
       "purpose": "intermediate",
-      "sha256": "03402957b635032c9787c4d76a4a8d038ee27077e4ed09304524b43f28fffc4d"
+      "sha256": "e26996bbee99fe9817022791875bb2b16d0ccb18a2d3bfbec3c36e9fd2cd5501"
     },
     {
       "path": "src/Train/qml/assets/Wg_LogOver_Greybox.qml",
       "purpose": "runtime",
-      "sha256": "61544b89765ce25d04c4b7678129696f88cffc4d01c1fba76c051b205abca8c8"
+      "sha256": "7505e8b8044ce1634f75848c7b7cb8f4c08ac5c4c838bf15e17f8b1cfc6b34a3"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_LogOverObstacle_LOD0_mesh.mesh",
       "purpose": "runtime",
       "sha256": "d8683080fcc05ad863a7335c5bedb14e47f327de440f444975ae9e86c18c7051"
-    },
-    {
-      "path": "src/Train/qml/assets/meshes/geo_LogOverTile_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "28a77477ab4b8bbd6a75ff0a98ba12da2895a1f1ab7c0ff0c8085960ad6d1331"
     }
   ],
   "processing": {
@@ -74,13 +69,12 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 7288,
-    "trianglesLod0": 84,
-    "materials": 3,
+    "glbBytes": 5764,
+    "trianglesLod0": 64,
+    "materials": 2,
     "textureBytes": 0,
     "nodes": [
       "ROOT_LogOver",
-      "GEO_LogOverTile_LOD0",
       "GEO_LogOverObstacle_LOD0",
       "SOCKET_IN",
       "SOCKET_OUT",
@@ -93,8 +87,8 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [-1.12, -0.07, 0.375],
-      "maximum": [2.1, 0.54, 1.665]
+      "minimum": [-1.12, -0.07, 0.75],
+      "maximum": [1.12, 0.54, 1.29]
     },
     "sockets": [
       {
@@ -116,12 +110,12 @@
     }
   },
   "review": {
-    "status": "candidate",
+    "status": "approved",
     "trademarkStatus": "not-applicable",
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
     "reviewedAt": "2026-08-25",
-    "notes": "GLB includes exact socket nodes, a visibly buried transverse log and a raised safe bypass. The runtime trail and forest floor remain authoritative to avoid duplicate ground geometry. Deterministic Blender and Balsam output plus runtime visual acceptance remain required before approval."
+    "notes": "GLB includes exact socket nodes and a visibly buried transverse log. Runtime trail, forest floor and branch geometry remain authoritative to avoid duplicate or floating ground geometry. Deterministic Blender and Balsam output, isolated package rendering, integrated completed/bypassed stills and 72-frame motion captures passed before approval."
   }
 }
