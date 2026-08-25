@@ -7,12 +7,6 @@ Item {
     width: 1280
     height: 720
 
-    function elapsedText(totalSeconds) {
-        const minutes = Math.floor(totalSeconds / 60)
-        const seconds = totalSeconds % 60
-        return minutes + ":" + (seconds < 10 ? "0" : "") + seconds
-    }
-
     function featureAccent(state) {
         if (state === 4) return "#ef7849"
         if (state === 5) return "#70c985"
@@ -330,46 +324,14 @@ Item {
         }
     }
 
-    Rectangle {
+    WorkoutGameTrainingHud {
+        id: trainingHud
         anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.margins: 14
-        width: Math.min(parent.width - 28, 670)
-        height: 62
-        color: "#d9131719"
-        border.color: "#55838a84"
-        border.width: 1
-
-        Row {
-            anchors.fill: parent
-            anchors.margins: 10
-            spacing: 22
-            Text { text: Math.round(workoutGame3D.watts) + " W"; color: "white"; font.pixelSize: 19; font.bold: true }
-            Text { text: "TARGET " + Math.round(workoutGame3D.targetWatts) + " W"; color: "#f0cf55"; font.pixelSize: 15 }
-            Text { text: workoutGame3D.cadenceRpm + " RPM"; color: "white"; font.pixelSize: 15 }
-            Text { text: workoutGame3D.heartRate + " BPM"; color: "#ff746b"; font.pixelSize: 15 }
-            Text { text: workoutGame3D.speedKph.toFixed(1) + " KM/H"; color: "white"; font.pixelSize: 15 }
-            Text { text: "G " + workoutGame3D.virtualGear; color: "#85d4ef"; font.pixelSize: 17; font.bold: true }
-        }
-    }
-
-    Rectangle {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: 14
-        width: 150
-        height: 76
-        color: "#d9131719"
-        border.color: "#55838a84"
-        Text {
-            anchors.centerIn: parent
-            text: workoutGame3D.fps.toFixed(1) + " FPS\n"
-                  + root.elapsedText(workoutGame3D.workoutTimeSeconds) + "\n"
-                  + (workoutGame3D.distanceMeters / 1000).toFixed(2) + " KM"
-            color: "#dbe8e5"
-            horizontalAlignment: Text.AlignHCenter
-            font.pixelSize: 14
-        }
+        height: implicitHeight
+        viewModel: workoutGame3D
     }
 
     Rectangle {

@@ -41,6 +41,8 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(double distanceMeters READ distanceMeters NOTIFY sceneChanged)
     Q_PROPERTY(int workoutTimeSeconds READ workoutTimeSeconds
                NOTIFY sceneChanged)
+    Q_PROPERTY(double workoutProgress READ workoutProgress NOTIFY sceneChanged)
+    Q_PROPERTY(double gradePercent READ gradePercent NOTIFY sceneChanged)
     Q_PROPERTY(double watts READ watts NOTIFY telemetryChanged)
     Q_PROPERTY(double targetWatts READ targetWatts NOTIFY telemetryChanged)
     Q_PROPERTY(int cadenceRpm READ cadenceRpm NOTIFY telemetryChanged)
@@ -67,6 +69,10 @@ class WorkoutGame3DViewModel : public QObject
                NOTIFY sceneChanged)
     Q_PROPERTY(int cadenceReadinessPercent READ cadenceReadinessPercent
                NOTIFY sceneChanged)
+    Q_PROPERTY(QVariantList powerProfileSegments READ powerProfileSegments
+               NOTIFY courseChanged)
+    Q_PROPERTY(double powerProfileMaximumWatts READ powerProfileMaximumWatts
+               NOTIFY courseChanged)
     Q_PROPERTY(QVariantList features READ features NOTIFY courseChanged)
     Q_PROPERTY(QVariantList trees READ trees NOTIFY treesChanged)
     Q_PROPERTY(QString cameraComposition READ cameraComposition CONSTANT)
@@ -119,6 +125,8 @@ public:
     double speedKph() const { return currentSpeedKph; }
     double distanceMeters() const { return currentDistanceMeters; }
     int workoutTimeSeconds() const { return currentWorkoutTimeSeconds; }
+    double workoutProgress() const { return currentWorkoutProgress; }
+    double gradePercent() const { return currentGradePercent; }
     double watts() const { return currentWatts; }
     double targetWatts() const { return currentTargetWatts; }
     int cadenceRpm() const { return currentCadenceRpm; }
@@ -158,6 +166,11 @@ public:
     {
         return currentFeatureHud.cadenceReadinessPercent;
     }
+    QVariantList powerProfileSegments() const { return currentPowerProfile; }
+    double powerProfileMaximumWatts() const
+    {
+        return currentPowerProfileMaximumWatts;
+    }
     QVariantList features() const { return courseFeatures; }
     QVariantList trees() const { return visibleTrees; }
     QString cameraComposition() const { return currentCameraComposition; }
@@ -190,12 +203,16 @@ private:
     void rebuildFeatures(double distanceMeters);
     void rebuildFloor(double distanceMeters);
     void rebuildTrees(double distanceMeters);
+    void rebuildPowerProfile(const WorkoutGameCourse &course);
     void updateCameraPose(double distanceMeters);
 
     std::unique_ptr<WorkoutGame3DGeometry> trail;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
     int activeFloorBuffer = 0;
     WorkoutGameRoadCourse roadCourse;
+    std::int64_t courseDurationMs = 0;
+    QVariantList currentPowerProfile;
+    double currentPowerProfileMaximumWatts = 1.0;
     QVariantList courseFeatures;
     QVariantList visibleTrees;
     bool sceneReady = false;
@@ -213,6 +230,8 @@ private:
     double currentSpeedKph = 0.0;
     double currentDistanceMeters = 0.0;
     int currentWorkoutTimeSeconds = 0;
+    double currentWorkoutProgress = 0.0;
+    double currentGradePercent = 0.0;
     double currentWatts = 0.0;
     double currentTargetWatts = 0.0;
     int currentCadenceRpm = 0;

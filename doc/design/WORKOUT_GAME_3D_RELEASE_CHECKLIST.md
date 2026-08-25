@@ -317,16 +317,27 @@ motion, with only the explicitly opt-in video export skipped.
 
 ### `HUD-02` Restore complete training instrumentation
 
-- [ ] Add workout power profile and current-position cursor.
-- [ ] Add current grade while preserving watts, target, cadence, heart rate,
+- [x] Add workout power profile and current-position cursor.
+- [x] Add current grade while preserving watts, target, cadence, heart rate,
   speed, gear, time, distance and actual presented FPS.
-- [ ] Keep data readable over bright/dark terrain and at laptop resolution.
+- [x] Keep data readable over bright/dark terrain and at laptop resolution.
 
 **Tests:** value binding, cursor progression, missing-sensor states and desktop/
 laptop/mobile-aspect screenshots.
 
 **Done when:** game mode does not remove information needed to execute and
 review the workout.
+
+**Current evidence:** the 3D ViewModel builds bounded normalized profile
+segments only when the course changes, while each immutable visual frame updates
+only cursor and grade scalars. `WorkoutGameTrainingHud.qml` presents ten
+instrument values, an interval profile and cursor in opaque high-contrast
+bands. Missing heart-rate and cadence sensors display `--` instead of zero.
+Binding and cursor-clamp tests pass, and real X11/OpenGL captures at 360 by 640,
+1024 by 600 and 1920 by 1080 verify bounded nonblank layouts. The production
+window test also waits for a nonzero value derived from `frameSwapped`, proving
+the displayed FPS is measured presentation rate. The full interactive suite
+passes 25 tests; the complete headless suite passes under ASan and UBSan.
 
 ### `GEN-01` Give Data Generator the active target authority
 

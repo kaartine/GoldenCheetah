@@ -9,6 +9,7 @@
 
 #include "WorkoutGame3DViewModel.h"
 
+#include "WorkoutGameFeatureChallenge.h"
 #include "WorkoutGameFeatureGeometry.h"
 
 #include <QByteArray>
@@ -108,6 +109,7 @@ void WorkoutGame3DViewModel::setCourse(
         double ftpWatts)
 {
     roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
+    rebuildPowerProfile(course);
     trail->setCourse(roadCourse);
     floorBucket = std::numeric_limits<int>::min();
     featureBucket = std::numeric_limits<int>::min();
@@ -118,6 +120,8 @@ void WorkoutGame3DViewModel::setCourse(
     currentFeatureActionText.clear();
     currentFeatureStatus.clear();
     currentReadinessPercent = 0;
+    currentWorkoutProgress = 0.0;
+    currentGradePercent = 0.0;
     rebuildFloor(0.0);
     sceneReady = roadCourse.ready && trail->ready()
             && floorBuffers[std::size_t(activeFloorBuffer)]->ready();
@@ -177,6 +181,12 @@ void WorkoutGame3DViewModel::setFrame(
     currentDistanceMeters = distanceMeters;
     currentWorkoutTimeSeconds = int(std::clamp<std::int64_t>(
             frame.simulation.workoutTimeMs / 1000, 0, 24 * 60 * 60));
+    currentWorkoutProgress = courseDurationMs > 0
+            ? std::clamp(double(frame.simulation.workoutTimeMs)
+                    / double(courseDurationMs), 0.0, 1.0)
+            : 0.0;
+    currentGradePercent = std::clamp(
+            finiteOrZero(frame.world.gradePercent), -30.0, 30.0);
     currentTerrainName = terrainText(frame.world.terrain);
     currentFeatureStatus = featureText(frame.feature);
     currentReadinessPercent = int(std::lround(std::clamp(
@@ -190,6 +200,58 @@ void WorkoutGame3DViewModel::setFrame(
     rebuildFeatures(currentDistanceMeters);
     rebuildTrees(currentDistanceMeters);
     emit sceneChanged();
+}
+
+void WorkoutGame3DViewModel::rebuildPowerProfile(
+        const WorkoutGameCourse &course)
+{
+    currentPowerProfile.clear();
+    currentPowerProfileMaximumWatts = 1.0;
+    courseDurationMs = course.status == WorkoutGameCourseStatus::Ready
+            ? std::max<std::int64_t>(0, course.durationMs) : 0;
+    if (courseDurationMs <= 0) return;
+
+    for (const WorkoutGameSection &section : course.sections) {
+        const double targetWatts = std::max(
+                0.0, finiteOrZero(section.targetWatts));
+        const WorkoutGameFeatureChallengeProfile challenge =
+                WorkoutGameFeatureChallenge::profile(section);
+        const double requiredWatts = challenge.enabled
+                && challenge.minimumEffortRatio > 0.0
+                ? targetWatts * challenge.minimumEffortRatio : 0.0;
+        currentPowerProfileMaximumWatts = std::max(
+                currentPowerProfileMaximumWatts,
+                std::max(targetWatts, requiredWatts));
+    }
+    currentPowerProfileMaximumWatts *= 1.1;
+
+    for (const WorkoutGameSection &section : course.sections) {
+        const double start = std::clamp(
+                double(section.startMs) / double(courseDurationMs), 0.0, 1.0);
+        const double end = std::clamp(
+                double(section.startMs + section.durationMs)
+                    / double(courseDurationMs),
+                start, 1.0);
+        const double targetWatts = std::max(
+                0.0, finiteOrZero(section.targetWatts));
+        const WorkoutGameFeatureChallengeProfile challenge =
+                WorkoutGameFeatureChallenge::profile(section);
+        QVariantMap values;
+        values.insert(QStringLiteral("start"), start);
+        values.insert(QStringLiteral("end"), end);
+        values.insert(QStringLiteral("targetWatts"), targetWatts);
+        values.insert(QStringLiteral("height"),
+                      targetWatts / currentPowerProfileMaximumWatts);
+        values.insert(QStringLiteral("challenge"), challenge.enabled);
+        if (challenge.enabled) {
+            const double span = end - start;
+            values.insert(QStringLiteral("challengeStart"),
+                          start + span * challenge.measurementStartProgress);
+            values.insert(QStringLiteral("challengeEnd"),
+                          start + span * challenge.decisionProgress);
+        }
+        currentPowerProfile.append(values);
+    }
 }
 
 void WorkoutGame3DViewModel::updateCameraPose(double distanceMeters)

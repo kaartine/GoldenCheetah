@@ -104,7 +104,7 @@ WorkoutGameCourse catalogCourse(WorkoutGameTerrainKind terrain)
             ? 8.0 : terrain == WorkoutGameTerrainKind::Drop ? -6.0 : 0.0;
     section.difficulty = 0.65;
     section.challengeCount = 1;
-    course.sections = {section};
+    course.sections.push_back(section);
     return course;
 }
 
@@ -195,6 +195,7 @@ int changedPixels(const QImage &first, const QImage &second)
                 ++changed;
             }
         }
+
     }
     return changed;
 }
@@ -226,6 +227,16 @@ double normalizedRadians(double angle)
     while (angle > pi) angle -= 2.0 * pi;
     while (angle < -pi) angle += 2.0 * pi;
     return angle;
+}
+
+QQuickItem *findVisualItem(QQuickItem *parent, const QString &objectName)
+{
+    if (!parent) return nullptr;
+    if (parent->objectName() == objectName) return parent;
+    for (QQuickItem *child : parent->childItems()) {
+        if (QQuickItem *match = findVisualItem(child, objectName)) return match;
+    }
+    return nullptr;
 }
 
 double tabletopApproachDistance(const WorkoutGameRoadCourse &road)
@@ -569,6 +580,133 @@ private slots:
                 <= cadenceBar->parentItem()->width() + 1e-9);
     }
 
+    void trainingHudPublishesProfileCursorGradeAndTelemetry()
+    {
+        const WorkoutGameCourse course = sampleCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        const QVariantList profile = viewModel.powerProfileSegments();
+        QCOMPARE(profile.size(), int(course.sections.size()));
+        QCOMPARE(profile.front().toMap().value(QStringLiteral("start")).toDouble(),
+                 0.0);
+        QCOMPARE(profile.back().toMap().value(QStringLiteral("end")).toDouble(),
+                 1.0);
+        QVERIFY(viewModel.powerProfileMaximumWatts() > 240.0);
+
+        WorkoutGameVisualSnapshot frame = frameAt(road, 12.0);
+        frame.simulation.workoutTimeMs = 25000;
+        frame.world.gradePercent = 6.25;
+        viewModel.setFrame(frame, 213.0, 219.0, 87, 151, 8);
+
+        QCOMPARE(viewModel.workoutProgress(), 0.25);
+        QCOMPARE(viewModel.gradePercent(), 6.25);
+        QCOMPARE(viewModel.watts(), 213.0);
+        QCOMPARE(viewModel.targetWatts(), 219.0);
+        QCOMPARE(viewModel.cadenceRpm(), 87);
+        QCOMPARE(viewModel.heartRate(), 151);
+        QCOMPARE(viewModel.speedKph(), 22.5);
+        QCOMPARE(viewModel.virtualGear(), 8);
+        QCOMPARE(viewModel.workoutTimeSeconds(), 25);
+
+        frame.simulation.workoutTimeMs = course.durationMs * 2;
+        viewModel.setFrame(frame, 213.0, 219.0, 87, 151, 8);
+        QCOMPARE(viewModel.workoutProgress(), 1.0);
+        frame.simulation.workoutTimeMs = -1000;
+        viewModel.setFrame(frame, 213.0, 219.0, 87, 151, 8);
+        QCOMPARE(viewModel.workoutProgress(), 0.0);
+    }
+
+    void trainingHudFitsAndReportsMissingSensors_data()
+    {
+        QTest::addColumn<QSize>("size");
+        QTest::newRow("mobile-aspect") << QSize(360, 640);
+        QTest::newRow("laptop") << QSize(1024, 600);
+        QTest::newRow("full-hd") << QSize(1920, 1080);
+    }
+
+    void trainingHudFitsAndReportsMissingSensors()
+    {
+        QFETCH(QSize, size);
+        const WorkoutGameCourse course = sampleCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(road, 12.0);
+        frame.simulation.workoutTimeMs = 25000;
+        frame.world.gradePercent = 6.25;
+        viewModel.setFrame(frame, 213.0, 219.0, 0, 0, 8);
+        viewModel.setFps(58.75);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(size);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QCoreApplication::processEvents();
+
+        auto *rootItem = qobject_cast<QQuickItem *>(window.rootObject());
+        QVERIFY(rootItem);
+        auto *hud = rootItem->findChild<QQuickItem *>(
+                QStringLiteral("trainingHud"));
+        auto *profile = rootItem->findChild<QQuickItem *>(
+                QStringLiteral("powerProfile"));
+        auto *cursor = rootItem->findChild<QQuickItem *>(
+                QStringLiteral("powerProfileCursor"));
+        QVERIFY(hud && profile && cursor);
+        QVERIFY(hud->x() >= 0.0 && hud->y() >= 0.0);
+        QVERIFY(hud->x() + hud->width() <= rootItem->width() + 1e-9);
+        QVERIFY(hud->y() + hud->height() <= rootItem->height() + 1e-9);
+        QVERIFY(cursor->x() >= 0.0);
+        QVERIFY(cursor->x() + cursor->width() <= profile->width() + 1e-9);
+
+        auto *cadence = findVisualItem(
+                rootItem, QStringLiteral("cadenceValue"));
+        auto *heartRate = findVisualItem(
+                rootItem, QStringLiteral("heartRateValue"));
+        auto *grade = findVisualItem(rootItem, QStringLiteral("gradeValue"));
+        auto *fps = findVisualItem(rootItem, QStringLiteral("fpsValue"));
+        QVERIFY(cadence && heartRate && grade && fps);
+        QCOMPARE(cadence->property("text").toString(), QStringLiteral("-- RPM"));
+        QCOMPARE(heartRate->property("text").toString(), QStringLiteral("-- BPM"));
+        QCOMPARE(grade->property("text").toString(), QStringLiteral("6.3%"));
+        QCOMPARE(fps->property("text").toString(), QStringLiteral("58.8 FPS"));
+
+        if (hasInteractiveGraphicsPlatform()) {
+            window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+            QTest::qWait(120);
+            const QImage image = window.grabWindow();
+            QVERIFY(!image.isNull());
+            QCOMPARE(image.size(), size);
+            QVERIFY2(sampledColorCount(image) > 40,
+                     "training HUD layout appears blank");
+            const QString outputDirectory = qEnvironmentVariable(
+                    "GC_WORKOUT_GAME_3D_HUD_SCREENSHOT_DIR");
+            if (!outputDirectory.isEmpty()) {
+                QVERIFY(QDir().mkpath(outputDirectory));
+                const QString filename = QDir(outputDirectory).filePath(
+                        QStringLiteral("training-hud-%1x%2.png")
+                            .arg(size.width()).arg(size.height()));
+                QVERIFY2(image.save(filename), qPrintable(filename));
+            }
+        }
+
+        QQuickItem *cadenceDelegate = cadence;
+        viewModel.setTelemetry(225.0, 230.0, 91, 155, 9);
+        QCoreApplication::processEvents();
+        cadence = findVisualItem(rootItem, QStringLiteral("cadenceValue"));
+        QCOMPARE(cadence, cadenceDelegate);
+        QCOMPARE(cadence->property("text").toString(), QStringLiteral("91 RPM"));
+    }
+
     void tabletopAssetUsesAuthoritativeRoadAnchorAndProfile()
     {
         const WorkoutGameCourse course = catalogCourse(
@@ -781,7 +919,14 @@ private slots:
         window->setSessionRunning(true);
         window->setFrame(
                 frameAt(road, 24.0), 235.0, 230.0, 90, 151, 9);
-        QTest::qWait(150);
+        auto *rootItem = qobject_cast<QQuickItem *>(window->rootObject());
+        QVERIFY(rootItem);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                findVisualItem(rootItem, QStringLiteral("fpsValue"))
+                    && findVisualItem(rootItem, QStringLiteral("fpsValue"))
+                        ->property("text").toString()
+                            != QStringLiteral("0.0 FPS"),
+                2000);
         window->setSessionRunning(false);
         window.reset();
     }

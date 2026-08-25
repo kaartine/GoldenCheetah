@@ -351,6 +351,15 @@ and completed or bypassed feedback expires six metres after the action surface.
 `WorkoutGame3DViewModel` translates and publishes this snapshot to QML and
 clears it when a course changes, so state cannot leak between rides.
 
+The training instrumentation follows a separate update-rate boundary. Course
+changes precompute a bounded list of normalized workout-power segments in
+`WorkoutGame3DViewModel`; visual frames update only workout progress and current
+grade scalars. `WorkoutGameTrainingHud.qml` draws those immutable segments,
+cursor and telemetry without rebuilding the profile in the frame loop. The FPS
+value comes from `QQuickWindow::frameSwapped`, so it measures completed
+presentation rather than simulation ticks or a requested refresh rate. Missing
+sensor values are presentation state only and never alter recorded telemetry.
+
 #### Course-Space 2.5D Geometry
 
 `WorkoutGameMesh` is the presentation-neutral geometry contract for reusable
