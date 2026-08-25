@@ -8,7 +8,7 @@ Node {
     PrincipledMaterial {
         id: mat_TabletopTrail_Grey_material
         objectName: "MAT_TabletopTrail_Grey"
-        baseColor: "#ff636159"
+        baseColor: "#ff61401f"
         roughness: 1
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque
@@ -16,7 +16,7 @@ Node {
     PrincipledMaterial {
         id: mat_TabletopTerrain_Grey_material
         objectName: "MAT_TabletopTerrain_Grey"
-        baseColor: "#ff4a524a"
+        baseColor: "#ff33522b"
         roughness: 1
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque
@@ -25,6 +25,14 @@ Node {
         id: mat_TabletopSkirt_Grey_material
         objectName: "MAT_TabletopSkirt_Grey"
         baseColor: "#ff2e302e"
+        roughness: 1
+        cullMode: PrincipledMaterial.NoCulling
+        alphaMode: PrincipledMaterial.Opaque
+    }
+    PrincipledMaterial {
+        id: mat_TabletopBypass_Grey_material
+        objectName: "MAT_TabletopBypass_Grey"
+        baseColor: "#ff785729"
         roughness: 1
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque
@@ -41,7 +49,8 @@ Node {
             materials: [
                 mat_TabletopTrail_Grey_material,
                 mat_TabletopTerrain_Grey_material,
-                mat_TabletopSkirt_Grey_material
+                mat_TabletopSkirt_Grey_material,
+                mat_TabletopBypass_Grey_material
             ]
         }
         Node {

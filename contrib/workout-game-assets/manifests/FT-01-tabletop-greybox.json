@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_tabletop.py",
     "retrievedAt": "2026-08-25",
     "originalFileName": "generate_tabletop.py",
-    "originalSha256": "253216a3b73ea76f6956034607c97abeed99056f93488e37bf3be6c987ab7b0b",
+    "originalSha256": "64153d8bb17c40c22d0f64dc962f43c222f04fc1cd033a44064353b611935de0",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_tabletop.py"
@@ -35,22 +35,22 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_tabletop.py",
       "purpose": "source",
-      "sha256": "253216a3b73ea76f6956034607c97abeed99056f93488e37bf3be6c987ab7b0b"
+      "sha256": "64153d8bb17c40c22d0f64dc962f43c222f04fc1cd033a44064353b611935de0"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_Tabletop_Greybox.glb",
       "purpose": "intermediate",
-      "sha256": "ec51bc5849c591256ac147cdf66067181ecd904f8098771aed43c41a6b4539f0"
+      "sha256": "0cc9a08df21be17978298ce57dc6f0151432a9f2d328d7e6128666ab349db944"
     },
     {
       "path": "src/Train/qml/assets/Wg_Tabletop_Greybox.qml",
       "purpose": "runtime",
-      "sha256": "b7b4cd546e1509730f935cfa7be426b1ac3e5514da6feab0d34f5435b175a9fc"
+      "sha256": "c817cb7b56e00af62280d2d629238b6ea25d3337d24882406715902f367d7674"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "ae186851b56cfba9b8eeb0774ba6f87f91cbac82361220812b4eeffd5ff23381"
+      "sha256": "3f440748115daf3285fe5071f5918a383954436c4cf77a7faf25cc14e509db34"
     }
   ],
   "processing": {
@@ -69,9 +69,9 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 9940,
-    "trianglesLod0": 122,
-    "materials": 3,
+    "glbBytes": 13428,
+    "trianglesLod0": 156,
+    "materials": 4,
     "textureBytes": 0,
     "nodes": [
       "ROOT_Tabletop",
@@ -117,6 +117,6 @@
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
     "reviewedAt": "2026-08-25",
-    "notes": "GLB, deterministic Balsam conversion and production-qrc rendering passed. Vertical-slice approval waits for bypass geometry and an extracted-AppImage rendering test."
+    "notes": "GLB includes tapered joined terrain and a raised safe-bypass strip. Deterministic Blender and Balsam conversion, Khronos validation, production-qrc rendering and game-scene integration pass. Vertical-slice approval still requires HUD-free silhouette and bypass readability."
   }
 }

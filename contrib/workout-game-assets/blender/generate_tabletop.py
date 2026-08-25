@@ -37,6 +37,11 @@ SKIRT_BOTTOM_Y_M = -0.60
 MAT_TRAIL = "MAT_TabletopTrail_Grey"
 MAT_TERRAIN = "MAT_TabletopTerrain_Grey"
 MAT_SKIRT = "MAT_TabletopSkirt_Grey"
+MAT_BYPASS = "MAT_TabletopBypass_Grey"
+
+BYPASS_HALF_WIDTH_M = 0.44
+BYPASS_OFFSET_M = 1.78
+BYPASS_RISE_M = 0.025
 
 REQUIRED_NAMES = {
     ROOT_NAME,
@@ -107,6 +112,7 @@ def profile_sections() -> list[float]:
     sections = [0.0, takeoff_start]
     sections.extend(takeoff_start + TAKEOFF_RUN_M * value for value in fractions)
     sections.append(takeoff_end)
+    sections.append((takeoff_end + deck_end) * 0.5)
     sections.append(deck_end)
     sections.extend(deck_end + LANDING_RUN_M * value for value in fractions)
     sections.extend((landing_end, TILE_LENGTH_M))
@@ -119,6 +125,36 @@ def outer_terrain_height(z_forward: float, left: bool) -> float:
         return 0.0
     envelope = 4.0 * core_progress * (1.0 - core_progress)
     return (0.10 if left else -0.06) * envelope
+
+
+def bypass_center_x(z_forward: float) -> float:
+    decision_z = DEAD_ZONE_M * 0.5
+    landing_z = DEAD_ZONE_M + CORE_LENGTH_M
+    merge_z = landing_z + DEAD_ZONE_M * 0.5
+    if z_forward <= decision_z or z_forward >= merge_z:
+        return 0.0
+    if z_forward < DEAD_ZONE_M:
+        progress = (z_forward - decision_z) / (DEAD_ZONE_M - decision_z)
+        return BYPASS_OFFSET_M * progress * progress * (3.0 - 2.0 * progress)
+    if z_forward <= landing_z:
+        return BYPASS_OFFSET_M
+    progress = (z_forward - landing_z) / (merge_z - landing_z)
+    return BYPASS_OFFSET_M * (1.0 - progress * progress * (3.0 - 2.0 * progress))
+
+
+def terrain_half_width(z_forward: float) -> float:
+    progress = min(1.0, max(0.0, z_forward / TILE_LENGTH_M))
+    envelope = math.sin(math.pi * progress) ** 2
+    tapered = SOCKET_HALF_WIDTH_M + 0.06 \
+        + (TERRAIN_HALF_WIDTH_M - SOCKET_HALF_WIDTH_M - 0.06) * envelope
+    decision_z = DEAD_ZONE_M * 0.5
+    merge_z = DEAD_ZONE_M + CORE_LENGTH_M + DEAD_ZONE_M * 0.5
+    if decision_z <= z_forward <= merge_z:
+        tapered = max(
+            tapered,
+            bypass_center_x(z_forward) + BYPASS_HALF_WIDTH_M + 0.35,
+        )
+    return tapered
 
 
 def add_triangle(
@@ -160,13 +196,14 @@ def build_mesh(root) -> tuple[object, list[tuple[float, float, float]]]:
     # trail-right and outer-right. The trail and terrain therefore cannot gap.
     for z_forward in sections:
         trail_y = surface_height(z_forward)
+        outer_width = terrain_half_width(z_forward)
         canonical_vertices.extend(
             (
-                (-TERRAIN_HALF_WIDTH_M,
+                (-outer_width,
                  outer_terrain_height(z_forward, True), z_forward),
                 (-SOCKET_HALF_WIDTH_M, trail_y, z_forward),
                 (SOCKET_HALF_WIDTH_M, trail_y, z_forward),
-                (TERRAIN_HALF_WIDTH_M,
+                (outer_width,
                  outer_terrain_height(z_forward, False), z_forward),
             )
         )
@@ -193,13 +230,14 @@ def build_mesh(root) -> tuple[object, list[tuple[float, float, float]]]:
     left_bottom: list[int] = []
     right_bottom: list[int] = []
     for z_forward in sections:
+        outer_width = terrain_half_width(z_forward)
         left_bottom.append(len(canonical_vertices))
         canonical_vertices.append(
-            (-TERRAIN_HALF_WIDTH_M, SKIRT_BOTTOM_Y_M, z_forward)
+            (-outer_width, SKIRT_BOTTOM_Y_M, z_forward)
         )
         right_bottom.append(len(canonical_vertices))
         canonical_vertices.append(
-            (TERRAIN_HALF_WIDTH_M, SKIRT_BOTTOM_Y_M, z_forward)
+            (outer_width, SKIRT_BOTTOM_Y_M, z_forward)
         )
 
     for row in range(len(sections) - 1):
@@ -264,17 +302,52 @@ def build_mesh(root) -> tuple[object, list[tuple[float, float, float]]]:
                     top_left, low_right, top_right, 2,
                 )
 
+    bypass_sections = sorted(set(
+        [DEAD_ZONE_M * 0.5,
+         DEAD_ZONE_M,
+         DEAD_ZONE_M + CORE_LENGTH_M,
+         DEAD_ZONE_M + CORE_LENGTH_M + DEAD_ZONE_M * 0.5]
+        + [value for value in sections
+           if DEAD_ZONE_M * 0.5 < value
+           < DEAD_ZONE_M + CORE_LENGTH_M + DEAD_ZONE_M * 0.5]
+    ))
+    bypass_rows: list[tuple[int, int]] = []
+    for z_forward in bypass_sections:
+        center_x = bypass_center_x(z_forward)
+        surface_y = outer_terrain_height(z_forward, False) + BYPASS_RISE_M
+        left = len(canonical_vertices)
+        canonical_vertices.append(
+            (center_x - BYPASS_HALF_WIDTH_M, surface_y, z_forward)
+        )
+        right = len(canonical_vertices)
+        canonical_vertices.append(
+            (center_x + BYPASS_HALF_WIDTH_M, surface_y, z_forward)
+        )
+        bypass_rows.append((left, right))
+    for previous, current in zip(bypass_rows, bypass_rows[1:]):
+        add_triangle(
+            faces, material_indices,
+            previous[0], current[0], current[1], 3,
+        )
+        add_triangle(
+            faces, material_indices,
+            previous[0], current[1], previous[1], 3,
+        )
+
     blender_vertices = [canonical_to_blender(point) for point in canonical_vertices]
     mesh = bpy.data.meshes.new(name=MESH_NAME)
     mesh.from_pydata(blender_vertices, [], faces)
     mesh.materials.append(
-        make_material(MAT_TRAIL, (0.39, 0.38, 0.35, 1.0))
+        make_material(MAT_TRAIL, (0.38, 0.25, 0.12, 1.0))
     )
     mesh.materials.append(
-        make_material(MAT_TERRAIN, (0.29, 0.32, 0.29, 1.0))
+        make_material(MAT_TERRAIN, (0.20, 0.32, 0.17, 1.0))
     )
     mesh.materials.append(
         make_material(MAT_SKIRT, (0.18, 0.19, 0.18, 1.0))
+    )
+    mesh.materials.append(
+        make_material(MAT_BYPASS, (0.47, 0.34, 0.16, 1.0))
     )
     mesh.update(calc_edges=True)
     if mesh.validate(verbose=True, clean_customdata=False):
@@ -452,10 +525,12 @@ def self_check(root, mesh_object, canonical_vertices) -> None:
         assert_finite(vertex.co, "Non-finite Blender mesh coordinate")
     if any(polygon.loop_total != 3 for polygon in mesh_object.data.polygons):
         raise RuntimeError("Generated mesh contains a non-triangle face")
-    if len(mesh_object.data.vertices) != 76 \
-            or len(mesh_object.data.polygons) != 122:
+    if len(mesh_object.data.vertices) != 108 \
+            or len(mesh_object.data.polygons) != 156:
         raise RuntimeError(
-            "Unexpected greybox topology: expected 76 vertices and 122 triangles"
+            "Unexpected greybox topology: expected 108 vertices and 156 "
+            f"triangles, got {len(mesh_object.data.vertices)} vertices and "
+            f"{len(mesh_object.data.polygons)} triangles"
         )
     if any(polygon.area <= EPSILON for polygon in mesh_object.data.polygons):
         raise RuntimeError("Generated mesh contains a degenerate triangle")
@@ -509,7 +584,7 @@ def self_check(root, mesh_object, canonical_vertices) -> None:
             or mesh_object.get("physics_authority") != "external":
         raise RuntimeError("GLB must not claim physics authority")
 
-    expected_materials = [MAT_TRAIL, MAT_TERRAIN, MAT_SKIRT]
+    expected_materials = [MAT_TRAIL, MAT_TERRAIN, MAT_SKIRT, MAT_BYPASS]
     actual_materials = [material.name for material in mesh_object.data.materials]
     if actual_materials != expected_materials:
         raise RuntimeError(

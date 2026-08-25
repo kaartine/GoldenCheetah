@@ -2,7 +2,7 @@
 
 This directory contains deterministic Blender source generators for custom
 Workout Game assets. `generate_tabletop.py` creates the first stylized
-low-poly tabletop greybox without downloading or embedding external assets.
+low-poly tabletop socket tile without downloading or embedding external assets.
 
 ## Tabletop contract
 
@@ -12,8 +12,10 @@ low-poly tabletop greybox without downloading or embedding external assets.
 - Entry and exit dead zones are `0.75 m` and remain flat.
 - The core is `0.446 m` high, with a `1.87 m` takeoff, `1.10 m` flat deck and
   `1.87 m` landing.
-- The joined mesh includes the trail, four-metre side terrain and dark outer,
-  front and rear skirts. It uses three opaque greybox materials and no texture.
+- The joined mesh includes the trail, tapered side terrain, a raised safe
+  bypass and dark outer, front and rear skirts. Side terrain narrows at the
+  socket ends so the tile joins the streamed floor without a rectangular lip.
+  It uses four opaque greybox materials and no texture.
 - `SOCKET_IN`, `SOCKET_OUT`, `MARKER_PREPARE`, `MARKER_DECISION`,
   `MARKER_ACTION`, `MARKER_LIP`, `MARKER_APEX` and `MARKER_LAND` are exported
   as named nodes with custom metadata.
@@ -57,7 +59,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 The expected output is one self-contained
 `build/workout-game-assets/WG_Tabletop_Greybox.glb`. Blender's console output
-also reports the expected greybox topology of `76` vertices and `122` triangles.
+also reports the expected topology of `108` vertices and `156` triangles.
 No `.blend`, texture, runtime collision or physics file is produced.
 
 Determinism is expected for the same Blender 4.x patch release and export

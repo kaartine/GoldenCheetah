@@ -9,6 +9,8 @@
 
 #include "WorkoutGame3DViewModel.h"
 
+#include "WorkoutGameFeatureGeometry.h"
+
 #include <QByteArray>
 #include <QVariantMap>
 
@@ -30,6 +32,9 @@ constexpr int MaximumVisibleFeatures = 32;
 constexpr double TreeSpacingMeters = 6.0;
 constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double CameraCorridorClearanceMeters = 0.85;
+constexpr double TabletopAssetDeadZoneMeters = 0.75;
+constexpr double TabletopAssetCoreLengthMeters = 4.84;
+constexpr double TabletopAssetHeightMeters = 0.446;
 
 double finiteOrZero(double value)
 {
@@ -323,6 +328,45 @@ void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
         feature.insert(QStringLiteral("yaw"),
                        sample.center.headingRadians * 180.0 / Pi);
         feature.insert(QStringLiteral("difficulty"), piece.difficulty);
+        if (piece.terrain == WorkoutGameTerrainKind::Tabletop) {
+            const WorkoutGameFeatureGeometryProfile profile =
+                    WorkoutGameFeatureGeometry::profile(
+                            piece.terrain, piece.difficulty);
+            if (profile.ready) {
+                const double coreLength = profile.endMeters
+                        - profile.startMeters;
+                const double scaleZ = coreLength
+                        / TabletopAssetCoreLengthMeters;
+                const double assetStartDistance = std::clamp(
+                        piece.challenge.obstacleDistanceMeters
+                            + profile.startMeters
+                            - TabletopAssetDeadZoneMeters * scaleZ,
+                        0.0, roadCourse.totalLengthMeters);
+                const WorkoutGameRoadSample assetStart =
+                        WorkoutGameRoadCourseBuilder::sample(
+                                roadCourse, assetStartDistance);
+                if (assetStart.ready) {
+                    feature.insert(QStringLiteral("assetX"),
+                                   assetStart.center.xMeters);
+                    feature.insert(QStringLiteral("assetY"),
+                                   assetStart.center.elevationMeters
+                                    - assetStart.nonPhysicalFeatureOffsetMeters);
+                    feature.insert(QStringLiteral("assetZ"),
+                                   assetStart.center.zMeters);
+                    feature.insert(QStringLiteral("assetYaw"),
+                                   assetStart.center.headingRadians
+                                    * 180.0 / Pi);
+                    feature.insert(QStringLiteral("assetPitch"),
+                                   -std::atan(
+                                        assetStart.baseGradePercent / 100.0)
+                                    * 180.0 / Pi);
+                    feature.insert(QStringLiteral("assetScaleY"),
+                                   profile.heightMeters
+                                    / TabletopAssetHeightMeters);
+                    feature.insert(QStringLiteral("assetScaleZ"), scaleZ);
+                }
+            }
+        }
         courseFeatures.push_back(feature);
         if (courseFeatures.size() >= MaximumVisibleFeatures) break;
     }

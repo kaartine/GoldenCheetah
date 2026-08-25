@@ -151,8 +151,8 @@ interactive X11/OpenGL view suite passes 13 tests with no failures.
 The first generated tabletop audit artifact is stored outside the source tree
 and is reproducible from
 `contrib/workout-game-assets/blender/generate_tabletop.py`. Blender 4.0.2
-produced a 9,940-byte GLB with 76 vertices and 122 triangles. Its SHA-256 is
-`ec51bc5849c591256ac147cdf66067181ecd904f8098771aed43c41a6b4539f0`.
+produced a 13,428-byte GLB with 108 vertices and 156 triangles. Its SHA-256 is
+`0cc9a08df21be17978298ce57dc6f0151432a9f2d328d7e6128666ab349db944`.
 Khronos glTF Validator 2.0.0-dev.3.10 reported zero errors, warnings, infos and
 hints. A second clean export produced the same SHA-256. Two Balsam 6.8.3 runs
 also produced byte-identical QML and `.mesh` outputs. The cross-platform policy

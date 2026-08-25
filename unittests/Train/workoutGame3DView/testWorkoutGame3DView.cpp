@@ -9,6 +9,7 @@
 
 #include "WorkoutGame3DViewModel.h"
 #include "WorkoutGame3DWindow.h"
+#include "WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
 
 #include <QDir>
@@ -431,6 +432,66 @@ private slots:
                          .arg(maximumYawAcceleration)));
     }
 
+    void tabletopAssetUsesAuthoritativeRoadAnchorAndProfile()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.terrain
+                            == WorkoutGameTerrainKind::Tabletop
+                            && candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                        piece->terrain, piece->difficulty);
+        QVERIFY(profile.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(
+                frameAt(road, 0.0), 220.0, 220.0, 88, 150, 7);
+        const QVariantList features = viewModel.features();
+        const auto asset = std::find_if(
+                features.begin(), features.end(),
+                [](const QVariant &entry) {
+                    return entry.toMap().value(QStringLiteral("kind")).toInt()
+                            == int(WorkoutGameTerrainKind::Tabletop);
+                });
+        QVERIFY(asset != features.end());
+        const QVariantMap values = asset->toMap();
+        const double expectedScaleZ =
+                (profile.endMeters - profile.startMeters) / 4.84;
+        const double expectedStartDistance = std::clamp(
+                piece->challenge.obstacleDistanceMeters
+                    + profile.startMeters - 0.75 * expectedScaleZ,
+                0.0, road.totalLengthMeters);
+        const WorkoutGameRoadSample expected =
+                WorkoutGameRoadCourseBuilder::sample(
+                        road, expectedStartDistance);
+        QVERIFY(expected.ready);
+        QCOMPARE(values.value(QStringLiteral("assetX")).toDouble(),
+                 expected.center.xMeters);
+        QCOMPARE(values.value(QStringLiteral("assetY")).toDouble(),
+                 expected.center.elevationMeters
+                    - expected.nonPhysicalFeatureOffsetMeters);
+        QCOMPARE(values.value(QStringLiteral("assetZ")).toDouble(),
+                 expected.center.zMeters);
+        QCOMPARE(values.value(QStringLiteral("assetScaleY")).toDouble(),
+                 profile.heightMeters / 0.446);
+        QCOMPARE(values.value(QStringLiteral("assetScaleZ")).toDouble(),
+                 expectedScaleZ);
+        QVERIFY(std::isfinite(
+                values.value(QStringLiteral("assetPitch")).toDouble()));
+        QVERIFY(std::isfinite(
+                values.value(QStringLiteral("assetYaw")).toDouble()));
+    }
+
     void packagedTabletopAssetLoadsWithRequiredNodes()
     {
         QQmlEngine engine;
@@ -446,7 +507,7 @@ private slots:
 
         std::unique_ptr<QObject> asset(component.create());
         QVERIFY2(asset, qPrintable(errors.join('\n')));
-        const std::array<const char *, 10> requiredObjects = {{
+        const std::array<const char *, 11> requiredObjects = {{
             "ROOT_Tabletop",
             "GEO_Tabletop_LOD0",
             "SOCKET_IN",
@@ -456,7 +517,8 @@ private slots:
             "MARKER_ACTION",
             "MARKER_LIP",
             "MARKER_APEX",
-            "MARKER_LAND"
+            "MARKER_LAND",
+            "MAT_TabletopBypass_Grey"
         }};
         for (const char *name : requiredObjects) {
             QVERIFY2(asset->findChild<QObject *>(
@@ -466,7 +528,7 @@ private slots:
         QFile mesh(QStringLiteral(
                 ":/qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh"));
         QVERIFY(mesh.open(QIODevice::ReadOnly));
-        QCOMPARE(mesh.size(), qint64(7236));
+        QCOMPARE(mesh.size(), qint64(10292));
     }
 
     void rendersPackagedTabletopAsset()

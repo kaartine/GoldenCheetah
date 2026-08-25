@@ -120,7 +120,7 @@ sphere as a final visible rider, feature or hero-environment object.
   first project-authored tabletop greybox without external assets.
 - [x] The generator checks the measured profile, exact socket seams, node and
   material names, finite coordinates, transforms and topology before export.
-- [x] The resulting 9,940-byte GLB has 76 vertices and 122 triangles; Khronos
+- [x] The current 13,428-byte GLB has 108 vertices and 156 triangles; Khronos
   glTF Validator 2.0.0-dev.3.10 reports zero errors, warnings, infos and hints.
 - [x] Two clean Blender invocations produce the same GLB SHA-256.
 - [x] Validate the manifest, file hashes, GLB policy and malformed fixtures in
@@ -161,16 +161,26 @@ than a ribbon pasted onto a flat floor.
 
 ### `VS-02` Build complete tabletop and bypass
 
-- [ ] Model belly, lip, deck, knuckle, landing and joined side terrain.
+- [x] Model belly, lip, deck, knuckle, landing and joined side terrain.
 - [ ] Model a readable split, safe line and merge before the decision marker.
-- [ ] Keep the canonical measured profile as the physics authority.
-- [ ] Place prepare, decision, action, lip, apex and landing markers.
+- [x] Keep the canonical measured profile as the physics authority.
+- [x] Place prepare, decision, action, lip, apex and landing markers.
 
 **Tests:** exact sockets, named anatomy silhouette, road/contact alignment,
 completed/bypass captures and bounded speed-dependent flight.
 
 **Done when:** a rider identifies the jump and both lines without HUD text and
 the wheels meet the landing surface at the reported landing event.
+
+**Current evidence:** the deterministic Blender source now generates tapered
+joined terrain and a raised bypass in the same 108-vertex/156-triangle mesh.
+The production ViewModel derives the asset socket transform and difficulty
+scale from the authoritative road profile, and the actual game QML renders
+the packaged Balsam component. Khronos validation, two reproducible Blender
+and Balsam runs, 13 policy tests, 14 interactive X11 view tests and a
+three-camera 1,080-frame motion audit pass. The split and jump silhouette are
+still too subdued for HUD-free acceptance, so visual readability remains
+open.
 
 ### `VS-03` Integrate rider and bike
 
