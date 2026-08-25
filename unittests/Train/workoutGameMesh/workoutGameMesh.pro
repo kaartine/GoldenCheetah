@@ -14,6 +14,7 @@ HEADERS = ../../../src/Train/WorkoutGameMesh.h \
           ../../../src/Train/WorkoutGameForestFloor.h \
           ../../../src/Train/WorkoutGameOcclusion.h \
           ../../../src/Train/WorkoutGameRootGeometry.h \
+          ../../../src/Train/WorkoutGameRockGardenGeometry.h \
           ../../../src/Train/WorkoutGameTrailBranch.h \
           ../../../src/Train/WorkoutGameTrailTile.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \

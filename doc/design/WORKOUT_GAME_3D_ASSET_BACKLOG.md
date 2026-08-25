@@ -76,7 +76,7 @@ targets, feature decisions, or trainer resistance.
 | FT-05 | Rollers | Three rounded crests and troughs formed in the trail surface; no separate bypass | Pump/absorb with both wheels surface-anchored |
 | FT-06 | Berm | Broad bowl-shaped bank, inner edge and joined approach/exit | Shared curved line, rider lean and roll |
 | FT-07 | Roots | Accepted project-authored buried network of eight branches, widened same-tread safe line and exact sockets | Box2D suspension drives bounded torso roughness; no scripted air or camera vibration |
-| FT-08 | Rock garden | Sunk irregular rock group and deformed rideable tread | Continuous roughness and line choice |
+| FT-08 | Rock garden | Accepted project-authored group of twelve sunk irregular stones, widened same-tread safe line and exact sockets | Box2D suspension drives bounded torso roughness and line choice; no scripted air or camera vibration |
 | FT-09 | Rock slab | Asymmetric slab, rollover crest, exposed sides and fissures | Front/rear pitch follows slab surface |
 | FT-10 | Skinny | Deck boards, beams/supports, visible ground and width transitions | Stable narrow line and subtle balance lean |
 | FT-11 | Climb | Long visible rising face, optional rock steps and readable crest | Standing pedal pose and crest release |
@@ -181,9 +181,9 @@ candidate until safe-line geometry and the extracted-AppImage gate pass.
 - [ ] `PROD-07` Feature-specific rider/camera/effect states.
 - [ ] `PROD-08` Completed/bypass catalog and live UI tests for all eleven features.
 
-`PROD-04` remains open for rock garden and rock slab. Its Roots component is
-accepted as deterministic project-authored procedural geometry and introduces
-no external asset or additional license obligation.
+`PROD-04` remains open only for rock slab. Its Roots and rock-garden components
+are accepted as deterministic project-authored procedural geometry and
+introduce no external asset or additional license obligation.
 
 ### Phase 5: Release
 

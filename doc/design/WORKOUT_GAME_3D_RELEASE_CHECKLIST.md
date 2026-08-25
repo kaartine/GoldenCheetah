@@ -299,7 +299,7 @@ and a runtime/geometry regression test.
 - [x] `FTR-04` Rollers: rounded continuous crests/troughs and pump motion.
 - [x] `FTR-05` Berm: broad banked bowl and shared curved rider line.
 - [x] `FTR-06` Roots: branching embedded network and bounded roughness.
-- [ ] `FTR-07` Rock garden: sunk varied rocks and a readable rideable line.
+- [x] `FTR-07` Rock garden: sunk varied rocks and a readable rideable line.
 - [ ] `FTR-08` Rock slab: asymmetric mass, crest, sides and surface following.
 - [ ] `FTR-09` Skinny: narrow deck, supports, ground clearance and transitions.
 - [ ] `FTR-10` Climb: visible rising face, crest and effort pose.
@@ -470,6 +470,39 @@ the `gc-ui-ftr06` artifact directory on the build host. The final main-line and
 safe-line MP4 SHA-256 values are respectively
 `bb7766231198aaec48b33438be823e06e98425d276f405c5775326b8b164c658` and
 `8a33f9bb61d114b88522010aca14ae1c6a7506d2cf78fe6fee178a0a17b25f46`.
+No external model, image or texture was added.
+
+**FTR-07 evidence:** The rock garden is a project-owned procedural 14-metre
+trail tile driven only by `WorkoutGameRockGardenGeometry`. Twelve deterministic
+elliptical stones vary in footprint, yaw and height; nine intersect the main
+line and all are buried by 18 percent. The active 6.5-metre bed widens from a
+0.68-metre socket half-width to 1.35 metres. Its 0.88-metre safe line remains
+on the same tread, rejoins through bounded cubic transitions and has no more
+than 3.5 centimetres of relief.
+
+Road elevation and width, runtime line choice, Box2D tyre contact, legacy
+comparison geometry and the merged Quick 3D mesh all consume that canonical
+profile. The physics adapter samples the active bed at 0.04-metre spacing. One
+Quick 3D draw range contains 180 vertices and 252 opaque triangles per tile,
+is bounded to 256 resident stones and is rebuilt into one of two buffers only
+when the floor streaming range changes. Ordinary trail relief is suppressed
+under the stones, so neither visual nor physical duplicate geometry can lift
+the rider. Rock gardens never synthesize airtime, camera vibration or cadence
+requirements; Box2D front/rear suspension drives a 70-ms-filtered torso pump.
+
+Road, geometry, runtime, mesh and world suites pass
+`33 + 21 + 20 + 28 + 36` tests normally and under ASan/UBSan. The complete
+X11/OpenGL view suite passes 46 tests with eight explicit opt-in exports
+skipped under both configurations. Coverage includes deterministic profile
+scaling, exact sockets, 3/5/7 m/s contact, bounded safe-line suspension and HUD
+target authority. The separate 288-frame main- and safe-line export passes at
+60 Hz normally and under ASan/UBSan with zero airborne frames, lateral steps
+below five centimetres and changing pixels in more than four fifths of frame
+transitions. Review videos and approach/core/exit images are in the
+`gc-ui-ftr07` artifact directory on the build host. Both videos are 960 by 540,
+4.8 seconds and 288 frames. Their SHA-256 values are respectively
+`f7ed58649c25407d9955b887b1b376b57500c4fe87352fd5f8aff7f82a14fc7b` and
+`00fb385a528b8c4216a041e6f25a0c2f80ff88bf0c73fdc21b64a8bad50c5db7`.
 No external model, image or texture was added.
 
 **Feature acceptance:** each feature is identifiable without its name, joins

@@ -12,6 +12,7 @@
 #include "WorkoutGameBermGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
@@ -207,6 +208,10 @@ void WorkoutGame3DGeometry::build(
         buildRoots(course, startDistanceMeters, endDistanceMeters);
         return;
     }
+    if (layer == Layer::RockGarden) {
+        buildRockGardens(course, startDistanceMeters, endDistanceMeters);
+        return;
+    }
     const double rangeMeters = endDistanceMeters - startDistanceMeters;
 
     std::vector<double> sampleDistances;
@@ -295,11 +300,13 @@ void WorkoutGame3DGeometry::build(
                         ? -sample.center.halfWidthMeters
                         : sample.center.halfWidthMeters)
                     : terrain.vertices[std::size_t(vertex)].lateralMeters;
-            const bool rootDatum = trailVertex
-                    && sample.terrain == WorkoutGameTerrainKind::Roots;
+            const bool technicalDatum = trailVertex
+                    && (sample.terrain == WorkoutGameTerrainKind::Roots
+                        || sample.terrain
+                            == WorkoutGameTerrainKind::RockGarden);
             const double elevation = trailVertex
                     ? sample.visualGroundElevationMeters()
-                        - (rootDatum ? sample.surfaceOffsetMeters : 0.0)
+                        - (technicalDatum ? sample.surfaceOffsetMeters : 0.0)
                         + 0.015
                     : terrain.vertices[std::size_t(vertex)].elevationMeters;
             const int previousVertex = std::max(0, vertex - 1);
@@ -405,6 +412,221 @@ void WorkoutGame3DGeometry::build(
     setBounds(boundsMin, boundsMax);
     geometryReady = true;
     generatedSampleCount = count;
+    update();
+}
+
+void WorkoutGame3DGeometry::buildRockGardens(
+        const WorkoutGameRoadCourse &course,
+        double startDistanceMeters,
+        double endDistanceMeters)
+{
+    constexpr int Sides = 7;
+    constexpr int VerticesPerStone = Sides * 2 + 1;
+    constexpr int MaximumStones = 256;
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    QVector3D boundsMin(
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max());
+    QVector3D boundsMax(
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest());
+    int stoneCount = 0;
+
+    const auto appendVertex = [&](
+            const WorkoutGameRoadSample &sample,
+            double distance,
+            double lateral,
+            double up,
+            double normalForward,
+            double normalLateral,
+            double normalUp,
+            float shade,
+            float u,
+            float v) {
+        const WorkoutGame3DTerrainProfileSnapshot terrain =
+                WorkoutGame3DTerrainProfile::build(
+                    sample, distance, course.seed);
+        if (!terrain.ready) return false;
+        const double rightX = std::cos(sample.center.headingRadians);
+        const double rightZ = -std::sin(sample.center.headingRadians);
+        const double forwardX = std::sin(sample.center.headingRadians);
+        const double forwardZ = std::cos(sample.center.headingRadians);
+        const double datum =
+                WorkoutGame3DTerrainProfile::elevationAtLateral(
+                    terrain, lateral)
+                - sample.surfaceOffsetMeters;
+        const double normalLength = std::sqrt(
+                normalForward * normalForward
+                + normalLateral * normalLateral
+                + normalUp * normalUp);
+        const double inverseNormal = normalLength > 1e-9
+                ? 1.0 / normalLength : 1.0;
+        const float x = float(sample.center.xMeters + lateral * rightX);
+        const float y = float(datum + up);
+        const float z = float(sample.center.zMeters + lateral * rightZ);
+        vertices.push_back({
+            x, y, z,
+            float((normalForward * forwardX
+                   + normalLateral * rightX) * inverseNormal),
+            float(normalUp * inverseNormal),
+            float((normalForward * forwardZ
+                   + normalLateral * rightZ) * inverseNormal),
+            0.34f + 0.17f * shade,
+            0.32f + 0.14f * shade,
+            0.27f + 0.10f * shade,
+            1.0f, u, v
+        });
+        boundsMin.setX(std::min(boundsMin.x(), x));
+        boundsMin.setY(std::min(boundsMin.y(), y));
+        boundsMin.setZ(std::min(boundsMin.z(), z));
+        boundsMax.setX(std::max(boundsMax.x(), x));
+        boundsMax.setY(std::max(boundsMax.y(), y));
+        boundsMax.setZ(std::max(boundsMax.z(), z));
+        return true;
+    };
+
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled
+                || piece.terrain != WorkoutGameTerrainKind::RockGarden) {
+            continue;
+        }
+        const WorkoutGameRockGardenGeometryProfile profile =
+                WorkoutGameRockGardenGeometry::profile(piece.difficulty);
+        if (!profile.ready) continue;
+        const double center = piece.challenge.obstacleDistanceMeters;
+        if (center + profile.activeEndMeters < startDistanceMeters
+                || center + profile.activeStartMeters > endDistanceMeters) {
+            continue;
+        }
+        int profileStoneIndex = 0;
+        for (const WorkoutGameRockGardenStone &stone : profile.stones) {
+            if (stoneCount >= MaximumStones) break;
+            const std::uint32_t first = std::uint32_t(vertices.size());
+            const double yawCosine = std::cos(stone.yawRadians);
+            const double yawSine = std::sin(stone.yawRadians);
+            const double baseUp = -profile.burialRatio * stone.heightMeters;
+            for (int ring = 0; ring < 2; ++ring) {
+                const double taper = ring == 0 ? 1.0 : 0.68;
+                for (int side = 0; side < Sides; ++side) {
+                    const double angle = 2.0 * Pi * double(side)
+                            / double(Sides);
+                    const double irregularity = 0.86
+                            + 0.10 * std::sin(
+                                3.0 * angle + 0.71 * profileStoneIndex)
+                            + 0.05 * std::cos(
+                                5.0 * angle - 0.37 * profileStoneIndex);
+                    const double localForward = std::cos(angle)
+                            * stone.forwardRadiusMeters
+                            * irregularity * taper;
+                    const double localLateral = std::sin(angle)
+                            * stone.lateralRadiusMeters
+                            * irregularity * taper;
+                    const double rotatedForward =
+                            localForward * yawCosine
+                            - localLateral * yawSine;
+                    const double rotatedLateral =
+                            localForward * yawSine
+                            + localLateral * yawCosine;
+                    const double distance = center + stone.forwardMeters
+                            + rotatedForward;
+                    const double lateral = stone.lateralMeters
+                            + rotatedLateral;
+                    const WorkoutGameRoadSample sample =
+                            WorkoutGameRoadCourseBuilder::sample(
+                                course, distance);
+                    if (!sample.ready) {
+                        clear();
+                        return;
+                    }
+                    const double up = ring == 0
+                            ? baseUp
+                            : baseUp + stone.heightMeters * (
+                                0.78 + 0.06 * std::sin(
+                                    angle + 0.53 * profileStoneIndex));
+                    if (!appendVertex(
+                            sample, distance, lateral, up,
+                            rotatedForward /
+                                stone.forwardRadiusMeters,
+                            rotatedLateral /
+                                stone.lateralRadiusMeters,
+                            ring == 0 ? 0.10 : 0.72,
+                            float((profileStoneIndex + side) % 4) / 3.0f,
+                            float(side) / float(Sides),
+                            float(ring))) {
+                        clear();
+                        return;
+                    }
+                }
+            }
+            const double crownForward = 0.08
+                    * stone.forwardRadiusMeters
+                    * std::sin(0.83 * profileStoneIndex);
+            const double crownLateral = 0.08
+                    * stone.lateralRadiusMeters
+                    * std::cos(0.67 * profileStoneIndex);
+            const double crownDistance = center + stone.forwardMeters
+                    + crownForward;
+            const double crownRight = stone.lateralMeters + crownLateral;
+            const WorkoutGameRoadSample crownSample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        course, crownDistance);
+            if (!crownSample.ready
+                    || !appendVertex(
+                        crownSample, crownDistance, crownRight,
+                        baseUp + stone.heightMeters,
+                        0.0, 0.0, 1.0,
+                        float(profileStoneIndex % 4) / 3.0f,
+                        0.5f, 1.0f)) {
+                clear();
+                return;
+            }
+
+            for (int side = 0; side < Sides; ++side) {
+                const std::uint32_t next = std::uint32_t((side + 1) % Sides);
+                indices.insert(indices.end(), {
+                    first + std::uint32_t(side),
+                    first + Sides + std::uint32_t(side),
+                    first + next,
+                    first + next,
+                    first + Sides + std::uint32_t(side),
+                    first + Sides + next,
+                    first + Sides + std::uint32_t(side),
+                    first + Sides * 2,
+                    first + Sides + next
+                });
+            }
+            ++stoneCount;
+            ++profileStoneIndex;
+        }
+        if (stoneCount >= MaximumStones) break;
+    }
+    if (vertices.empty() || indices.empty()) return;
+
+    QByteArray vertexData;
+    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
+    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
+    QByteArray indexData;
+    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
+    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
+    setStride(sizeof(Vertex));
+    setVertexData(vertexData);
+    setIndexData(indexData);
+    setPrimitiveType(PrimitiveType::Triangles);
+    addAttribute(Attribute::PositionSemantic,
+                 offsetof(Vertex, x), Attribute::F32Type);
+    addAttribute(Attribute::NormalSemantic,
+                 offsetof(Vertex, nx), Attribute::F32Type);
+    addAttribute(Attribute::ColorSemantic,
+                 offsetof(Vertex, r), Attribute::F32Type);
+    addAttribute(Attribute::TexCoordSemantic,
+                 offsetof(Vertex, u), Attribute::F32Type);
+    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
+    setBounds(boundsMin, boundsMax);
+    geometryReady = true;
+    generatedSampleCount = stoneCount * VerticesPerStone;
     update();
 }
 

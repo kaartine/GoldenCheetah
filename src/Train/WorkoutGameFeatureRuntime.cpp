@@ -13,6 +13,7 @@
 #include "WorkoutGameTrailBranch.h"
 
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 
 #include <algorithm>
@@ -224,6 +225,15 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         actionEnd = std::min(
                 layout.endDistanceMeters,
                 result.obstacleDistanceMeters + roots.activeEndMeters);
+    } else if (piece->terrain == WorkoutGameTerrainKind::RockGarden) {
+        const WorkoutGameRockGardenGeometryProfile rocks =
+                WorkoutGameRockGardenGeometry::profile(piece->difficulty);
+        actionStart = std::max(
+                layout.startDistanceMeters,
+                result.obstacleDistanceMeters + rocks.activeStartMeters);
+        actionEnd = std::min(
+                layout.endDistanceMeters,
+                result.obstacleDistanceMeters + rocks.activeEndMeters);
     } else if (result.motion == WorkoutGameFeatureMotion::Jump) {
         const WorkoutGameFeatureGeometryProfile geometry =
                 WorkoutGameFeatureGeometry::profile(
@@ -287,6 +297,13 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             result.lateralOffsetMeters = roots.safeLineOffsetMeters(
                         result.visualDistanceMeters
                             - piece->challenge.obstacleDistanceMeters);
+        } else if (piece->terrain == WorkoutGameTerrainKind::RockGarden) {
+            const WorkoutGameRockGardenGeometryProfile rocks =
+                    WorkoutGameRockGardenGeometry::profile(
+                        piece->difficulty);
+            result.lateralOffsetMeters = rocks.safeLineOffsetMeters(
+                    result.visualDistanceMeters
+                        - piece->challenge.obstacleDistanceMeters);
         } else {
             const double branchStart =
                     piece->challenge.bypassStartDistanceMeters;
@@ -312,11 +329,6 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             result.verticalOffsetMeters = jumpHeight(piece->terrain)
                     * jumpArc(actionProgress);
             result.pitchDegrees = 7.0 * std::cos(Pi * actionProgress);
-        } else if (result.motion == WorkoutGameFeatureMotion::Absorb
-                && completed && !bypass
-                && piece->terrain == WorkoutGameTerrainKind::RockGarden) {
-            result.vibration = 0.34
-                    * (0.65 + 0.35 * std::sin(actionProgress * Pi * 8.0));
         } else if (result.motion == WorkoutGameFeatureMotion::Drop
                 && completed && !bypass) {
             result.pitchDegrees = -14.0 * std::sin(Pi * actionProgress);

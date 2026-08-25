@@ -11,6 +11,7 @@
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameForestFloor.h"
 #include "Train/WorkoutGameRootGeometry.h"
+#include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameOcclusion.h"
 #include "Train/WorkoutGameTrailBranch.h"
 #include "Train/WorkoutGameTrailTile.h"
@@ -66,6 +67,31 @@ class TestWorkoutGameMesh : public QObject
     Q_OBJECT
 
 private slots:
+    void rockGardenMeshUsesTheCanonicalBuriedStoneBudget()
+    {
+        const WorkoutGameRockGardenGeometryProfile profile =
+                WorkoutGameRockGardenGeometry::profile(0.65);
+        const WorkoutGameMesh mesh = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::RockGarden, 0.65);
+        QVERIFY(mesh.ready);
+        QCOMPARE(mesh.entry.forwardMeters, profile.startMeters);
+        QCOMPARE(mesh.exit.forwardMeters, profile.endMeters);
+        QCOMPARE(mesh.entry.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.exit.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.colliders.size(), profile.stones.size());
+        QVERIFY(mesh.triangles.size() <= 300u);
+        double minimumUp = 0.0;
+        double maximumUp = 0.0;
+        for (const WorkoutGameMeshVertex &vertex : mesh.vertices) {
+            minimumUp = std::min(minimumUp, vertex.upMeters);
+            maximumUp = std::max(maximumUp, vertex.upMeters);
+        }
+        QVERIFY(minimumUp < -0.02);
+        QVERIFY(maximumUp >= 0.18);
+    }
+
     void rootsMeshUsesTheCanonicalNetworkAndSocketBudget()
     {
         const WorkoutGameRootGeometryProfile profile =

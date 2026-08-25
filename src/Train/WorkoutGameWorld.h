@@ -49,7 +49,7 @@ struct WorkoutGameVehiclePose
 
     double airHeightMeters() const
     {
-        if (!std::isfinite(clearanceMeters)) return 0.0;
+        if (!airborne || !std::isfinite(clearanceMeters)) return 0.0;
         return std::clamp(clearanceMeters - 0.82, 0.0, 4.0);
     }
 };

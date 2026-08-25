@@ -102,6 +102,10 @@ never allowed to join that worker.
   segments in the resident range. Their 40 vertices and 512 triangles per tile
   are rebuilt into one of two buffers only when the floor streaming bucket
   changes; no root vertex data is uploaded from the per-frame pose path.
+- Rock gardens are project-authored procedural geometry with at most 256 stones
+  in the resident range. Twelve stones produce 180 vertices and 252 triangles
+  per tile in one merged draw range. That range uses the same double-buffered
+  floor-bucket lifecycle and is never rebuilt by the per-frame pose path.
 - Textures use mipmaps and explicit size budgets. Repeated props use instancing
   once authored assets replace the initial primitives.
 - Shadows and expensive post-processing default off on the low-power profile.

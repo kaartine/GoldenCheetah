@@ -10,6 +10,7 @@
 #include "WorkoutGame3DGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameRootGeometry.h"
+#include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <QTest>
@@ -110,6 +111,24 @@ WorkoutGameRoadCourse rootsCourse()
     return WorkoutGameRoadCourseBuilder::build(source, 200.0);
 }
 
+WorkoutGameRoadCourse rockGardenCourse()
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 977u;
+    source.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::Trail;
+    section.terrain = WorkoutGameTerrainKind::RockGarden;
+    section.durationMs = source.durationMs;
+    section.lengthMeters = 76.0;
+    section.targetWatts = 185.0;
+    section.difficulty = 0.65;
+    section.challengeCount = 1;
+    source.sections = {section};
+    return WorkoutGameRoadCourseBuilder::build(source, 200.0);
+}
+
 }
 
 class TestWorkoutGame3DGeometry : public QObject
@@ -117,6 +136,49 @@ class TestWorkoutGame3DGeometry : public QObject
     Q_OBJECT
 
 private slots:
+    void rockGardenBuildsOneMergedBuriedStoneNetwork()
+    {
+        const WorkoutGameRoadCourse course = rockGardenCourse();
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const WorkoutGameRockGardenGeometryProfile profile =
+                WorkoutGameRockGardenGeometry::profile(piece->difficulty);
+        WorkoutGame3DGeometry rocks(
+                WorkoutGame3DGeometry::Layer::RockGarden);
+        rocks.setCourse(course);
+
+        constexpr int VerticesPerStone = 15;
+        constexpr int IndicesPerStone = 63;
+        QVERIFY(rocks.ready());
+        QCOMPARE(rocks.sampleCount(),
+                 int(profile.stones.size()) * VerticesPerStone);
+        QCOMPARE(rocks.vertexData().size(),
+                 rocks.sampleCount() * rocks.stride());
+        QCOMPARE(rocks.indexData().size(),
+                 int(profile.stones.size()) * IndicesPerStone
+                    * int(sizeof(quint32)));
+        QVERIFY(rocks.boundsMax().x() - rocks.boundsMin().x() > 1.6f);
+        QVERIFY(rocks.boundsMax().y() > rocks.boundsMin().y() + 0.18f);
+        QVERIFY(rocks.boundsMax().z() - rocks.boundsMin().z() > 5.0f);
+    }
+
+    void rockGardenRangeBuildExcludesDistantTiles()
+    {
+        WorkoutGame3DGeometry rocks(
+                WorkoutGame3DGeometry::Layer::RockGarden);
+        const WorkoutGameRoadCourse course = rockGardenCourse();
+        rocks.setCourseRange(course, 0.0, 5.0);
+        QVERIFY(!rocks.ready());
+        QCOMPARE(rocks.sampleCount(), 0);
+
+        rocks.setCourse(course);
+        QVERIFY(rocks.ready());
+    }
+
     void rootsBuildAProceduralBuriedTubeNetwork()
     {
         const WorkoutGameRoadCourse course = rootsCourse();

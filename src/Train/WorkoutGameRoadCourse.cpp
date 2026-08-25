@@ -12,6 +12,7 @@
 #include "WorkoutGameBermGeometry.h"
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 
 #include <algorithm>
@@ -51,9 +52,11 @@ double technicalSurfaceOffset(
         }
         break;
     case WorkoutGameTerrainKind::RockGarden:
-        offset += 0.04 * curvatureScale * envelope
-                * (0.35 + 0.65
-                    * std::pow(std::sin(2.0 * Pi * progress), 2.0));
+        if (!piece.challenge.enabled) {
+            offset += 0.04 * curvatureScale * envelope
+                    * (0.35 + 0.65
+                        * std::pow(std::sin(2.0 * Pi * progress), 2.0));
+        }
         break;
     default:
         break;
@@ -71,6 +74,9 @@ double featureSurfaceOffset(
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Roots:
         return WorkoutGameRootGeometry::profile(
+                piece.difficulty).surfaceOffsetMeters(local, 0.0);
+    case WorkoutGameTerrainKind::RockGarden:
+        return WorkoutGameRockGardenGeometry::profile(
                 piece.difficulty).surfaceOffsetMeters(local, 0.0);
     case WorkoutGameTerrainKind::Rollers:
     case WorkoutGameTerrainKind::BunnyHop:
@@ -480,7 +486,6 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     sectionStart + sectionLength * 0.80,
                     challengeDistance + 4.0);
             break;
-        case WorkoutGameTerrainKind::RockGarden:
         case WorkoutGameTerrainKind::RockSlab:
             obstacleDistance = sectionStart + sectionLength * std::min(
                     0.92, challenge.decisionProgress + 0.05);
@@ -489,6 +494,11 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             obstacleDistance = std::min(
                     sectionStart + sectionLength - 6.0,
                     challengeDistance + 6.0);
+            break;
+        case WorkoutGameTerrainKind::RockGarden:
+            obstacleDistance = std::min(
+                    sectionStart + sectionLength - 7.0,
+                    challengeDistance + 7.0);
             break;
         default:
             break;
@@ -535,6 +545,19 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         obstacleDistance, minimumObstacle, maximumObstacle);
                 challengeDistance = obstacleDistance + roots.startMeters;
             }
+        } else if (challenge.enabled
+                && section.terrain == WorkoutGameTerrainKind::RockGarden) {
+            const WorkoutGameRockGardenGeometryProfile rocks =
+                    WorkoutGameRockGardenGeometry::profile(
+                        section.difficulty);
+            const double minimumObstacle = sectionStart - rocks.startMeters;
+            const double maximumObstacle = sectionStart + sectionLength
+                    - rocks.endMeters;
+            if (maximumObstacle >= minimumObstacle) {
+                obstacleDistance = std::clamp(
+                        obstacleDistance, minimumObstacle, maximumObstacle);
+                challengeDistance = obstacleDistance + rocks.startMeters;
+            }
         }
         for (int part = 0; part < pieceCount; ++part) {
             WorkoutGameRoadPiece piece;
@@ -570,6 +593,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         == WorkoutGameTerrainKind::BunnyHop ? 3.0 : 6.0;
                 piece.challenge.prepareDistanceMeters =
                         section.terrain == WorkoutGameTerrainKind::Roots
+                            || section.terrain
+                                == WorkoutGameTerrainKind::RockGarden
                     ? std::max(measuredPreparationDistance,
                                challengeDistance
                                     - maximumPreparationMeters)
@@ -586,9 +611,11 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                             ? featureGeometry.endMeters : 4.0);
                 if (section.terrain == WorkoutGameTerrainKind::Rollers
                         || section.terrain == WorkoutGameTerrainKind::Berm
-                        || section.terrain == WorkoutGameTerrainKind::Roots) {
-                    // These are fully rollable trail surfaces. A berm's
-                    // slower inside line is part of the same tread.
+                        || section.terrain == WorkoutGameTerrainKind::Roots
+                        || section.terrain
+                            == WorkoutGameTerrainKind::RockGarden) {
+                    // These are fully rollable trail surfaces. Their easier
+                    // lines remain part of the same widened tread.
                     piece.challenge.bypassStartDistanceMeters =
                             challengeDistance;
                     piece.challenge.bypassEndDistanceMeters =
@@ -726,6 +753,13 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
         const double local = distance
                 - piece.challenge.obstacleDistanceMeters;
         result.center.halfWidthMeters = roots.halfWidthMeters(local);
+    } else if (piece.terrain == WorkoutGameTerrainKind::RockGarden
+            && piece.challenge.enabled) {
+        const WorkoutGameRockGardenGeometryProfile rocks =
+                WorkoutGameRockGardenGeometry::profile(piece.difficulty);
+        const double local = distance
+                - piece.challenge.obstacleDistanceMeters;
+        result.center.halfWidthMeters = rocks.halfWidthMeters(local);
     }
     const double reliefOffset = trailReliefOffset(piece, distance);
     result.center.elevationMeters += reliefOffset

@@ -10,6 +10,7 @@
 #include "WorkoutGameMesh.h"
 
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
@@ -165,9 +166,14 @@ void addIrregularBoulder(
         double length,
         double width,
         double height,
-        double phase)
+        double phase,
+        double yawRadians = 0.0,
+        double burialRatio = 0.0)
 {
     constexpr int Sides = 7;
+    const double yawCosine = std::cos(yawRadians);
+    const double yawSine = std::sin(yawRadians);
+    const double baseUp = -burialRatio * height;
     const std::uint32_t start = std::uint32_t(mesh.vertices.size());
     for (int ring = 0; ring < 2; ++ring) {
         for (int index = 0; index < Sides; ++index) {
@@ -176,13 +182,17 @@ void addIrregularBoulder(
                     + 0.14 * std::sin(3.0 * angle + phase)
                     + 0.07 * std::cos(5.0 * angle - phase);
             const double taper = ring == 0 ? 1.0 : 0.67;
+            const double localForward = std::cos(angle) * length * 0.5
+                    * irregularity * taper;
+            const double localRight = std::sin(angle) * width * 0.5
+                    * irregularity * taper;
             addVertex(mesh,
-                    forward + std::cos(angle) * length * 0.5
-                        * irregularity * taper,
-                    right + std::sin(angle) * width * 0.5
-                        * irregularity * taper,
-                    ring == 0 ? 0.0
-                              : height * (0.80
+                    forward + localForward * yawCosine
+                        - localRight * yawSine,
+                    right + localForward * yawSine
+                        + localRight * yawCosine,
+                    ring == 0 ? baseUp
+                              : baseUp + height * (0.80
                                   + 0.08 * std::sin(angle + phase)),
                     0.5 + 0.5 * std::cos(angle),
                     0.5 + 0.5 * std::sin(angle));
@@ -190,9 +200,12 @@ void addIrregularBoulder(
     }
     const std::uint32_t crown = addVertex(
             mesh,
-            forward + 0.08 * length * std::sin(phase),
-            right + 0.07 * width * std::cos(phase),
-            height * 0.94, 0.5, 0.5);
+            forward + 0.08 * length * std::sin(phase) * yawCosine
+                - 0.07 * width * std::cos(phase) * yawSine,
+            right + 0.08 * length * std::sin(phase) * yawSine
+                + 0.07 * width * std::cos(phase) * yawCosine,
+            baseUp + height * (burialRatio > 0.0 ? 1.0 : 0.94),
+            0.5, 0.5);
     for (int index = 0; index < Sides; ++index) {
         const int next = (index + 1) % Sides;
         addQuad(mesh,
@@ -484,27 +497,41 @@ WorkoutGameMesh roughModel(
             profile.startMeters, profile.socketHalfWidthMeters, 0.0};
         mesh.exit = {
             profile.endMeters, profile.socketHalfWidthMeters, 0.0};
-    } else {
-        for (int index = 0; index < 9; ++index) {
-            const double forward = -2.65 + double(index) * 0.67;
-            const double right = ((index * 5) % 9 - 4) * 0.27;
-            const double size = 0.27 + 0.07 * double(index % 4)
-                    + 0.12 * difficulty;
-            const double rockHeight = size * (0.62
-                    + 0.06 * double(index % 3));
+    } else if (terrain == WorkoutGameTerrainKind::RockGarden) {
+        const WorkoutGameRockGardenGeometryProfile profile =
+                WorkoutGameRockGardenGeometry::profile(difficulty);
+        int index = 0;
+        for (const WorkoutGameRockGardenStone &stone : profile.stones) {
             addIrregularBoulder(
-                    mesh, forward, right,
-                    size * (1.45 + 0.12 * double(index % 2)),
-                    size * (1.55 + 0.10 * double((index + 1) % 3)),
-                    rockHeight, 0.73 * double(index));
+                    mesh,
+                    stone.forwardMeters,
+                    stone.lateralMeters,
+                    2.0 * stone.forwardRadiusMeters,
+                    2.0 * stone.lateralRadiusMeters,
+                    stone.heightMeters,
+                    0.73 * double(index),
+                    stone.yawRadians,
+                    profile.burialRatio);
+            const double visibleHeight =
+                    (1.0 - profile.burialRatio) * stone.heightMeters;
             mesh.colliders.push_back({
-                forward, right, rockHeight * 0.5,
-                size * 0.75, size * 0.82, rockHeight * 0.5
+                stone.forwardMeters,
+                stone.lateralMeters,
+                visibleHeight * 0.5,
+                stone.forwardRadiusMeters,
+                stone.lateralRadiusMeters,
+                visibleHeight * 0.5
             });
+            ++index;
         }
-        mesh.lengthMeters = 5.8;
+        mesh.lengthMeters = profile.endMeters - profile.startMeters;
+        mesh.entry = {
+            profile.startMeters, profile.socketHalfWidthMeters, 0.0};
+        mesh.exit = {
+            profile.endMeters, profile.socketHalfWidthMeters, 0.0};
     }
-    if (terrain != WorkoutGameTerrainKind::Roots) {
+    if (terrain != WorkoutGameTerrainKind::Roots
+            && terrain != WorkoutGameTerrainKind::RockGarden) {
         mesh.entry = {-mesh.lengthMeters * 0.5, 1.4, 0.0};
         mesh.exit = {mesh.lengthMeters * 0.5, 1.4, 0.0};
     }

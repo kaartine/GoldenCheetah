@@ -100,6 +100,21 @@ Item {
         }
 
         Model {
+            objectName: "rockGardenGeometryModel"
+            geometry: workoutGame3D.rockGardenGeometry
+            materials: PrincipledMaterial {
+                baseColor: "white"
+                metalness: 0
+                roughness: 0.92
+                vertexColorsEnabled: true
+                lighting: PrincipledMaterial.FragmentLighting
+                cullMode: Material.NoCulling
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
+        Model {
             objectName: "bermGeometryModel"
             geometry: workoutGame3D.bermGeometry
             materials: PrincipledMaterial {
@@ -163,7 +178,7 @@ Item {
                 eulerRotation.y: modelData.yaw
 
                 Model {
-                    visible: modelData.kind === 4 || modelData.kind === 11
+                    visible: modelData.kind === 11
                     source: "#Sphere"
                     y: 0.26
                     scale: Qt.vector3d(0.012, 0.0065, 0.010)

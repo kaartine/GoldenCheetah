@@ -31,6 +31,8 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(QObject *bypassGeometry READ bypassGeometry CONSTANT)
     Q_PROPERTY(QObject *rootsGeometry READ rootsGeometry
                NOTIFY floorGeometryChanged)
+    Q_PROPERTY(QObject *rockGardenGeometry READ rockGardenGeometry
+               NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *floorGeometry READ floorGeometry
                NOTIFY floorGeometryChanged)
     Q_PROPERTY(bool ready READ ready NOTIFY sceneChanged)
@@ -120,6 +122,10 @@ public:
     QObject *rootsGeometry() const
     {
         return rootBuffers[std::size_t(activeFloorBuffer)].get();
+    }
+    QObject *rockGardenGeometry() const
+    {
+        return rockGardenBuffers[std::size_t(activeFloorBuffer)].get();
     }
     QObject *floorGeometry() const
     {
@@ -224,6 +230,7 @@ private:
     std::unique_ptr<WorkoutGame3DGeometry> bypass;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rootBuffers;
+    std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rockGardenBuffers;
     int activeFloorBuffer = 0;
     WorkoutGameRoadCourse roadCourse;
     std::vector<std::size_t> rollerChallengePieceIndices;
@@ -248,6 +255,8 @@ private:
     bool rootCompressionInitialized = false;
     double previousRootCompression = 0.0;
     std::int64_t lastRiderPoseTimeMs = -1;
+    bool rockCompressionInitialized = false;
+    double previousRockCompression = 0.0;
     double currentPedalAngle = 0.0;
     double currentSpeedKph = 0.0;
     double currentDistanceMeters = 0.0;

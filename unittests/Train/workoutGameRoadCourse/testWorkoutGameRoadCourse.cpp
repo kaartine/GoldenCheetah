@@ -13,6 +13,7 @@
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameHorizon.h"
 #include "Train/WorkoutGameRootGeometry.h"
+#include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameTrailBranch.h"
 
 #include <QTest>
@@ -83,6 +84,141 @@ class TestWorkoutGameRoadCourse : public QObject
     Q_OBJECT
 
 private slots:
+    void rockGardenProfileHasSocketedBuriedMainAndSafeLines()
+    {
+        const WorkoutGameRockGardenGeometryProfile profile =
+                WorkoutGameRockGardenGeometry::profile(0.65);
+        const WorkoutGameRockGardenGeometryProfile repeated =
+                WorkoutGameRockGardenGeometry::profile(0.65);
+        const WorkoutGameRockGardenGeometryProfile easiest =
+                WorkoutGameRockGardenGeometry::profile(0.0);
+        const WorkoutGameRockGardenGeometryProfile hardest =
+                WorkoutGameRockGardenGeometry::profile(1.0);
+        QVERIFY(profile.ready);
+        QCOMPARE(profile.startMeters, -7.0);
+        QCOMPARE(profile.activeStartMeters, -3.25);
+        QCOMPARE(profile.activeEndMeters, 3.25);
+        QCOMPARE(profile.endMeters, 7.0);
+        QCOMPARE(profile.socketHalfWidthMeters, 0.68);
+        QCOMPARE(profile.activeHalfWidthMeters, 1.35);
+        QCOMPARE(profile.safeLineLateralMeters, 0.88);
+        QVERIFY(profile.burialRatio >= 0.15);
+        QVERIFY(profile.burialRatio <= 0.25);
+        QCOMPARE(repeated.stones.size(), profile.stones.size());
+        for (std::size_t index = 0; index < profile.stones.size(); ++index) {
+            const WorkoutGameRockGardenStone &stone = profile.stones[index];
+            const WorkoutGameRockGardenStone &sameStone =
+                    repeated.stones[index];
+            QCOMPARE(sameStone.forwardMeters, stone.forwardMeters);
+            QCOMPARE(sameStone.lateralMeters, stone.lateralMeters);
+            QCOMPARE(sameStone.forwardRadiusMeters,
+                     stone.forwardRadiusMeters);
+            QCOMPARE(sameStone.lateralRadiusMeters,
+                     stone.lateralRadiusMeters);
+            QCOMPARE(sameStone.heightMeters, stone.heightMeters);
+            QCOMPARE(sameStone.yawRadians, stone.yawRadians);
+            QCOMPARE(easiest.stones[index].forwardMeters,
+                     hardest.stones[index].forwardMeters);
+            QCOMPARE(easiest.stones[index].lateralMeters,
+                     hardest.stones[index].lateralMeters);
+            QVERIFY(easiest.stones[index].heightMeters
+                    < hardest.stones[index].heightMeters);
+        }
+        QCOMPARE(profile.safeLineOffsetMeters(-6.0), 0.0);
+        QCOMPARE(profile.safeLineOffsetMeters(0.0),
+                 profile.safeLineLateralMeters);
+        QCOMPARE(profile.safeLineOffsetMeters(6.0), 0.0);
+        QCOMPARE(profile.halfWidthMeters(profile.startMeters),
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(profile.halfWidthMeters(0.0),
+                 profile.activeHalfWidthMeters);
+
+        double maximumMainHeight = 0.0;
+        double maximumSafeHeight = 0.0;
+        int mainLineStones = 0;
+        for (const WorkoutGameRockGardenStone &stone : profile.stones) {
+            QVERIFY(stone.forwardMeters >= profile.activeStartMeters);
+            QVERIFY(stone.forwardMeters <= profile.activeEndMeters);
+            QVERIFY(stone.forwardRadiusMeters > 0.0);
+            QVERIFY(stone.lateralRadiusMeters > 0.0);
+            QVERIFY(stone.heightMeters > 0.0);
+            if (std::abs(stone.lateralMeters)
+                    < stone.lateralRadiusMeters) {
+                ++mainLineStones;
+            }
+        }
+        for (double local = profile.activeStartMeters;
+             local <= profile.activeEndMeters; local += 0.01) {
+            maximumMainHeight = std::max(
+                    maximumMainHeight,
+                    profile.surfaceOffsetMeters(local, 0.0));
+            maximumSafeHeight = std::max(
+                    maximumSafeHeight,
+                    profile.surfaceOffsetMeters(
+                        local, profile.safeLineLateralMeters));
+        }
+        QVERIFY(mainLineStones >= 6);
+        QVERIFY(maximumMainHeight >= 0.12);
+        QVERIFY(maximumMainHeight <= 0.24);
+        QVERIFY(maximumSafeHeight <= 0.035);
+        QVERIFY(maximumSafeHeight <= maximumMainHeight * 0.25);
+    }
+
+    void rockGardenRoadUsesTheCanonicalTyreContactProfile()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 977u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::RockGarden;
+        section.durationMs = source.durationMs;
+        section.lengthMeters = 76.0;
+        section.targetWatts = 185.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        source.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameRockGardenGeometryProfile profile =
+                WorkoutGameRockGardenGeometry::profile(piece->difficulty);
+        const double center = piece->challenge.obstacleDistanceMeters;
+        QCOMPARE(piece->challenge.decisionDistanceMeters,
+                 center + profile.startMeters);
+        QVERIFY(piece->challenge.decisionDistanceMeters
+                - piece->challenge.prepareDistanceMeters > 0.0);
+        QVERIFY(piece->challenge.decisionDistanceMeters
+                - piece->challenge.prepareDistanceMeters <= 6.0 + 1e-9);
+        QCOMPARE(piece->challenge.bypassStartDistanceMeters,
+                 piece->challenge.bypassEndDistanceMeters);
+        QCOMPARE(piece->challenge.bypassLateralMeters, 0.0);
+        const WorkoutGameRoadSample middle =
+                WorkoutGameRoadCourseBuilder::sample(road, center);
+        QVERIFY(middle.ready);
+        QCOMPARE(middle.center.halfWidthMeters,
+                 profile.activeHalfWidthMeters);
+
+        double maximumHeight = 0.0;
+        for (double local = profile.startMeters;
+             local <= profile.endMeters; local += 0.02) {
+            const WorkoutGameRoadSample roadSample =
+                    WorkoutGameRoadCourseBuilder::sample(road, center + local);
+            QVERIFY(roadSample.ready);
+            const double expected =
+                    profile.surfaceOffsetMeters(local, 0.0);
+            QVERIFY(std::abs(roadSample.surfaceOffsetMeters - expected) < 1e-9);
+            maximumHeight = std::max(maximumHeight, expected);
+        }
+        QVERIFY(maximumHeight >= 0.12);
+    }
+
     void rootProfileHasLevelSocketsAndAConnectedBuriedNetwork()
     {
         const WorkoutGameRootGeometryProfile profile =

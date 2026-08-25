@@ -10,6 +10,7 @@
 #include "Train/WorkoutGameWorld.h"
 #include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameRootGeometry.h"
+#include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRoadCourse.h"
 
 #include <QTest>
@@ -483,6 +484,95 @@ private slots:
                          "roots became airborne at %1 m/s")
                          .arg(speed)));
             QVERIFY(maximumSuspension - minimumSuspension > 0.03);
+        }
+    }
+
+    void productionRockGardenUsesBoundedMainAndSafeSuspension()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 977u;
+        course.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::RockGarden;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 76.0;
+        section.targetWatts = 185.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameRockGardenGeometryProfile rocks =
+                WorkoutGameRockGardenGeometry::profile(piece->difficulty);
+        const double start = piece->challenge.obstacleDistanceMeters
+                + rocks.startMeters;
+        const double end = piece->challenge.obstacleDistanceMeters
+                + rocks.activeEndMeters + 1.0;
+
+        for (const double speed : {3.0, 5.0, 7.0}) {
+            double suspensionRanges[2] = {};
+            for (int route = 0; route < 2; ++route) {
+                WorkoutGamePhysics physics;
+                QVERIFY(physics.configure(road));
+                WorkoutGamePhysicsInput input;
+                input.terrain = WorkoutGameTerrainKind::RockGarden;
+                input.desiredSpeedMetersPerSecond = speed;
+                input.effortRatio = route == 0 ? 1.0 : 0.75;
+                input.forceGroundFollowing = route == 1;
+                double minimumSuspension = 1.0;
+                double maximumSuspension = 0.0;
+                double maximumAirHeight = 0.0;
+                const int ticks = int(std::ceil(
+                        (end - start) / (speed * 0.02)));
+                for (int tick = 0; tick <= ticks; ++tick) {
+                    input.workoutTimeMs = tick * 20;
+                    input.courseDistanceMeters = std::min(
+                            end, start + tick * speed * 0.02);
+                    const WorkoutGameWorldSnapshot result =
+                            physics.update(input);
+                    QVERIFY(result.ready);
+                    QVERIFY(!result.rider.airborne);
+                    maximumAirHeight = std::max(
+                            maximumAirHeight,
+                            result.rider.airHeightMeters());
+                    const double suspension = 0.5 * (
+                            result.rider.rearSuspension
+                            + result.rider.frontSuspension);
+                    if (input.courseDistanceMeters
+                                >= piece->challenge.obstacleDistanceMeters
+                                    + rocks.activeStartMeters
+                            && input.courseDistanceMeters
+                                <= piece->challenge.obstacleDistanceMeters
+                                    + rocks.activeEndMeters) {
+                        minimumSuspension = std::min(
+                                minimumSuspension, suspension);
+                        maximumSuspension = std::max(
+                                maximumSuspension, suspension);
+                    }
+                }
+                QVERIFY(maximumAirHeight <= 0.05);
+                suspensionRanges[route] =
+                        maximumSuspension - minimumSuspension;
+            }
+            QVERIFY2(suspensionRanges[0] > 0.05,
+                     qPrintable(QStringLiteral(
+                         "rock suspension range %1 at %2 m/s")
+                         .arg(suspensionRanges[0]).arg(speed)));
+            QVERIFY2(suspensionRanges[1] <= suspensionRanges[0] * 0.40,
+                     qPrintable(QStringLiteral(
+                         "safe suspension %1 exceeded 40 percent of main %2 "
+                         "at %3 m/s")
+                         .arg(suspensionRanges[1])
+                         .arg(suspensionRanges[0])
+                         .arg(speed)));
         }
     }
 
@@ -1018,8 +1108,10 @@ private slots:
         QCOMPARE(view.centerElevationMeters, 5.2);
 
         world.rider.airborne = false;
-        QCOMPARE(world.rider.airHeightMeters(), 1.0);
+        QCOMPARE(world.rider.airHeightMeters(), 0.0);
         world.rider.clearanceMeters = 0.90;
+        QCOMPARE(world.rider.airHeightMeters(), 0.0);
+        world.rider.airborne = true;
         QVERIFY(std::abs(world.rider.airHeightMeters() - 0.08) < 1e-9);
     }
 

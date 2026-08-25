@@ -380,6 +380,15 @@ bucket. Per-frame work therefore changes only rider pose and suspension-derived
 torso pump; it does not rebuild root geometry or touch trainer and recording
 owners.
 
+Rock gardens follow the same ownership boundary through
+`WorkoutGameRockGardenGeometry`. It owns a 14-metre socketed tile, the widened
+same-tread safe line, burial and twelve deterministic stone caps. Road, Box2D,
+legacy comparison geometry and one merged Quick 3D draw range consume this
+profile rather than maintaining separate rock layouts. Box2D samples only the
+6.5-metre active bed at 0.04-metre spacing. The view double-buffers the bounded
+rock range with the floor bucket; per-frame work is limited to rider transform
+and suspension-derived torso pump, with no synthetic air or camera shake.
+
 #### Course-Space 2.5D Geometry
 
 `WorkoutGameMesh` is the presentation-neutral geometry contract for reusable

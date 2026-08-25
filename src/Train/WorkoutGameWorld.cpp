@@ -10,6 +10,7 @@
 #include "WorkoutGameWorld.h"
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameRoadCourse.h"
+#include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 
 #include <box2d/box2d.h>
@@ -120,11 +121,24 @@ bool retainsOrdinaryGroundContact(WorkoutGameTerrainKind terrain)
 
 double physicalSurfaceElevation(
         const WorkoutGameRoadSample &sample,
-        bool safeBypass)
+        bool safeBypass,
+        const WorkoutGameRoadCourse &course)
 {
-    return safeBypass
-            ? sample.center.elevationMeters - sample.surfaceOffsetMeters
-            : sample.visualGroundElevationMeters();
+    if (!safeBypass) return sample.visualGroundElevationMeters();
+    const double datum = sample.center.elevationMeters
+            - sample.surfaceOffsetMeters;
+    if (sample.pieceIndex >= course.pieces.size()) return datum;
+    const WorkoutGameRoadPiece &piece = course.pieces[sample.pieceIndex];
+    if (!piece.challenge.enabled
+            || piece.terrain != WorkoutGameTerrainKind::RockGarden) {
+        return datum;
+    }
+    const WorkoutGameRockGardenGeometryProfile rocks =
+            WorkoutGameRockGardenGeometry::profile(piece.difficulty);
+    const double local = sample.distanceMeters
+            - piece.challenge.obstacleDistanceMeters;
+    return datum + rocks.surfaceOffsetMeters(
+            local, rocks.safeLineOffsetMeters(local));
 }
 
 }
@@ -229,8 +243,10 @@ struct WorkoutGamePhysics::Impl
                     WorkoutGameRoadCourseBuilder::sample(
                         roadCourse, distanceBase);
             if (sample.ready && origin.ready) {
-                return physicalSurfaceElevation(sample, safeBypassActive)
-                        - physicalSurfaceElevation(origin, safeBypassActive);
+                return physicalSurfaceElevation(
+                            sample, safeBypassActive, roadCourse)
+                        - physicalSurfaceElevation(
+                            origin, safeBypassActive, roadCourse);
             }
         }
         return WorkoutGamePhysics::terrainHeight(
@@ -251,6 +267,7 @@ struct WorkoutGamePhysics::Impl
     {
         if (!roadCourse.ready) {
             return terrain == WorkoutGameTerrainKind::Roots
+                    || terrain == WorkoutGameTerrainKind::RockGarden
                     ? 0.04 : TerrainSampleMeters;
         }
         const double distance = distanceBase + localX - RiderStartMeters;
@@ -261,17 +278,27 @@ struct WorkoutGamePhysics::Impl
         }
         const WorkoutGameRoadPiece &piece =
                 roadCourse.pieces[sample.pieceIndex];
-        if (!piece.challenge.enabled
-                || piece.terrain != WorkoutGameTerrainKind::Roots) {
+        if (!piece.challenge.enabled) {
             return TerrainSampleMeters;
         }
-        const WorkoutGameRootGeometryProfile roots =
-                WorkoutGameRootGeometry::profile(piece.difficulty);
         const double local = distance
                 - piece.challenge.obstacleDistanceMeters;
-        return local >= roots.activeStartMeters - 0.5
-                && local <= roots.activeEndMeters + 0.5
-                ? 0.04 : TerrainSampleMeters;
+        if (piece.terrain == WorkoutGameTerrainKind::Roots) {
+            const WorkoutGameRootGeometryProfile roots =
+                    WorkoutGameRootGeometry::profile(piece.difficulty);
+            return local >= roots.activeStartMeters - 0.5
+                    && local <= roots.activeEndMeters + 0.5
+                    ? 0.04 : TerrainSampleMeters;
+        }
+        if (piece.terrain == WorkoutGameTerrainKind::RockGarden) {
+            const WorkoutGameRockGardenGeometryProfile rocks =
+                    WorkoutGameRockGardenGeometry::profile(
+                        piece.difficulty);
+            return local >= rocks.activeStartMeters - 0.5
+                    && local <= rocks.activeEndMeters + 0.5
+                    ? 0.04 : TerrainSampleMeters;
+        }
+        return TerrainSampleMeters;
     }
 
     void createWorld()
@@ -511,7 +538,8 @@ struct WorkoutGamePhysics::Impl
                     roadCourse, distanceBase)
                 : WorkoutGameRoadSample();
         const double originSurfaceElevation = groundOrigin.ready
-                ? physicalSurfaceElevation(groundOrigin, safeBypassActive)
+                ? physicalSurfaceElevation(
+                    groundOrigin, safeBypassActive, roadCourse)
                 : elevationBase;
         result.rider.elevationMeters = originSurfaceElevation
                 + double(position.y) - originBodyY;
@@ -531,13 +559,15 @@ struct WorkoutGamePhysics::Impl
                     roadCourse, groundDistance)
                 : WorkoutGameRoadSample();
         const double groundY = ground.ready && groundOrigin.ready
-                ? physicalSurfaceElevation(ground, safeBypassActive)
+                ? physicalSurfaceElevation(
+                        ground, safeBypassActive, roadCourse)
                     - physicalSurfaceElevation(
-                        groundOrigin, safeBypassActive)
+                        groundOrigin, safeBypassActive, roadCourse)
                 : WorkoutGamePhysics::terrainHeight(
                     terrain, position.x, gradePercent, difficulty, seed);
         result.surfaceElevationMeters = ground.ready
-                ? physicalSurfaceElevation(ground, safeBypassActive)
+                ? physicalSurfaceElevation(
+                    ground, safeBypassActive, roadCourse)
                 : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
         result.rider.airborne = !grounded()
@@ -697,12 +727,9 @@ double WorkoutGamePhysics::terrainHeight(
         return slope + (0.25 + 0.4 * challenge)
                 * (1.0 - std::cos(2.0 * Pi * phase / 8.0)) * 0.5;
     case WorkoutGameTerrainKind::RockGarden: {
-        const double rock = std::pow(
-                std::max(0.0, std::sin(2.0 * Pi * phase / 3.2)), 4.0);
-        const double offsetRock = std::pow(
-                std::max(0.0, std::sin(2.0 * Pi * phase / 5.0 + 1.1)), 6.0);
-        return slope + (0.14 + 0.3 * challenge) * rock
-                + (0.08 + 0.2 * challenge) * offsetRock;
+        const double rockTile = std::fmod(phase, 14.0) - 7.0;
+        return slope + WorkoutGameRockGardenGeometry::profile(
+                challenge).surfaceOffsetMeters(rockTile, 0.0);
     }
     case WorkoutGameTerrainKind::BunnyHop: {
         const double approach = std::abs(phase - 30.0);

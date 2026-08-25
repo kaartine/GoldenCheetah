@@ -14,6 +14,7 @@
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureChallenge.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
@@ -96,6 +97,11 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
         buffer = std::make_unique<WorkoutGame3DGeometry>(
                 WorkoutGame3DGeometry::Layer::Roots);
     }
+    for (std::unique_ptr<WorkoutGame3DGeometry> &buffer
+            : rockGardenBuffers) {
+        buffer = std::make_unique<WorkoutGame3DGeometry>(
+                WorkoutGame3DGeometry::Layer::RockGarden);
+    }
     const QByteArray requested = qgetenv("GC_WORKOUT_GAME_3D_CAMERA")
             .trimmed().toLower();
     if (requested == "low-centre") {
@@ -145,6 +151,7 @@ void WorkoutGame3DViewModel::setCourse(
     riderPumpMeters = 0.0;
     riderPoseInitialized = false;
     rootCompressionInitialized = false;
+    rockCompressionInitialized = false;
     lastRiderPoseTimeMs = -1;
     rebuildFloor(0.0);
     sceneReady = roadCourse.ready && trail->ready()
@@ -216,6 +223,19 @@ void WorkoutGame3DViewModel::setFrame(
                 && frame.feature.route == WorkoutGameRoute::SafeBypass) {
             visualGround -= sample.surfaceOffsetMeters;
         }
+        if (sample.terrain == WorkoutGameTerrainKind::RockGarden
+                && frame.feature.route == WorkoutGameRoute::SafeBypass
+                && sample.pieceIndex < roadCourse.pieces.size()) {
+            const WorkoutGameRoadPiece &piece =
+                    roadCourse.pieces[sample.pieceIndex];
+            const WorkoutGameRockGardenGeometryProfile rocks =
+                    WorkoutGameRockGardenGeometry::profile(
+                        piece.difficulty);
+            const double local = distanceMeters
+                    - piece.challenge.obstacleDistanceMeters;
+            visualGround += rocks.surfaceOffsetMeters(local, lateral)
+                    - sample.surfaceOffsetMeters;
+        }
         if (sample.terrain == WorkoutGameTerrainKind::Berm
                 && sample.pieceIndex < roadCourse.pieces.size()) {
             const WorkoutGameRoadPiece &piece =
@@ -265,6 +285,9 @@ void WorkoutGame3DViewModel::setFrame(
     if (frame.world.terrain != WorkoutGameTerrainKind::Roots) {
         rootCompressionInitialized = false;
     }
+    if (frame.world.terrain != WorkoutGameTerrainKind::RockGarden) {
+        rockCompressionInitialized = false;
+    }
     if (frame.world.terrain == WorkoutGameTerrainKind::Roots
             && frame.feature.route == WorkoutGameRoute::MainLine
             && !frame.world.rider.airborne) {
@@ -288,6 +311,30 @@ void WorkoutGame3DViewModel::setFrame(
         riderPumpMeters += (target - riderPumpMeters) * blend;
         riderPumpMeters = std::clamp(riderPumpMeters, -0.05, 0.025);
         previousRootCompression = compression;
+    } else if (frame.world.terrain == WorkoutGameTerrainKind::RockGarden
+            && frame.feature.route == WorkoutGameRoute::MainLine
+            && !frame.world.rider.airborne) {
+        const double compression = std::clamp(0.5 * (
+                finiteOrZero(frame.world.rider.rearSuspension)
+                + finiteOrZero(frame.world.rider.frontSuspension)), 0.0, 1.0);
+        if (!rockCompressionInitialized) {
+            previousRockCompression = compression;
+            rockCompressionInitialized = true;
+        }
+        const double compressionDelta = compression
+                - previousRockCompression;
+        const double target = std::clamp(
+                -0.16 * compressionDelta, -0.08, 0.04);
+        const double elapsedSeconds = lastRiderPoseTimeMs >= 0
+                ? std::clamp(double(frame.simulation.workoutTimeMs
+                                    - lastRiderPoseTimeMs) / 1000.0,
+                             0.0, 0.25)
+                : 0.07;
+        const double blend = 1.0 - std::exp(
+                -elapsedSeconds / 0.07);
+        riderPumpMeters += (target - riderPumpMeters) * blend;
+        riderPumpMeters = std::clamp(riderPumpMeters, -0.08, 0.04);
+        previousRockCompression = compression;
     } else if (frame.world.terrain == WorkoutGameTerrainKind::Rollers
             && frame.feature.route == WorkoutGameRoute::MainLine
             && !frame.world.rider.airborne) {
@@ -655,6 +702,8 @@ void WorkoutGame3DViewModel::rebuildFloor(double distanceMeters)
         floorBuffers[1]->setCourse(roadCourse);
         rootBuffers[0]->setCourse(roadCourse);
         rootBuffers[1]->setCourse(roadCourse);
+        rockGardenBuffers[0]->setCourse(roadCourse);
+        rockGardenBuffers[1]->setCourse(roadCourse);
         activeFloorBuffer = 0;
         emit floorGeometryChanged();
         return;
@@ -672,6 +721,8 @@ void WorkoutGame3DViewModel::rebuildFloor(double distanceMeters)
             roadCourse, start, end);
     if (!floorBuffers[std::size_t(nextBuffer)]->ready()) return;
     rootBuffers[std::size_t(nextBuffer)]->setCourseRange(
+            roadCourse, start, end);
+    rockGardenBuffers[std::size_t(nextBuffer)]->setCourseRange(
             roadCourse, start, end);
     activeFloorBuffer = nextBuffer;
     emit floorGeometryChanged();
