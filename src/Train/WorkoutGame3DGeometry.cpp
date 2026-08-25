@@ -98,6 +98,10 @@ void appendFeatureSamples(
         append(center);
         append(center + profile.plateauEndMeters);
         append(center + profile.endMeters);
+        if (profile.shape == WorkoutGameFeatureGeometryShape::DropLedge) {
+            append(center + profile.landingStartMeters);
+            append(center + profile.recoveryStartMeters);
+        }
         if (profile.shape == WorkoutGameFeatureGeometryShape::FacetedLog) {
             const double radius = profile.heightMeters * 0.5;
             for (int segment = 0;
@@ -198,7 +202,9 @@ void WorkoutGame3DGeometry::build(
     const int stripsPerSample = verticesPerSample - 1;
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
+    std::vector<bool> rideableSamples;
     vertices.reserve(std::size_t(count * verticesPerSample));
+    rideableSamples.reserve(std::size_t(count));
     indices.reserve(std::size_t(
             (count - 1) * stripsPerSample * 6));
 
@@ -219,6 +225,7 @@ void WorkoutGame3DGeometry::build(
             clear();
             return;
         }
+        rideableSamples.push_back(sample.rideableSurface);
         const double rightX = std::cos(sample.center.headingRadians);
         const double rightZ = -std::sin(sample.center.headingRadians);
         const TerrainColor color = layer == Layer::Trail
@@ -296,7 +303,9 @@ void WorkoutGame3DGeometry::build(
             boundsMax.setY(std::max(boundsMax.y(), y));
             boundsMax.setZ(std::max(boundsMax.z(), z));
         }
-        if (index > 0) {
+        if (index > 0 && (layer != Layer::Trail
+                || (rideableSamples[std::size_t(index - 1)]
+                    && rideableSamples[std::size_t(index)]))) {
             const std::uint32_t base = std::uint32_t(
                     index * verticesPerSample);
             for (int strip = 0; strip < stripsPerSample; ++strip) {

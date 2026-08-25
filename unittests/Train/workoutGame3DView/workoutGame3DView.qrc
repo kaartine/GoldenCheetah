@@ -5,5 +5,6 @@
         <file alias="qml/assets/TabletopAssetHarness.qml">TabletopAssetHarness.qml</file>
         <file alias="qml/assets/LogOverAssetHarness.qml">LogOverAssetHarness.qml</file>
         <file alias="qml/assets/BunnyHopAssetHarness.qml">BunnyHopAssetHarness.qml</file>
+        <file alias="qml/assets/DropAssetHarness.qml">DropAssetHarness.qml</file>
     </qresource>
 </RCC>

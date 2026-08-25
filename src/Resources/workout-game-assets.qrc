@@ -6,5 +6,7 @@
         <file alias="qml/assets/meshes/geo_LogOverObstacle_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_LogOverObstacle_LOD0_mesh.mesh</file>
         <file alias="qml/assets/Wg_BunnyHop_Greybox.qml">../Train/qml/assets/Wg_BunnyHop_Greybox.qml</file>
         <file alias="qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/Wg_Drop_Greybox.qml">../Train/qml/assets/Wg_Drop_Greybox.qml</file>
+        <file alias="qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh</file>
     </qresource>
 </RCC>

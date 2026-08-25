@@ -42,6 +42,14 @@ BUNNY_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_BunnyHop_Greybox.glb"
 )
+DROP_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/FT-04-drop-greybox.json"
+)
+DROP_GLB_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generated/WG_Drop_Greybox.glb"
+)
 
 
 def sha256(path: Path) -> str:
@@ -87,6 +95,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "FT-01-tabletop-greybox",
                 "FT-02-log-over-greybox",
                 "FT-03-bunny-hop-greybox",
+                "FT-04-drop-greybox",
             ],
         )
 
@@ -225,6 +234,30 @@ class TestWorkoutGameAssets(unittest.TestCase):
             [0.0, 0.0, 3.5],
         )
         self.assertLessEqual(manifest["technical"]["materials"], 2)
+
+    def test_drop_asset_is_only_a_narrow_face_below_the_lip(self) -> None:
+        document, size = assets.read_glb(DROP_GLB_PATH)
+        manifest = assets.load_json_file(DROP_MANIFEST_PATH)
+        assets.validate_glb_document(document, size, manifest)
+
+        self.assertEqual(
+            {material["name"] for material in document["materials"]},
+            {"MAT_DropFace_Grey", "MAT_DropEdge_Grey"},
+        )
+        self.assertEqual(
+            [node["name"] for node in document["nodes"] if "mesh" in node],
+            ["GEO_DropFace_LOD0"],
+        )
+        bounds = manifest["technical"]["boundsMeters"]
+        self.assertLessEqual(bounds["maximum"][1], 0.03)
+        self.assertLessEqual(bounds["minimum"][1], -0.70)
+        self.assertLessEqual(
+            bounds["maximum"][2] - bounds["minimum"][2], 0.25
+        )
+        self.assertEqual(
+            manifest["technical"]["sockets"][1]["positionMeters"],
+            [0.0, 0.0, 22.0],
+        )
 
     def test_malformed_glb_structure_fails_cleanly(self) -> None:
         document, size = assets.read_glb(GLB_PATH)

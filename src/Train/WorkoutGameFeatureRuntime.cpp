@@ -231,7 +231,6 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     }
     result.actionStartDistanceMeters = actionStart;
     result.actionEndDistanceMeters = actionEnd;
-    const double recoveryEnd = layout.endDistanceMeters;
     if (result.visualDistanceMeters < piece->challenge.prepareDistanceMeters) {
         result.phase = WorkoutGameFeaturePhase::Approach;
     } else if (result.visualDistanceMeters
@@ -286,14 +285,6 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             result.pitchDegrees = -14.0 * std::sin(Pi * actionProgress);
             result.verticalOffsetMeters = -0.45 * smoothStep(actionProgress);
         }
-    } else if (result.phase == WorkoutGameFeaturePhase::Recovery
-            && completed && !bypass
-            && result.motion == WorkoutGameFeatureMotion::Drop) {
-        const double recoveryProgress = std::clamp(
-                (result.visualDistanceMeters - actionEnd)
-                    / std::max(0.01, recoveryEnd - actionEnd),
-                0.0, 1.0);
-        result.landingImpact = 1.0 - smoothStep(recoveryProgress);
     }
     return result;
 }

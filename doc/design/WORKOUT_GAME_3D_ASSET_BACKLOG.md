@@ -173,7 +173,7 @@ candidate until safe-line geometry and the extracted-AppImage gate pass.
 ### Phase 4: Feature Production
 
 - [ ] `PROD-01` Log over and bunny hop.
-- [ ] `PROD-02` Drop and its safe bypass.
+- [x] `PROD-02` Drop and its safe bypass.
 - [ ] `PROD-03` Rollers and berm.
 - [ ] `PROD-04` Roots, rock garden and rock slab.
 - [ ] `PROD-05` Skinny and width transitions.

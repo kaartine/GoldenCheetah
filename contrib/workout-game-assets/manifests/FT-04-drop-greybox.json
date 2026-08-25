@@ -1,0 +1,123 @@
+{
+  "assetId": "FT-04-drop-greybox",
+  "displayName": "Workout Game Drop Greybox",
+  "role": "feature",
+  "source": {
+    "kind": "project-authored",
+    "provider": "GoldenCheetah",
+    "author": "GoldenCheetah contributors",
+    "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_drop.py",
+    "retrievedAt": "2026-08-25",
+    "originalFileName": "generate_drop.py",
+    "originalSha256": "08c8651b3474d8fee191c28ddf786ff85139de526737736a98da3e3adff42416",
+    "generator": "Blender",
+    "generatorVersion": "4.0.2",
+    "promptOrScript": "contrib/workout-game-assets/blender/generate_drop.py"
+  },
+  "license": {
+    "spdxId": "GPL-2.0-or-later",
+    "licenseUrl": "https://www.gnu.org/licenses/old-licenses/gpl-2.0.html",
+    "attribution": "GoldenCheetah contributors",
+    "modificationAllowed": true,
+    "redistributionAllowed": true,
+    "decision": "allow",
+    "policyVersion": "2026-08-25",
+    "archivedLicensePath": "COPYING",
+    "distributionScopes": [
+      "source",
+      "appimage",
+      "screenshots-video"
+    ],
+    "conditions": [],
+    "reviewNotes": "Project-authored geometry with no external model, texture or material."
+  },
+  "files": [
+    {
+      "path": "contrib/workout-game-assets/blender/generate_drop.py",
+      "purpose": "source",
+      "sha256": "08c8651b3474d8fee191c28ddf786ff85139de526737736a98da3e3adff42416"
+    },
+    {
+      "path": "contrib/workout-game-assets/generated/WG_Drop_Greybox.glb",
+      "purpose": "intermediate",
+      "sha256": "4ce9a5bec8345fe6a8c40f5b5594cc2669281c3399402747ca0281521cb08258"
+    },
+    {
+      "path": "src/Train/qml/assets/Wg_Drop_Greybox.qml",
+      "purpose": "runtime",
+      "sha256": "42d6123f2788d5b166765f0c22d68611738c40b068f5aee5d5cf8991eeeb8252"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "6ee78a60adb32877e993950c8166e83bb0a6df61128227907cb3ee064e3723f7"
+    }
+  ],
+  "processing": {
+    "tool": "Blender and Qt Balsam",
+    "toolVersion": "Blender 4.0.2; Qt Balsam 6.8.3",
+    "steps": [
+      "Start Blender with --background --factory-startup.",
+      "Run generate_drop.py with its internal topology, envelope and socket checks.",
+      "Export glTF 2.0 GLB with opaque materials, extras and no cameras, lights or animations.",
+      "Validate with Khronos glTF Validator 2.0.0-dev.3.10.",
+      "Convert the reviewed GLB with Qt Balsam 6.8.3."
+    ]
+  },
+  "technical": {
+    "format": "glb",
+    "unitMeters": 1.0,
+    "upAxis": "+Y",
+    "forwardAxis": "+Z",
+    "glbBytes": 4736,
+    "trianglesLod0": 20,
+    "materials": 2,
+    "textureBytes": 0,
+    "nodes": [
+      "ROOT_Drop",
+      "GEO_DropFace_LOD0",
+      "SOCKET_IN",
+      "SOCKET_OUT",
+      "MARKER_PREPARE",
+      "MARKER_DECISION",
+      "MARKER_ACTION",
+      "MARKER_LIP",
+      "MARKER_AIR",
+      "MARKER_LAND",
+      "MARKER_RECOVERY"
+    ],
+    "animations": [],
+    "allowedExtensions": [],
+    "boundsMeters": {
+      "minimum": [-1.30, -0.74, 9.96],
+      "maximum": [1.30, 0.025, 10.20]
+    },
+    "sockets": [
+      {
+        "name": "SOCKET_IN",
+        "positionMeters": [0.0, 0.0, 0.0],
+        "halfWidthMeters": 0.68
+      },
+      {
+        "name": "SOCKET_OUT",
+        "positionMeters": [0.0, 0.0, 22.0],
+        "halfWidthMeters": 0.68
+      }
+    ],
+    "budgets": {
+      "maxGlbBytes": 16384,
+      "maxTrianglesLod0": 64,
+      "maxMaterials": 2,
+      "maxTextureBytes": 0
+    }
+  },
+  "review": {
+    "status": "approved",
+    "trademarkStatus": "not-applicable",
+    "personReleaseStatus": "not-applicable",
+    "propertyReleaseStatus": "not-applicable",
+    "reviewer": "GoldenCheetah engineering audit",
+    "reviewedAt": "2026-08-25",
+    "notes": "Approved project-authored faceted drop face with exact 22.0 m profile sockets and no duplicated trail, landing or bypass ground. Khronos validation, deterministic Blender and Balsam runs, asset-policy gates, packaged X11/OpenGL rendering, real-Box2D completed motion and grounded safe-line motion all passed."
+  }
+}

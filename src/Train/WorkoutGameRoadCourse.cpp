@@ -196,6 +196,28 @@ double nonPhysicalFeatureOffsetAt(
     return offset;
 }
 
+bool rideableSurfaceAt(
+        const WorkoutGameRoadCourse &course,
+        double distanceMeters)
+{
+    const std::size_t index = pieceIndexAt(course, distanceMeters);
+    const std::size_t first = index > 0u ? index - 1u : 0u;
+    const std::size_t last = std::min(
+            course.pieces.size() - 1u, index + 1u);
+    for (std::size_t candidate = first; candidate <= last; ++candidate) {
+        const WorkoutGameRoadPiece &piece = course.pieces[candidate];
+        if (!piece.challenge.enabled) continue;
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    piece.terrain, piece.difficulty);
+        if (!profile.ready) continue;
+        const double local = distanceMeters
+                - piece.challenge.obstacleDistanceMeters;
+        if (!profile.surfacePresent(local)) return false;
+    }
+    return true;
+}
+
 double estimatedLength(
         const WorkoutGameSection &section,
         double ftpWatts)
@@ -548,6 +570,7 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     result.surfaceOffsetMeters = surfaceOffsetAt(course, distance);
     result.nonPhysicalFeatureOffsetMeters =
             nonPhysicalFeatureOffsetAt(course, distance);
+    result.rideableSurface = rideableSurfaceAt(course, distance);
     const double reliefOffset = trailReliefOffset(piece, distance);
     result.center.elevationMeters += reliefOffset
             + result.surfaceOffsetMeters;

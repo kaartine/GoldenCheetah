@@ -35,6 +35,8 @@ AssetSpec specFor(WorkoutGameTerrainKind terrain)
         return {true, 0.75, 0.54, 0.54};
     case WorkoutGameTerrainKind::Tabletop:
         return {true, 0.75, 4.84, 0.446};
+    case WorkoutGameTerrainKind::Drop:
+        return {true, 0.0, 22.0, 0.70};
     default:
         return {};
     }
@@ -52,13 +54,13 @@ WorkoutGame3DFeatureAssetSnapshot WorkoutGame3DFeatureAsset::place(
             WorkoutGameFeatureGeometry::profile(
                 piece.terrain, piece.difficulty);
     if (!course.ready || !piece.challenge.enabled || !spec.ready
-            || !profile.ready || profile.heightMeters <= 0.0
+            || !profile.ready || std::abs(profile.heightMeters) <= 0.0
             || spec.coreLengthMeters <= 0.0 || spec.heightMeters <= 0.0) {
         return result;
     }
     const double coreLength = profile.endMeters - profile.startMeters;
     const double scaleZ = coreLength / spec.coreLengthMeters;
-    const double scaleY = profile.heightMeters / spec.heightMeters;
+    const double scaleY = std::abs(profile.heightMeters) / spec.heightMeters;
     if (!std::isfinite(scaleZ) || !std::isfinite(scaleY)
             || scaleZ <= 0.0 || scaleY <= 0.0) {
         return result;

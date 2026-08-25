@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace {
 
@@ -44,6 +45,32 @@ float vertexFloat(const QByteArray &data, int stride, int vertex, int offset)
                 data.constData() + vertex * stride + offset,
                 sizeof(value));
     return value;
+}
+
+quint32 indexValue(const QByteArray &data, int index)
+{
+    quint32 value = 0;
+    std::memcpy(&value, data.constData() + index * int(sizeof(value)),
+                sizeof(value));
+    return value;
+}
+
+WorkoutGameRoadCourse dropCourse()
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 611u;
+    source.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::RecoveryDescent;
+    section.terrain = WorkoutGameTerrainKind::Drop;
+    section.durationMs = source.durationMs;
+    section.targetWatts = 150.0;
+    section.gradePercent = -4.0;
+    section.difficulty = 0.65;
+    section.challengeCount = 1;
+    source.sections = {section};
+    return WorkoutGameRoadCourseBuilder::build(source, 200.0);
 }
 
 }
@@ -290,6 +317,43 @@ private slots:
                 floor.vertexData(), floor.stride(), middleVertex + 3,
                 sizeof(float));
         QVERIFY(std::abs(outerY - trailEdgeY) > 0.10f);
+    }
+
+    void dropTrailIndicesDoNotBridgeTheAirGap()
+    {
+        const WorkoutGameRoadCourse course = dropCourse();
+        QVERIFY(course.ready);
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const double lip = piece->challenge.obstacleDistanceMeters;
+        WorkoutGame3DGeometry trail(WorkoutGame3DGeometry::Layer::Trail);
+        trail.setCourse(course);
+        QVERIFY(trail.ready());
+
+        const int indexCount = trail.indexData().size()
+                / int(sizeof(quint32));
+        QVERIFY(indexCount
+                < (trail.sampleCount() - 1) * 6);
+        for (int index = 0; index + 2 < indexCount; index += 3) {
+            double minimumDistance = std::numeric_limits<double>::infinity();
+            double maximumDistance =
+                    -std::numeric_limits<double>::infinity();
+            for (int corner = 0; corner < 3; ++corner) {
+                const int vertex = int(indexValue(
+                        trail.indexData(), index + corner));
+                const double distance = vertexFloat(
+                        trail.vertexData(), trail.stride(), vertex, 44) / 0.22;
+                minimumDistance = std::min(minimumDistance, distance);
+                maximumDistance = std::max(maximumDistance, distance);
+            }
+            QVERIFY2(!(minimumDistance <= lip + 1e-4
+                       && maximumDistance >= lip + 1.25 - 1e-4),
+                     "trail triangle bridges the drop air gap");
+        }
     }
 
     void bypassUsesTheRuntimeBranchCurveAndTerrainSurface()

@@ -574,6 +574,169 @@ private slots:
         QVERIFY(maximumImpact > 0.05);
     }
 
+    void roadCourseDropCreatesBoundedUnforcedFlight()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 804u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::RecoveryDescent;
+        section.terrain = WorkoutGameTerrainKind::Drop;
+        section.durationMs = source.durationMs;
+        section.targetWatts = 150.0;
+        section.gradePercent = -4.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        source.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const double lip = piece->challenge.obstacleDistanceMeters;
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+        WorkoutGamePhysicsInput input;
+        input.terrain = WorkoutGameTerrainKind::Drop;
+        input.desiredSpeedMetersPerSecond = 5.0;
+        input.effortRatio = 1.0;
+        input.jumpRequested = false;
+        const double start = lip - 3.0;
+        int takeoffMs = -1;
+        int landingMs = -1;
+        double takeoffDistance = 0.0;
+        double landingDistance = 0.0;
+        double maximumAirMeters = 0.0;
+        double maximumImpact = 0.0;
+        double minimumAirbornePitch = 180.0;
+        double maximumAirbornePitch = -180.0;
+        double maximumElevationStep = 0.0;
+        double previousElevation = 0.0;
+        bool havePreviousElevation = false;
+        int impactTicks = 0;
+        for (int tick = 0; tick <= 300; ++tick) {
+            input.workoutTimeMs = tick * 20;
+            input.courseDistanceMeters = start + tick * 0.10;
+            const WorkoutGameWorldSnapshot result = physics.update(input);
+            QVERIFY(result.ready);
+            if (result.rider.airborne && takeoffMs < 0) {
+                takeoffMs = input.workoutTimeMs;
+                takeoffDistance = input.courseDistanceMeters;
+            }
+            if (result.rider.airborne) {
+                minimumAirbornePitch = std::min(
+                        minimumAirbornePitch,
+                        result.rider.pitchDegrees);
+                maximumAirbornePitch = std::max(
+                        maximumAirbornePitch,
+                        result.rider.pitchDegrees);
+            }
+            if (havePreviousElevation) {
+                maximumElevationStep = std::max(
+                        maximumElevationStep,
+                        std::abs(result.rider.elevationMeters
+                                 - previousElevation));
+            }
+            previousElevation = result.rider.elevationMeters;
+            havePreviousElevation = true;
+            if (result.landingImpact > 0.01) ++impactTicks;
+            if (takeoffMs >= 0 && !result.rider.airborne) {
+                landingMs = input.workoutTimeMs;
+                landingDistance = input.courseDistanceMeters;
+                maximumImpact = std::max(maximumImpact, result.landingImpact);
+                break;
+            }
+            maximumAirMeters = std::max(
+                    maximumAirMeters, result.rider.airHeightMeters());
+            maximumImpact = std::max(maximumImpact, result.landingImpact);
+        }
+        QVERIFY(takeoffMs >= 0);
+        QVERIFY(landingMs > takeoffMs);
+        QVERIFY2(takeoffDistance >= lip - 0.35
+                        && takeoffDistance <= lip + 1.10,
+                 qPrintable(QStringLiteral(
+                     "drop takeoff at %1 m, lip at %2 m")
+                     .arg(takeoffDistance).arg(lip)));
+        QVERIFY(landingMs - takeoffMs >= 200);
+        QVERIFY(landingMs - takeoffMs <= 1200);
+        QVERIFY(landingDistance <= lip + 5.0);
+        QVERIFY(maximumAirMeters <= 1.10);
+        QVERIFY(maximumImpact >= 0.05);
+        QVERIFY(maximumImpact <= 0.65);
+        QVERIFY(minimumAirbornePitch >= -18.0);
+        QVERIFY(maximumAirbornePitch <= 4.0);
+        QVERIFY(maximumElevationStep <= 0.20);
+        QVERIFY(impactTicks >= 1);
+        QVERIFY(impactTicks <= 4);
+    }
+
+    void roadCourseDropBypassUsesGroundedOrdinarySurface()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 804u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::RecoveryDescent;
+        section.terrain = WorkoutGameTerrainKind::Drop;
+        section.durationMs = source.durationMs;
+        section.targetWatts = 150.0;
+        section.gradePercent = -4.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        source.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const double lip = piece->challenge.obstacleDistanceMeters;
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+        WorkoutGamePhysicsInput input;
+        input.terrain = WorkoutGameTerrainKind::Drop;
+        input.desiredSpeedMetersPerSecond = 5.0;
+        input.effortRatio = 0.5;
+        input.forceGroundFollowing = true;
+        const double start = lip - 3.0;
+        double maximumAirMeters = 0.0;
+        double maximumImpact = 0.0;
+        for (int tick = 0; tick <= 180; ++tick) {
+            input.workoutTimeMs = tick * 20;
+            input.courseDistanceMeters = start + tick * 0.10;
+            const WorkoutGameRoadSample roadSample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, input.courseDistanceMeters);
+            const WorkoutGameWorldSnapshot result = physics.update(input);
+            QVERIFY(result.ready && roadSample.ready);
+            maximumAirMeters = std::max(
+                    maximumAirMeters,
+                    result.rider.airborne
+                        ? result.rider.airHeightMeters() : 0.0);
+            maximumImpact = std::max(maximumImpact, result.landingImpact);
+            const double ordinarySurface = roadSample.center.elevationMeters
+                    - roadSample.surfaceOffsetMeters;
+            QVERIFY2(std::abs(result.surfaceElevationMeters
+                              - ordinarySurface) < 0.03,
+                     qPrintable(QStringLiteral(
+                         "bypass surface %1, ordinary %2 at %3 m")
+                         .arg(result.surfaceElevationMeters)
+                         .arg(ordinarySurface)
+                         .arg(input.courseDistanceMeters)));
+        }
+        QVERIFY(maximumAirMeters < 0.03);
+        QVERIFY(maximumImpact < 0.01);
+    }
+
     void longRunRebasesWithoutFallingOffWorld()
     {
         WorkoutGamePhysics physics;

@@ -96,6 +96,7 @@ struct WorkoutGameRoadSample
     double baseGradePercent = 0.0;
     double surfaceOffsetMeters = 0.0;
     double nonPhysicalFeatureOffsetMeters = 0.0;
+    bool rideableSurface = true;
     WorkoutGameRoadConnector center;
 
     double surfaceElevationMeters() const

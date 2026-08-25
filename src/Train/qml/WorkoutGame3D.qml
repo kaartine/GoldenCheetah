@@ -232,6 +232,27 @@ Item {
             }
         }
 
+        Repeater3D {
+            model: workoutGame3D.features
+            delegate: WorkoutGameAssets.Wg_Drop_Greybox {
+                required property var modelData
+                visible: modelData.kind === 6
+                         && modelData.assetScaleY !== undefined
+                position: Qt.vector3d(
+                    modelData.assetX || 0,
+                    modelData.assetY || 0,
+                    modelData.assetZ || 0)
+                eulerRotation: Qt.vector3d(
+                    modelData.assetPitch || 0,
+                    modelData.assetYaw || 0,
+                    0)
+                scale: Qt.vector3d(
+                    1,
+                    modelData.assetScaleY || 1,
+                    modelData.assetScaleZ || 1)
+            }
+        }
+
         Node {
             id: rider
             objectName: "riderNode"

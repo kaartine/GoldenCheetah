@@ -142,6 +142,34 @@ private slots:
                          - road.visualGroundElevationMeters()) < 1e-12);
         QVERIFY(std::abs(asset.zMeters - road.center.zMeters) < 1e-12);
     }
+
+    void placesDropTileFromTheUpperLipSocket()
+    {
+        const WorkoutGameRoadCourse course = courseWith(
+                WorkoutGameTerrainKind::Drop, 0.6);
+        const WorkoutGameRoadPiece &piece = challengePiece(course);
+        const WorkoutGame3DFeatureAssetSnapshot asset =
+                WorkoutGame3DFeatureAsset::place(course, piece);
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    piece.terrain, piece.difficulty);
+
+        QVERIFY(asset.ready);
+        QCOMPARE(asset.terrain, WorkoutGameTerrainKind::Drop);
+        QVERIFY(std::abs(asset.scaleY
+                         - std::abs(profile.heightMeters) / 0.70) < 1e-12);
+        QCOMPARE(asset.scaleZ, 1.0);
+
+        const double expectedStart =
+                piece.challenge.obstacleDistanceMeters + profile.startMeters;
+        const WorkoutGameRoadSample road = WorkoutGameRoadCourseBuilder::sample(
+                course, expectedStart);
+        QVERIFY(road.ready);
+        QVERIFY(std::abs(asset.xMeters - road.center.xMeters) < 1e-12);
+        QVERIFY(std::abs(asset.yMeters
+                         - road.visualGroundElevationMeters()) < 1e-12);
+        QVERIFY(std::abs(asset.zMeters - road.center.zMeters) < 1e-12);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGame3DFeatureAsset)

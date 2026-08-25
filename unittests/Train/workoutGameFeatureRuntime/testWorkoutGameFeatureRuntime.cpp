@@ -488,7 +488,7 @@ private slots:
         QVERIFY(std::abs(afterReturn) < 1e-9);
     }
 
-    void dropPitchesTheRiderAndReportsLanding()
+    void dropPoseDoesNotSynthesizeASecondLandingImpact()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
         const WorkoutGameRoadCourse road =
@@ -499,15 +499,20 @@ private slots:
         const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
         QVERIFY(piece != nullptr);
 
+        const WorkoutGameFeatureRuntimeSnapshot layout = runtime.update(
+                snapshot(section, 0.99,
+                         WorkoutGameFeatureOutcome::Completed));
+        const double actionDistance = layout.actionStartDistanceMeters
+                + 0.5 * (layout.actionEndDistanceMeters
+                         - layout.actionStartDistanceMeters);
         const WorkoutGameFeatureRuntimeSnapshot action = runtime.update(snapshot(
                 section, progressAtDistance(
-                    road, section,
-                    piece->challenge.obstacleDistanceMeters + 1.5),
+                    road, section, actionDistance),
                 WorkoutGameFeatureOutcome::Completed));
         const WorkoutGameFeatureRuntimeSnapshot recovery = runtime.update(snapshot(
                 section, progressAtDistance(
                     road, section,
-                    piece->challenge.obstacleDistanceMeters + 6.1),
+                    layout.actionEndDistanceMeters + 0.1),
                 WorkoutGameFeatureOutcome::Completed));
 
         QCOMPARE(action.motion, WorkoutGameFeatureMotion::Drop);
@@ -516,7 +521,7 @@ private slots:
                  qPrintable(QStringLiteral(
                      "drop action pitch was %1 degrees")
                      .arg(action.pitchDegrees)));
-        QVERIFY(recovery.landingImpact > 0.0);
+        QCOMPARE(recovery.landingImpact, 0.0);
     }
 
     void airbornePolicyDistinguishesRollersFromAnchoredFeatures()

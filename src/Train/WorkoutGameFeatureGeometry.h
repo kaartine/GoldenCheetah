@@ -20,7 +20,8 @@ enum class WorkoutGameFeatureGeometryShape
     Linear,
     Hurdle,
     FacetedLog,
-    CurvedTabletop
+    CurvedTabletop,
+    DropLedge
 };
 
 constexpr int WorkoutGameLogRadialSegments = 16;
@@ -35,6 +36,19 @@ struct WorkoutGameFeatureGeometryProfile
     double heightMeters = 0.0;
     WorkoutGameFeatureGeometryShape shape =
             WorkoutGameFeatureGeometryShape::Linear;
+    double landingStartMeters = 0.0;
+    double recoveryStartMeters = 0.0;
+
+    bool surfacePresent(double localDistanceMeters) const
+    {
+        if (!ready || localDistanceMeters < startMeters
+                || localDistanceMeters > endMeters) {
+            return true;
+        }
+        return shape != WorkoutGameFeatureGeometryShape::DropLedge
+                || localDistanceMeters <= plateauStartMeters
+                || localDistanceMeters >= landingStartMeters;
+    }
 
     double surfaceOffset(double localDistanceMeters) const
     {
@@ -44,6 +58,19 @@ struct WorkoutGameFeatureGeometryProfile
         }
         if (shape == WorkoutGameFeatureGeometryShape::Hurdle) {
             return 0.0;
+        }
+        if (shape == WorkoutGameFeatureGeometryShape::DropLedge) {
+            if (localDistanceMeters <= plateauStartMeters) return 0.0;
+            if (localDistanceMeters <= recoveryStartMeters) {
+                return heightMeters;
+            }
+            const double progress = std::clamp(
+                    (localDistanceMeters - recoveryStartMeters)
+                        / (endMeters - recoveryStartMeters),
+                    0.0, 1.0);
+            const double smooth = progress * progress
+                    * (3.0 - 2.0 * progress);
+            return heightMeters * (1.0 - smooth);
         }
         if (shape == WorkoutGameFeatureGeometryShape::FacetedLog) {
             if (localDistanceMeters <= startMeters
@@ -183,8 +210,10 @@ public:
                       0.30 + 0.25 * difficulty};
             break;
         case WorkoutGameTerrainKind::Drop:
-            result = {true, 0.0, 2.0, 6.0, 10.0,
-                      -(0.7 + 0.5 * difficulty)};
+            result = {true, -10.0, 0.0, 1.25, 12.0,
+                      -(0.35 + 0.35 * difficulty),
+                      WorkoutGameFeatureGeometryShape::DropLedge,
+                      1.25, 5.0};
             break;
         default:
             break;

@@ -16,7 +16,8 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGameFeatureHud.cpp \
            ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
            ../../../src/Train/WorkoutGameTerrainTransition.cpp \
-           ../../../src/Train/WorkoutGameVisualSmoother.cpp
+           ../../../src/Train/WorkoutGameVisualSmoother.cpp \
+           ../../../src/Train/WorkoutGameWorld.cpp
 
 HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGame3DFeatureAsset.h \
@@ -34,6 +35,9 @@ HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGameSimulation.h \
            ../../../src/Train/WorkoutGameVisualSmoother.h \
            ../../../src/Train/WorkoutGameWorld.h
+
+BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)
+include($$BOX2D_ROOT/box2d.pri)
 
 RESOURCES += workoutGame3DView.qrc \
              ../../../src/Resources/workout-game-assets.qrc

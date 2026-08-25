@@ -3,8 +3,26 @@
 This directory contains deterministic Blender source generators for custom
 Workout Game assets. `generate_tabletop.py` creates the first stylized
 low-poly tabletop socket tile, `generate_log_over.py` creates a socketed,
-partly buried log-over tile, and `generate_bunny_hop.py` creates a compact
-practice hurdle. None of the generators downloads or embeds external assets.
+partly buried log-over tile, `generate_bunny_hop.py` creates a compact
+practice hurdle, and `generate_drop.py` creates a faceted drop face. None of
+the generators downloads or embeds external assets.
+
+## Drop contract
+
+- The `22.0 m` metadata tile matches the runtime profile from `-10.0 m` to
+  `+12.0 m`, with the physical lip at local `10.0 m`.
+- The asset contributes only a narrow, faceted rock face below the upper lip.
+  The streamed socket trail owns the approach, actual gap, lower landing,
+  recovery and safe branch, so no duplicate ground can overlap or bridge the
+  drop.
+- The source face is `0.70 m` deep and scales only vertically to the
+  difficulty-dependent `0.35-0.70 m` runtime depth. Its rough edge extends
+  beyond both sides of the `1.36 m` tread.
+- Prepare, decision, action, lip, air, land and recovery markers are visual
+  metadata. Box2D remains the sole source of rider flight, pitch and landing
+  impact.
+- The generator validates exact sockets, topology, finite coordinates, two
+  opaque materials, the lip envelope and applied transforms before export.
 
 ## Bunny-hop contract
 

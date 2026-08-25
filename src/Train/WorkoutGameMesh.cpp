@@ -633,30 +633,60 @@ WorkoutGameMesh dropModel(double difficulty)
     const WorkoutGameFeatureGeometryProfile profile =
             WorkoutGameFeatureGeometry::profile(
                     WorkoutGameTerrainKind::Drop, difficulty);
-    std::vector<SculptedStripSample> samples;
-    constexpr int Samples = 18;
-    for (int index = 0; index <= Samples; ++index) {
-        const double progress = double(index) / double(Samples);
-        const double forward = profile.startMeters
-                + progress * (profile.endMeters - profile.startMeters);
-        samples.push_back({
-            forward,
-            profile.surfaceOffset(forward),
+    std::vector<SculptedStripSample> approach;
+    const double approachForwards[] = {
+        profile.startMeters, -7.0, -4.0, -2.0, -1.0, 0.0
+    };
+    constexpr std::size_t ApproachCount =
+            sizeof(approachForwards) / sizeof(approachForwards[0]);
+    for (std::size_t index = 0; index < ApproachCount; ++index) {
+        const double forward = approachForwards[index];
+        const double progress = double(index)
+                / double(ApproachCount - 1u);
+        approach.push_back({
+            forward, 0.0,
             1.08 + 0.15 * std::sin(Pi * progress)
                 + 0.04 * std::sin(7.0 * Pi * progress),
             0.035 * std::sin(3.0 * Pi * progress)
         });
     }
+    std::vector<SculptedStripSample> landing;
+    const double landingForwards[] = {
+        profile.landingStartMeters, 2.5, 3.75,
+        profile.recoveryStartMeters, 6.0, 7.0, 8.0, 9.0,
+        10.0, 11.0, profile.endMeters
+    };
+    constexpr std::size_t LandingCount =
+            sizeof(landingForwards) / sizeof(landingForwards[0]);
+    for (std::size_t index = 0; index < LandingCount; ++index) {
+        const double forward = landingForwards[index];
+        const double progress = double(index)
+                / double(LandingCount - 1u);
+        landing.push_back({
+            forward, profile.surfaceOffset(forward),
+            1.12 + 0.12 * std::sin(Pi * progress)
+                + 0.035 * std::sin(5.0 * Pi * progress),
+            0.025 * std::sin(3.0 * Pi * progress)
+        });
+    }
     addSculptedStrip(
-            mesh, samples, 0.25,
+            mesh, approach, 0.25,
             WorkoutGameMeshMaterial::RockTop,
             WorkoutGameMeshMaterial::RockHighlight,
             WorkoutGameMeshMaterial::DropFace);
+    addSculptedStrip(
+            mesh, landing, 0.25,
+            WorkoutGameMeshMaterial::RockTop,
+            WorkoutGameMeshMaterial::RockHighlight,
+            WorkoutGameMeshMaterial::DropFace);
+    addBox(mesh, -0.06, 0.0, profile.heightMeters * 0.5,
+           0.06, 1.25, -profile.heightMeters * 0.5,
+           WorkoutGameMeshMaterial::DropFace,
+           WorkoutGameMeshMaterial::RockHighlight);
     mesh.colliders.push_back({
-        (profile.plateauStartMeters + profile.plateauEndMeters) * 0.5,
+        0.0,
         0.0, profile.heightMeters * 0.5,
-        (profile.plateauEndMeters - profile.plateauStartMeters) * 0.5,
-        1.25, -profile.heightMeters * 0.5
+        0.12, 1.25, -profile.heightMeters * 0.5
     });
     mesh.lengthMeters = profile.endMeters - profile.startMeters;
     mesh.entry = {profile.startMeters, 1.25, 0.0};

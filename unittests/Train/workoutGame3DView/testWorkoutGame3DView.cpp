@@ -13,6 +13,7 @@
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
+#include "Train/WorkoutGameWorld.h"
 
 #include <QDir>
 #include <QFile>
@@ -926,6 +927,45 @@ private slots:
         QVERIFY(values.contains(QStringLiteral("assetZ")));
     }
 
+    void dropAssetUsesUpperSocketAnchorAndDepthScale()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Drop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.terrain == WorkoutGameTerrainKind::Drop
+                            && candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    piece->terrain, piece->difficulty);
+        QVERIFY(profile.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 0.0), 220.0, 220.0, 88, 150, 7);
+        const QVariantList features = viewModel.features();
+        const auto asset = std::find_if(
+                features.begin(), features.end(),
+                [](const QVariant &entry) {
+                    return entry.toMap().value(QStringLiteral("kind")).toInt()
+                            == int(WorkoutGameTerrainKind::Drop);
+                });
+        QVERIFY(asset != features.end());
+        const QVariantMap values = asset->toMap();
+        QCOMPARE(values.value(QStringLiteral("assetScaleY")).toDouble(),
+                 std::abs(profile.heightMeters) / 0.70);
+        QCOMPARE(values.value(QStringLiteral("assetScaleZ")).toDouble(), 1.0);
+        QVERIFY(values.contains(QStringLiteral("assetX")));
+        QVERIFY(values.contains(QStringLiteral("assetY")));
+        QVERIFY(values.contains(QStringLiteral("assetZ")));
+    }
+
     void packagedBunnyHopAssetLoadsWithRequiredNodes()
     {
         QQmlEngine engine;
@@ -964,6 +1004,46 @@ private slots:
                 ":/qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh"));
         QVERIFY(mesh.open(QIODevice::ReadOnly));
         QCOMPARE(mesh.size(), qint64(2164));
+    }
+
+    void packagedDropAssetLoadsWithRequiredNodes()
+    {
+        QQmlEngine engine;
+        QQmlComponent component(
+                &engine,
+                QUrl(QStringLiteral(
+                        "qrc:/qml/assets/Wg_Drop_Greybox.qml")));
+        QStringList errors;
+        for (const QQmlError &error : component.errors()) {
+            errors.append(error.toString());
+        }
+        QVERIFY2(component.isReady(), qPrintable(errors.join('\n')));
+
+        std::unique_ptr<QObject> asset(component.create());
+        QVERIFY2(asset, qPrintable(errors.join('\n')));
+        const std::array<const char *, 13> requiredObjects = {{
+            "ROOT_Drop",
+            "GEO_DropFace_LOD0",
+            "SOCKET_IN",
+            "SOCKET_OUT",
+            "MARKER_PREPARE",
+            "MARKER_DECISION",
+            "MARKER_ACTION",
+            "MARKER_LIP",
+            "MARKER_AIR",
+            "MARKER_LAND",
+            "MARKER_RECOVERY",
+            "MAT_DropFace_Grey",
+            "MAT_DropEdge_Grey"
+        }};
+        for (const char *name : requiredObjects) {
+            QVERIFY2(asset->findChild<QObject *>(
+                    QString::fromLatin1(name)), name);
+        }
+        QFile mesh(QStringLiteral(
+                ":/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh"));
+        QVERIFY(mesh.open(QIODevice::ReadOnly));
+        QCOMPARE(mesh.size(), qint64(2004));
     }
 
     void bypassRiderUsesTheSameBranchAndTerrainSurfaceAsItsMesh()
@@ -1103,6 +1183,33 @@ private slots:
                  "packaged bunny-hop mesh appears blank");
         const QString screenshot = qEnvironmentVariable(
                 "GC_WORKOUT_GAME_BUNNY_HOP_ASSET_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            QVERIFY2(rendered.save(screenshot), qPrintable(screenshot));
+        }
+    }
+
+    void rendersPackagedDropAsset()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.setSource(QUrl(QStringLiteral(
+                "qrc:/qml/assets/DropAssetHarness.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTest::qWait(500);
+
+        const QImage rendered = window.grabWindow();
+        QVERIFY(!rendered.isNull());
+        QCOMPARE(rendered.size(), QSize(960, 540));
+        QVERIFY2(sampledColorCount(rendered) > 7,
+                 "packaged drop mesh appears blank");
+        const QString screenshot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_DROP_ASSET_SCREENSHOT");
         if (!screenshot.isEmpty()) {
             QVERIFY2(rendered.save(screenshot), qPrintable(screenshot));
         }
@@ -1344,6 +1451,10 @@ private slots:
                 << int(WorkoutGameTerrainKind::BunnyHop)
                 << QByteArray("GC_WORKOUT_GAME_BUNNY_HOP_LINE_SCREENSHOT_DIR")
                 << QStringLiteral("bunny-hop") << 1.02;
+        QTest::newRow("drop")
+                << int(WorkoutGameTerrainKind::Drop)
+                << QByteArray("GC_WORKOUT_GAME_DROP_LINE_SCREENSHOT_DIR")
+                << QStringLiteral("drop") << 0.82;
     }
 
     void rendersAuthoredChallengeCompletedAndBypassedLines()
@@ -1368,7 +1479,8 @@ private slots:
                     return candidate.challenge.enabled;
                 });
         QVERIFY(piece != road.pieces.end());
-        const double distance = piece->challenge.obstacleDistanceMeters;
+        const double distance = piece->challenge.obstacleDistanceMeters
+                - (terrain == WorkoutGameTerrainKind::Drop ? 1.5 : 0.0);
 
         WorkoutGame3DWindow window(true);
         QVERIFY(window.rendererAvailable());
@@ -1384,7 +1496,8 @@ private slots:
         main.feature.outcome = WorkoutGameFeatureOutcome::Completed;
         main.feature.phase = WorkoutGameFeaturePhase::Recovery;
         main.world.rider.clearanceMeters = mainClearanceMeters;
-        main.world.rider.airborne = true;
+        main.world.rider.airborne =
+                terrain != WorkoutGameTerrainKind::Drop;
         window.setFrame(main, 235.0, 220.0, 92, 152, 7);
         QTest::qWait(350);
         const QImage completed = window.grabWindow();
@@ -1493,6 +1606,9 @@ private slots:
         QTest::newRow("bunny-hop")
                 << int(WorkoutGameTerrainKind::BunnyHop)
                 << QByteArray("GC_WORKOUT_GAME_BUNNY_HOP_VIDEO_DIR") << 0.43;
+        QTest::newRow("drop")
+                << int(WorkoutGameTerrainKind::Drop)
+                << QByteArray("GC_WORKOUT_GAME_DROP_VIDEO_DIR") << 1.10;
     }
 
     void exportsAuthoredChallengeCompletedAndBypassedMotionFrames()
@@ -1531,11 +1647,15 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
         window.setCourse(course, FtpWatts);
         constexpr int FrameCount = 72;
+        const bool physicalDrop = terrain == WorkoutGameTerrainKind::Drop;
         const double start = std::max(
-                0.0, piece->challenge.bypassStartDistanceMeters - 2.0);
+                0.0, physicalDrop
+                    ? piece->challenge.obstacleDistanceMeters - 3.0
+                    : piece->challenge.bypassStartDistanceMeters - 2.0);
         const double end = std::min(
-                road.totalLengthMeters,
-                piece->challenge.bypassEndDistanceMeters + 2.0);
+                road.totalLengthMeters, physicalDrop
+                    ? piece->challenge.obstacleDistanceMeters + 5.0
+                    : piece->challenge.bypassEndDistanceMeters + 2.0);
 
         for (WorkoutGameRoute route : {
                  WorkoutGameRoute::MainLine,
@@ -1547,6 +1667,8 @@ private slots:
                     : QStringLiteral("completed");
             const QString directory = QDir(outputRoot).filePath(scenario);
             QVERIFY(QDir().mkpath(directory));
+            WorkoutGamePhysics dropPhysics;
+            if (physicalDrop) QVERIFY(dropPhysics.configure(road));
             QImage previous;
             int changedFrames = 0;
             double largestAirMeters = 0.0;
@@ -1564,11 +1686,27 @@ private slots:
                         : WorkoutGameFeatureOutcome::Completed;
                 frame.simulation.speedKph = 22.5;
                 frame.feature = runtime.update(frame.simulation);
-                const double air = frame.feature.verticalOffsetMeters;
+                if (physicalDrop) {
+                    WorkoutGamePhysicsInput input;
+                    input.workoutTimeMs = frameIndex * 20;
+                    input.courseDistanceMeters = distance;
+                    input.terrain = terrain;
+                    input.desiredSpeedMetersPerSecond = 22.5 / 3.6;
+                    input.effortRatio = safe ? 0.5 : 1.0;
+                    input.forceGroundFollowing = safe;
+                    frame.world = dropPhysics.update(input);
+                    QVERIFY(frame.world.ready);
+                }
+                const double air = physicalDrop
+                        ? (frame.world.rider.airborne
+                            ? frame.world.rider.airHeightMeters() : 0.0)
+                        : frame.feature.verticalOffsetMeters;
                 largestAirMeters = std::max(largestAirMeters, air);
-                frame.world.rider.clearanceMeters = 0.82 + air;
-                frame.world.rider.airborne = air > 0.01;
-                frame.world.rider.pitchDegrees = frame.feature.pitchDegrees;
+                if (!physicalDrop) {
+                    frame.world.rider.clearanceMeters = 0.82 + air;
+                    frame.world.rider.airborne = air > 0.01;
+                    frame.world.rider.pitchDegrees = frame.feature.pitchDegrees;
+                }
                 window.setFrame(
                         frame,
                         safe ? 150.0 : 235.0,
@@ -1855,6 +1993,35 @@ private slots:
 
         QVERIFY(std::abs(viewModel.riderY()
                 - droppedSample.center.elevationMeters) < 1e-9);
+    }
+
+    void completedDropUsesWorldPitchAsTheSingleAuthority()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Drop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        WorkoutGameVisualSnapshot frame = frameAt(
+                road, piece->challenge.obstacleDistanceMeters + 1.5);
+        frame.world.rider.pitchDegrees = -6.0;
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::Drop;
+        frame.feature.motion = WorkoutGameFeatureMotion::Drop;
+        frame.feature.phase = WorkoutGameFeaturePhase::Action;
+        frame.feature.outcome = WorkoutGameFeatureOutcome::Completed;
+        frame.feature.pitchDegrees = -14.0;
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frame, 150.0, 150.0, 80, 145, 4);
+        QCOMPARE(viewModel.riderPitch(), -6.0);
     }
 };
 

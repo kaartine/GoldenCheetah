@@ -33,7 +33,7 @@ silhouette, scale, trail integration, and line readability from future art.
 | Climb | Gradient design, p. 25 | Edge rocks are visible, but the mesh does not communicate a climb; the road grade carries all of the meaning. | Give the trail a long visible rising face, transverse rock steps, and a readable crest. |
 | Rock garden | Track armouring, p. 35 | Irregular rocks make the feature recognisable, but many look like detached upright blocks. | Sink and overlap rocks into an uneven rideable surface, with varied size and orientation. |
 | Bunny hop | Jump anatomy, p. 38 | A separate project-authored practice hurdle now spans the ordinary trail without raising its ground surface. It has a short preload, feature-specific bounded lift and a grounded safe branch. | Preserve the accepted socket, clearance and timing contract when final pixel materials and rider preload/landing clips replace the current low-poly presentation. |
-| Drop | Drop sections, p. 36 | Incorrect silhouette. The profile descends gradually, stays low, and climbs back, so it reads as a dip rather than a ledge. | Rebuild as level approach, sharp lip, visible face/air gap, lower landing transition, and a separately readable bypass. |
+| Drop | Drop sections, p. 36 | A sharp level lip now opens into a real physics and render gap, an exposed faceted face, a lower landing and smooth recovery. The separate safe line stays on ordinary ground. | Preserve the shared gap, collision, socket and bypass contract when final materials replace the approved low-poly face. |
 | Skinny | Boardwalk construction, p. 48 | Width and raised line are credible, but the uninterrupted brown strip resembles a narrow road. | Add deck boards, beams, supports, visible ground below, and aligned entry and exit transitions. |
 | Berm | Berm cross-section, p. 30 | Curvature and raised outside edge are directionally correct. The surface is a narrow wedge and the rider still follows the ordinary centre line. | Build a broad bowl-shaped tread and make road centre, rider lateral position, roll, and mesh use the same curve. |
 | Log over | Drop/obstacle examples, p. 36 | The tapered round log is one of the clearest current features. | Extend it beyond the trail, partly bury it, and add end-grain and broken branch details. |
@@ -72,11 +72,10 @@ test-driven change.
 
 ## Implementation Priority
 
-1. Rebuild drop and give bunny-hop its own geometry.
-2. Align berm geometry with the rider's actual route.
-3. Expose tabletop anatomy and round the roller profiles.
-4. Integrate climb, roots, rocks, and slab into the trail surface.
-5. Show both main and bypass lines before the decision point, following the
+1. Align berm geometry with the rider's actual route.
+2. Expose tabletop anatomy and round the roller profiles.
+3. Integrate climb, roots, rocks, and slab into the trail surface.
+4. Show both main and bypass lines before the decision point, following the
    split-line guidance on page 70.
-6. Add final materials and feature-specific camera treatment only after the
+5. Add final materials and feature-specific camera treatment only after the
    geometry and route contracts are stable.

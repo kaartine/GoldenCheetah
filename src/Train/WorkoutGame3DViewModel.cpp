@@ -156,16 +156,8 @@ void WorkoutGame3DViewModel::setFrame(
     const double rightZ = -std::sin(sample.center.headingRadians);
     riderPositionX = sample.center.xMeters + lateral * rightX;
     cameraGroundY = sample.visualGroundElevationMeters();
-    const double featureAir = !frame.world.ready && frame.feature.ready
-            && frame.feature.route != WorkoutGameRoute::SafeBypass
-            && frame.feature.outcome == WorkoutGameFeatureOutcome::Completed
-            ? std::max(0.0,
-                finiteOrZero(frame.feature.verticalOffsetMeters))
-            : 0.0;
-    const double authoritativeAir = frame.world.ready
-            ? std::max(0.0,
-                finiteOrZero(frame.world.rider.airHeightMeters()))
-            : featureAir;
+    const double authoritativeAir = std::max(
+            0.0, finiteOrZero(frame.world.rider.airHeightMeters()));
     double visualGround = sample.center.elevationMeters;
     if (frame.feature.route == WorkoutGameRoute::SafeBypass) {
         const WorkoutGame3DTerrainProfileSnapshot terrain =
@@ -203,8 +195,7 @@ void WorkoutGame3DViewModel::setFrame(
     riderPositionZ = sample.center.zMeters + lateral * rightZ;
     riderHeadingDegrees = sample.center.headingRadians * 180.0 / Pi;
     updateCameraPose(distanceMeters);
-    riderPitchDegrees = finiteOrZero(frame.world.rider.pitchDegrees)
-            + finiteOrZero(frame.feature.pitchDegrees);
+    riderPitchDegrees = finiteOrZero(frame.world.rider.pitchDegrees);
     riderRollDegrees = finiteOrZero(frame.world.rider.rollDegrees);
     currentPedalAngle = std::fmod(
             finiteOrZero(frame.riderPedalCycles) * 360.0, 360.0);

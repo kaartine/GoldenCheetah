@@ -116,9 +116,13 @@ bool retainsOrdinaryGroundContact(WorkoutGameTerrainKind terrain)
     }
 }
 
-double physicalSurfaceElevation(const WorkoutGameRoadSample &sample)
+double physicalSurfaceElevation(
+        const WorkoutGameRoadSample &sample,
+        bool safeBypass)
 {
-    return sample.visualGroundElevationMeters();
+    return safeBypass
+            ? sample.center.elevationMeters - sample.surfaceOffsetMeters
+            : sample.visualGroundElevationMeters();
 }
 
 }
@@ -142,6 +146,7 @@ struct WorkoutGamePhysics::Impl
     double originBodyY = 0.0;
     double landingImpact = 0.0;
     bool wasGrounded = true;
+    bool safeBypassActive = false;
     int lastJumpTile = -1;
     std::uint64_t lastFeatureActionId = 0;
     WorkoutGameWorldSnapshot latest;
@@ -222,12 +227,22 @@ struct WorkoutGamePhysics::Impl
                     WorkoutGameRoadCourseBuilder::sample(
                         roadCourse, distanceBase);
             if (sample.ready && origin.ready) {
-                return physicalSurfaceElevation(sample)
-                        - physicalSurfaceElevation(origin);
+                return physicalSurfaceElevation(sample, safeBypassActive)
+                        - physicalSurfaceElevation(origin, safeBypassActive);
             }
         }
         return WorkoutGamePhysics::terrainHeight(
                 terrain, localX, gradePercent, difficulty, seed);
+    }
+
+    bool surfacePresent(double localX) const
+    {
+        if (!roadCourse.ready || safeBypassActive) return true;
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sample(
+                    roadCourse,
+                    distanceBase + localX - RiderStartMeters);
+        return sample.ready && sample.rideableSurface;
     }
 
     void createWorld()
@@ -245,17 +260,22 @@ struct WorkoutGamePhysics::Impl
         terrainShape.material.friction = 1.1f;
         double priorX = TerrainStartMeters;
         double priorY = surfaceHeight(priorX);
+        bool priorSurfacePresent = surfacePresent(priorX);
         for (double x = TerrainStartMeters + TerrainSampleMeters;
                 x <= TerrainEndMeters + 0.001;
                 x += TerrainSampleMeters) {
             const double y = surfaceHeight(x);
-            const b2Segment segment = {
-                {float(priorX), float(priorY)},
-                {float(x), float(y)}
-            };
-            b2CreateSegmentShape(ground, &terrainShape, &segment);
+            const bool currentSurfacePresent = surfacePresent(x);
+            if (priorSurfacePresent && currentSurfacePresent) {
+                const b2Segment segment = {
+                    {float(priorX), float(priorY)},
+                    {float(x), float(y)}
+                };
+                b2CreateSegmentShape(ground, &terrainShape, &segment);
+            }
             priorX = x;
             priorY = y;
+            priorSurfacePresent = currentSurfacePresent;
         }
 
         const double groundY = surfaceHeight(RiderStartMeters);
@@ -387,7 +407,7 @@ struct WorkoutGamePhysics::Impl
                     roadCourse, distanceBase)
                 : WorkoutGameRoadSample();
         const double originSurfaceElevation = groundOrigin.ready
-                ? physicalSurfaceElevation(groundOrigin)
+                ? physicalSurfaceElevation(groundOrigin, safeBypassActive)
                 : elevationBase;
         result.rider.elevationMeters = originSurfaceElevation
                 + double(position.y) - originBodyY;
@@ -405,12 +425,13 @@ struct WorkoutGamePhysics::Impl
                         - RiderStartMeters)
                 : WorkoutGameRoadSample();
         const double groundY = ground.ready && groundOrigin.ready
-                ? physicalSurfaceElevation(ground)
-                    - physicalSurfaceElevation(groundOrigin)
+                ? physicalSurfaceElevation(ground, safeBypassActive)
+                    - physicalSurfaceElevation(
+                        groundOrigin, safeBypassActive)
                 : WorkoutGamePhysics::terrainHeight(
                     terrain, position.x, gradePercent, difficulty, seed);
         result.surfaceElevationMeters = ground.ready
-                ? physicalSurfaceElevation(ground)
+                ? physicalSurfaceElevation(ground, safeBypassActive)
                 : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
         result.rider.airborne = !grounded();
@@ -537,6 +558,7 @@ void WorkoutGamePhysics::reset()
     impl->publishedDistanceMeters = 0.0;
     impl->elevationBase = 0.0;
     impl->landingImpact = 0.0;
+    impl->safeBypassActive = false;
     impl->lastJumpTile = -1;
     impl->lastFeatureActionId = 0;
     impl->latest = WorkoutGameWorldSnapshot();
@@ -652,8 +674,11 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
         reset();
     }
 
+    const bool requestedSafeBypass = input.forceGroundFollowing
+            && impl->roadCourse.ready;
     const bool terrainChanged = !impl->initialized
             || input.terrain != impl->terrain
+            || requestedSafeBypass != impl->safeBypassActive
             || (!impl->roadCourse.ready
                 && (input.gradePercent != impl->gradePercent
                     || input.difficulty != impl->difficulty));
@@ -665,6 +690,7 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
             ++impl->generation;
         }
         impl->terrain = input.terrain;
+        impl->safeBypassActive = requestedSafeBypass;
         impl->gradePercent = input.gradePercent;
         impl->difficulty = input.difficulty;
         impl->createWorld();

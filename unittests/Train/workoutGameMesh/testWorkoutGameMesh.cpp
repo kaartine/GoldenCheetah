@@ -548,6 +548,45 @@ private slots:
         QVERIFY(std::atan(secondSlope) * 180.0 / Pi <= 15.0 + 1e-9);
     }
 
+    void dropHasASharpLedgeAndLowerLandingInsteadOfADip()
+    {
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::Drop, 0.65);
+        QVERIFY(profile.ready);
+        QCOMPARE(profile.shape,
+                 WorkoutGameFeatureGeometryShape::DropLedge);
+        QCOMPARE(profile.startMeters, -10.0);
+        QCOMPARE(profile.plateauStartMeters, 0.0);
+        QCOMPARE(profile.landingStartMeters, 1.25);
+        QCOMPARE(profile.recoveryStartMeters, 5.0);
+        QCOMPARE(profile.endMeters, 12.0);
+        QVERIFY(profile.heightMeters <= -0.35);
+        QVERIFY(profile.heightMeters >= -0.70);
+        QCOMPARE(profile.surfaceOffset(-0.01), 0.0);
+        QCOMPARE(profile.surfaceOffset(0.0), 0.0);
+        QVERIFY(!profile.surfacePresent(0.01));
+        QVERIFY(!profile.surfacePresent(1.24));
+        QVERIFY(profile.surfacePresent(profile.landingStartMeters));
+        QCOMPARE(profile.surfaceOffset(profile.landingStartMeters),
+                 profile.heightMeters);
+        QCOMPARE(profile.surfaceOffset(2.0), profile.heightMeters);
+        QCOMPARE(profile.surfaceOffset(profile.endMeters), 0.0);
+
+        const WorkoutGameMesh drop = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::Drop, 0.65);
+        QVERIFY(WorkoutGameMeshLibrary::valid(drop));
+        double lipTop = -std::numeric_limits<double>::infinity();
+        double lipBottom = std::numeric_limits<double>::infinity();
+        for (const WorkoutGameMeshVertex &vertex : drop.vertices) {
+            if (std::abs(vertex.forwardMeters) > 1e-9) continue;
+            lipTop = std::max(lipTop, vertex.upMeters);
+            lipBottom = std::min(lipBottom, vertex.upMeters);
+        }
+        QVERIFY(std::abs(lipTop) < 1e-9);
+        QVERIFY(lipBottom <= profile.heightMeters + 1e-9);
+    }
+
     void logUsesAReadableRoundedCrossSection()
     {
         QVERIFY(WorkoutGameLogRadialSegments >= 16);

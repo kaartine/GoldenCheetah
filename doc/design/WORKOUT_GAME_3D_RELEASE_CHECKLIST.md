@@ -239,8 +239,9 @@ landing agrees with the runtime event.
 
 **Current evidence:** a ready Box2D world snapshot is now the sole airborne
 authority in both the 3D ViewModel and shared rider visual. Scripted feature
-height remains only as a fallback for isolated render fixtures with no world
-snapshot. Calibrated Box2D launch speeds retain the previous readability
+height remains only as a fallback in the shared legacy rider visual when no
+world snapshot exists; the 3D path does not synthesize one. Calibrated Box2D
+launch speeds retain the previous readability
 thresholds; tests cap tabletop height at 1.8 m, continuous flight at 2 s and
 per-20 ms height change at 0.25 m. Drop depth remains in the authoritative
 road surface rather than a second
@@ -294,7 +295,7 @@ and a runtime/geometry regression test.
 
 - [x] `FTR-01` Log over: buried volumetric log and front/rear clearance.
 - [x] `FTR-02` Bunny hop: distinct hurdle/kicker and short preload window.
-- [ ] `FTR-03` Drop: sharp ledge, exposed face, lower landing and downward pose.
+- [x] `FTR-03` Drop: sharp ledge, exposed face, lower landing and downward pose.
 - [ ] `FTR-04` Rollers: rounded continuous crests/troughs and pump motion.
 - [ ] `FTR-05` Berm: broad banked bowl and shared curved rider line.
 - [ ] `FTR-06` Roots: branching embedded network and bounded roughness.
@@ -351,6 +352,32 @@ hints. Asset, road, runtime, mesh, world and direct placement suites pass 15,
 three explicit opt-in video skips; the bunny opt-in completed and bypassed
 72-frame exports both pass. ASan/UBSan passes the changed core suites and the
 packaged/integrated Quick 3D bunny render.
+
+**FTR-03 evidence:** Drop now uses a level ten-metre approach, a sharp lip,
+an actual `1.25 m` gap, a difficulty-scaled `0.35-0.70 m` lower landing and
+a seven-metre smooth recovery. Trail indices and Box2D segments are both
+absent through the same authoritative gap. The safe route regenerates Box2D
+against the ordinary continuous surface, remains grounded and cannot report a
+false landing impact.
+
+The project-authored `4,736`-byte GLB contributes only the exposed faceted
+rock face below the lip. It has 20 triangles, two opaque materials, exact
+`22.0 m` profile sockets and named prepare, decision, action, lip, air,
+landing and recovery markers. The streamed trail owns approach, gap, landing,
+recovery and bypass geometry, preventing duplicate ground and pasted-on
+tiles. Runtime difficulty scales only the face depth.
+
+Two clean Blender 4.0.2 exports and two Qt Balsam 6.8.3 conversions are
+byte-identical. Khronos validation reports zero errors, warnings, infos and
+hints, and the repository asset validator passes all 16 policy and fixture
+tests. Asset placement, geometry, mesh, road, runtime, world and X11/OpenGL
+view suites pass `7 + 15 + 25 + 25 + 16 + 32 + 41` tests. The same changed
+C++ suites pass ASan/UBSan. Completed and grounded-bypass stills plus both
+72-frame motion exports pass; the completed route uses the real Box2D
+snapshot and the bypass uses the real alternate collision surface. Regression
+limits keep flight at `0.2-1.2 s`, clearance below `1.10 m`, airborne pitch
+inside `-18..+4 degrees`, per-frame elevation change below `0.20 m`, and
+landing impact inside `0.05-0.65`.
 
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct

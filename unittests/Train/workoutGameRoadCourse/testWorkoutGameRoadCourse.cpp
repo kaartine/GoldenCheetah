@@ -217,6 +217,38 @@ private slots:
         QCOMPARE(obstacle.surfaceOffsetMeters, 0.0);
     }
 
+    void dropRoadDefinesAnActualGapAndLowerLanding()
+    {
+        WorkoutGameCourse course = sampleCourse();
+        course.sections.back().terrain = WorkoutGameTerrainKind::Drop;
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto drop = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.challenge.enabled
+                            && piece.terrain == WorkoutGameTerrainKind::Drop;
+                });
+        QVERIFY(drop != road.pieces.end());
+        const double lip = drop->challenge.obstacleDistanceMeters;
+        const WorkoutGameRoadSample approach =
+                WorkoutGameRoadCourseBuilder::sample(road, lip - 0.1);
+        const WorkoutGameRoadSample gap =
+                WorkoutGameRoadCourseBuilder::sample(road, lip + 0.5);
+        const WorkoutGameRoadSample landing =
+                WorkoutGameRoadCourseBuilder::sample(road, lip + 1.25);
+        const WorkoutGameRoadSample runout =
+                WorkoutGameRoadCourseBuilder::sample(road, lip + 4.0);
+        QVERIFY(approach.ready && gap.ready && landing.ready && runout.ready);
+        QVERIFY(approach.rideableSurface);
+        QVERIFY(!gap.rideableSurface);
+        QVERIFY(landing.rideableSurface);
+        QVERIFY(runout.rideableSurface);
+        QCOMPARE(approach.surfaceOffsetMeters, 0.0);
+        QVERIFY(landing.surfaceOffsetMeters < -0.35);
+        QCOMPARE(runout.surfaceOffsetMeters, landing.surfaceOffsetMeters);
+    }
+
     void generationAndSamplingAreDeterministic()
     {
         const WorkoutGameRoadCourse first =
