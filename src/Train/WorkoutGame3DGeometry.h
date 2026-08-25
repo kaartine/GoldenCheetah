@@ -27,6 +27,7 @@ public:
         RockGarden,
         RockSlab,
         Roots,
+        Skinny,
         Trail
     };
 
@@ -64,6 +65,10 @@ private:
             double startDistanceMeters,
             double endDistanceMeters);
     void buildRockSlabs(
+            const WorkoutGameRoadCourse &course,
+            double startDistanceMeters,
+            double endDistanceMeters);
+    void buildSkinnies(
             const WorkoutGameRoadCourse &course,
             double startDistanceMeters,
             double endDistanceMeters);

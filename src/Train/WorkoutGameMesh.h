@@ -132,6 +132,7 @@ public:
             double halfWidthMeters,
             double entryConnectorHalfWidthMeters = 0.0,
             double exitConnectorHalfWidthMeters = 0.0);
+    static WorkoutGameMesh skinnySafeLine(double difficulty);
     static bool valid(const WorkoutGameMesh &mesh);
 };
 

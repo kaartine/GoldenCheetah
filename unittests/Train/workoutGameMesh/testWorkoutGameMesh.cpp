@@ -13,6 +13,7 @@
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
+#include "Train/WorkoutGameSkinnyGeometry.h"
 #include "Train/WorkoutGameOcclusion.h"
 #include "Train/WorkoutGameTrailBranch.h"
 #include "Train/WorkoutGameTrailTile.h"
@@ -68,6 +69,72 @@ class TestWorkoutGameMesh : public QObject
     Q_OBJECT
 
 private slots:
+    void skinnyMeshHasBoardsBeamsSupportsAndExactSockets()
+    {
+        const auto profile = WorkoutGameSkinnyGeometry::profile(0.65);
+        const WorkoutGameMesh mesh = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::Skinny, 0.65);
+        QVERIFY(mesh.ready);
+        QCOMPARE(mesh.entry.forwardMeters, profile.startMeters);
+        QCOMPARE(mesh.exit.forwardMeters, profile.endMeters);
+        QCOMPARE(mesh.entry.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.exit.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.lengthMeters, profile.endMeters - profile.startMeters);
+        QCOMPARE(mesh.colliders.size(), 12u);
+        QCOMPARE(mesh.vertices.size(), 384u);
+        QCOMPARE(mesh.triangles.size(), 576u);
+        double minimumUp = 1.0;
+        double maximumUp = 0.0;
+        for (const WorkoutGameMeshVertex &vertex : mesh.vertices) {
+            minimumUp = std::min(minimumUp, vertex.upMeters);
+            maximumUp = std::max(maximumUp, vertex.upMeters);
+        }
+        QVERIFY(minimumUp <= 1e-9);
+        QVERIFY(maximumUp >= profile.deckHeightMeters - 1e-9);
+    }
+
+    void skinnyLegacySafeLineUsesTheCanonicalRouteAndSockets()
+    {
+        const WorkoutGameRoadCourse course = featureCourse(
+                WorkoutGameTerrainKind::Skinny, 0.65);
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const auto profile = WorkoutGameSkinnyGeometry::profile(
+                piece->difficulty);
+        const WorkoutGameTrailTile tile =
+                WorkoutGameTrailTileAssembler::challenge(course, *piece);
+        QVERIFY(tile.ready);
+        QCOMPARE(tile.bypass.anchorDistanceMeters,
+                 piece->challenge.obstacleDistanceMeters
+                    + profile.startMeters);
+        QCOMPARE(tile.bypass.mesh.entry.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(tile.bypass.mesh.exit.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(tile.bypass.mesh.vertices.size(), 148u);
+        QCOMPARE(tile.bypass.mesh.triangles.size(), 216u);
+        double maximumCenter = 0.0;
+        for (std::size_t index = 0;
+             index + 3u < tile.bypass.mesh.vertices.size(); index += 4u) {
+            const WorkoutGameMeshVertex &left =
+                    tile.bypass.mesh.vertices[index + 1u];
+            const WorkoutGameMeshVertex &right =
+                    tile.bypass.mesh.vertices[index + 2u];
+            const double center = 0.5 * (left.rightMeters + right.rightMeters);
+            const double local = profile.startMeters + left.forwardMeters;
+            QVERIFY(std::abs(center - profile.safeLineOffsetMeters(local))
+                    < 1e-9);
+            maximumCenter = std::max(maximumCenter, center);
+        }
+        QCOMPARE(maximumCenter, profile.safeLineLateralMeters);
+    }
+
     void rockSlabMeshUsesCanonicalAsymmetricMassAndFissureBudget()
     {
         const WorkoutGameRockSlabGeometryProfile profile =

@@ -63,9 +63,12 @@ WorkoutGame3DTerrainProfileSnapshot WorkoutGame3DTerrainProfile::build(
     // The authored berm bowl raises each edge by two thirds of the linear
     // bank height. Keep the surrounding terrain on those exact sockets.
     const double bankSlope = 2.0 / 3.0 * std::tan(road.bermBankRadians);
-    const double leftSeamElevation = road.visualGroundElevationMeters()
+    const double trailDatum = road.terrain == WorkoutGameTerrainKind::Skinny
+            ? road.visualGroundElevationMeters() - road.surfaceOffsetMeters
+            : road.visualGroundElevationMeters();
+    const double leftSeamElevation = trailDatum
             - halfWidth * bankSlope - TrailSeamDropMeters;
-    const double rightSeamElevation = road.visualGroundElevationMeters()
+    const double rightSeamElevation = trailDatum
             + halfWidth * bankSlope - TrailSeamDropMeters;
     const double leftRidge = ridgeHeight(distanceMeters, seed, -1.0);
     const double rightRidge = ridgeHeight(distanceMeters, seed, 1.0);

@@ -37,7 +37,7 @@ silhouette, scale, trail integration, and line readability from future art.
 | Rock garden | Track armouring, p. 35 | The production tile now sinks twelve irregular, rotated stones into one widened tread. Nine stones cross the main line, the low-relief safe line stays on the same trail, and physics suspension follows the same crowns rendered by Quick 3D. | Preserve the canonical profile, partial burial, opaque merged mesh and exact sockets when final rock and ground materials replace the current vertex colors. |
 | Bunny hop | Jump anatomy, p. 38 | A separate project-authored practice hurdle now spans the ordinary trail without raising its ground surface. It has a short preload, feature-specific bounded lift and a grounded safe branch. | Preserve the accepted socket, clearance and timing contract when final pixel materials and rider preload/landing clips replace the current low-poly presentation. |
 | Drop | Drop sections, p. 36 | A sharp level lip now opens into a real physics and render gap, an exposed faceted face, a lower landing and smooth recovery. The separate safe line stays on ordinary ground. | Preserve the shared gap, collision, socket and bypass contract when final materials replace the approved low-poly face. |
-| Skinny | Boardwalk construction, p. 48 | Width and raised line are credible, but the uninterrupted brown strip resembles a narrow road. | Add deck boards, beams, supports, visible ground below, and aligned entry and exit transitions. |
+| Skinny | Boardwalk construction, p. 48 | The production tile now has individually spaced deck boards, longitudinal beams, ground-reaching supports, visible clearance, a same-tile packed-dirt safe line and exact width/elevation sockets. | Preserve the canonical deck, ground datum, subtle deterministic balance response and seam overlap when final wood and ground materials replace the current vertex colors. |
 | Berm | Berm cross-section, p. 30 | The production tile now has a 75-degree curved centreline, broad banked bowl, level sockets and an integrated slower inside line. Road, rider, mesh and camera share the same distance profile. | Preserve the canonical profile and socket contract when final ground materials replace the current low-poly shading. |
 | Log over | Drop/obstacle examples, p. 36 | The tapered round log is one of the clearest current features. | Extend it beyond the trail, partly bury it, and add end-grain and broken branch details. |
 | Tabletop | Jump anatomy and examples, pp. 38-40 | The main proportions are plausible, but the current solid mound hides the take-off belly, lip, knuckle, and landing transition. | Preserve the measured dimensions while exposing those named parts in the silhouette and shading. |
@@ -72,6 +72,12 @@ The production rock slab tile is 14 m long with a 7.4 m active face. At
 difficulty 0.65 it rises approximately 0.84 m to a single rounded crest. Its
 asymmetric footprint varies from 1.44 to 1.76 m wide; the 1.05 m lateral safe
 line has at most 2.5 cm of relief and reconnects to each 1.36 m-wide socket.
+
+The production skinny tile is 18 m long with a 14 m active section and a 7 m
+flat deck. Difficulty scales the deck from 0.62 to 0.50 m wide and from 0.28 to
+0.36 m high; its entry and exit ramps remain below six degrees. The packed-dirt
+safe line is 1.05 m right of centre and reconnects through four-metre blends to
+each 1.36 m-wide socket.
 
 ## Airborne Presentation
 

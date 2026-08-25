@@ -19,6 +19,7 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameRootGeometry.h \
           ../../../src/Train/WorkoutGameRockGardenGeometry.h \
           ../../../src/Train/WorkoutGameRockSlabGeometry.h \
+          ../../../src/Train/WorkoutGameSkinnyGeometry.h \
           ../../../src/Train/WorkoutGameSimulation.h \
           ../../../src/Train/WorkoutGameWorld.h
 

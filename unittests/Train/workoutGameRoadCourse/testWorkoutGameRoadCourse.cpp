@@ -15,6 +15,7 @@
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
+#include "Train/WorkoutGameSkinnyGeometry.h"
 #include "Train/WorkoutGameTrailBranch.h"
 
 #include <QTest>
@@ -86,6 +87,136 @@ class TestWorkoutGameRoadCourse : public QObject
     Q_OBJECT
 
 private slots:
+    void skinnyProfileHasRaisedDeckSocketsAndDeterministicBalance()
+    {
+        const auto profile = WorkoutGameSkinnyGeometry::profile(0.65);
+        const auto repeated = WorkoutGameSkinnyGeometry::profile(0.65);
+        const auto easiest = WorkoutGameSkinnyGeometry::profile(0.0);
+        const auto hardest = WorkoutGameSkinnyGeometry::profile(1.0);
+        const auto invalid = WorkoutGameSkinnyGeometry::profile(
+                std::numeric_limits<double>::quiet_NaN());
+        QVERIFY(profile.ready);
+        QCOMPARE(profile.startMeters, -9.0);
+        QCOMPARE(profile.activeStartMeters, -7.0);
+        QCOMPARE(profile.safeLineStartMeters, -5.0);
+        QCOMPARE(profile.deckStartMeters, -3.5);
+        QCOMPARE(profile.deckEndMeters, 3.5);
+        QCOMPARE(profile.safeLineEndMeters, 5.0);
+        QCOMPARE(profile.activeEndMeters, 7.0);
+        QCOMPARE(profile.endMeters, 9.0);
+        QCOMPARE(profile.socketHalfWidthMeters, 0.68);
+        QCOMPARE(profile.activeHalfWidthMeters, 1.55);
+        QCOMPARE(profile.safeLineLateralMeters, 1.05);
+        QCOMPARE(profile.safeLineSurfaceLiftMeters, 0.012);
+        QCOMPARE(invalid.deckHeightMeters, easiest.deckHeightMeters);
+        QCOMPARE(repeated.deckHeightMeters, profile.deckHeightMeters);
+        QVERIFY(easiest.deckHeightMeters < hardest.deckHeightMeters);
+        QVERIFY(easiest.deckHalfWidthMeters > hardest.deckHalfWidthMeters);
+        QVERIFY(profile.deckHalfWidthMeters >= 0.25);
+        QVERIFY(profile.deckHalfWidthMeters <= 0.31);
+        QVERIFY(std::atan(hardest.deckHeightMeters
+                         / (hardest.deckStartMeters
+                            - hardest.activeStartMeters))
+                    * 180.0 / 3.14159265358979323846 <= 6.0);
+
+        QCOMPARE(profile.deckSurfaceOffsetMeters(profile.startMeters), 0.0);
+        QCOMPARE(profile.deckSurfaceOffsetMeters(profile.activeStartMeters), 0.0);
+        QCOMPARE(profile.deckSurfaceOffsetMeters(0.0),
+                 profile.deckHeightMeters);
+        QCOMPARE(profile.deckSurfaceOffsetMeters(profile.activeEndMeters), 0.0);
+        QCOMPARE(profile.deckSurfaceOffsetMeters(profile.endMeters), 0.0);
+        QCOMPARE(profile.surfaceOffsetMeters(
+                    0.0, profile.safeLineLateralMeters), 0.0);
+        QCOMPARE(profile.safeLineOffsetMeters(profile.startMeters), 0.0);
+        QCOMPARE(profile.safeLineOffsetMeters(0.0),
+                 profile.safeLineLateralMeters);
+        QCOMPARE(profile.safeLineOffsetMeters(profile.endMeters), 0.0);
+        QCOMPARE(profile.halfWidthMeters(profile.startMeters),
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(profile.halfWidthMeters(0.0),
+                 profile.activeHalfWidthMeters);
+
+        double maximumBalance = 0.0;
+        for (double local = profile.deckStartMeters;
+             local <= profile.deckEndMeters; local += 0.02) {
+            maximumBalance = std::max(
+                    maximumBalance,
+                    std::abs(profile.balanceRollDegrees(local)));
+            QCOMPARE(profile.balanceRollDegrees(local),
+                     repeated.balanceRollDegrees(local));
+        }
+        QVERIFY(maximumBalance >= 1.0);
+        QVERIFY(maximumBalance <= 2.0);
+        QCOMPARE(profile.safeLineOffsetMeters(
+                    std::numeric_limits<double>::quiet_NaN()), 0.0);
+        QCOMPARE(profile.halfWidthMeters(
+                    std::numeric_limits<double>::quiet_NaN()),
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(profile.balanceRollDegrees(
+                    std::numeric_limits<double>::quiet_NaN()), 0.0);
+        QCOMPARE(profile.balanceRollDegrees(profile.startMeters), 0.0);
+        QCOMPARE(profile.balanceRollDegrees(profile.endMeters), 0.0);
+    }
+
+    void skinnyRoadDecidesBeforeTheCompleteSocketedTile()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 1201u;
+        source.durationMs = 40000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::Skinny;
+        section.durationMs = source.durationMs;
+        section.lengthMeters = 220.0;
+        section.targetWatts = 175.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        source.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const auto profile = WorkoutGameSkinnyGeometry::profile(
+                piece->difficulty);
+        const double center = piece->challenge.obstacleDistanceMeters;
+        QVERIFY(center + profile.startMeters
+                >= piece->startDistanceMeters - 1e-9);
+        QVERIFY(center + profile.endMeters
+                <= piece->startDistanceMeters + piece->lengthMeters + 1e-9);
+        QCOMPARE(piece->challenge.decisionDistanceMeters,
+                 center + profile.startMeters);
+        QVERIFY(piece->challenge.prepareDistanceMeters
+                < piece->challenge.decisionDistanceMeters);
+        QVERIFY(piece->challenge.decisionDistanceMeters
+                - piece->challenge.prepareDistanceMeters <= 6.0 + 1e-9);
+        QCOMPARE(piece->challenge.bypassStartDistanceMeters,
+                 piece->challenge.bypassEndDistanceMeters);
+        QCOMPARE(piece->challenge.bypassLateralMeters, 0.0);
+        QVERIFY(WorkoutGameRoadCourseBuilder::sample(
+                    road, center + profile.startMeters)
+                .renderableTrailSurface);
+        QVERIFY(!WorkoutGameRoadCourseBuilder::sample(road, center)
+                .renderableTrailSurface);
+        QVERIFY(WorkoutGameRoadCourseBuilder::sample(
+                    road, center + profile.endMeters)
+                .renderableTrailSurface);
+        for (double local = profile.startMeters;
+             local <= profile.endMeters; local += 0.05) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(road, center + local);
+            QVERIFY(sample.ready);
+            QVERIFY(std::abs(sample.surfaceOffsetMeters
+                        - profile.surfaceOffsetMeters(local, 0.0)) < 1e-9);
+            QVERIFY(std::abs(sample.center.halfWidthMeters
+                        - profile.halfWidthMeters(local)) < 1e-9);
+        }
+    }
+
     void rockSlabProfileHasAsymmetricMassAndSameTreadSafeLine()
     {
         const WorkoutGameRockSlabGeometryProfile profile =

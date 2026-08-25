@@ -48,6 +48,9 @@ WorkoutGameFeaturePromptSnapshot WorkoutGameFeaturePrompt::build(
         case WorkoutGameFeatureMotion::Absorb:
             result.instruction = WorkoutGameFeatureInstruction::Absorb;
             break;
+        case WorkoutGameFeatureMotion::Balance:
+            result.instruction = WorkoutGameFeatureInstruction::HoldLine;
+            break;
         case WorkoutGameFeatureMotion::Drop:
             result.instruction = WorkoutGameFeatureInstruction::Drop;
             break;

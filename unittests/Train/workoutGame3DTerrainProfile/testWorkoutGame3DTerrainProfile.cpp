@@ -101,6 +101,24 @@ private slots:
         QVERIFY(near(profile.vertices[4].elevationMeters, 3.98));
     }
 
+    void skinnyDeckDoesNotRaiseItsGroundOrSafeLineSockets()
+    {
+        WorkoutGameRoadSample road = roadSample();
+        road.terrain = WorkoutGameTerrainKind::Skinny;
+        road.center.halfWidthMeters = 1.55;
+        road.center.elevationMeters = 4.35;
+        road.surfaceOffsetMeters = 0.35;
+
+        const WorkoutGame3DTerrainProfileSnapshot profile =
+                WorkoutGame3DTerrainProfile::build(road, 42.0, 17u);
+
+        QVERIFY(profile.ready);
+        QVERIFY(near(profile.vertices[3].elevationMeters, 3.98));
+        QVERIFY(near(profile.vertices[4].elevationMeters, 3.98));
+        QVERIFY(near(WorkoutGame3DTerrainProfile::elevationAtLateral(
+                         profile, 1.05), 3.98));
+    }
+
     void usesGlobalDistanceForChunkSocketContinuity()
     {
         const WorkoutGame3DTerrainProfileSnapshot first =

@@ -15,6 +15,7 @@
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
+#include "WorkoutGameSkinnyGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <QByteArray>
@@ -27,6 +28,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <vector>
 
 namespace {
@@ -102,6 +104,18 @@ void appendFeatureSamples(
             append(center + slab.crestMeters);
             append(center + slab.activeEndMeters);
             append(center + slab.endMeters);
+            continue;
+        }
+        if (piece.terrain == WorkoutGameTerrainKind::Skinny) {
+            const WorkoutGameSkinnyGeometryProfile skinny =
+                    WorkoutGameSkinnyGeometry::profile(piece.difficulty);
+            const double center = piece.challenge.obstacleDistanceMeters;
+            append(center + skinny.startMeters);
+            append(center + skinny.activeStartMeters);
+            append(center + skinny.deckStartMeters);
+            append(center + skinny.deckEndMeters);
+            append(center + skinny.activeEndMeters);
+            append(center + skinny.endMeters);
             continue;
         }
         const WorkoutGameFeatureGeometryProfile profile =
@@ -229,6 +243,10 @@ void WorkoutGame3DGeometry::build(
         buildRockSlabs(course, startDistanceMeters, endDistanceMeters);
         return;
     }
+    if (layer == Layer::Skinny) {
+        buildSkinnies(course, startDistanceMeters, endDistanceMeters);
+        return;
+    }
     const double rangeMeters = endDistanceMeters - startDistanceMeters;
 
     std::vector<double> sampleDistances;
@@ -322,7 +340,9 @@ void WorkoutGame3DGeometry::build(
                         || sample.terrain
                             == WorkoutGameTerrainKind::RockGarden
                         || sample.terrain
-                            == WorkoutGameTerrainKind::RockSlab);
+                            == WorkoutGameTerrainKind::RockSlab
+                        || sample.terrain
+                            == WorkoutGameTerrainKind::Skinny);
             const double elevation = trailVertex
                     ? sample.visualGroundElevationMeters()
                         - (technicalDatum ? sample.surfaceOffsetMeters : 0.0)
@@ -475,8 +495,7 @@ void WorkoutGame3DGeometry::buildRockGardens(
         const double forwardZ = std::cos(sample.center.headingRadians);
         const double datum =
                 WorkoutGame3DTerrainProfile::elevationAtLateral(
-                    terrain, lateral)
-                - sample.surfaceOffsetMeters;
+                    terrain, lateral);
         const double normalLength = std::sqrt(
                 normalForward * normalForward
                 + normalLateral * normalLateral
@@ -928,6 +947,297 @@ void WorkoutGame3DGeometry::buildRockSlabs(
             });
         }
         ++slabCount;
+    }
+    if (vertices.empty() || indices.empty()) return;
+
+    QByteArray vertexData;
+    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
+    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
+    QByteArray indexData;
+    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
+    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
+    setStride(sizeof(Vertex));
+    setVertexData(vertexData);
+    setIndexData(indexData);
+    setPrimitiveType(PrimitiveType::Triangles);
+    addAttribute(Attribute::PositionSemantic,
+                 offsetof(Vertex, x), Attribute::F32Type);
+    addAttribute(Attribute::NormalSemantic,
+                 offsetof(Vertex, nx), Attribute::F32Type);
+    addAttribute(Attribute::ColorSemantic,
+                 offsetof(Vertex, r), Attribute::F32Type);
+    addAttribute(Attribute::TexCoordSemantic,
+                 offsetof(Vertex, u), Attribute::F32Type);
+    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
+    setBounds(boundsMin, boundsMax);
+    geometryReady = true;
+    generatedSampleCount = int(vertices.size());
+    update();
+}
+
+void WorkoutGame3DGeometry::buildSkinnies(
+        const WorkoutGameRoadCourse &course,
+        double startDistanceMeters,
+        double endDistanceMeters)
+{
+    constexpr int BoardCount = 60;
+    constexpr int BeamSegments = 4;
+    constexpr int MaximumSkinnies = 12;
+    constexpr int VerticesPerSkinny = 1008;
+    constexpr int TrianglesPerSkinny = 504;
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    vertices.reserve(std::size_t(MaximumSkinnies * VerticesPerSkinny));
+    indices.reserve(std::size_t(
+            MaximumSkinnies * TrianglesPerSkinny * 3));
+    QVector3D boundsMin(
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max());
+    QVector3D boundsMax(
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest());
+    int skinnyCount = 0;
+
+    struct Station
+    {
+        WorkoutGameRoadSample road;
+        WorkoutGame3DTerrainProfileSnapshot terrain;
+        bool ready = false;
+    };
+    std::map<double, Station> stations;
+
+    const auto worldPoint = [&](double distance, double lateral, double up,
+                                QVector3D &result) {
+        auto [station, inserted] = stations.try_emplace(distance);
+        if (inserted) {
+            station->second.road =
+                    WorkoutGameRoadCourseBuilder::sample(course, distance);
+            if (station->second.road.ready) {
+                station->second.terrain = WorkoutGame3DTerrainProfile::build(
+                        station->second.road, distance, course.seed);
+                station->second.ready = station->second.terrain.ready;
+            }
+        }
+        if (!station->second.ready) return false;
+        const WorkoutGameRoadSample &sample = station->second.road;
+        const WorkoutGame3DTerrainProfileSnapshot &terrain =
+                station->second.terrain;
+        const double rightX = std::cos(sample.center.headingRadians);
+        const double rightZ = -std::sin(sample.center.headingRadians);
+        const double datum =
+                WorkoutGame3DTerrainProfile::elevationAtLateral(
+                    terrain, lateral)
+                - sample.surfaceOffsetMeters;
+        result = QVector3D(
+                float(sample.center.xMeters + lateral * rightX),
+                float(datum + up),
+                float(sample.center.zMeters + lateral * rightZ));
+        return true;
+    };
+    const auto appendFace = [&](const QVector3D &a, const QVector3D &b,
+                                const QVector3D &c, const QVector3D &d,
+                                const TerrainColor &color) {
+        QVector3D normal = QVector3D::crossProduct(b - a, d - a);
+        if (normal.lengthSquared() < 1e-10f) normal = QVector3D(0, 1, 0);
+        normal.normalize();
+        const std::uint32_t first = std::uint32_t(vertices.size());
+        const std::array<QVector3D, 4> points = {a, b, c, d};
+        for (int corner = 0; corner < 4; ++corner) {
+            const QVector3D &point = points[std::size_t(corner)];
+            vertices.push_back({
+                point.x(), point.y(), point.z(),
+                normal.x(), normal.y(), normal.z(),
+                color.r, color.g, color.b, 1.0f,
+                corner == 1 || corner == 2 ? 1.0f : 0.0f,
+                corner >= 2 ? 1.0f : 0.0f
+            });
+            boundsMin.setX(std::min(boundsMin.x(), point.x()));
+            boundsMin.setY(std::min(boundsMin.y(), point.y()));
+            boundsMin.setZ(std::min(boundsMin.z(), point.z()));
+            boundsMax.setX(std::max(boundsMax.x(), point.x()));
+            boundsMax.setY(std::max(boundsMax.y(), point.y()));
+            boundsMax.setZ(std::max(boundsMax.z(), point.z()));
+        }
+        indices.insert(indices.end(), {
+            first, first + 1u, first + 2u,
+            first, first + 2u, first + 3u
+        });
+    };
+    const auto appendPrism = [&](double from, double to,
+                                 double centerLateral, double halfWidth,
+                                 double topFrom, double topTo,
+                                 double bottomFrom, double bottomTo,
+                                 const TerrainColor &topColor,
+                                 const TerrainColor &sideColor) {
+        std::array<QVector3D, 8> point;
+        const bool ready =
+                worldPoint(from, centerLateral - halfWidth, topFrom, point[0])
+                && worldPoint(from, centerLateral + halfWidth, topFrom, point[1])
+                && worldPoint(to, centerLateral + halfWidth, topTo, point[2])
+                && worldPoint(to, centerLateral - halfWidth, topTo, point[3])
+                && worldPoint(from, centerLateral - halfWidth,
+                              bottomFrom, point[4])
+                && worldPoint(from, centerLateral + halfWidth,
+                              bottomFrom, point[5])
+                && worldPoint(to, centerLateral + halfWidth,
+                              bottomTo, point[6])
+                && worldPoint(to, centerLateral - halfWidth,
+                              bottomTo, point[7]);
+        if (!ready) return false;
+        appendFace(point[0], point[3], point[2], point[1], topColor);
+        appendFace(point[4], point[5], point[6], point[7], sideColor);
+        appendFace(point[0], point[4], point[7], point[3], sideColor);
+        appendFace(point[1], point[2], point[6], point[5], sideColor);
+        appendFace(point[0], point[1], point[5], point[4], sideColor);
+        appendFace(point[3], point[7], point[6], point[2], sideColor);
+        return true;
+    };
+    const auto appendBoard = [&](double from, double to,
+                                 double halfWidth,
+                                 double topFrom, double topTo,
+                                 double thickness,
+                                 const TerrainColor &topColor,
+                                 const TerrainColor &sideColor) {
+        std::array<QVector3D, 6> point;
+        const bool ready =
+                worldPoint(from, -halfWidth, topFrom, point[0])
+                && worldPoint(from, halfWidth, topFrom, point[1])
+                && worldPoint(to, halfWidth, topTo, point[2])
+                && worldPoint(to, -halfWidth, topTo, point[3])
+                && worldPoint(from, -halfWidth,
+                              topFrom - thickness, point[4])
+                && worldPoint(from, halfWidth,
+                              topFrom - thickness, point[5]);
+        if (!ready) return false;
+        appendFace(point[0], point[3], point[2], point[1], topColor);
+        appendFace(point[0], point[1], point[5], point[4], sideColor);
+        return true;
+    };
+
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled
+                || piece.terrain != WorkoutGameTerrainKind::Skinny) {
+            continue;
+        }
+        const WorkoutGameSkinnyGeometryProfile profile =
+                WorkoutGameSkinnyGeometry::profile(piece.difficulty);
+        const double center = piece.challenge.obstacleDistanceMeters;
+        if (center + profile.activeEndMeters < startDistanceMeters
+                || center + profile.activeStartMeters > endDistanceMeters) {
+            continue;
+        }
+        if (skinnyCount >= MaximumSkinnies) break;
+        const double pitch = (profile.activeEndMeters
+                - profile.activeStartMeters) / double(BoardCount);
+        for (int board = 0; board < BoardCount; ++board) {
+            const double localFrom = profile.activeStartMeters
+                    + (double(board) + 0.04) * pitch;
+            const double localTo = profile.activeStartMeters
+                    + (double(board) + 0.96) * pitch;
+            const TerrainColor topColor = board % 4 == 0
+                    ? TerrainColor{0.58f, 0.37f, 0.18f}
+                    : TerrainColor{0.48f, 0.29f, 0.13f};
+            const double topFrom = profile.deckSurfaceOffsetMeters(localFrom);
+            const double topTo = profile.deckSurfaceOffsetMeters(localTo);
+            if (!appendBoard(
+                    center + localFrom, center + localTo,
+                    profile.deckHalfWidthMeters,
+                    topFrom, topTo, profile.deckThicknessMeters,
+                    topColor, {0.28f, 0.16f, 0.07f})) {
+                clear();
+                return;
+            }
+        }
+        const double beamPitch = (profile.deckEndMeters
+                - profile.deckStartMeters) / double(BeamSegments);
+        for (double lateral : {-0.17, 0.17}) {
+            for (int segment = 0; segment < BeamSegments; ++segment) {
+                const double localFrom = profile.deckStartMeters
+                        + double(segment) * beamPitch;
+                const double localTo = localFrom + beamPitch;
+                const double top = profile.deckHeightMeters - 0.10;
+                if (!appendPrism(
+                        center + localFrom, center + localTo,
+                        lateral, 0.045,
+                        top, top, top - 0.11, top - 0.11,
+                        {0.25f, 0.14f, 0.06f},
+                        {0.20f, 0.10f, 0.04f})) {
+                    clear();
+                    return;
+                }
+            }
+        }
+        for (double local : {-2.4, -1.2, 0.0, 1.2, 2.4}) {
+            for (double lateral : {-0.17, 0.17}) {
+                const double top = profile.deckHeightMeters - 0.16;
+                if (!appendPrism(
+                        center + local - 0.045, center + local + 0.045,
+                        lateral, 0.045,
+                        top, top, 0.0, 0.0,
+                        {0.24f, 0.13f, 0.05f},
+                        {0.18f, 0.09f, 0.035f})) {
+                    clear();
+                    return;
+                }
+            }
+        }
+        constexpr int SafeLineSegments = 12;
+        constexpr double SafeLineHalfWidth = 0.38;
+        constexpr double GroundSeamOverlapMeters = 0.30;
+        for (int segment = 0; segment < SafeLineSegments; ++segment) {
+            const double fromLocal = profile.activeStartMeters
+                    + (profile.activeEndMeters - profile.activeStartMeters)
+                        * double(segment) / double(SafeLineSegments);
+            const double toLocal = profile.activeStartMeters
+                    + (profile.activeEndMeters - profile.activeStartMeters)
+                        * double(segment + 1) / double(SafeLineSegments);
+            const double fromLateral =
+                    profile.safeLineOffsetMeters(fromLocal);
+            const double toLateral = profile.safeLineOffsetMeters(toLocal);
+            const double fromGroundHalfWidth =
+                    profile.halfWidthMeters(fromLocal)
+                    + GroundSeamOverlapMeters;
+            const double toGroundHalfWidth = profile.halfWidthMeters(toLocal);
+            const double overlappedToGroundHalfWidth =
+                    toGroundHalfWidth + GroundSeamOverlapMeters;
+            std::array<QVector3D, 4> ground;
+            if (!worldPoint(center + fromLocal,
+                            -fromGroundHalfWidth, -0.018, ground[0])
+                    || !worldPoint(center + toLocal,
+                                   -overlappedToGroundHalfWidth,
+                                   -0.018, ground[1])
+                    || !worldPoint(center + toLocal,
+                                   overlappedToGroundHalfWidth,
+                                   -0.018, ground[2])
+                    || !worldPoint(center + fromLocal,
+                                   fromGroundHalfWidth, -0.018, ground[3])) {
+                clear();
+                return;
+            }
+            appendFace(ground[0], ground[1], ground[2], ground[3],
+                       {0.25f, 0.32f, 0.17f});
+            std::array<QVector3D, 4> point;
+            if (!worldPoint(center + fromLocal,
+                            fromLateral - SafeLineHalfWidth,
+                            profile.safeLineSurfaceLiftMeters, point[0])
+                    || !worldPoint(center + toLocal,
+                                   toLateral - SafeLineHalfWidth,
+                                   profile.safeLineSurfaceLiftMeters, point[1])
+                    || !worldPoint(center + toLocal,
+                                   toLateral + SafeLineHalfWidth,
+                                   profile.safeLineSurfaceLiftMeters, point[2])
+                    || !worldPoint(center + fromLocal,
+                                   fromLateral + SafeLineHalfWidth,
+                                   profile.safeLineSurfaceLiftMeters, point[3])) {
+                clear();
+                return;
+            }
+            appendFace(point[0], point[1], point[2], point[3],
+                       {0.48f, 0.31f, 0.15f});
+        }
+        ++skinnyCount;
     }
     if (vertices.empty() || indices.empty()) return;
 

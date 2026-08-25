@@ -13,6 +13,7 @@
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
+#include "WorkoutGameSkinnyGeometry.h"
 
 #include <box2d/box2d.h>
 
@@ -270,6 +271,7 @@ struct WorkoutGamePhysics::Impl
             return terrain == WorkoutGameTerrainKind::Roots
                     || terrain == WorkoutGameTerrainKind::RockGarden
                     || terrain == WorkoutGameTerrainKind::RockSlab
+                    || terrain == WorkoutGameTerrainKind::Skinny
                     ? 0.04 : TerrainSampleMeters;
         }
         const double distance = distanceBase + localX - RiderStartMeters;
@@ -306,6 +308,13 @@ struct WorkoutGamePhysics::Impl
                         piece.difficulty);
             return local >= slab.activeStartMeters - 0.5
                     && local <= slab.activeEndMeters + 0.5
+                    ? 0.04 : TerrainSampleMeters;
+        }
+        if (piece.terrain == WorkoutGameTerrainKind::Skinny) {
+            const WorkoutGameSkinnyGeometryProfile skinny =
+                    WorkoutGameSkinnyGeometry::profile(piece.difficulty);
+            return local >= skinny.activeStartMeters - 0.5
+                    && local <= skinny.activeEndMeters + 0.5
                     ? 0.04 : TerrainSampleMeters;
         }
         return TerrainSampleMeters;
@@ -778,9 +787,13 @@ double WorkoutGamePhysics::terrainHeight(
         if (phase < 76.0) return slope - (0.7 + 0.5 * challenge)
                 * (1.0 - smoothStep((phase - 68.0) / 8.0));
         return slope;
+    case WorkoutGameTerrainKind::Skinny: {
+        const double skinnyTile = phase - 40.0;
+        return slope + WorkoutGameSkinnyGeometry::profile(
+                challenge).surfaceOffsetMeters(skinnyTile, 0.0);
+    }
     case WorkoutGameTerrainKind::Climb:
     case WorkoutGameTerrainKind::SmoothTrail:
-    case WorkoutGameTerrainKind::Skinny:
     case WorkoutGameTerrainKind::Berm:
         return slope;
     }

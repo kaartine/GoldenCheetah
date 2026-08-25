@@ -12,6 +12,7 @@
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
+#include "WorkoutGameSkinnyGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <QTest>
@@ -148,6 +149,24 @@ WorkoutGameRoadCourse rockSlabCourse()
     return WorkoutGameRoadCourseBuilder::build(source, 200.0);
 }
 
+WorkoutGameRoadCourse skinnyCourse()
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 1201u;
+    source.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::Trail;
+    section.terrain = WorkoutGameTerrainKind::Skinny;
+    section.durationMs = source.durationMs;
+    section.lengthMeters = 76.0;
+    section.targetWatts = 175.0;
+    section.difficulty = 0.65;
+    section.challengeCount = 1;
+    source.sections = {section};
+    return WorkoutGameRoadCourseBuilder::build(source, 200.0);
+}
+
 }
 
 class TestWorkoutGame3DGeometry : public QObject
@@ -155,6 +174,34 @@ class TestWorkoutGame3DGeometry : public QObject
     Q_OBJECT
 
 private slots:
+    void skinnyBuildsMergedBoardsBeamsAndGroundedSupportsWithinBudget()
+    {
+        const WorkoutGameRoadCourse course = skinnyCourse();
+        WorkoutGame3DGeometry skinny(WorkoutGame3DGeometry::Layer::Skinny);
+        skinny.setCourse(course);
+        QVERIFY(skinny.ready());
+        QCOMPARE(skinny.sampleCount(), 1008);
+        QCOMPARE(skinny.vertexData().size(),
+                 skinny.sampleCount() * skinny.stride());
+        const int triangleCount = skinny.indexData().size()
+                / int(3 * sizeof(quint32));
+        QCOMPARE(triangleCount, 504);
+        QVERIFY(skinny.boundsMax().x() - skinny.boundsMin().x() > 0.45f);
+        QVERIFY(skinny.boundsMax().y() - skinny.boundsMin().y() > 0.30f);
+        QVERIFY(skinny.boundsMax().z() - skinny.boundsMin().z() > 13.5f);
+    }
+
+    void skinnyRangeBuildExcludesDistantTiles()
+    {
+        WorkoutGame3DGeometry skinny(WorkoutGame3DGeometry::Layer::Skinny);
+        const WorkoutGameRoadCourse course = skinnyCourse();
+        skinny.setCourseRange(course, 0.0, 5.0);
+        QVERIFY(!skinny.ready());
+        QCOMPARE(skinny.sampleCount(), 0);
+        skinny.setCourse(course);
+        QVERIFY(skinny.ready());
+    }
+
     void rockSlabBuildsOneMergedAsymmetricMassWithinBudget()
     {
         const WorkoutGameRoadCourse course = rockSlabCourse();

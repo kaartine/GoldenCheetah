@@ -35,6 +35,8 @@ class WorkoutGame3DViewModel : public QObject
                NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *rockSlabGeometry READ rockSlabGeometry
                NOTIFY floorGeometryChanged)
+    Q_PROPERTY(QObject *skinnyGeometry READ skinnyGeometry
+               NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *floorGeometry READ floorGeometry
                NOTIFY floorGeometryChanged)
     Q_PROPERTY(bool ready READ ready NOTIFY sceneChanged)
@@ -132,6 +134,10 @@ public:
     QObject *rockSlabGeometry() const
     {
         return rockSlabBuffers[std::size_t(activeFloorBuffer)].get();
+    }
+    QObject *skinnyGeometry() const
+    {
+        return skinnyBuffers[std::size_t(activeFloorBuffer)].get();
     }
     QObject *floorGeometry() const
     {
@@ -238,6 +244,7 @@ private:
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rootBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rockGardenBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rockSlabBuffers;
+    std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> skinnyBuffers;
     int activeFloorBuffer = 0;
     WorkoutGameRoadCourse roadCourse;
     std::vector<std::size_t> rollerChallengePieceIndices;

@@ -116,8 +116,9 @@ implementations. The Qt Quick 3D chase projection uses the same world snapshot,
 workout clock and recording path. Projection changes must never recreate the
 physics world or reset course progress. Berm is enabled after deterministic
 tests established shared trail width, bank, main/inside lines, bounded roll and
-socket-blended camera motion. Skinny remains pending the same line-choice and
-transition gates.
+socket-blended camera motion. Skinny is enabled after deterministic tests
+established exact width/elevation sockets, a same-tile safe line, bounded
+one-to-two-degree balance roll and camera-stable grounded motion.
 
 The initial physics backend is vendored Box2D 3.1.1 (MIT license, pinned to
 commit `8c661469c9507d3ad6fbd2fea3f1aa71669c2fe3`). Box2D controls terrain

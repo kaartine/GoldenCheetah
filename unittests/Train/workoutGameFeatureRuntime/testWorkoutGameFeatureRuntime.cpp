@@ -14,6 +14,7 @@
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
+#include "Train/WorkoutGameSkinnyGeometry.h"
 
 #include <QTest>
 
@@ -109,6 +110,57 @@ class TestWorkoutGameFeatureRuntime : public QObject
     Q_OBJECT
 
 private slots:
+    void skinnyUsesCanonicalBalanceWindowAndSmoothGroundedSafeLine()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const int section = sectionFor(course, WorkoutGameTerrainKind::Skinny);
+        const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
+        QVERIFY(piece != nullptr);
+        const auto skinny = WorkoutGameSkinnyGeometry::profile(
+                piece->difficulty);
+        const double center = piece->challenge.obstacleDistanceMeters;
+        const auto at = [&](double distance, WorkoutGameRoute route) {
+            return runtime.update(snapshot(
+                    section, progressAtDistance(road, section, distance),
+                    route == WorkoutGameRoute::MainLine
+                        ? WorkoutGameFeatureOutcome::Completed
+                        : WorkoutGameFeatureOutcome::Bypassed,
+                    route));
+        };
+
+        const auto main = at(center, WorkoutGameRoute::MainLine);
+        QCOMPARE(main.motion, WorkoutGameFeatureMotion::Balance);
+        QCOMPARE(main.actionStartDistanceMeters,
+                 center + skinny.activeStartMeters);
+        QCOMPARE(main.actionEndDistanceMeters,
+                 center + skinny.activeEndMeters);
+        QCOMPARE(main.vibration, 0.0);
+        QCOMPARE(main.verticalOffsetMeters, 0.0);
+        QCOMPARE(main.pitchDegrees, 0.0);
+        QVERIFY(!main.triggerJump);
+        QCOMPARE(at(center + skinny.startMeters,
+                    WorkoutGameRoute::SafeBypass).lateralOffsetMeters, 0.0);
+        QCOMPARE(at(center, WorkoutGameRoute::SafeBypass).lateralOffsetMeters,
+                 skinny.safeLineLateralMeters);
+        QCOMPARE(at(center + skinny.endMeters,
+                    WorkoutGameRoute::SafeBypass).lateralOffsetMeters, 0.0);
+
+        double previousLateral = 0.0;
+        constexpr double FrameTravelMeters = 5.0 / 60.0;
+        for (double local = skinny.startMeters;
+             local <= skinny.endMeters; local += FrameTravelMeters) {
+            const double lateral = at(
+                    center + local,
+                    WorkoutGameRoute::SafeBypass).lateralOffsetMeters;
+            QVERIFY(std::abs(lateral - previousLateral) < 0.05);
+            previousLateral = lateral;
+        }
+    }
+
     void invalidCoursesFailClosed()
     {
         WorkoutGameFeatureRuntime runtime;

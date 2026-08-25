@@ -110,6 +110,12 @@ never allowed to join that worker.
   the resident range. A slab uses 147 vertices and 224 triangles in one merged
   draw range. The range follows the same double-buffered floor-bucket lifecycle;
   only rider transform and suspension-derived torso response change per frame.
+- Skinnies are project-authored procedural geometry with at most 12 tiles in the
+  resident range. One tile uses 1,008 vertices and 504 triangles for spaced deck
+  boards, beams, supports, ground infill and its packed-dirt safe line. The
+  canonical profile owns deck and route coordinates; one double-buffered merged
+  range changes only when the floor streaming bucket changes. Per-frame work is
+  limited to rider route, height and deterministic balance roll transforms.
 - Textures use mipmaps and explicit size budgets. Repeated props use instancing
   once authored assets replace the initial primitives.
 - Shadows and expensive post-processing default off on the low-power profile.

@@ -32,6 +32,7 @@ enum class WorkoutGameFeatureMotion
     None,
     Jump,
     Absorb,
+    Balance,
     Drop
 };
 

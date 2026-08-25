@@ -478,6 +478,13 @@ private slots:
                 WorkoutGameFeaturePrompt::build(profile, feature);
         QCOMPARE(takeoff.instruction,
                  WorkoutGameFeatureInstruction::Takeoff);
+
+        feature.terrain = WorkoutGameTerrainKind::Skinny;
+        feature.motion = WorkoutGameFeatureMotion::Balance;
+        const WorkoutGameFeaturePromptSnapshot balance =
+                WorkoutGameFeaturePrompt::build(profile, feature);
+        QCOMPARE(balance.instruction,
+                 WorkoutGameFeatureInstruction::HoldLine);
     }
 
     void horizonHasClearlyVisibleForestRelief()
@@ -763,8 +770,8 @@ private slots:
                             && piece.challenge.enabled;
                 });
         QVERIFY(challenge != road.pieces.end());
-        QVERIFY(challenge->challenge.decisionDistanceMeters
-                < challenge->challenge.bypassStartDistanceMeters);
+        QCOMPARE(challenge->challenge.decisionDistanceMeters,
+                 challenge->challenge.bypassStartDistanceMeters);
         QVERIFY(challenge->challenge.bypassStartDistanceMeters
                 < challenge->challenge.obstacleDistanceMeters);
         QVERIFY(challenge->challenge.bypassEndDistanceMeters
@@ -1009,6 +1016,11 @@ private slots:
         WorkoutGameVisualSnapshot grounded = airborne;
         grounded.feature.verticalOffsetMeters = 0.0;
         grounded.feature.pitchDegrees = 0.0;
+        grounded.world.rider.airborne = false;
+        grounded.world.rider.clearanceMeters = 0.82;
+        airborne.world.rider.airborne = true;
+        airborne.world.rider.clearanceMeters =
+                0.82 + airborne.feature.verticalOffsetMeters;
 
         WorkoutGameSceneGraphWindow groundWindow;
         groundWindow.resize(1280, 720);

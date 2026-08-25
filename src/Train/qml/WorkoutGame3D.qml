@@ -130,6 +130,21 @@ Item {
         }
 
         Model {
+            objectName: "skinnyGeometryModel"
+            geometry: workoutGame3D.skinnyGeometry
+            materials: PrincipledMaterial {
+                baseColor: "white"
+                metalness: 0
+                roughness: 0.92
+                vertexColorsEnabled: true
+                lighting: PrincipledMaterial.FragmentLighting
+                cullMode: Material.NoCulling
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
+        Model {
             objectName: "bermGeometryModel"
             geometry: workoutGame3D.bermGeometry
             materials: PrincipledMaterial {
@@ -179,27 +194,6 @@ Item {
                     scale: Qt.vector3d(0.022, 0.045, 0.022)
                     materials: PrincipledMaterial {
                         baseColor: modelData.variant % 2 ? "#245b35" : "#2f6b3d"
-                        roughness: 1
-                    }
-                }
-            }
-        }
-
-        Repeater3D {
-            model: workoutGame3D.features
-            delegate: Node {
-                required property var modelData
-                position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
-                eulerRotation.y: modelData.yaw
-
-                Model {
-                    visible: modelData.kind === 7
-                    source: "#Cube"
-                    y: 0.20
-                    z: 2.2
-                    scale: Qt.vector3d(0.005, 0.003, 0.05)
-                    materials: PrincipledMaterial {
-                        baseColor: "#6d4929"
                         roughness: 1
                     }
                 }

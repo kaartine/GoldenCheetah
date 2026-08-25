@@ -912,7 +912,7 @@ SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/Computraine
            Train/WorkoutFilterBox.cpp Train/TagBar.cpp Train/TagWidget.cpp \
            Train/TrainerDayAPIQuery.cpp Train/TrainerDayAPIDialog.cpp Train/ElevationChartWindow.cpp
 
-HEADERS += Train/WorkoutGameRiderVisual.h Train/WorkoutGameRootGeometry.h Train/WorkoutGameRockGardenGeometry.h Train/WorkoutGameRockSlabGeometry.h
+HEADERS += Train/WorkoutGameRiderVisual.h Train/WorkoutGameRootGeometry.h Train/WorkoutGameRockGardenGeometry.h Train/WorkoutGameRockSlabGeometry.h Train/WorkoutGameSkinnyGeometry.h
 HEADERS += Train/WorkoutGame3DFeatureAsset.h Train/WorkoutGame3DGeometry.h Train/WorkoutGame3DTerrainProfile.h Train/WorkoutGame3DViewModel.h \
            Train/WorkoutGame3DWindow.h
 SOURCES += Train/WorkoutGame3DFeatureAsset.cpp Train/WorkoutGame3DGeometry.cpp Train/WorkoutGame3DTerrainProfile.cpp Train/WorkoutGame3DViewModel.cpp \

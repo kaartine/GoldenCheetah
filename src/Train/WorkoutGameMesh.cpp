@@ -13,6 +13,7 @@
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
+#include "WorkoutGameSkinnyGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <algorithm>
@@ -652,28 +653,57 @@ WorkoutGameMesh climbModel(double difficulty)
 WorkoutGameMesh skinnyModel(double difficulty)
 {
     WorkoutGameMesh mesh;
-    std::vector<SculptedStripSample> samples;
-    constexpr int Samples = 12;
-    constexpr double Length = 7.0;
-    for (int index = 0; index <= Samples; ++index) {
-        const double progress = double(index) / double(Samples);
-        samples.push_back({
-            -Length * 0.5 + Length * progress,
-            0.22 + 0.025 * std::sin(4.0 * Pi * progress),
-            0.30 + 0.035 * difficulty
-                + 0.018 * std::sin(5.0 * Pi * progress),
-            0.03 * std::sin(2.0 * Pi * progress)
-        });
+    const WorkoutGameSkinnyGeometryProfile profile =
+            WorkoutGameSkinnyGeometry::profile(difficulty);
+    constexpr int BoardCount = 36;
+    const double boardPitch = (profile.activeEndMeters
+            - profile.activeStartMeters) / double(BoardCount);
+    for (int index = 0; index < BoardCount; ++index) {
+        const double forward = profile.activeStartMeters
+                + (double(index) + 0.5) * boardPitch;
+        const double top = profile.deckSurfaceOffsetMeters(forward);
+        addBox(mesh, forward, 0.0,
+               top - profile.deckThicknessMeters * 0.5,
+               boardPitch * 0.46, profile.deckHalfWidthMeters,
+               profile.deckThicknessMeters * 0.5,
+               WorkoutGameMeshMaterial::WoodSide,
+               index % 4 == 0
+                    ? WorkoutGameMeshMaterial::WoodHighlight
+                    : WorkoutGameMeshMaterial::WoodTop);
+        if (index % 3 == 0) {
+            const double colliderForward = forward + boardPitch;
+            const double colliderTop = profile.deckSurfaceOffsetMeters(
+                    colliderForward);
+            mesh.colliders.push_back({
+                colliderForward, 0.0,
+                colliderTop - profile.deckThicknessMeters * 0.5,
+                boardPitch * 1.5, profile.deckHalfWidthMeters,
+                profile.deckThicknessMeters * 0.5
+            });
+        }
     }
-    addSculptedStrip(
-            mesh, samples, 0.18,
-            WorkoutGameMeshMaterial::WoodTop,
-            WorkoutGameMeshMaterial::WoodHighlight,
-            WorkoutGameMeshMaterial::WoodSide);
-    mesh.colliders.push_back({0.0, 0.0, 0.12, 3.5, 0.36, 0.12});
-    mesh.lengthMeters = Length;
-    mesh.entry = {-Length * 0.5, 0.38, 0.0};
-    mesh.exit = {Length * 0.5, 0.38, 0.0};
+    for (double lateral : {-0.17, 0.17}) {
+        addBox(mesh, 0.0, lateral,
+               profile.deckHeightMeters - 0.14,
+               (profile.deckEndMeters - profile.deckStartMeters) * 0.5,
+               0.045, 0.055,
+               WorkoutGameMeshMaterial::WoodSide,
+               WorkoutGameMeshMaterial::WoodSide);
+    }
+    for (double forward : {-2.4, -1.2, 0.0, 1.2, 2.4}) {
+        for (double lateral : {-0.17, 0.17}) {
+            const double height = profile.deckHeightMeters - 0.18;
+            addBox(mesh, forward, lateral, height * 0.5,
+                   0.045, 0.045, height * 0.5,
+                   WorkoutGameMeshMaterial::WoodSide,
+                   WorkoutGameMeshMaterial::WoodSide);
+        }
+    }
+    mesh.lengthMeters = profile.endMeters - profile.startMeters;
+    mesh.entry = {
+        profile.startMeters, profile.socketHalfWidthMeters, 0.0};
+    mesh.exit = {
+        profile.endMeters, profile.socketHalfWidthMeters, 0.0};
     mesh.ready = true;
     return mesh;
 }
@@ -925,6 +955,55 @@ WorkoutGameMesh WorkoutGameMeshLibrary::bypassRibbon(
     mesh.lengthMeters = lengthMeters;
     mesh.entry = {0.0, entryConnectorHalfWidthMeters, 0.0};
     mesh.exit = {lengthMeters, exitConnectorHalfWidthMeters, 0.0};
+    mesh.ready = true;
+    return mesh;
+}
+
+WorkoutGameMesh WorkoutGameMeshLibrary::skinnySafeLine(double difficulty)
+{
+    WorkoutGameMesh mesh;
+    const WorkoutGameSkinnyGeometryProfile profile =
+            WorkoutGameSkinnyGeometry::profile(difficulty);
+    if (!profile.ready) return mesh;
+    constexpr int Samples = 36;
+    constexpr double HalfWidthMeters = 0.38;
+    constexpr double EdgeWidthMeters = 0.08;
+    const double length = profile.endMeters - profile.startMeters;
+    for (int index = 0; index <= Samples; ++index) {
+        const double progress = double(index) / double(Samples);
+        const double local = profile.startMeters + length * progress;
+        const double center = profile.safeLineOffsetMeters(local);
+        const double envelope = profile.safeLineLateralMeters > 0.0
+                ? center / profile.safeLineLateralMeters : 0.0;
+        const double halfWidth = profile.socketHalfWidthMeters
+                + (HalfWidthMeters - profile.socketHalfWidthMeters)
+                    * envelope;
+        const double forward = length * progress;
+        addVertex(mesh, forward, center - halfWidth - EdgeWidthMeters,
+                  profile.safeLineSurfaceLiftMeters - 0.008,
+                  progress, 0.0);
+        addVertex(mesh, forward, center - halfWidth,
+                  profile.safeLineSurfaceLiftMeters,
+                  progress, 0.12);
+        addVertex(mesh, forward, center + halfWidth,
+                  profile.safeLineSurfaceLiftMeters,
+                  progress, 0.88);
+        addVertex(mesh, forward, center + halfWidth + EdgeWidthMeters,
+                  profile.safeLineSurfaceLiftMeters - 0.008,
+                  progress, 1.0);
+        if (index > 0) {
+            const std::uint32_t start = std::uint32_t(index * 4);
+            addQuad(mesh, start - 3, start - 2, start + 2, start + 1,
+                    WorkoutGameMeshMaterial::Bypass);
+            addQuad(mesh, start - 4, start - 3, start + 1, start,
+                    WorkoutGameMeshMaterial::DirtEdge);
+            addQuad(mesh, start - 2, start - 1, start + 3, start + 2,
+                    WorkoutGameMeshMaterial::DirtEdge);
+        }
+    }
+    mesh.lengthMeters = length;
+    mesh.entry = {0.0, profile.socketHalfWidthMeters, 0.0};
+    mesh.exit = {length, profile.socketHalfWidthMeters, 0.0};
     mesh.ready = true;
     return mesh;
 }

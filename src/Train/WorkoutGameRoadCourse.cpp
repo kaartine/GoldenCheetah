@@ -15,6 +15,7 @@
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
+#include "WorkoutGameSkinnyGeometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -81,6 +82,9 @@ double featureSurfaceOffset(
                 piece.difficulty).surfaceOffsetMeters(local, 0.0);
     case WorkoutGameTerrainKind::RockSlab:
         return WorkoutGameRockSlabGeometry::profile(
+                piece.difficulty).surfaceOffsetMeters(local, 0.0);
+    case WorkoutGameTerrainKind::Skinny:
+        return WorkoutGameSkinnyGeometry::profile(
                 piece.difficulty).surfaceOffsetMeters(local, 0.0);
     case WorkoutGameTerrainKind::Rollers:
     case WorkoutGameTerrainKind::BunnyHop:
@@ -149,7 +153,7 @@ double featureClearanceHalfWidth(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver: return 0.95;
     case WorkoutGameTerrainKind::Drop: return 1.25;
-    case WorkoutGameTerrainKind::Skinny: return 0.38;
+    case WorkoutGameTerrainKind::Skinny: return 1.55;
     case WorkoutGameTerrainKind::Berm: return 1.4;
     case WorkoutGameTerrainKind::Tabletop: return 1.10;
     case WorkoutGameTerrainKind::RockSlab: return 1.42;
@@ -494,6 +498,11 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     sectionStart + sectionLength - 7.0,
                     challengeDistance + 7.0);
             break;
+        case WorkoutGameTerrainKind::Skinny:
+            obstacleDistance = std::min(
+                    sectionStart + sectionLength - 9.0,
+                    challengeDistance + 9.0);
+            break;
         case WorkoutGameTerrainKind::Roots:
             obstacleDistance = std::min(
                     sectionStart + sectionLength - 6.0,
@@ -530,6 +539,26 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 obstacleDistance = std::clamp(
                         obstacleDistance, minimumObstacle, maximumObstacle);
                 challengeDistance = obstacleDistance + slab.startMeters;
+            }
+        } else if (challenge.enabled
+                && section.terrain == WorkoutGameTerrainKind::Skinny) {
+            const WorkoutGameSkinnyGeometryProfile skinny =
+                    WorkoutGameSkinnyGeometry::profile(section.difficulty);
+            const double localObstacle = std::clamp(
+                    obstacleDistance - sectionStart,
+                    0.0, std::max(0.0, sectionLength - 1e-9));
+            const int ownerPart = std::min(
+                    pieceCount - 1,
+                    int(std::floor(localObstacle / pieceLength)));
+            const double ownerStart = sectionStart
+                    + double(ownerPart) * pieceLength;
+            const double minimumObstacle = ownerStart - skinny.startMeters;
+            const double maximumObstacle = ownerStart + pieceLength
+                    - skinny.endMeters;
+            if (maximumObstacle >= minimumObstacle) {
+                obstacleDistance = std::clamp(
+                        obstacleDistance, minimumObstacle, maximumObstacle);
+                challengeDistance = obstacleDistance + skinny.startMeters;
             }
         } else if (challenge.enabled && featureGeometry.ready) {
             const double minimumObstacle = sectionStart
@@ -622,6 +651,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                                 == WorkoutGameTerrainKind::RockGarden
                             || section.terrain
                                 == WorkoutGameTerrainKind::RockSlab
+                            || section.terrain
+                                == WorkoutGameTerrainKind::Skinny
                     ? std::max(measuredPreparationDistance,
                                challengeDistance
                                     - maximumPreparationMeters)
@@ -638,6 +669,10 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                                     == WorkoutGameTerrainKind::RockSlab
                             ? WorkoutGameRockSlabGeometry::profile(
                                 piece.difficulty).endMeters
+                            : section.terrain
+                                    == WorkoutGameTerrainKind::Skinny
+                                ? WorkoutGameSkinnyGeometry::profile(
+                                    piece.difficulty).endMeters
                             : featureGeometry.ready
                                 ? featureGeometry.endMeters : 4.0);
                 if (section.terrain == WorkoutGameTerrainKind::Rollers
@@ -646,7 +681,9 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         || section.terrain
                             == WorkoutGameTerrainKind::RockGarden
                         || section.terrain
-                            == WorkoutGameTerrainKind::RockSlab) {
+                            == WorkoutGameTerrainKind::RockSlab
+                        || section.terrain
+                            == WorkoutGameTerrainKind::Skinny) {
                     // These are fully rollable trail surfaces. Their easier
                     // lines remain part of the same widened tread.
                     piece.challenge.bypassStartDistanceMeters =
@@ -800,6 +837,15 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
         const double local = distance
                 - piece.challenge.obstacleDistanceMeters;
         result.center.halfWidthMeters = slab.halfWidthMeters(local);
+    } else if (piece.terrain == WorkoutGameTerrainKind::Skinny
+            && piece.challenge.enabled) {
+        const WorkoutGameSkinnyGeometryProfile skinny =
+                WorkoutGameSkinnyGeometry::profile(piece.difficulty);
+        const double local = distance
+                - piece.challenge.obstacleDistanceMeters;
+        result.center.halfWidthMeters = skinny.halfWidthMeters(local);
+        result.renderableTrailSurface = local <= skinny.activeStartMeters
+                || local >= skinny.activeEndMeters;
     }
     const double reliefOffset = trailReliefOffset(piece, distance);
     result.center.elevationMeters += reliefOffset

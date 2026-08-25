@@ -253,7 +253,7 @@ ground following and cannot activate either airborne visual path.
 
 - [x] Rollers pump/absorb while both wheels track the surface.
 - [x] Berm uses the same curved path for trail, rider lateral position and roll.
-- [ ] Skinny uses subtle balance lean without random steering.
+- [x] Skinny uses subtle balance lean without random steering.
 - [x] Roots/rocks/slab move suspension and torso without camera vibration.
 - [ ] Climb selects seated/standing effort and a bounded crest release.
 
@@ -301,7 +301,7 @@ and a runtime/geometry regression test.
 - [x] `FTR-06` Roots: branching embedded network and bounded roughness.
 - [x] `FTR-07` Rock garden: sunk varied rocks and a readable rideable line.
 - [x] `FTR-08` Rock slab: asymmetric mass, crest, sides and surface following.
-- [ ] `FTR-09` Skinny: narrow deck, supports, ground clearance and transitions.
+- [x] `FTR-09` Skinny: narrow deck, supports, ground clearance and transitions.
 - [ ] `FTR-10` Climb: visible rising face, crest and effort pose.
 - [ ] `FTR-11` Tabletop: promote the accepted vertical slice to production.
 
@@ -535,6 +535,44 @@ host. Both videos are 960 by 540, 60 FPS and 4.8 seconds. Their SHA-256 values
 are respectively
 `dd1efa6beb2c527c4b0123e54534d303a624268a9691f1dc89b1c1c901602001` and
 `f0208a9cd8261ef1e6ea73d638ac61302ca95ef70979e945b3e1389b511e5fd8`.
+No external model, image or texture was added.
+
+**FTR-09 evidence:** Skinny is a project-owned procedural 18-metre tile driven
+only by `WorkoutGameSkinnyGeometry`. Its 14-metre active section rises through
+ramps below six degrees to a seven-metre deck. Difficulty scales the deck from
+0.62 to 0.50 metres wide and from 0.28 to 0.36 metres high. Sixty individually
+spaced boards, two longitudinal beams and ten ground-reaching supports expose
+real clearance below the deck. The 1.05-metre lateral packed-dirt safe line
+stays within the same widened tile and both routes rejoin exact 1.36-metre-wide
+entry and exit sockets through four-metre transitions.
+
+Road elevation and width, runtime line choice, Box2D ground contact, legacy
+comparison geometry and the merged Quick 3D mesh all consume that canonical
+profile. Ordinary centre trail is suppressed only under the dedicated active
+tile. A shared ground datum and a bounded 0.30-metre render seam overlap prevent
+double height offsets and clear-color gaps without changing the physical trail
+width. One tile uses 1,008 vertices and 504 opaque triangles; at most twelve are
+resident in one double-buffered model/material range. Skinny never creates
+scripted air, random steering or camera vibration. Main-line balance roll is a
+deterministic one-to-two degrees, while the safe line remains level and
+grounded. A distance-station cache reuses road and terrain-profile samples
+during each cold-path mesh rebuild, and the bounded vertex/index storage is
+reserved once instead of repeatedly growing on the GUI thread.
+
+Road, feature-runtime, legacy-mesh, world, Quick 3D geometry, terrain-profile,
+scene-graph and X11/OpenGL view suites pass
+`37 + 22 + 31 + 38 + 25 + 10 + 20 + 49` tests normally and under real
+ASan/UBSan instrumentation. The complete view suite has ten explicit opt-in
+exports skipped. The separate main- and safe-line export passes normally and
+under ASan/UBSan with 288 frames per route, zero airborne frames, lateral steps
+below five centimetres, vertical steps below ten centimetres and changing
+pixels in more than 90 percent of frame transitions. Its midpoint regression
+also rejects the renderer clear color inside the trail. Review videos and
+approach/core/exit images are in `$HOME/Documents/personal/gc-ui-ftr09` on the
+build host. Both videos are 960 by 540, 60 FPS and 4.8 seconds. Their SHA-256
+values are respectively
+`f51e2eab77dc085db0f3e568f9975a21c95774993c057ecb2b063703c52c8ed0` and
+`b3108494537f3de22f98cb6a6d253b900e03b9767315bbc64eafebaa6ef62928`.
 No external model, image or texture was added.
 
 **Feature acceptance:** each feature is identifiable without its name, joins

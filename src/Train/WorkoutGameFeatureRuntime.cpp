@@ -16,6 +16,7 @@
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
+#include "WorkoutGameSkinnyGeometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,6 +52,8 @@ WorkoutGameFeatureMotion motionFor(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::RockGarden:
     case WorkoutGameTerrainKind::RockSlab:
         return WorkoutGameFeatureMotion::Absorb;
+    case WorkoutGameTerrainKind::Skinny:
+        return WorkoutGameFeatureMotion::Balance;
     case WorkoutGameTerrainKind::Drop:
         return WorkoutGameFeatureMotion::Drop;
     default:
@@ -245,6 +248,15 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         actionEnd = std::min(
                 layout.endDistanceMeters,
                 result.obstacleDistanceMeters + slab.activeEndMeters);
+    } else if (piece->terrain == WorkoutGameTerrainKind::Skinny) {
+        const WorkoutGameSkinnyGeometryProfile skinny =
+                WorkoutGameSkinnyGeometry::profile(piece->difficulty);
+        actionStart = std::max(
+                layout.startDistanceMeters,
+                result.obstacleDistanceMeters + skinny.activeStartMeters);
+        actionEnd = std::min(
+                layout.endDistanceMeters,
+                result.obstacleDistanceMeters + skinny.activeEndMeters);
     } else if (result.motion == WorkoutGameFeatureMotion::Jump) {
         const WorkoutGameFeatureGeometryProfile geometry =
                 WorkoutGameFeatureGeometry::profile(
@@ -320,6 +332,12 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                     WorkoutGameRockSlabGeometry::profile(
                         piece->difficulty);
             result.lateralOffsetMeters = slab.safeLineOffsetMeters(
+                    result.visualDistanceMeters
+                        - piece->challenge.obstacleDistanceMeters);
+        } else if (piece->terrain == WorkoutGameTerrainKind::Skinny) {
+            const WorkoutGameSkinnyGeometryProfile skinny =
+                    WorkoutGameSkinnyGeometry::profile(piece->difficulty);
+            result.lateralOffsetMeters = skinny.safeLineOffsetMeters(
                     result.visualDistanceMeters
                         - piece->challenge.obstacleDistanceMeters);
         } else {

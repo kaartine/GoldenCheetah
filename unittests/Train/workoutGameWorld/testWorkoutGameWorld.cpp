@@ -12,6 +12,7 @@
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
+#include "Train/WorkoutGameSkinnyGeometry.h"
 #include "Train/WorkoutGameRoadCourse.h"
 
 #include <QTest>
@@ -25,6 +26,88 @@ class TestWorkoutGameWorld : public QObject
     Q_OBJECT
 
 private slots:
+    void productionSkinnyTracksRaisedDeckAndGroundedSafeLine()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 1201u;
+        course.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::Skinny;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 76.0;
+        section.targetWatts = 175.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const auto skinny = WorkoutGameSkinnyGeometry::profile(
+                piece->difficulty);
+        const double center = piece->challenge.obstacleDistanceMeters;
+        for (const double speed : {3.0, 5.0, 7.0}) {
+            for (int route = 0; route < 2; ++route) {
+                const bool safe = route == 1;
+                WorkoutGamePhysics physics;
+                QVERIFY(physics.configure(road));
+                WorkoutGamePhysicsInput input;
+                input.terrain = WorkoutGameTerrainKind::Skinny;
+                input.desiredSpeedMetersPerSecond = speed;
+                input.effortRatio = safe ? 0.75 : 1.0;
+                input.forceGroundFollowing = safe;
+                double maximumRise = 0.0;
+                double maximumVerticalStep = 0.0;
+                double previousElevation = 0.0;
+                const double start = center + skinny.startMeters;
+                const double end = center + skinny.endMeters;
+                const int ticks = int(std::ceil(
+                        (end - start) / (speed * 0.02)));
+                for (int tick = 0; tick <= ticks; ++tick) {
+                    input.workoutTimeMs = tick * 20;
+                    input.courseDistanceMeters = std::min(
+                            end, start + tick * speed * 0.02);
+                    const WorkoutGameRoadSample sample =
+                            WorkoutGameRoadCourseBuilder::sample(
+                                road, input.courseDistanceMeters);
+                    const WorkoutGameWorldSnapshot result =
+                            physics.update(input);
+                    QVERIFY(result.ready);
+                    QVERIFY(!result.rider.airborne);
+                    QCOMPARE(result.rider.airHeightMeters(), 0.0);
+                    const double datum = sample.center.elevationMeters
+                            - sample.surfaceOffsetMeters;
+                    const double expected = safe
+                            ? datum : sample.visualGroundElevationMeters();
+                    QVERIFY(std::abs(result.surfaceElevationMeters
+                                - expected) < 0.03);
+                    maximumRise = std::max(
+                            maximumRise,
+                            result.surfaceElevationMeters - datum);
+                    if (tick > 0) {
+                        maximumVerticalStep = std::max(
+                                maximumVerticalStep,
+                                std::abs(result.rider.elevationMeters
+                                    - previousElevation));
+                    }
+                    previousElevation = result.rider.elevationMeters;
+                }
+                QVERIFY(maximumVerticalStep < 0.10);
+                if (safe) {
+                    QVERIFY(maximumRise < 0.02);
+                } else {
+                    QVERIFY(maximumRise >= skinny.deckHeightMeters * 0.95);
+                }
+            }
+        }
+    }
+
     void authoritativeDistanceUsesTheRenderedCourseSurface()
     {
         WorkoutGameCourse course;
@@ -246,6 +329,7 @@ private slots:
                 WorkoutGameTerrainKind::Rollers,
                 WorkoutGameTerrainKind::Climb,
                 WorkoutGameTerrainKind::RockGarden,
+                WorkoutGameTerrainKind::Skinny,
                 WorkoutGameTerrainKind::BunnyHop,
                 WorkoutGameTerrainKind::Drop}) {
             const double first = WorkoutGamePhysics::terrainHeight(
@@ -261,6 +345,14 @@ private slots:
         const double roller = WorkoutGamePhysics::terrainHeight(
                 WorkoutGameTerrainKind::Rollers, 17.25, 0.0, 0.7, 41u);
         QVERIFY(root != roller);
+
+        const double beforeWrap = WorkoutGamePhysics::terrainHeight(
+                WorkoutGameTerrainKind::Skinny, 80.0 - 1e-6,
+                0.0, 0.7, 0u);
+        const double afterWrap = WorkoutGamePhysics::terrainHeight(
+                WorkoutGameTerrainKind::Skinny, 80.0 + 1e-6,
+                0.0, 0.7, 0u);
+        QVERIFY(std::abs(beforeWrap - afterWrap) < 1e-6);
     }
 
     void fixedInputsProduceDeterministicVehiclePose()
