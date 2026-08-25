@@ -102,6 +102,11 @@ struct WorkoutGameRoadSample
     {
         return center.elevationMeters;
     }
+
+    double visualGroundElevationMeters() const
+    {
+        return center.elevationMeters - nonPhysicalFeatureOffsetMeters;
+    }
 };
 
 struct WorkoutGameRoadTimelineSample

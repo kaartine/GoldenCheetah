@@ -844,6 +844,117 @@ private slots:
         QCOMPARE(mesh.size(), qint64(6976));
     }
 
+    void logOverAssetUsesAuthoritativeRoadAnchorAndProfile()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::LogOver);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.terrain == WorkoutGameTerrainKind::LogOver
+                            && candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    piece->terrain, piece->difficulty);
+        QVERIFY(profile.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 0.0), 220.0, 220.0, 88, 150, 7);
+        const QVariantList features = viewModel.features();
+        const auto asset = std::find_if(
+                features.begin(), features.end(),
+                [](const QVariant &entry) {
+                    return entry.toMap().value(QStringLiteral("kind")).toInt()
+                            == int(WorkoutGameTerrainKind::LogOver);
+                });
+        QVERIFY(asset != features.end());
+        const QVariantMap values = asset->toMap();
+        const double expectedScale = profile.heightMeters / 0.54;
+        QCOMPARE(values.value(QStringLiteral("assetScaleY")).toDouble(),
+                 expectedScale);
+        QCOMPARE(values.value(QStringLiteral("assetScaleZ")).toDouble(),
+                 expectedScale);
+        QVERIFY(values.contains(QStringLiteral("assetX")));
+        QVERIFY(values.contains(QStringLiteral("assetY")));
+        QVERIFY(values.contains(QStringLiteral("assetZ")));
+    }
+
+    void packagedLogOverAssetLoadsWithRequiredNodes()
+    {
+        QQmlEngine engine;
+        QQmlComponent component(
+                &engine,
+                QUrl(QStringLiteral(
+                        "qrc:/qml/assets/Wg_LogOver_Greybox.qml")));
+        QStringList errors;
+        for (const QQmlError &error : component.errors()) {
+            errors.append(error.toString());
+        }
+        QVERIFY2(component.isReady(), qPrintable(errors.join('\n')));
+
+        std::unique_ptr<QObject> asset(component.create());
+        QVERIFY2(asset, qPrintable(errors.join('\n')));
+        const std::array<const char *, 12> requiredObjects = {{
+            "ROOT_LogOver",
+            "GEO_LogOverTile_LOD0",
+            "GEO_LogOverObstacle_LOD0",
+            "SOCKET_IN",
+            "SOCKET_OUT",
+            "MARKER_PREPARE",
+            "MARKER_DECISION",
+            "MARKER_ACTION",
+            "MARKER_APEX",
+            "MARKER_LAND",
+            "MAT_LogOverBark_Grey",
+            "MAT_LogOverBypass_Grey"
+        }};
+        for (const char *name : requiredObjects) {
+            QVERIFY2(asset->findChild<QObject *>(
+                    QString::fromLatin1(name)), name);
+        }
+        QFile obstacle(QStringLiteral(
+                ":/qml/assets/meshes/geo_LogOverObstacle_LOD0_mesh.mesh"));
+        QFile tile(QStringLiteral(
+                ":/qml/assets/meshes/geo_LogOverTile_LOD0_mesh.mesh"));
+        QVERIFY(obstacle.open(QIODevice::ReadOnly));
+        QVERIFY(tile.open(QIODevice::ReadOnly));
+        QCOMPARE(obstacle.size(), qint64(3508));
+        QCOMPARE(tile.size(), qint64(1056));
+    }
+
+    void rendersPackagedLogOverAsset()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.setSource(QUrl(QStringLiteral(
+                "qrc:/qml/assets/LogOverAssetHarness.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTest::qWait(500);
+
+        const QImage rendered = window.grabWindow();
+        QVERIFY(!rendered.isNull());
+        QCOMPARE(rendered.size(), QSize(960, 540));
+        QVERIFY2(sampledColorCount(rendered) > 12,
+                 "packaged log-over mesh appears blank");
+        const QString screenshot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_LOG_OVER_ASSET_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            QVERIFY2(rendered.save(screenshot), qPrintable(screenshot));
+        }
+    }
+
     void rendersPackagedTabletopAsset()
     {
         if (!hasInteractiveGraphicsPlatform()) {

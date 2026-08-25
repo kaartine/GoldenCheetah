@@ -2,5 +2,8 @@
     <qresource prefix="/">
         <file alias="qml/assets/Wg_Tabletop_Greybox.qml">../Train/qml/assets/Wg_Tabletop_Greybox.qml</file>
         <file alias="qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/Wg_LogOver_Greybox.qml">../Train/qml/assets/Wg_LogOver_Greybox.qml</file>
+        <file alias="qml/assets/meshes/geo_LogOverObstacle_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_LogOverObstacle_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_LogOverTile_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_LogOverTile_LOD0_mesh.mesh</file>
     </qresource>
 </RCC>

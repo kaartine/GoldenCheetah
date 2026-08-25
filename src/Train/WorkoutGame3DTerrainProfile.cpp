@@ -61,7 +61,7 @@ WorkoutGame3DTerrainProfileSnapshot WorkoutGame3DTerrainProfile::build(
     }
 
     const double seamElevation =
-            road.center.elevationMeters - TrailSeamDropMeters;
+            road.visualGroundElevationMeters() - TrailSeamDropMeters;
     const double leftRidge = ridgeHeight(distanceMeters, seed, -1.0);
     const double rightRidge = ridgeHeight(distanceMeters, seed, 1.0);
     const double leftOuterElevation = road.baseElevationMeters + leftRidge;

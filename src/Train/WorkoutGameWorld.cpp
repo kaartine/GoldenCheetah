@@ -106,8 +106,7 @@ bool retainsOrdinaryGroundContact(WorkoutGameTerrainKind terrain)
 
 double physicalSurfaceElevation(const WorkoutGameRoadSample &sample)
 {
-    return sample.surfaceElevationMeters()
-            - sample.nonPhysicalFeatureOffsetMeters;
+    return sample.visualGroundElevationMeters();
 }
 
 }

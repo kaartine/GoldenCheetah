@@ -87,6 +87,20 @@ private slots:
                 != first.vertices[3].green);
     }
 
+    void nonPhysicalObstacleDoesNotRaiseTheForestSocket()
+    {
+        WorkoutGameRoadSample road = roadSample();
+        road.center.elevationMeters = 4.54;
+        road.nonPhysicalFeatureOffsetMeters = 0.54;
+
+        const WorkoutGame3DTerrainProfileSnapshot profile =
+                WorkoutGame3DTerrainProfile::build(road, 42.0, 17u);
+
+        QVERIFY(profile.ready);
+        QVERIFY(near(profile.vertices[3].elevationMeters, 3.98));
+        QVERIFY(near(profile.vertices[4].elevationMeters, 3.98));
+    }
+
     void usesGlobalDistanceForChunkSocketContinuity()
     {
         const WorkoutGame3DTerrainProfileSnapshot first =

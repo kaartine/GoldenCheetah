@@ -2,7 +2,25 @@
 
 This directory contains deterministic Blender source generators for custom
 Workout Game assets. `generate_tabletop.py` creates the first stylized
-low-poly tabletop socket tile without downloading or embedding external assets.
+low-poly tabletop socket tile and `generate_log_over.py` creates a socketed,
+partly buried log-over tile without downloading or embedding external assets.
+
+## Log-over contract
+
+- Canonical units, axes and the exact `0.68 m` socket half-width match the
+  tabletop contract.
+- The `2.04 m` tile has `0.75 m` flat entry and exit dead zones around a
+  `0.54 m` long physical core.
+- The visible log reaches `0.54 m` above the tread, extends past both trail
+  edges and has a small buried lower hull. Its upper 16-segment chords use the
+  same normalized profile as `WorkoutGameFeatureGeometry`.
+- The continuous runtime trail and forest floor remain the only ground meshes.
+  The asset contributes the obstacle and a narrow raised safe-bypass ribbon,
+  avoiding coplanar trail geometry and a broad terrain wedge.
+- Exact socket nodes plus named prepare, decision, action, apex and land
+  markers remain visual metadata. The script validates topology, finite
+  coordinates, socket placement, profile continuity, buried volume, material
+  order and applied transforms before exporting.
 
 ## Tabletop contract
 

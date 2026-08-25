@@ -9,9 +9,9 @@
 
 #include "WorkoutGame3DViewModel.h"
 
+#include "WorkoutGame3DFeatureAsset.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureChallenge.h"
-#include "WorkoutGameFeatureGeometry.h"
 
 #include <QByteArray>
 #include <QVariantMap>
@@ -34,9 +34,6 @@ constexpr int MaximumVisibleFeatures = 32;
 constexpr double TreeSpacingMeters = 6.0;
 constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double CameraCorridorClearanceMeters = 0.85;
-constexpr double TabletopAssetDeadZoneMeters = 0.75;
-constexpr double TabletopAssetCoreLengthMeters = 4.84;
-constexpr double TabletopAssetHeightMeters = 0.446;
 
 double finiteOrZero(double value)
 {
@@ -154,8 +151,7 @@ void WorkoutGame3DViewModel::setFrame(
     const double rightX = std::cos(sample.center.headingRadians);
     const double rightZ = -std::sin(sample.center.headingRadians);
     riderPositionX = sample.center.xMeters + lateral * rightX;
-    cameraGroundY = sample.center.elevationMeters
-            - sample.nonPhysicalFeatureOffsetMeters;
+    cameraGroundY = sample.visualGroundElevationMeters();
     const double featureAir = !frame.world.ready && frame.feature.ready
             && frame.feature.route != WorkoutGameRoute::SafeBypass
             && frame.feature.outcome == WorkoutGameFeatureOutcome::Completed
@@ -284,8 +280,7 @@ void WorkoutGame3DViewModel::updateCameraPose(double distanceMeters)
     cameraPositionZ = cameraSample.center.zMeters
             - cameraForwardZ * missingBehind
             - cameraRightZ * cameraSideDistanceMeters;
-    cameraPositionY = cameraSample.center.elevationMeters
-            - cameraSample.nonPhysicalFeatureOffsetMeters
+    cameraPositionY = cameraSample.visualGroundElevationMeters()
             + cameraHeightDistanceMeters;
 
     const double targetForwardX = std::sin(
@@ -299,8 +294,7 @@ void WorkoutGame3DViewModel::updateCameraPose(double distanceMeters)
             + targetForwardX * missingAhead;
     cameraTargetPositionZ = targetSample.center.zMeters
             + targetForwardZ * missingAhead;
-    cameraTargetPositionY = targetSample.center.elevationMeters
-            - targetSample.nonPhysicalFeatureOffsetMeters
+    cameraTargetPositionY = targetSample.visualGroundElevationMeters()
             + cameraTargetHeightDistanceMeters;
 }
 
@@ -420,50 +414,22 @@ void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
         QVariantMap feature;
         feature.insert(QStringLiteral("kind"), int(piece.terrain));
         feature.insert(QStringLiteral("x"), sample.center.xMeters);
-        feature.insert(QStringLiteral("y"), sample.center.elevationMeters
-                - sample.nonPhysicalFeatureOffsetMeters);
+        feature.insert(QStringLiteral("y"),
+                       sample.visualGroundElevationMeters());
         feature.insert(QStringLiteral("z"), sample.center.zMeters);
         feature.insert(QStringLiteral("yaw"),
                        sample.center.headingRadians * 180.0 / Pi);
         feature.insert(QStringLiteral("difficulty"), piece.difficulty);
-        if (piece.terrain == WorkoutGameTerrainKind::Tabletop) {
-            const WorkoutGameFeatureGeometryProfile profile =
-                    WorkoutGameFeatureGeometry::profile(
-                            piece.terrain, piece.difficulty);
-            if (profile.ready) {
-                const double coreLength = profile.endMeters
-                        - profile.startMeters;
-                const double scaleZ = coreLength
-                        / TabletopAssetCoreLengthMeters;
-                const double assetStartDistance = std::clamp(
-                        piece.challenge.obstacleDistanceMeters
-                            + profile.startMeters
-                            - TabletopAssetDeadZoneMeters * scaleZ,
-                        0.0, roadCourse.totalLengthMeters);
-                const WorkoutGameRoadSample assetStart =
-                        WorkoutGameRoadCourseBuilder::sample(
-                                roadCourse, assetStartDistance);
-                if (assetStart.ready) {
-                    feature.insert(QStringLiteral("assetX"),
-                                   assetStart.center.xMeters);
-                    feature.insert(QStringLiteral("assetY"),
-                                   assetStart.center.elevationMeters
-                                    - assetStart.nonPhysicalFeatureOffsetMeters);
-                    feature.insert(QStringLiteral("assetZ"),
-                                   assetStart.center.zMeters);
-                    feature.insert(QStringLiteral("assetYaw"),
-                                   assetStart.center.headingRadians
-                                    * 180.0 / Pi);
-                    feature.insert(QStringLiteral("assetPitch"),
-                                   -std::atan(
-                                        assetStart.baseGradePercent / 100.0)
-                                    * 180.0 / Pi);
-                    feature.insert(QStringLiteral("assetScaleY"),
-                                   profile.heightMeters
-                                    / TabletopAssetHeightMeters);
-                    feature.insert(QStringLiteral("assetScaleZ"), scaleZ);
-                }
-            }
+        const WorkoutGame3DFeatureAssetSnapshot asset =
+                WorkoutGame3DFeatureAsset::place(roadCourse, piece);
+        if (asset.ready) {
+            feature.insert(QStringLiteral("assetX"), asset.xMeters);
+            feature.insert(QStringLiteral("assetY"), asset.yMeters);
+            feature.insert(QStringLiteral("assetZ"), asset.zMeters);
+            feature.insert(QStringLiteral("assetYaw"), asset.yawDegrees);
+            feature.insert(QStringLiteral("assetPitch"), asset.pitchDegrees);
+            feature.insert(QStringLiteral("assetScaleY"), asset.scaleY);
+            feature.insert(QStringLiteral("assetScaleZ"), asset.scaleZ);
         }
         courseFeatures.push_back(feature);
         if (courseFeatures.size() >= MaximumVisibleFeatures) break;

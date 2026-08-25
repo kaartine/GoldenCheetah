@@ -218,7 +218,7 @@ private slots:
         QVERIFY(geometry.indexData().size() < 512 * 1024);
     }
 
-    void narrowFeatureApexIsAlwaysSampled()
+    void authoredObstacleDoesNotRaiseTheRenderedTrailBase()
     {
         WorkoutGameRoadCourse course = straightCourse(20000.0);
         WorkoutGameRoadPiece &piece = course.pieces.front();
@@ -233,14 +233,28 @@ private slots:
 
         QVERIFY(geometry.ready());
         QVERIFY(geometry.sampleCount() <= 16000);
-        float maximumY = -1000.0f;
+        bool sampledObstacle = false;
         for (int sample = 0; sample < geometry.sampleCount(); ++sample) {
-            maximumY = std::max(maximumY, vertexFloat(
+            const float y = vertexFloat(
                     geometry.vertexData(), geometry.stride(),
-                    sample * 2, sizeof(float)));
+                    sample * 2, sizeof(float));
+            const float z = vertexFloat(
+                    geometry.vertexData(), geometry.stride(),
+                    sample * 2, 2 * int(sizeof(float)));
+            const WorkoutGameRoadSample road =
+                    WorkoutGameRoadCourseBuilder::sample(course, z);
+            QVERIFY(road.ready);
+            QVERIFY(std::abs(y
+                    - float(road.visualGroundElevationMeters() + 0.015))
+                    < 0.001f);
+            if (std::abs(z - piece.challenge.obstacleDistanceMeters)
+                    < 0.001f) {
+                sampledObstacle = true;
+                QVERIFY(road.nonPhysicalFeatureOffsetMeters > 0.60);
+                QVERIFY(y < road.center.elevationMeters - 0.50);
+            }
         }
-        QVERIFY2(maximumY > 0.60f,
-                 "narrow log apex was lost between uniform samples");
+        QVERIFY(sampledObstacle);
     }
 
     void rangeBuildContainsOnlyRequestedCourseChunk()

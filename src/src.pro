@@ -913,9 +913,9 @@ SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/Computraine
            Train/TrainerDayAPIQuery.cpp Train/TrainerDayAPIDialog.cpp Train/ElevationChartWindow.cpp
 
 HEADERS += Train/WorkoutGameRiderVisual.h
-HEADERS += Train/WorkoutGame3DGeometry.h Train/WorkoutGame3DTerrainProfile.h Train/WorkoutGame3DViewModel.h \
+HEADERS += Train/WorkoutGame3DFeatureAsset.h Train/WorkoutGame3DGeometry.h Train/WorkoutGame3DTerrainProfile.h Train/WorkoutGame3DViewModel.h \
            Train/WorkoutGame3DWindow.h
-SOURCES += Train/WorkoutGame3DGeometry.cpp Train/WorkoutGame3DTerrainProfile.cpp Train/WorkoutGame3DViewModel.cpp \
+SOURCES += Train/WorkoutGame3DFeatureAsset.cpp Train/WorkoutGame3DGeometry.cpp Train/WorkoutGame3DTerrainProfile.cpp Train/WorkoutGame3DViewModel.cpp \
            Train/WorkoutGame3DWindow.cpp
 
 SOURCES += Train/TrainBottom.cpp Train/TrainDB.cpp Train/TrainSidebar.cpp \

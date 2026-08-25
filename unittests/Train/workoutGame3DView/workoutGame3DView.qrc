@@ -3,5 +3,6 @@
         <file alias="qml/WorkoutGame3D.qml">../../../src/Train/qml/WorkoutGame3D.qml</file>
         <file alias="qml/WorkoutGameTrainingHud.qml">../../../src/Train/qml/WorkoutGameTrainingHud.qml</file>
         <file alias="qml/assets/TabletopAssetHarness.qml">TabletopAssetHarness.qml</file>
+        <file alias="qml/assets/LogOverAssetHarness.qml">LogOverAssetHarness.qml</file>
     </qresource>
 </RCC>

@@ -232,7 +232,7 @@ void WorkoutGame3DGeometry::build(
                         : sample.center.halfWidthMeters)
                     : terrain.vertices[std::size_t(vertex)].lateralMeters;
             const double elevation = trailVertex
-                    ? sample.center.elevationMeters + 0.015
+                    ? sample.visualGroundElevationMeters() + 0.015
                     : terrain.vertices[std::size_t(vertex)].elevationMeters;
             const int previousVertex = std::max(0, vertex - 1);
             const int nextVertex = std::min(verticesPerSample - 1, vertex + 1);

@@ -26,6 +26,14 @@ GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_Tabletop_Greybox.glb"
 )
+LOG_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/FT-02-log-over-greybox.json"
+)
+LOG_GLB_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generated/WG_LogOver_Greybox.glb"
+)
 
 
 def sha256(path: Path) -> str:
@@ -67,7 +75,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
     def test_repository_assets_pass_all_gates(self) -> None:
         self.assertEqual(
             assets.validate_repository(REPOSITORY),
-            ["FT-01-tabletop-greybox"],
+            ["FT-01-tabletop-greybox", "FT-02-log-over-greybox"],
         )
 
     def test_schema_rejects_unknown_property(self) -> None:
@@ -169,6 +177,22 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         with self.assertRaisesRegex(assets.AssetValidationError, "triangle budget"):
             assets.validate_glb_document(document, size, manifest)
+
+    def test_log_asset_does_not_duplicate_runtime_ground(self) -> None:
+        document, size = assets.read_glb(LOG_GLB_PATH)
+        manifest = assets.load_json_file(LOG_MANIFEST_PATH)
+        assets.validate_glb_document(document, size, manifest)
+
+        self.assertEqual(
+            {material["name"] for material in document["materials"]},
+            {
+                "MAT_LogOverBark_Grey",
+                "MAT_LogOverEndGrain_Grey",
+                "MAT_LogOverBypass_Grey",
+            },
+        )
+        bounds = manifest["technical"]["boundsMeters"]
+        self.assertLessEqual(bounds["maximum"][0] - bounds["minimum"][0], 3.22)
 
     def test_malformed_glb_structure_fails_cleanly(self) -> None:
         document, size = assets.read_glb(GLB_PATH)

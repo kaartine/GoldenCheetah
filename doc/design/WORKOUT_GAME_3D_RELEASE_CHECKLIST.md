@@ -143,6 +143,12 @@ sphere as a final visible rider, feature or hero-environment object.
   acceleration, while crown-aware placement rejects trees intersecting the
   camera-to-cue corridor. The complete X11/OpenGL suite passed 13 tests with
   no failures after the change.
+- [x] The project-authored log-over candidate is reproducible as a 7,288-byte,
+  84-triangle, three-material GLB. Two Blender 4.0.2 and two Balsam 6.8.3 runs
+  are byte-identical, Khronos validation reports no issues, and the manifest
+  records the exact source and runtime hashes. Its GLB contains only the
+  obstacle and narrow bypass visual; the common trail and forest floor remain
+  the sole ground meshes.
 
 ## P0 Vertical Slice
 
@@ -297,6 +303,20 @@ and a runtime/geometry regression test.
 - [ ] `FTR-09` Skinny: narrow deck, supports, ground clearance and transitions.
 - [ ] `FTR-10` Climb: visible rising face, crest and effort pose.
 - [ ] `FTR-11` Tabletop: promote the accepted vertical slice to production.
+
+**FTR-01 current evidence:** a 16-sided transverse log now extends beyond both
+trail edges, includes end-grain faces and a buried lower hull, and scales from
+the authoritative difficulty profile. The faceted physical/visual profile is
+continuous at both trail joins, with no start/end height teleport. A shared
+`visualGroundElevationMeters()` contract keeps the runtime trail, forest-floor
+socket, camera and asset root on rolling ground while leaving the authored
+obstacle and rider response separate. The former duplicate 7.2-metre terrain
+wedge is removed; matched 1280 by 720 before/after captures show unchanged
+surrounding terrain and a readable log. Asset, road, simulation, Box2D world,
+terrain, geometry, placement and full X11/Quick 3D suites pass, including
+ASan/UBSan runs and a PCH production build. A terrain-following safe bypass,
+front/rear clearance motion capture and completed/bypassed video remain open,
+so `FTR-01` is intentionally not checked yet.
 
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct
