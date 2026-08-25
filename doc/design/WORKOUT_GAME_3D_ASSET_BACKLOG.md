@@ -130,16 +130,19 @@ targets, feature decisions, or trainer resistance.
 - [x] `PIPE-03` Add GLB bounds, scale, triangle, texture and node validation.
 - [x] `PIPE-04A` Package and render one Balsam-converted asset through the
   production qrc.
-- [ ] `PIPE-04B` Verify the packaged asset from an extracted AppImage.
+- [x] `PIPE-04B` Verify the packaged asset from an extracted AppImage.
 - [x] `CAM-01` Implement low-centre, medium-centre and slight-shoulder candidates.
 - [x] `CAM-02A` Capture matched stills on the same deterministic state.
-- [ ] `CAM-02B` Capture matched videos on the same deterministic route.
+- [x] `CAM-02B` Capture matched videos on the same deterministic route.
 - [ ] `CAM-03` Select and regression-test the fixed baseline camera.
 - [ ] `CAM-04` Add camera/vegetation exclusion and terrain intersection tests.
 
 The first `CAM-01` catalog is retained as a build artifact. The provisional
 default is `medium-centre`; `low-centre` and `shoulder` remain audit modes via
-`GC_WORKOUT_GAME_3D_CAMERA`. Final selection waits for matched motion videos.
+`GC_WORKOUT_GAME_3D_CAMERA`. The matched 102 m motion audit records 360 frames
+per camera at 960 by 540 and 30 FPS. Automated checks require nonblank output
+and visible changes in more than 90 percent of frame transitions. Final
+selection still requires user review of the encoded 12-second videos.
 
 The first generated tabletop audit artifact is stored outside the source tree
 and is reproducible from

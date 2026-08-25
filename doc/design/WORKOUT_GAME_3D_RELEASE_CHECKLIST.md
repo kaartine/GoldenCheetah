@@ -30,7 +30,7 @@ visual-readability task.
 
 - [x] Implement low-centre, medium-centre and slight-shoulder audit modes.
 - [x] Render matched still images from the same rider and course state.
-- [ ] Record matched motion videos with terrain turns, climb, tabletop and drop.
+- [x] Record matched motion videos with terrain turns, climb, tabletop and drop.
 - [ ] Select the baseline with user review; `medium-centre` is provisional.
 
 **Implementation:** camera position and target use the authoritative road
@@ -130,6 +130,12 @@ sphere as a final visible rider, feature or hero-environment object.
 - [x] A clean Ubuntu 22.04/glibc 2.35 release build reproduced the AppImage
   byte for byte, passed the packaged offscreen event-loop smoke, and exposed
   both generated tabletop QML and mesh resource names in the extracted ELF.
+- [x] An opt-in X11/Quick 3D motion test captured the three camera candidates
+  over the same deterministic 102 m course. Each capture contains 360 frames
+  at 960 by 540 and the test rejects blank output or fewer than 90 percent
+  visibly changing frame transitions. The encoded 30 FPS videos are exactly
+  12 seconds long; `medium-centre` remains the provisional baseline pending
+  user review.
 
 ## P0 Vertical Slice
 
