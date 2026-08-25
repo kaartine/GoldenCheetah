@@ -149,8 +149,8 @@ sphere as a final visible rider, feature or hero-environment object.
 ### `VS-01` Build canonical ordinary trail and terrain
 
 - [ ] Author normal trail, shoulders, forest-floor tile and distant terrain.
-- [ ] Preserve the 1.36 m full trail width and exact socket dead zones.
-- [ ] Add material separation without photorealistic PBR noise.
+- [x] Preserve the 1.36 m full trail width and exact socket dead zones.
+- [x] Add material separation without photorealistic PBR noise.
 - [ ] Keep the uneven forest horizon and stronger visible terrain relief.
 
 **Tests:** seam vertices, normals, material coverage, camera sweep, background
@@ -158,6 +158,17 @@ hole check and trail-width invariant.
 
 **Done when:** tiles form a continuous singletrack embedded in terrain rather
 than a ribbon pasted onto a flat floor.
+
+**Current evidence:** `WorkoutGame3DTerrainProfile` now generates a
+deterministic eight-vertex cross-section from global course distance and seed.
+Its exact 0.68 m trail-edge sockets, shoulder and forest material bands, seven
+indexed strips, unit cross-slope normals and chunk-edge continuity are covered
+by 21 focused tests. Trees interpolate their base height from the same profile
+instead of the former flat base elevation. The complete X11/OpenGL suite passes
+26 tests with one opt-in video export skipped, and the geometry plus headless
+view suites pass with confirmed ASan/UBSan linkage. A 1280 by 720 capture shows
+the ordinary trail embedded in raised near terrain without background holes.
+Distant terrain art and final relief acceptance remain open.
 
 ### `VS-02` Build complete tabletop and bypass
 

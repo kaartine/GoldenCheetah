@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGame3DViewModel.h"
+#include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGame3DWindow.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
@@ -380,6 +381,43 @@ private slots:
         }
         QVERIFY2(inspectedTrees >= 1000,
                  "camera exclusion removed the forest instead of relocating it");
+    }
+
+    void treesAreAnchoredToGeneratedTerrain()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 30.0), 220.0, 220.0, 88, 150, 7);
+        QVERIFY(!viewModel.trees().isEmpty());
+
+        int reliefAnchors = 0;
+        for (const QVariant &entry : viewModel.trees()) {
+            const QVariantMap tree = entry.toMap();
+            const double distance = tree.value(
+                    QStringLiteral("distance")).toDouble();
+            const double lateral = tree.value(
+                    QStringLiteral("lateral")).toDouble();
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(road, distance);
+            const WorkoutGame3DTerrainProfileSnapshot terrain =
+                    WorkoutGame3DTerrainProfile::build(
+                        sample, distance, road.seed);
+            QVERIFY(terrain.ready);
+            const double expected =
+                    WorkoutGame3DTerrainProfile::elevationAtLateral(
+                        terrain, lateral);
+            QVERIFY(std::abs(tree.value(QStringLiteral("y")).toDouble()
+                             - expected) < 1.0e-9);
+            if (std::abs(expected - sample.baseElevationMeters) > 0.20) {
+                ++reliefAnchors;
+            }
+        }
+        QVERIFY2(reliefAnchors > 0,
+                 "trees still appear to use the former flat floor elevation");
     }
 
     void cameraMotionIsContinuousAndBounded()

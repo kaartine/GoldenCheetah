@@ -7,10 +7,12 @@ INCLUDEPATH += ../../../src/Train
 
 SOURCES += testWorkoutGame3DGeometry.cpp \
            ../../../src/Train/WorkoutGame3DGeometry.cpp \
+           ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
            ../../../src/Train/WorkoutGameFeatureChallenge.cpp
 
 HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
+           ../../../src/Train/WorkoutGame3DTerrainProfile.h \
            ../../../src/Train/WorkoutGameRoadCourse.h \
            ../../../src/Train/WorkoutGameFeatureCatalog.h \
            ../../../src/Train/WorkoutGameFeatureGeometry.h \

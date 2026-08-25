@@ -360,6 +360,16 @@ value comes from `QQuickWindow::frameSwapped`, so it measures completed
 presentation rather than simulation ticks or a requested refresh rate. Missing
 sensor values are presentation state only and never alter recorded telemetry.
 
+The Qt Quick 3D near terrain has one additional pure boundary:
+`WorkoutGame3DTerrainProfile` maps an authoritative road sample, global course
+distance and course seed to an ordered eight-vertex lateral cross-section. Its
+two centre vertices are exact trail-edge sockets; outer vertices form the
+shoulders and bounded forest relief. Both `WorkoutGame3DGeometry` and grounded
+prop placement consume this snapshot. Chunk rebuilds therefore have identical
+shared edge values, and trees cannot independently estimate a flat base height.
+Profile construction occurs only during bounded floor or prop-bucket rebuilds,
+never on the simulation thread or trainer-control path.
+
 #### Course-Space 2.5D Geometry
 
 `WorkoutGameMesh` is the presentation-neutral geometry contract for reusable

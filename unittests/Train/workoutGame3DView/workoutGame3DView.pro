@@ -7,6 +7,7 @@ INCLUDEPATH += ../../../src/Train
 
 SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGame3DGeometry.cpp \
+           ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
            ../../../src/Train/WorkoutGame3DViewModel.cpp \
            ../../../src/Train/WorkoutGame3DWindow.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
@@ -17,6 +18,7 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGameVisualSmoother.cpp
 
 HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
+           ../../../src/Train/WorkoutGame3DTerrainProfile.h \
            ../../../src/Train/WorkoutGame3DViewModel.h \
            ../../../src/Train/WorkoutGame3DWindow.h \
            ../../../src/Train/WorkoutGameRoadCourse.h \

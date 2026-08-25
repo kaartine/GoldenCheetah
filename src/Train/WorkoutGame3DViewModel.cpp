@@ -9,6 +9,7 @@
 
 #include "WorkoutGame3DViewModel.h"
 
+#include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureChallenge.h"
 #include "WorkoutGameFeatureGeometry.h"
 
@@ -522,6 +523,12 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
         const double crownRadius = TreeCrownRadiusMeters * scale;
         const double treeX = sample.center.xMeters + lateral * rightX;
         const double treeZ = sample.center.zMeters + lateral * rightZ;
+        const WorkoutGame3DTerrainProfileSnapshot terrain =
+                WorkoutGame3DTerrainProfile::build(
+                    sample, distance, roadCourse.seed);
+        if (!terrain.ready) continue;
+        const double treeY = WorkoutGame3DTerrainProfile::elevationAtLateral(
+                terrain, lateral);
         const double requiredClearance =
                 crownRadius + CameraCorridorClearanceMeters;
         if (horizontalDistanceToSegmentSquared(
@@ -533,8 +540,10 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
         }
         QVariantMap tree;
         tree.insert(QStringLiteral("x"), treeX);
-        tree.insert(QStringLiteral("y"), sample.baseElevationMeters - 0.10);
+        tree.insert(QStringLiteral("y"), treeY);
         tree.insert(QStringLiteral("z"), treeZ);
+        tree.insert(QStringLiteral("distance"), distance);
+        tree.insert(QStringLiteral("lateral"), lateral);
         tree.insert(QStringLiteral("scale"), scale);
         tree.insert(QStringLiteral("crownRadius"), crownRadius);
         tree.insert(QStringLiteral("variant"), int((random >> 24) & 3u));

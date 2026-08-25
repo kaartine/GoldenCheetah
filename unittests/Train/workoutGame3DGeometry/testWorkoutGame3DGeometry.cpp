@@ -117,13 +117,82 @@ private slots:
         const float trailY = vertexFloat(
                 trail.vertexData(), trail.stride(), 0, sizeof(float));
         const float floorY = vertexFloat(
-                floor.vertexData(), floor.stride(), 0, sizeof(float));
+                floor.vertexData(), floor.stride(), 3, sizeof(float));
         QVERIFY(std::abs(floorLeftX) > std::abs(trailLeftX) + 12.0f);
-        QVERIFY(floorY < trailY - 0.09f);
+        QVERIFY(floorY < trailY - 0.02f);
         QCOMPARE(floor.vertexData().size(),
-                 floor.sampleCount() * 4 * floor.stride());
+                 floor.sampleCount() * 8 * floor.stride());
         QCOMPARE(floor.indexData().size(),
-                 (floor.sampleCount() - 1) * 12 * int(sizeof(quint32)));
+                 (floor.sampleCount() - 1) * 42 * int(sizeof(quint32)));
+    }
+
+    void forestFloorShouldersJoinBothTrailEdges()
+    {
+        WorkoutGame3DGeometry trail(
+                WorkoutGame3DGeometry::Layer::Trail);
+        WorkoutGame3DGeometry floor(
+                WorkoutGame3DGeometry::Layer::ForestFloor);
+        const WorkoutGameRoadCourse course = straightCourse(12.0);
+        trail.setCourse(course);
+        floor.setCourse(course);
+
+        const float trailLeftX = vertexFloat(
+                trail.vertexData(), trail.stride(), 0, 0);
+        const float trailRightX = vertexFloat(
+                trail.vertexData(), trail.stride(), 1, 0);
+        const float trailY = vertexFloat(
+                trail.vertexData(), trail.stride(), 0, sizeof(float));
+        const float floorLeftX = vertexFloat(
+                floor.vertexData(), floor.stride(), 3, 0);
+        const float floorRightX = vertexFloat(
+                floor.vertexData(), floor.stride(), 4, 0);
+        const float floorLeftY = vertexFloat(
+                floor.vertexData(), floor.stride(), 3, sizeof(float));
+        const float floorRightY = vertexFloat(
+                floor.vertexData(), floor.stride(), 4, sizeof(float));
+
+        QVERIFY(std::abs(trailLeftX - floorLeftX) < 0.001f);
+        QVERIFY(std::abs(trailRightX - floorRightX) < 0.001f);
+        QVERIFY(std::abs(trailY - floorLeftY) < 0.04f);
+        QVERIFY(std::abs(trailY - floorRightY) < 0.04f);
+    }
+
+    void forestFloorHasReliefMaterialsAndUnitNormals()
+    {
+        WorkoutGame3DGeometry floor(
+                WorkoutGame3DGeometry::Layer::ForestFloor);
+        floor.setCourse(straightCourse(24.0));
+        QVERIFY(floor.ready());
+
+        const int base = (floor.sampleCount() / 2) * 8;
+        float minimumY = 1000.0f;
+        float maximumY = -1000.0f;
+        for (int vertex = 0; vertex < 8; ++vertex) {
+            const float y = vertexFloat(
+                    floor.vertexData(), floor.stride(), base + vertex,
+                    sizeof(float));
+            const float nx = vertexFloat(
+                    floor.vertexData(), floor.stride(), base + vertex, 12);
+            const float ny = vertexFloat(
+                    floor.vertexData(), floor.stride(), base + vertex, 16);
+            const float nz = vertexFloat(
+                    floor.vertexData(), floor.stride(), base + vertex, 20);
+            minimumY = std::min(minimumY, y);
+            maximumY = std::max(maximumY, y);
+            QVERIFY(ny > 0.0f);
+            QVERIFY(std::abs(std::sqrt(nx * nx + ny * ny + nz * nz) - 1.0f)
+                    < 0.001f);
+        }
+        QVERIFY(maximumY - minimumY > 0.30f);
+        float colorDistance = 0.0f;
+        for (int component = 0; component < 3; ++component) {
+            colorDistance += std::abs(vertexFloat(
+                    floor.vertexData(), floor.stride(), base,
+                    24 + component * int(sizeof(float))) - vertexFloat(
+                    floor.vertexData(), floor.stride(), base + 3,
+                    24 + component * int(sizeof(float))));
+        }
+        QVERIFY(colorDistance > 0.15f);
     }
 
     void risingCourseExpandsVerticalBounds()
@@ -197,11 +266,14 @@ private slots:
         floor.setCourse(straightCourse(24.0));
 
         QVERIFY(floor.ready());
-        const int middleVertex = (floor.sampleCount() / 2) * 4;
-        const float middleY = vertexFloat(
+        const int middleVertex = (floor.sampleCount() / 2) * 8;
+        const float outerY = vertexFloat(
                 floor.vertexData(), floor.stride(), middleVertex,
                 sizeof(float));
-        QVERIFY(std::abs(middleY + 0.09f) < 0.001f);
+        const float trailEdgeY = vertexFloat(
+                floor.vertexData(), floor.stride(), middleVertex + 3,
+                sizeof(float));
+        QVERIFY(std::abs(outerY - trailEdgeY) > 0.10f);
     }
 };
 

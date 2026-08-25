@@ -9,6 +9,7 @@
 
 #include "WorkoutGame3DGeometry.h"
 
+#include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureGeometry.h"
 
 #include <QByteArray>
@@ -183,8 +184,9 @@ void WorkoutGame3DGeometry::build(
                 return std::abs(left - right) < 1e-6;
             }), sampleDistances.end());
     const int count = int(sampleDistances.size());
-    const int verticesPerSample = layer == Layer::Trail ? 2 : 4;
-    const int stripsPerSample = layer == Layer::Trail ? 1 : 2;
+    const int verticesPerSample = layer == Layer::Trail
+            ? 2 : int(WorkoutGame3DTerrainProfileSnapshot::VertexCount);
+    const int stripsPerSample = verticesPerSample - 1;
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
     vertices.reserve(std::size_t(count * verticesPerSample));
@@ -213,41 +215,66 @@ void WorkoutGame3DGeometry::build(
         const TerrainColor color = layer == Layer::Trail
                 ? colorFor(sample.terrain)
                 : TerrainColor{0.20f, 0.32f, 0.17f};
-        const double innerWidth = std::max(
-                0.0, sample.center.halfWidthMeters - 0.04);
-        const double lateralOffsets[] = {
-            -14.0, -innerWidth, innerWidth, 14.0
-        };
+        const WorkoutGame3DTerrainProfileSnapshot terrain =
+                layer == Layer::ForestFloor
+                ? WorkoutGame3DTerrainProfile::build(
+                    sample, distance, course.seed)
+                : WorkoutGame3DTerrainProfileSnapshot();
+        if (layer == Layer::ForestFloor && !terrain.ready) {
+            clear();
+            return;
+        }
         for (int vertex = 0; vertex < verticesPerSample; ++vertex) {
             const bool trailVertex = layer == Layer::Trail;
-            const bool innerFloorVertex = !trailVertex
-                    && (vertex == 1 || vertex == 2);
             const double lateral = trailVertex
                     ? (vertex == 0
                         ? -sample.center.halfWidthMeters
                         : sample.center.halfWidthMeters)
-                    : lateralOffsets[vertex];
-            const double elevation = trailVertex || innerFloorVertex
-                    ? sample.center.elevationMeters
-                    : sample.baseElevationMeters;
-            const double verticalOffset = trailVertex ? 0.015 : -0.09;
-            const double grade = (trailVertex || innerFloorVertex
+                    : terrain.vertices[std::size_t(vertex)].lateralMeters;
+            const double elevation = trailVertex
+                    ? sample.center.elevationMeters + 0.015
+                    : terrain.vertices[std::size_t(vertex)].elevationMeters;
+            const int previousVertex = std::max(0, vertex - 1);
+            const int nextVertex = std::min(verticesPerSample - 1, vertex + 1);
+            const double lateralSpan = trailVertex ? 1.0
+                    : terrain.vertices[std::size_t(nextVertex)].lateralMeters
+                        - terrain.vertices[std::size_t(previousVertex)]
+                            .lateralMeters;
+            const double crossSlope = trailVertex ? 0.0
+                    : (terrain.vertices[std::size_t(nextVertex)].elevationMeters
+                        - terrain.vertices[std::size_t(previousVertex)]
+                            .elevationMeters)
+                        / std::max(1e-6, lateralSpan);
+            const bool nearTrail = trailVertex
+                    || (!trailVertex && vertex >= 2 && vertex <= 5);
+            const double grade = (nearTrail
                     ? sample.center.gradePercent
                     : sample.baseGradePercent) / 100.0;
-            QVector3D normal(
-                    float(-std::sin(sample.center.headingRadians) * grade),
-                    1.0f,
-                    float(-std::cos(sample.center.headingRadians) * grade));
+            const QVector3D forward(
+                    float(std::sin(sample.center.headingRadians)),
+                    float(grade),
+                    float(std::cos(sample.center.headingRadians)));
+            const QVector3D right(
+                    float(std::cos(sample.center.headingRadians)),
+                    float(crossSlope),
+                    float(-std::sin(sample.center.headingRadians)));
+            QVector3D normal = QVector3D::crossProduct(forward, right);
             normal.normalize();
+            const TerrainColor vertexColor = trailVertex
+                    ? color
+                    : TerrainColor{
+                        terrain.vertices[std::size_t(vertex)].red,
+                        terrain.vertices[std::size_t(vertex)].green,
+                        terrain.vertices[std::size_t(vertex)].blue};
             const float x = float(sample.center.xMeters
                     + lateral * rightX);
-            const float y = float(elevation + verticalOffset);
+            const float y = float(elevation);
             const float z = float(sample.center.zMeters
                     + lateral * rightZ);
             vertices.push_back({
                 x, y, z,
                 normal.x(), normal.y(), normal.z(),
-                color.r, color.g, color.b, 1.0f,
+                vertexColor.r, vertexColor.g, vertexColor.b, 1.0f,
                 verticesPerSample > 1
                     ? float(vertex) / float(verticesPerSample - 1)
                     : 0.0f,
@@ -263,10 +290,8 @@ void WorkoutGame3DGeometry::build(
         if (index > 0) {
             const std::uint32_t base = std::uint32_t(
                     index * verticesPerSample);
-            const int stripStarts[] = {0, 2};
             for (int strip = 0; strip < stripsPerSample; ++strip) {
-                const std::uint32_t left = std::uint32_t(
-                        stripStarts[strip]);
+                const std::uint32_t left = std::uint32_t(strip);
                 indices.insert(indices.end(), {
                     base - std::uint32_t(verticesPerSample) + left,
                     base + left,

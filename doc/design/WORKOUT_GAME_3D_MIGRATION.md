@@ -21,6 +21,10 @@ only by them are retired after the acceptance gates below pass.
   metre-based connectors are also the authoritative 3D path.
 - `WorkoutGame3DGeometry` converts a complete road course into immutable trail
   and forest-floor triangle meshes. It does no work in the frame loop.
+- `WorkoutGame3DTerrainProfile` generates the deterministic eight-vertex
+  course-space cross-section shared by forest geometry and grounded prop
+  anchors. Global course distance and seed make independently streamed chunks
+  meet without mutable state.
 - `WorkoutGame3DViewModel` converts a visual snapshot to scene transforms and
   bounded nearby-prop lists. It has no trainer, recording or athlete-storage
   dependencies.
@@ -43,8 +47,11 @@ toward positive Z. The trail geometry samples the same
 `WorkoutGameRoadCourseBuilder::sample()` function used to place the rider and
 features, preventing independently estimated paths from drifting apart.
 Each sample exposes both connector-derived base terrain and the final physical
-trail surface. Wide forest geometry and trees use the base terrain; the trail,
-rider and feature physics use the surface with relief and obstacles applied.
+trail surface. The terrain profile preserves the exact trail-edge sockets,
+then interpolates authored shoulders and broad forest relief from that sample.
+Forest triangles and grounded props query the same profile, preventing floating
+or buried bases. The trail, rider and feature physics continue to use the
+authoritative surface with relief and obstacles applied.
 
 Each authored course tile has entry and exit sockets at its local Z ends. A
 socket contains position, heading, width, grade and semantic surface class.
@@ -76,12 +83,13 @@ never allowed to join that worker.
 ## Resource Bounds
 
 - Trail and ground geometry use at most 16,000 path samples each.
-- The initial forest floor is a bounded 14-metre course ribbon split into a
+- The forest floor is a bounded 28-metre-wide, eight-vertex cross-section split
+  into seven indexed strips and streamed in a
   10-metre streaming window. Only 15 metres behind and 130 metres ahead are
   resident, preventing remote course loops from intersecting the foreground.
   Chunk replacement uses two geometry buffers so the render thread never sees
-  an in-use mesh cleared in place. It is an A/B baseline; a unified authored
-  terrain mesh can replace it later.
+  an in-use mesh cleared in place. Vertex colors separate trail seams,
+  shoulders and forest without adding texture work to the frame loop.
 - The frame loop changes transforms and small telemetry values; it does not
   rebuild the course mesh.
 - Trees and feature props are bounded distance windows and update only when the
