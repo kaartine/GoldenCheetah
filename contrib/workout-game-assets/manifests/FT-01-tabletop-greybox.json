@@ -38,19 +38,30 @@
       "sha256": "253216a3b73ea76f6956034607c97abeed99056f93488e37bf3be6c987ab7b0b"
     },
     {
-      "path": "build/workout-game-assets/WG_Tabletop_Greybox.glb",
-      "purpose": "runtime",
+      "path": "contrib/workout-game-assets/generated/WG_Tabletop_Greybox.glb",
+      "purpose": "intermediate",
       "sha256": "ec51bc5849c591256ac147cdf66067181ecd904f8098771aed43c41a6b4539f0"
+    },
+    {
+      "path": "src/Train/qml/assets/Wg_Tabletop_Greybox.qml",
+      "purpose": "runtime",
+      "sha256": "b7b4cd546e1509730f935cfa7be426b1ac3e5514da6feab0d34f5435b175a9fc"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "ae186851b56cfba9b8eeb0774ba6f87f91cbac82361220812b4eeffd5ff23381"
     }
   ],
   "processing": {
-    "tool": "Blender",
-    "toolVersion": "4.0.2",
+    "tool": "Blender and Qt Balsam",
+    "toolVersion": "Blender 4.0.2; Qt Balsam 6.8.3",
     "steps": [
       "Start Blender with --background --factory-startup.",
       "Run generate_tabletop.py with its internal geometry checks.",
       "Export glTF 2.0 GLB with opaque materials, extras and no cameras, lights or animations.",
-      "Validate with Khronos glTF Validator 2.0.0-dev.3.10."
+      "Validate with Khronos glTF Validator 2.0.0-dev.3.10.",
+      "Convert the reviewed GLB with Qt Balsam 6.8.3."
     ]
   },
   "technical": {
@@ -58,6 +69,7 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
+    "glbBytes": 9940,
     "trianglesLod0": 122,
     "materials": 3,
     "textureBytes": 0,
@@ -73,7 +85,30 @@
       "MARKER_APEX",
       "MARKER_LAND"
     ],
-    "animations": []
+    "animations": [],
+    "allowedExtensions": [],
+    "boundsMeters": {
+      "minimum": [-4.0, -0.6, 0.0],
+      "maximum": [4.0, 0.446, 6.34]
+    },
+    "sockets": [
+      {
+        "name": "SOCKET_IN",
+        "positionMeters": [0.0, 0.0, 0.0],
+        "halfWidthMeters": 0.68
+      },
+      {
+        "name": "SOCKET_OUT",
+        "positionMeters": [0.0, 0.0, 6.34],
+        "halfWidthMeters": 0.68
+      }
+    ],
+    "budgets": {
+      "maxGlbBytes": 16384,
+      "maxTrianglesLod0": 256,
+      "maxMaterials": 4,
+      "maxTextureBytes": 0
+    }
   },
   "review": {
     "status": "candidate",
@@ -82,6 +117,6 @@
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
     "reviewedAt": "2026-08-25",
-    "notes": "GLB validation passed. Runtime approval waits for bypass geometry, Balsam conversion, qrc packaging and AppImage rendering tests."
+    "notes": "GLB, deterministic Balsam conversion and production-qrc rendering passed. Vertical-slice approval waits for bypass geometry and an extracted-AppImage rendering test."
   }
 }

@@ -125,10 +125,12 @@ targets, feature decisions, or trainer resistance.
 
 - [x] `PIPE-00` Add a repository-owned Blender 4.0.2 Docker environment and a
   deterministic, self-checking tabletop GLB generator.
-- [ ] `PIPE-01` Define the GLB node, pivot, material, socket and animation schema.
-- [ ] `PIPE-02` Add license/provenance manifest validation.
-- [ ] `PIPE-03` Add GLB bounds, scale, triangle, texture and node validation.
-- [ ] `PIPE-04` Package one GLB and texture atlas in qrc/AppImage tests.
+- [x] `PIPE-01` Define the GLB node, pivot, material, socket and animation schema.
+- [x] `PIPE-02` Add license/provenance manifest validation.
+- [x] `PIPE-03` Add GLB bounds, scale, triangle, texture and node validation.
+- [x] `PIPE-04A` Package and render one Balsam-converted asset through the
+  production qrc.
+- [ ] `PIPE-04B` Verify the packaged asset from an extracted AppImage.
 - [x] `CAM-01` Implement low-centre, medium-centre and slight-shoulder candidates.
 - [x] `CAM-02A` Capture matched stills on the same deterministic state.
 - [ ] `CAM-02B` Capture matched videos on the same deterministic route.
@@ -145,9 +147,11 @@ and is reproducible from
 produced a 9,940-byte GLB with 76 vertices and 122 triangles. Its SHA-256 is
 `ec51bc5849c591256ac147cdf66067181ecd904f8098771aed43c41a6b4539f0`.
 Khronos glTF Validator 2.0.0-dev.3.10 reported zero errors, warnings, infos and
-hints. A second clean export produced the same SHA-256. This proves the
-authoring/export step only; the asset is not accepted
-for runtime use until manifest, Balsam, qrc and AppImage gates pass.
+hints. A second clean export produced the same SHA-256. Two Balsam 6.8.3 runs
+also produced byte-identical QML and `.mesh` outputs. The cross-platform policy
+validator and thirteen policy/fixture tests pass, and the production qrc
+renders the committed mesh under X11/OpenGL. The asset remains a vertical-slice
+candidate until safe-line geometry and the extracted-AppImage gate pass.
 
 ### Phase 3: Vertical Slice
 

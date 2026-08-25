@@ -29,6 +29,7 @@ HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGameVisualSmoother.h \
            ../../../src/Train/WorkoutGameWorld.h
 
-RESOURCES += workoutGame3DView.qrc
+RESOURCES += workoutGame3DView.qrc \
+             ../../../src/Resources/workout-game-assets.qrc
 
 include(../../unittests.pri)

@@ -226,6 +226,7 @@ QMAKE_EXTRA_COMPILERS += TSQM
 ###==========
 
 RESOURCES = $${PWD}/Resources/application.qrc \
+            $${PWD}/Resources/workout-game-assets.qrc \
             $${PWD}/Resources/map.qrc
 
 

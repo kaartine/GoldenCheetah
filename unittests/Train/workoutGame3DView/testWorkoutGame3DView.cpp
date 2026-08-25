@@ -12,9 +12,12 @@
 #include "Train/WorkoutGameFeatureRuntime.h"
 
 #include <QDir>
+#include <QFile>
 #include <QGuiApplication>
 #include <QImage>
+#include <QQmlComponent>
 #include <QQmlContext>
+#include <QQmlEngine>
 #include <QQuickView>
 #include <QQuickWindow>
 #include <QSet>
@@ -248,6 +251,71 @@ private slots:
             QVERIFY(shoulder.cameraSideMeters() < 0.68);
         }
 
+    }
+
+    void packagedTabletopAssetLoadsWithRequiredNodes()
+    {
+        QQmlEngine engine;
+        QQmlComponent component(
+                &engine,
+                QUrl(QStringLiteral(
+                        "qrc:/qml/assets/Wg_Tabletop_Greybox.qml")));
+        QStringList errors;
+        for (const QQmlError &error : component.errors()) {
+            errors.append(error.toString());
+        }
+        QVERIFY2(component.isReady(), qPrintable(errors.join('\n')));
+
+        std::unique_ptr<QObject> asset(component.create());
+        QVERIFY2(asset, qPrintable(errors.join('\n')));
+        const std::array<const char *, 10> requiredObjects = {{
+            "ROOT_Tabletop",
+            "GEO_Tabletop_LOD0",
+            "SOCKET_IN",
+            "SOCKET_OUT",
+            "MARKER_PREPARE",
+            "MARKER_DECISION",
+            "MARKER_ACTION",
+            "MARKER_LIP",
+            "MARKER_APEX",
+            "MARKER_LAND"
+        }};
+        for (const char *name : requiredObjects) {
+            QVERIFY2(asset->findChild<QObject *>(
+                    QString::fromLatin1(name)), name);
+        }
+
+        QFile mesh(QStringLiteral(
+                ":/qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh"));
+        QVERIFY(mesh.open(QIODevice::ReadOnly));
+        QCOMPARE(mesh.size(), qint64(7236));
+    }
+
+    void rendersPackagedTabletopAsset()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.setSource(QUrl(QStringLiteral(
+                "qrc:/qml/assets/TabletopAssetHarness.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTest::qWait(500);
+
+        const QImage rendered = window.grabWindow();
+        QVERIFY(!rendered.isNull());
+        QCOMPARE(rendered.size(), QSize(960, 540));
+        QVERIFY2(sampledColorCount(rendered) > 12,
+                 "packaged tabletop mesh appears blank");
+        const QString screenshot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_TABLETOP_ASSET_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            QVERIFY2(rendered.save(screenshot), qPrintable(screenshot));
+        }
     }
 
     void loadsRendersAndMovesScene()

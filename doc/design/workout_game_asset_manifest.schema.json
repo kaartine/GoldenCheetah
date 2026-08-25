@@ -108,6 +108,7 @@
             "enum": [
               "source",
               "runtime",
+              "intermediate",
               "texture",
               "license",
               "reference",
@@ -145,6 +146,7 @@
         "trianglesLod0": { "type": "integer", "minimum": 0 },
         "trianglesLod1": { "type": "integer", "minimum": 0 },
         "trianglesLod2": { "type": "integer", "minimum": 0 },
+        "glbBytes": { "type": "integer", "minimum": 1 },
         "materials": { "type": "integer", "minimum": 0 },
         "textureBytes": { "type": "integer", "minimum": 0 },
         "nodes": {
@@ -156,6 +158,76 @@
           "type": "array",
           "items": { "type": "string" },
           "uniqueItems": true
+        },
+        "allowedExtensions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "boundsMeters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimum", "maximum"],
+          "properties": {
+            "minimum": {
+              "type": "array",
+              "minItems": 3,
+              "prefixItems": [
+                { "type": "number" },
+                { "type": "number" },
+                { "type": "number" }
+              ],
+              "items": false
+            },
+            "maximum": {
+              "type": "array",
+              "minItems": 3,
+              "prefixItems": [
+                { "type": "number" },
+                { "type": "number" },
+                { "type": "number" }
+              ],
+              "items": false
+            }
+          }
+        },
+        "sockets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "positionMeters", "halfWidthMeters"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "positionMeters": {
+                "type": "array",
+                "minItems": 3,
+                "prefixItems": [
+                  { "type": "number" },
+                  { "type": "number" },
+                  { "type": "number" }
+                ],
+                "items": false
+              },
+              "halfWidthMeters": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          }
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxGlbBytes",
+            "maxTrianglesLod0",
+            "maxMaterials",
+            "maxTextureBytes"
+          ],
+          "properties": {
+            "maxGlbBytes": { "type": "integer", "minimum": 1 },
+            "maxTrianglesLod0": { "type": "integer", "minimum": 0 },
+            "maxMaterials": { "type": "integer", "minimum": 0 },
+            "maxTextureBytes": { "type": "integer", "minimum": 0 }
+          }
         }
       }
     },

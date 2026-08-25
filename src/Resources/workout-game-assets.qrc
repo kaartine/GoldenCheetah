@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="qml/assets/Wg_Tabletop_Greybox.qml">../Train/qml/assets/Wg_Tabletop_Greybox.qml</file>
+        <file alias="qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh</file>
+    </qresource>
+</RCC>

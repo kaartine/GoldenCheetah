@@ -134,6 +134,8 @@ Blender 4.0.2 audit output has 76 vertices, 122 triangles, three opaque
 materials and the required sockets and gameplay markers. Khronos glTF Validator
 2.0.0-dev.3.10 reports zero errors, warnings, infos and hints.
 
-The output is not yet a runtime asset. It remains an audit artifact until it
-has a reviewed manifest, safe-line/bypass geometry, optimized Qt Quick 3D
-conversion, qrc packaging and an AppImage rendering test.
+The reviewed GLB and deterministic Qt Balsam 6.8.3 QML/`.mesh` output are now
+committed with an allowlisted manifest and exact hashes. The shared production
+qrc loads every required node and renders the mesh in a real X11/OpenGL test.
+It remains a vertical-slice candidate until it has safe-line/bypass geometry
+and passes an extracted-AppImage rendering test.

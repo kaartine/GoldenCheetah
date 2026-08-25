@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
         <file alias="qml/WorkoutGame3D.qml">../../../src/Train/qml/WorkoutGame3D.qml</file>
+        <file alias="qml/assets/TabletopAssetHarness.qml">TabletopAssetHarness.qml</file>
     </qresource>
 </RCC>

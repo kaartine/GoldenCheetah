@@ -88,11 +88,11 @@ and its original source can be reproduced.
 
 ### `PIPE-02` Define and validate the GLB contract
 
-- [ ] Lock metre scale, +Y up, +Z forward and applied transforms.
-- [ ] Lock `SOCKET_IN`/`SOCKET_OUT`, pivot, marker, LOD and proxy node names.
-- [ ] Validate bounds, triangle/material/texture budgets and animation clips.
-- [ ] Use trusted built-in assets only; do not runtime-load downloaded content.
-- [ ] Convert accepted GLB files offline to optimized Qt Quick 3D assets.
+- [x] Lock metre scale, +Y up, +Z forward and applied transforms.
+- [x] Lock `SOCKET_IN`/`SOCKET_OUT`, pivot, marker, LOD and proxy node names.
+- [x] Validate bounds, triangle/material/texture budgets and animation clips.
+- [x] Use trusted built-in assets only; do not runtime-load downloaded content.
+- [x] Convert accepted GLB files offline to optimized Qt Quick 3D assets.
 
 **Tests:** malformed/untrusted fixture rejection, exact socket comparison,
 required-node checks, animation list, budget limits and qrc/AppImage load test.
@@ -123,8 +123,12 @@ sphere as a final visible rider, feature or hero-environment object.
 - [x] The resulting 9,940-byte GLB has 76 vertices and 122 triangles; Khronos
   glTF Validator 2.0.0-dev.3.10 reports zero errors, warnings, infos and hints.
 - [x] Two clean Blender invocations produce the same GLB SHA-256.
-- [ ] Add manifest validation, Balsam conversion, qrc packaging and AppImage
-  loading before this evidence can complete `PIPE-02`.
+- [x] Validate the manifest, file hashes, GLB policy and malformed fixtures in
+  the standard cross-platform unit-test inventory.
+- [x] Two Qt Balsam 6.8.3 conversions produce byte-identical QML and `.mesh`
+  files; the production qrc loads and renders them in a real X11/OpenGL test.
+- [ ] Verify the production resources from an extracted AppImage before this
+  evidence can complete the full release packaging gate.
 
 ## P0 Vertical Slice
 

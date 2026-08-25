@@ -63,3 +63,27 @@ No `.blend`, texture, runtime collision or physics file is produced.
 Determinism is expected for the same Blender 4.x patch release and export
 settings. Different Blender exporter versions may serialize equivalent GLB
 data differently, so cross-version byte hashes are not promised.
+
+## Validation and runtime conversion
+
+The reviewed GLB is committed under `contrib/workout-game-assets/generated`.
+Validate its manifest, provenance, hashes, structure, sockets and budgets with:
+
+```bash
+python3 contrib/workout-game-assets/validate_assets.py --root "$PWD"
+```
+
+Qt Balsam 6.8.3 converts the GLB offline. The reviewed output is committed in
+`src/Train/qml/assets` and packaged by
+`src/Resources/workout-game-assets.qrc`. Runtime code must load this built-in
+resource; it must not load the authored GLB or downloaded content dynamically.
+
+```bash
+QT_QPA_PLATFORM=offscreen balsam \
+  -o build/workout-game-assets/balsam \
+  contrib/workout-game-assets/generated/WG_Tabletop_Greybox.glb
+```
+
+For this toolchain, repeated Balsam runs must match the manifest hashes. The
+`Build/workoutGameAssets` tests cover policy failures, and the
+`Train/workoutGame3DView` tests load and render the production qrc output.

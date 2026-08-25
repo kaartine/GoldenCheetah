@@ -7,6 +7,7 @@ exists(unittests.pri) {
 	equals(GC_UNITTESTS, active) {
 	SUBDIRS += Build/ciTestRunner \
 			   Build/headerIncludePaths \
+			   Build/workoutGameAssets \
 			   Build/publicReleaseCredentials \
 			   Build/linkerSectionFlags \
 			   Core/athleteMigrationSafety \
