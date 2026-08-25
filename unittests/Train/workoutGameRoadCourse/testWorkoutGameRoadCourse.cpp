@@ -9,6 +9,7 @@
 
 #include "Train/WorkoutGameRoadCourse.h"
 #include "Train/WorkoutGameBermGeometry.h"
+#include "Train/WorkoutGameClimbGeometry.h"
 #include "Train/WorkoutGameRoadProjection.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameHorizon.h"
@@ -87,6 +88,181 @@ class TestWorkoutGameRoadCourse : public QObject
     Q_OBJECT
 
 private slots:
+    void climbProfileIsDeterministicAndHasExactTrailSockets()
+    {
+        const auto profile = WorkoutGameClimbGeometry::profile(0.65);
+        const auto repeated = WorkoutGameClimbGeometry::profile(0.65);
+        const auto invalid = WorkoutGameClimbGeometry::profile(
+                std::numeric_limits<double>::quiet_NaN());
+
+        QVERIFY(profile.ready);
+        QVERIFY(invalid.ready);
+        QCOMPARE(profile.startMeters, repeated.startMeters);
+        QCOMPARE(profile.endMeters, repeated.endMeters);
+        QCOMPARE(profile.steps, repeated.steps);
+        QCOMPARE(profile.socketHalfWidthMeters, 0.68);
+        QVERIFY(profile.startMeters < profile.activeStartMeters);
+        QVERIFY(profile.activeStartMeters < profile.crestStartMeters);
+        QVERIFY(profile.crestStartMeters < profile.endMeters);
+        QCOMPARE(profile.endMeters, 0.0);
+        QCOMPARE(profile.minimumLengthMeters,
+                 profile.endMeters - profile.startMeters);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.startMeters), 0.0);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.endMeters), 0.0);
+        for (const WorkoutGameClimbStep &step : profile.steps) {
+            QVERIFY(std::isfinite(step.forwardMeters));
+            QVERIFY(std::isfinite(step.lateralMeters));
+            QVERIFY(step.halfLengthMeters > 0.0);
+            QVERIFY(step.halfWidthMeters > 0.0);
+            QVERIFY(step.heightMeters > 0.0);
+            QVERIFY(step.forwardMeters >= profile.activeStartMeters);
+            QVERIFY(step.forwardMeters < profile.crestStartMeters);
+            QCOMPARE(profile.surfaceOffsetMeters(step.forwardMeters),
+                     step.heightMeters);
+        }
+    }
+
+    void climbStaysOnOneTreadAndUsesABoundedContinuousCrest()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 9021u;
+        course.durationMs = 60000;
+        WorkoutGameSection climb;
+        climb.feature = WorkoutGameFeature::Climb;
+        climb.terrain = WorkoutGameTerrainKind::Climb;
+        climb.durationMs = 40000;
+        climb.lengthMeters = 120.0;
+        climb.targetWatts = 240.0;
+        climb.gradePercent = 9.0;
+        climb.difficulty = 0.65;
+        climb.challengeCount = 1;
+        WorkoutGameSection recovery = climb;
+        recovery.feature = WorkoutGameFeature::Trail;
+        recovery.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        recovery.startMs = climb.durationMs;
+        recovery.durationMs = 20000;
+        recovery.lengthMeters = 60.0;
+        recovery.targetWatts = 100.0;
+        recovery.gradePercent = 0.0;
+        recovery.challengeCount = 0;
+        course.sections = {climb, recovery};
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+        const auto profile = WorkoutGameClimbGeometry::profile(0.65);
+        const double crest = road.timeline[0].endDistanceMeters;
+        const auto challenge = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.terrain == WorkoutGameTerrainKind::Climb
+                            && piece.challenge.enabled;
+                });
+        QVERIFY(challenge != road.pieces.end());
+        QCOMPARE(challenge->challenge.obstacleDistanceMeters, crest);
+        QCOMPARE(challenge->challenge.bypassStartDistanceMeters,
+                 challenge->challenge.bypassEndDistanceMeters);
+        QCOMPARE(challenge->challenge.bypassLateralMeters, 0.0);
+
+        const double sustainedGrade = profile.sustainedGradePercent(
+                120.0, 9.0, 0.0, 0.0,
+                profile.entryTransitionMeters,
+                profile.crestTransitionMeters);
+        const auto beforeTransition = WorkoutGameRoadCourseBuilder::sample(
+                road, crest - profile.crestTransitionMeters - 0.05);
+        const auto beforeSocket = WorkoutGameRoadCourseBuilder::sample(
+                road, crest - 0.001);
+        const auto atSocket = WorkoutGameRoadCourseBuilder::sample(road, crest);
+        const auto afterSocket = WorkoutGameRoadCourseBuilder::sample(
+                road, crest + 0.001);
+        QVERIFY(beforeTransition.ready);
+        QVERIFY(beforeSocket.ready);
+        QVERIFY(atSocket.ready);
+        QVERIFY(afterSocket.ready);
+        QVERIFY(std::abs(beforeTransition.baseGradePercent
+                         - sustainedGrade) < 0.1);
+        QVERIFY(std::abs(beforeSocket.baseGradePercent) < 0.1);
+        QVERIFY(std::abs(atSocket.baseGradePercent) < 1e-9);
+        QVERIFY(std::abs(atSocket.center.gradePercent) < 0.1);
+        QVERIFY(std::abs(afterSocket.center.gradePercent) < 0.1);
+        QVERIFY(std::abs(beforeSocket.center.elevationMeters
+                         - atSocket.center.elevationMeters) < 0.01);
+        QVERIFY(std::abs(afterSocket.center.elevationMeters
+                         - atSocket.center.elevationMeters) < 0.01);
+        const auto start = WorkoutGameRoadCourseBuilder::sample(road, 0.0);
+        QVERIFY(start.ready);
+        QVERIFY(std::abs(atSocket.baseElevationMeters
+                         - start.baseElevationMeters - 10.8) < 1e-9);
+
+        double previousGrade = sustainedGrade + 0.01;
+        for (double distance = crest - profile.crestTransitionMeters;
+             distance <= crest; distance += 0.05) {
+            const auto sample = WorkoutGameRoadCourseBuilder::sample(
+                    road, distance);
+            QVERIFY(sample.ready);
+            QVERIFY(sample.baseGradePercent >= -0.01);
+            QVERIFY(sample.baseGradePercent <= sustainedGrade + 0.01);
+            QVERIFY(sample.baseGradePercent <= previousGrade + 0.01);
+            previousGrade = sample.baseGradePercent;
+        }
+        for (const WorkoutGameClimbStep &step : profile.steps) {
+            const auto sample = WorkoutGameRoadCourseBuilder::sample(
+                    road, crest + step.forwardMeters);
+            QVERIFY(sample.ready);
+            QCOMPARE(sample.surfaceOffsetMeters, step.heightMeters);
+        }
+    }
+
+    void climbNormalizesShortTilesAndBoundsHugePieceCounts()
+    {
+        const auto profile = WorkoutGameClimbGeometry::profile(0.5);
+        for (const double requestedLength : {1.0, 5.0, 10.0, 14.0, 24.0}) {
+            WorkoutGameCourse course;
+            course.status = WorkoutGameCourseStatus::Ready;
+            course.durationMs = 10000;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::Climb;
+            section.terrain = WorkoutGameTerrainKind::Climb;
+            section.durationMs = course.durationMs;
+            section.lengthMeters = requestedLength;
+            section.targetWatts = 220.0;
+            section.gradePercent = 8.0;
+            section.difficulty = 0.5;
+            section.challengeCount = 1;
+            course.sections = {section};
+            const WorkoutGameRoadCourse road =
+                    WorkoutGameRoadCourseBuilder::build(course, 200.0);
+            QVERIFY(road.ready);
+            QVERIFY(road.totalLengthMeters >= profile.minimumLengthMeters);
+            const auto piece = std::find_if(
+                    road.pieces.begin(), road.pieces.end(),
+                    [](const WorkoutGameRoadPiece &candidate) {
+                        return candidate.challenge.enabled;
+                    });
+            QVERIFY(piece != road.pieces.end());
+            QVERIFY(piece->challenge.obstacleDistanceMeters
+                    + profile.startMeters >= -1e-9);
+        }
+
+        WorkoutGameCourse huge;
+        huge.status = WorkoutGameCourseStatus::Ready;
+        huge.durationMs = 10000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Climb;
+        section.terrain = WorkoutGameTerrainKind::Climb;
+        section.durationMs = huge.durationMs;
+        section.lengthMeters = 1.0e12;
+        section.targetWatts = 220.0;
+        section.gradePercent = 8.0;
+        section.challengeCount = 1;
+        huge.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(huge, 200.0);
+        QVERIFY(road.ready);
+        QVERIFY(road.pieces.size() <= 24u);
+    }
+
     void skinnyProfileHasRaisedDeckSocketsAndDeterministicBalance()
     {
         const auto profile = WorkoutGameSkinnyGeometry::profile(0.65);

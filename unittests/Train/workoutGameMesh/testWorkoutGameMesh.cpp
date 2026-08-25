@@ -9,6 +9,7 @@
 
 #include "Train/WorkoutGameMesh.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
+#include "Train/WorkoutGameClimbGeometry.h"
 #include "Train/WorkoutGameForestFloor.h"
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
@@ -69,6 +70,25 @@ class TestWorkoutGameMesh : public QObject
     Q_OBJECT
 
 private slots:
+    void climbMeshHasTransverseEmbeddedStepsAndExactSockets()
+    {
+        const auto profile = WorkoutGameClimbGeometry::profile(0.65);
+        const WorkoutGameMesh mesh = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::Climb, 0.65);
+        QVERIFY(mesh.ready);
+        QCOMPARE(mesh.entry.forwardMeters, profile.startMeters);
+        QCOMPARE(mesh.exit.forwardMeters, profile.endMeters);
+        QCOMPARE(mesh.entry.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.exit.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.lengthMeters, profile.endMeters - profile.startMeters);
+        QCOMPARE(mesh.colliders.size(), profile.steps.size());
+        QVERIFY(mesh.vertices.size() >= profile.steps.size() * 8u);
+        QVERIFY(mesh.triangles.size() >= profile.steps.size() * 12u);
+        QVERIFY(mesh.triangles.size() <= 160u);
+    }
+
     void skinnyMeshHasBoardsBeamsSupportsAndExactSockets()
     {
         const auto profile = WorkoutGameSkinnyGeometry::profile(0.65);

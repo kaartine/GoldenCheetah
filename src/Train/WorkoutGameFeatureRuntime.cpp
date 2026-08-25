@@ -10,6 +10,7 @@
 #include "WorkoutGameFeatureRuntime.h"
 
 #include "WorkoutGameBermGeometry.h"
+#include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include "WorkoutGameFeatureGeometry.h"
@@ -54,6 +55,8 @@ WorkoutGameFeatureMotion motionFor(WorkoutGameTerrainKind terrain)
         return WorkoutGameFeatureMotion::Absorb;
     case WorkoutGameTerrainKind::Skinny:
         return WorkoutGameFeatureMotion::Balance;
+    case WorkoutGameTerrainKind::Climb:
+        return WorkoutGameFeatureMotion::Climb;
     case WorkoutGameTerrainKind::Drop:
         return WorkoutGameFeatureMotion::Drop;
     default:
@@ -161,33 +164,58 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             || simulation.activeSection >= int(sections.size())) {
         return result;
     }
-    const SectionLayout &layout = sections[simulation.activeSection];
-    if (!layout.valid) return result;
+    const SectionLayout &activeLayout = sections[simulation.activeSection];
+    if (!activeLayout.valid) return result;
 
-    result.ready = true;
-    result.sourceSectionIndex = simulation.activeSection;
-    result.terrain = layout.terrain;
     const double sectionProgress = std::clamp(
             std::isfinite(simulation.sectionProgress)
                     ? simulation.sectionProgress : 0.0,
             0.0, 1.0);
-    result.visualDistanceMeters = layout.startDistanceMeters
-            + (layout.endDistanceMeters - layout.startDistanceMeters)
-                * sectionProgress;
-    result.outcome = simulation.featureOutcome;
+    const double visualDistanceMeters = activeLayout.startDistanceMeters
+            + (activeLayout.endDistanceMeters
+                - activeLayout.startDistanceMeters) * sectionProgress;
+    int featureSection = simulation.activeSection;
+    WorkoutGameFeatureOutcome featureOutcome = simulation.featureOutcome;
+    double featureReadiness = simulation.challengeReadiness;
+    const SectionLayout *layout = &activeLayout;
+    if (activeLayout.challengePieceIndex
+                >= configuredCourse.pieces.size()
+            && simulation.previousFeatureSection >= 0
+            && simulation.previousFeatureSection < int(sections.size())) {
+        const SectionLayout &previous =
+                sections[std::size_t(simulation.previousFeatureSection)];
+        if (previous.valid
+                && previous.challengePieceIndex
+                    < configuredCourse.pieces.size()
+                && configuredCourse.pieces[previous.challengePieceIndex]
+                        .terrain == WorkoutGameTerrainKind::Climb
+                && visualDistanceMeters
+                    <= previous.endDistanceMeters + 6.0) {
+            featureSection = simulation.previousFeatureSection;
+            featureOutcome = simulation.previousFeatureOutcome;
+            featureReadiness = simulation.previousFeatureReadiness;
+            layout = &previous;
+        }
+    }
+
+    result.ready = true;
+    result.sourceSectionIndex = featureSection;
+    result.terrain = layout->terrain;
+    result.visualDistanceMeters = visualDistanceMeters;
+    result.outcome = featureOutcome;
     result.route = simulation.route;
     result.readiness = std::clamp(
-            std::isfinite(simulation.challengeReadiness)
-                    ? simulation.challengeReadiness : 0.0,
+            std::isfinite(featureReadiness) ? featureReadiness : 0.0,
             0.0, 1.0);
 
-    if (layout.challengePieceIndex >= configuredCourse.pieces.size()) {
+    if (layout->challengePieceIndex >= configuredCourse.pieces.size()) {
         return result;
     }
     const WorkoutGameRoadPiece *piece =
-            &configuredCourse.pieces[layout.challengePieceIndex];
+            &configuredCourse.pieces[layout->challengePieceIndex];
     result.terrain = piece->terrain;
-    if (result.terrain == WorkoutGameTerrainKind::Rollers) {
+    if (result.terrain == WorkoutGameTerrainKind::Rollers
+            || result.terrain == WorkoutGameTerrainKind::Climb) {
         result.route = WorkoutGameRoute::MainLine;
     }
     result.motion = motionFor(piece->terrain);
@@ -211,61 +239,70 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     }
     double actionStart = result.obstacleDistanceMeters;
     double actionEnd = std::min(
-            layout.endDistanceMeters, actionStart + 6.0);
-    if (piece->terrain == WorkoutGameTerrainKind::Berm) {
+            layout->endDistanceMeters, actionStart + 6.0);
+    if (piece->terrain == WorkoutGameTerrainKind::Climb) {
+        const WorkoutGameClimbGeometryProfile climb =
+                WorkoutGameClimbGeometry::profile(piece->difficulty);
+        actionStart = std::max(
+                layout->startDistanceMeters,
+                result.obstacleDistanceMeters + climb.activeStartMeters);
+        actionEnd = std::min(
+                layout->endDistanceMeters,
+                result.obstacleDistanceMeters + climb.endMeters);
+    } else if (piece->terrain == WorkoutGameTerrainKind::Berm) {
         const WorkoutGameBermGeometryProfile berm =
                 WorkoutGameBermGeometry::profile(piece->difficulty);
         actionStart = std::max(
-                layout.startDistanceMeters,
+                layout->startDistanceMeters,
                 result.obstacleDistanceMeters + berm.startMeters);
         actionEnd = std::min(
-                layout.endDistanceMeters,
+                layout->endDistanceMeters,
                 result.obstacleDistanceMeters + berm.endMeters);
     } else if (piece->terrain == WorkoutGameTerrainKind::Roots) {
         const WorkoutGameRootGeometryProfile roots =
                 WorkoutGameRootGeometry::profile(piece->difficulty);
         actionStart = std::max(
-                layout.startDistanceMeters,
+                layout->startDistanceMeters,
                 result.obstacleDistanceMeters + roots.activeStartMeters);
         actionEnd = std::min(
-                layout.endDistanceMeters,
+                layout->endDistanceMeters,
                 result.obstacleDistanceMeters + roots.activeEndMeters);
     } else if (piece->terrain == WorkoutGameTerrainKind::RockGarden) {
         const WorkoutGameRockGardenGeometryProfile rocks =
                 WorkoutGameRockGardenGeometry::profile(piece->difficulty);
         actionStart = std::max(
-                layout.startDistanceMeters,
+                layout->startDistanceMeters,
                 result.obstacleDistanceMeters + rocks.activeStartMeters);
         actionEnd = std::min(
-                layout.endDistanceMeters,
+                layout->endDistanceMeters,
                 result.obstacleDistanceMeters + rocks.activeEndMeters);
     } else if (piece->terrain == WorkoutGameTerrainKind::RockSlab) {
         const WorkoutGameRockSlabGeometryProfile slab =
                 WorkoutGameRockSlabGeometry::profile(piece->difficulty);
         actionStart = std::max(
-                layout.startDistanceMeters,
+                layout->startDistanceMeters,
                 result.obstacleDistanceMeters + slab.activeStartMeters);
         actionEnd = std::min(
-                layout.endDistanceMeters,
+                layout->endDistanceMeters,
                 result.obstacleDistanceMeters + slab.activeEndMeters);
     } else if (piece->terrain == WorkoutGameTerrainKind::Skinny) {
         const WorkoutGameSkinnyGeometryProfile skinny =
                 WorkoutGameSkinnyGeometry::profile(piece->difficulty);
         actionStart = std::max(
-                layout.startDistanceMeters,
+                layout->startDistanceMeters,
                 result.obstacleDistanceMeters + skinny.activeStartMeters);
         actionEnd = std::min(
-                layout.endDistanceMeters,
+                layout->endDistanceMeters,
                 result.obstacleDistanceMeters + skinny.activeEndMeters);
     } else if (result.motion == WorkoutGameFeatureMotion::Jump) {
         const WorkoutGameFeatureGeometryProfile geometry =
                 WorkoutGameFeatureGeometry::profile(
                     piece->terrain, piece->difficulty);
         const double sectionLengthMeters = std::max(
-                0.01, layout.endDistanceMeters - layout.startDistanceMeters);
+                0.01, layout->endDistanceMeters - layout->startDistanceMeters);
         const double sectionSeconds = std::max(
-                0.001, double(layout.durationMs) / 1000.0);
-        const double timelineMetersPerSecond = layout.durationMs > 0
+                0.001, double(layout->durationMs) / 1000.0);
+        const double timelineMetersPerSecond = layout->durationMs > 0
                 ? sectionLengthMeters / sectionSeconds
                 : std::max(3.0, simulation.speedKph / 3.6);
         const double requestedFlightSeconds = jumpFlightDurationSeconds(
@@ -273,7 +310,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                 std::max(0.0, simulation.speedKph));
         actionStart = result.physicalTakeoffDistanceMeters;
         actionEnd = std::min(
-                layout.endDistanceMeters,
+                layout->endDistanceMeters,
                 std::max({actionStart + minimumJumpTravelMeters(
                                     piece->terrain),
                          result.obstacleDistanceMeters
@@ -286,7 +323,12 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     }
     result.actionStartDistanceMeters = actionStart;
     result.actionEndDistanceMeters = actionEnd;
-    if (result.visualDistanceMeters < piece->challenge.prepareDistanceMeters) {
+    if (piece->terrain == WorkoutGameTerrainKind::Climb
+            && result.visualDistanceMeters >= actionStart
+            && result.visualDistanceMeters < actionEnd) {
+        result.phase = WorkoutGameFeaturePhase::Action;
+    } else if (result.visualDistanceMeters
+            < piece->challenge.prepareDistanceMeters) {
         result.phase = WorkoutGameFeaturePhase::Approach;
     } else if (result.visualDistanceMeters
             < piece->challenge.decisionDistanceMeters) {
@@ -299,11 +341,12 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         result.phase = WorkoutGameFeaturePhase::Recovery;
     }
 
-    result.actionId = (std::uint64_t(simulation.activeSection + 1) << 32)
+    result.actionId = (std::uint64_t(featureSection + 1) << 32)
             | (std::uint64_t(piece->terrain) + 1u);
     const bool completed = result.outcome
             == WorkoutGameFeatureOutcome::Completed;
     const bool bypass = result.terrain != WorkoutGameTerrainKind::Rollers
+            && result.terrain != WorkoutGameTerrainKind::Climb
             && (result.outcome == WorkoutGameFeatureOutcome::Bypassed
                 || result.route == WorkoutGameRoute::SafeBypass);
     if (bypass) {

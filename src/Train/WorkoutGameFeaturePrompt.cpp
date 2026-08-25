@@ -34,8 +34,9 @@ WorkoutGameFeaturePromptSnapshot WorkoutGameFeaturePrompt::build(
             0.0, std::isfinite(profile.cue.actualWatts)
                 ? profile.cue.actualWatts : 0.0);
 
-    if (profile.cue.state == WorkoutGamePowerCueState::Bypassed
-            || feature.route == WorkoutGameRoute::SafeBypass) {
+    if (feature.terrain != WorkoutGameTerrainKind::Climb
+            && (profile.cue.state == WorkoutGamePowerCueState::Bypassed
+                || feature.route == WorkoutGameRoute::SafeBypass)) {
         result.instruction = WorkoutGameFeatureInstruction::SafeLine;
         return result;
     }
@@ -50,6 +51,9 @@ WorkoutGameFeaturePromptSnapshot WorkoutGameFeaturePrompt::build(
             break;
         case WorkoutGameFeatureMotion::Balance:
             result.instruction = WorkoutGameFeatureInstruction::HoldLine;
+            break;
+        case WorkoutGameFeatureMotion::Climb:
+            result.instruction = WorkoutGameFeatureInstruction::KeepClimbing;
             break;
         case WorkoutGameFeatureMotion::Drop:
             result.instruction = WorkoutGameFeatureInstruction::Drop;

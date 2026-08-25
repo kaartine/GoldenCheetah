@@ -96,6 +96,9 @@ void addSimulation(
     hash.addInteger(simulation.score);
     hash.addDouble(simulation.streakSeconds);
     hash.addEnum(simulation.featureOutcome);
+    hash.addInteger(simulation.previousFeatureSection);
+    hash.addEnum(simulation.previousFeatureOutcome);
+    hash.addDouble(simulation.previousFeatureReadiness);
     hash.addEnum(simulation.route);
     addChallenge(hash, simulation.challenge);
     hash.addDouble(simulation.challengeMetrics.averageActualWatts);
@@ -208,6 +211,7 @@ bool WorkoutGameReplayHarness::finiteState(
             && isFiniteValue(simulation.speedKph)
             && isFiniteValue(simulation.adherence)
             && isFiniteValue(simulation.streakSeconds)
+            && isFiniteValue(simulation.previousFeatureReadiness)
             && isFiniteValue(simulation.challengeMetrics.averageActualWatts)
             && isFiniteValue(simulation.challengeMetrics.averageTargetWatts)
             && isFiniteValue(simulation.challengeMetrics.averageEffortRatio)

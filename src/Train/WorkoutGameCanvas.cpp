@@ -952,7 +952,11 @@ void WorkoutGameCanvas::paintScene(
                 challengeHeight);
         const bool completed = current.featureOutcome
                 == WorkoutGameFeatureOutcome::Completed;
-        const bool bypassed = current.featureOutcome
+        const bool missedClimb = challengeTerrain
+                    == WorkoutGameTerrainKind::Climb
+                && current.featureOutcome
+                    == WorkoutGameFeatureOutcome::Bypassed;
+        const bool bypassed = !missedClimb && current.featureOutcome
                 == WorkoutGameFeatureOutcome::Bypassed;
         const QColor accent = completed
                 ? QColor(88, 188, 105)
@@ -968,6 +972,9 @@ void WorkoutGameCanvas::paintScene(
             challengeText = tr("%1 CLEARED  +%2")
                     .arg(terrainName(challengeTerrain))
                     .arg(current.challenge.bonusPoints);
+        } else if (missedClimb) {
+            challengeText = tr("%1  COMPLETE - NO BONUS")
+                    .arg(terrainName(challengeTerrain));
         } else if (bypassed) {
             challengeText = tr("%1  SAFE LINE")
                     .arg(terrainName(challengeTerrain));
@@ -983,7 +990,7 @@ void WorkoutGameCanvas::paintScene(
                 challengeRect.adjusted(8, 0, -8, -challengeHeight / 2),
                 Qt::AlignCenter,
                 challengeText);
-        if (!completed && !bypassed) {
+        if (!completed && !bypassed && !missedClimb) {
             const QColor readyColor(88, 188, 105);
             const QColor missingColor(238, 101, 82);
             const QColor unusedColor(125, 143, 135);

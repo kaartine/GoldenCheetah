@@ -30,6 +30,7 @@ int readinessPercent(double value)
 
 bool bypassed(const WorkoutGameFeatureRuntimeSnapshot &feature)
 {
+    if (feature.terrain == WorkoutGameTerrainKind::Climb) return false;
     return feature.route == WorkoutGameRoute::SafeBypass
             || feature.outcome == WorkoutGameFeatureOutcome::Bypassed;
 }
@@ -96,6 +97,9 @@ WorkoutGameFeatureHudSnapshot WorkoutGameFeatureHud::build(
         if (feature.outcome == WorkoutGameFeatureOutcome::Completed
                 && !bypassed(feature)) {
             result.state = WorkoutGameFeatureHudState::Complete;
+        } else if (feature.terrain == WorkoutGameTerrainKind::Climb
+                && feature.outcome == WorkoutGameFeatureOutcome::Bypassed) {
+            result.state = WorkoutGameFeatureHudState::NoBonus;
         } else if (bypassed(feature)) {
             result.state = WorkoutGameFeatureHudState::Bypass;
         } else {

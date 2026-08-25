@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGame3DGeometry.h"
+#include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
@@ -167,6 +168,25 @@ WorkoutGameRoadCourse skinnyCourse()
     return WorkoutGameRoadCourseBuilder::build(source, 200.0);
 }
 
+WorkoutGameRoadCourse climbCourse()
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 1229u;
+    source.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::Climb;
+    section.terrain = WorkoutGameTerrainKind::Climb;
+    section.durationMs = source.durationMs;
+    section.lengthMeters = 80.0;
+    section.targetWatts = 230.0;
+    section.gradePercent = 9.0;
+    section.difficulty = 0.65;
+    section.challengeCount = 1;
+    source.sections = {section};
+    return WorkoutGameRoadCourseBuilder::build(source, 200.0);
+}
+
 }
 
 class TestWorkoutGame3DGeometry : public QObject
@@ -174,6 +194,160 @@ class TestWorkoutGame3DGeometry : public QObject
     Q_OBJECT
 
 private slots:
+    void climbBuildsMergedEmbeddedStepsWithinBudget()
+    {
+        const WorkoutGameRoadCourse course = climbCourse();
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const WorkoutGameClimbGeometryProfile profile =
+                WorkoutGameClimbGeometry::profile(piece->difficulty);
+        WorkoutGame3DGeometry climb(WorkoutGame3DGeometry::Layer::Climb);
+        climb.setCourse(course);
+        QVERIFY(climb.ready());
+        QCOMPARE(climb.sampleCount(), 680);
+        QCOMPARE(climb.vertexData().size(),
+                 climb.sampleCount() * climb.stride());
+        const int triangleCount = climb.indexData().size()
+                / int(3 * sizeof(quint32));
+        QCOMPARE(triangleCount, 340);
+        QVERIFY(climb.boundsMax().y() - climb.boundsMin().y() > 0.12f);
+
+        constexpr int RampSegments = 4;
+        constexpr int VerticesPerStep = 136;
+        for (int stepIndex = 0;
+             stepIndex < int(profile.steps.size()); ++stepIndex) {
+            const WorkoutGameClimbStep &step =
+                    profile.steps[std::size_t(stepIndex)];
+            const WorkoutGameRoadSample center =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        course,
+                        piece->challenge.obstacleDistanceMeters
+                            + step.forwardMeters);
+            QVERIFY(center.ready);
+            const double yaw = step.yawDegrees
+                    * 3.14159265358979323846 / 180.0;
+            const double cosine = std::cos(yaw);
+            const double sine = std::sin(yaw);
+            const std::array<std::array<double, 2>, 4> corners = {{
+                {{-step.halfLengthMeters, -step.halfWidthMeters}},
+                {{ step.halfLengthMeters, -step.halfWidthMeters}},
+                {{ step.halfLengthMeters,  step.halfWidthMeters}},
+                {{-step.halfLengthMeters,  step.halfWidthMeters}}
+            }};
+            const double datum = center.visualGroundElevationMeters()
+                    - center.surfaceOffsetMeters;
+            for (int corner = 0; corner < int(corners.size()); ++corner) {
+                const double localForward = corners[std::size_t(corner)][0];
+                const double localLateral = corners[std::size_t(corner)][1];
+                const double forward = localForward * cosine
+                        - localLateral * sine;
+                const double lateral = step.lateralMeters
+                        + localForward * sine + localLateral * cosine;
+                const double contact = profile.surfaceOffsetMeters(
+                        step.forwardMeters + forward, lateral);
+                QCOMPARE(contact, step.heightMeters);
+                const double expectedTop = datum
+                        + forward * center.baseGradePercent / 100.0
+                        + contact + 0.006;
+                const float renderedTop = vertexFloat(
+                        climb.vertexData(), climb.stride(),
+                        stepIndex * VerticesPerStep + corner,
+                        int(sizeof(float)));
+                QVERIFY2(std::abs(double(renderedTop) - expectedTop) < 1e-5,
+                         "climb top vertex does not match contact surface");
+            }
+            for (int sideIndex = 0; sideIndex < 2; ++sideIndex) {
+                const int side = sideIndex == 0 ? -1 : 1;
+                const double inner = side < 0
+                        ? -step.halfLengthMeters : step.halfLengthMeters;
+                const double outer = side < 0
+                        ? inner - profile.contactRampMeters
+                        : inner + profile.contactRampMeters;
+                for (int segment = 0; segment < RampSegments; ++segment) {
+                    const double p0 = double(segment) / RampSegments;
+                    const double p1 = double(segment + 1) / RampSegments;
+                    const double forward0 = side < 0
+                            ? outer + (inner - outer) * p0
+                            : inner + (outer - inner) * p0;
+                    const double forward1 = side < 0
+                            ? outer + (inner - outer) * p1
+                            : inner + (outer - inner) * p1;
+                    const std::array<std::array<double, 2>, 4> rampCorners = {{
+                        {{forward0, -step.halfWidthMeters}},
+                        {{forward1, -step.halfWidthMeters}},
+                        {{forward1,  step.halfWidthMeters}},
+                        {{forward0,  step.halfWidthMeters}}
+                    }};
+                    const int firstRampVertex = stepIndex * VerticesPerStep
+                            + 24 + sideIndex * 56 + segment * 12;
+                    for (int corner = 0;
+                         corner < int(rampCorners.size()); ++corner) {
+                        const double localForward =
+                                rampCorners[std::size_t(corner)][0];
+                        const double localLateral =
+                                rampCorners[std::size_t(corner)][1];
+                        const double forward = localForward * cosine
+                                - localLateral * sine;
+                        const double contact =
+                                profile.stepSurfaceOffsetMeters(
+                                    step, localForward, localLateral);
+                        const double expectedTop = datum
+                                + forward * center.baseGradePercent / 100.0
+                                + contact + 0.006;
+                        const float renderedTop = vertexFloat(
+                                climb.vertexData(), climb.stride(),
+                                firstRampVertex + corner,
+                                int(sizeof(float)));
+                        QVERIFY2(std::abs(double(renderedTop) - expectedTop)
+                                    < 1e-5,
+                                 "climb ramp vertex does not match contact");
+                    }
+                }
+            }
+        }
+    }
+
+    void climbRangeBuildUsesRotatedStepFootprint()
+    {
+        const WorkoutGameRoadCourse course = climbCourse();
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const WorkoutGameClimbGeometryProfile profile =
+                WorkoutGameClimbGeometry::profile(piece->difficulty);
+        const WorkoutGameClimbStep &step = profile.steps.front();
+        const double yaw = step.yawDegrees
+                * 3.14159265358979323846 / 180.0;
+        const double projectedExtent = std::abs(std::cos(yaw))
+                    * (step.halfLengthMeters + profile.contactRampMeters)
+                + std::abs(std::sin(yaw)) * step.halfWidthMeters;
+        const double center = piece->challenge.obstacleDistanceMeters
+                + step.forwardMeters;
+        const double unrotatedExtent = step.halfLengthMeters
+                + profile.contactRampMeters;
+        const double overlapStart = center + unrotatedExtent
+                + 0.25 * (projectedExtent - unrotatedExtent);
+
+        WorkoutGame3DGeometry climb(WorkoutGame3DGeometry::Layer::Climb);
+        climb.setCourseRange(course, overlapStart,
+                center + projectedExtent - 1e-5);
+        QVERIFY(climb.ready());
+        QCOMPARE(climb.sampleCount(), 136);
+
+        climb.setCourseRange(course,
+                center + projectedExtent + 1e-4,
+                center + projectedExtent + 0.02);
+        QVERIFY(!climb.ready());
+        QCOMPARE(climb.sampleCount(), 0);
+    }
+
     void skinnyBuildsMergedBoardsBeamsAndGroundedSupportsWithinBudget()
     {
         const WorkoutGameRoadCourse course = skinnyCourse();

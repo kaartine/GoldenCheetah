@@ -9,6 +9,7 @@
 
 #include "WorkoutGame3DViewModel.h"
 #include "WorkoutGameBermGeometry.h"
+#include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGame3DWindow.h"
 #include "WorkoutGameFeatureGeometry.h"
@@ -116,6 +117,24 @@ WorkoutGameCourse catalogCourse(WorkoutGameTerrainKind terrain)
     return course;
 }
 
+WorkoutGameCourse climbRenderCourse()
+{
+    WorkoutGameCourse course = catalogCourse(WorkoutGameTerrainKind::Climb);
+    WorkoutGameSection &climb = course.sections.front();
+    climb.lengthMeters = 90.0;
+    WorkoutGameSection runout;
+    runout.feature = WorkoutGameFeature::RecoveryDescent;
+    runout.terrain = WorkoutGameTerrainKind::SmoothTrail;
+    runout.startMs = climb.durationMs;
+    runout.durationMs = 12000;
+    runout.lengthMeters = 36.0;
+    runout.targetWatts = 100.0;
+    runout.gradePercent = -3.0;
+    course.sections.push_back(runout);
+    course.durationMs += runout.durationMs;
+    return course;
+}
+
 WorkoutGameCourse sampleCourse()
 {
     WorkoutGameCourse course;
@@ -169,6 +188,7 @@ WorkoutGameVisualSnapshot frameAt(
     WorkoutGameVisualSnapshot frame;
     frame.world.ready = true;
     frame.world.terrain = roadSample.terrain;
+    frame.world.gradePercent = roadSample.center.gradePercent;
     frame.world.rider.distanceMeters = distanceMeters;
     frame.world.rider.elevationMeters = roadSample.center.elevationMeters;
     frame.world.rider.pitchDegrees = roadSample.center.gradePercent * 0.45;
@@ -294,6 +314,311 @@ class TestWorkoutGame3DView : public QObject
     Q_OBJECT
 
 private slots:
+    void climbUsesDedicatedGeometryAndBoundedEffortPoses()
+    {
+        const WorkoutGameCourse course = climbRenderCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const double effortDistance =
+                piece->challenge.obstacleDistanceMeters - 9.0;
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        WorkoutGameVisualSnapshot effort = frameAt(road, effortDistance);
+        effort.simulation.activeSection = 0;
+        effort.simulation.sectionProgress = effortDistance
+                / road.timeline.front().endDistanceMeters;
+        effort.simulation.featureOutcome =
+                WorkoutGameFeatureOutcome::Completed;
+        effort.simulation.route = WorkoutGameRoute::MainLine;
+        effort.feature = runtime.update(effort.simulation);
+        for (int frame = 0; frame < 16; ++frame) {
+            effort.simulation.workoutTimeMs = 1000 + frame * 100;
+            viewModel.setFrame(effort, 250.0, 220.0, 54, 150, 5);
+        }
+        auto *geometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.climbGeometry());
+        QVERIFY(geometry);
+        QVERIFY(geometry->ready());
+        QCOMPARE(geometry->sampleCount(), 680);
+        QVERIFY(viewModel.riderStandingBlend() > 0.70);
+        QVERIFY(viewModel.riderStandingBlend() <= 1.0);
+        QVERIFY(!viewModel.riderWalking());
+        const double standing = viewModel.riderStandingBlend();
+
+        WorkoutGameVisualSnapshot crest = frameAt(
+                road, piece->challenge.obstacleDistanceMeters);
+        crest.simulation.activeSection = 0;
+        crest.simulation.sectionProgress = 1.0;
+        crest.simulation.featureOutcome =
+                WorkoutGameFeatureOutcome::Completed;
+        crest.simulation.route = WorkoutGameRoute::MainLine;
+        crest.feature = runtime.update(crest.simulation);
+        for (int frame = 0; frame < 12; ++frame) {
+            crest.simulation.workoutTimeMs = 2700 + frame * 100;
+            viewModel.setFrame(crest, 250.0, 220.0, 54, 150, 5);
+        }
+        QVERIFY(viewModel.riderStandingBlend() < standing * 0.15);
+
+        effort.world.rider.walking = true;
+        for (int frame = 0; frame < 12; ++frame) {
+            effort.simulation.workoutTimeMs = 4000 + frame * 100;
+            viewModel.setFrame(effort, 40.0, 220.0, 40, 145, 1);
+        }
+        QVERIFY(viewModel.riderWalking());
+        QVERIFY(viewModel.riderStandingBlend() < 0.05);
+    }
+
+    void rendersClimbFaceCrestAndEmbeddedSteps()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const WorkoutGameCourse course = climbRenderCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+        });
+        QVERIFY(piece != road.pieces.end());
+        QCOMPARE(piece->challenge.profile.minimumEffortRatio, 1.0);
+        const double distance =
+                piece->challenge.obstacleDistanceMeters - 7.0;
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+        frame.simulation.activeSection = 0;
+        frame.simulation.sectionProgress = distance
+                / road.timeline.front().endDistanceMeters;
+        frame.simulation.featureOutcome =
+                WorkoutGameFeatureOutcome::Completed;
+        frame.simulation.route = WorkoutGameRoute::MainLine;
+        frame.simulation.challenge = piece->challenge.profile;
+        frame.simulation.challengeAssessment.effortReadiness = 1.0;
+        frame.feature = runtime.update(frame.simulation);
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        window.setCourse(course, FtpWatts);
+        window.setFrame(frame, 250.0, 220.0, 54, 150, 5);
+        QTest::qWait(500);
+        auto *powerValue = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("featurePowerValue"));
+        QVERIFY(powerValue);
+        QCOMPARE(powerValue->property("text").toString(),
+                 QStringLiteral("250 / 220 W"));
+        QVERIFY(window.rootObject()->findChild<QObject *>(
+                QStringLiteral("climbGeometryModel")));
+
+        const QImage rendered = window.grabWindow();
+        QVERIFY(!rendered.isNull());
+        QCOMPARE(rendered.size(), QSize(960, 540));
+        QVERIFY2(sampledColorCount(rendered) > 35,
+                 "climb scene appears blank or nearly monochrome");
+        const QString screenshot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_CLIMB_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            QVERIFY2(rendered.save(screenshot), qPrintable(screenshot));
+        }
+    }
+
+    void missedClimbRendersNoBonusResult()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const WorkoutGameCourse course = climbRenderCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(course, FtpWatts));
+        WorkoutGameSimulationSnapshot simulationFrame;
+        for (std::int64_t timeMs = 0; timeMs <= 30500; timeMs += 250) {
+            WorkoutGameSimulationInput input;
+            input.workoutTimeMs = timeMs;
+            input.actualWatts = timeMs < 30000 ? 80.0 : 100.0;
+            input.targetWatts = timeMs < 30000 ? 220.0 : 100.0;
+            input.cadenceRpm = timeMs < 30000 ? 45.0 : 70.0;
+            simulationFrame = simulation.update(input);
+        }
+        QCOMPARE(simulationFrame.activeSection, 1);
+        QCOMPARE(simulationFrame.previousFeatureSection, 0);
+        QCOMPARE(simulationFrame.previousFeatureOutcome,
+                 WorkoutGameFeatureOutcome::Bypassed);
+        const WorkoutGameRoadTimelineSection &runout = road.timeline[1];
+        const double distance = runout.startDistanceMeters
+                + (runout.endDistanceMeters - runout.startDistanceMeters)
+                    * simulationFrame.sectionProgress;
+        WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+        frame.simulation = simulationFrame;
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        frame.feature = runtime.update(frame.simulation);
+        QCOMPARE(frame.feature.phase, WorkoutGameFeaturePhase::Recovery);
+        QCOMPARE(frame.feature.terrain, WorkoutGameTerrainKind::Climb);
+        QCOMPARE(frame.feature.outcome,
+                 WorkoutGameFeatureOutcome::Bypassed);
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.resize(960, 540);
+        window.setCourse(course, FtpWatts);
+        window.setFrame(frame, 100.0, 100.0, 70, 148, 3);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        auto *label = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("featureStateLabel"));
+        QVERIFY(label);
+        QTRY_COMPARE_WITH_TIMEOUT(label->property("text").toString(),
+                QStringLiteral("NO BONUS"), 2000);
+    }
+
+    void exportsClimbSeatedStandingAndWalkingMotionFrames()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const QString outputRoot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_CLIMB_VIDEO_DIR");
+        if (outputRoot.isEmpty()) {
+            QSKIP("Set GC_WORKOUT_GAME_CLIMB_VIDEO_DIR to export frames");
+        }
+        struct Scenario
+        {
+            const char *name;
+            double watts;
+            int cadence;
+        };
+        const std::array<Scenario, 3> scenarios = {{
+            {"seated", 190.0, 82},
+            {"standing", 250.0, 54},
+            {"walking", 40.0, 40}
+        }};
+        const WorkoutGameCourse course = climbRenderCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        constexpr int FrameCount = 240;
+        const double start = std::max(
+                0.0, piece->challenge.obstacleDistanceMeters - 20.0);
+        const double end = piece->challenge.obstacleDistanceMeters;
+
+        for (const Scenario &scenario : scenarios) {
+            const QString directory = QDir(outputRoot).filePath(
+                    QString::fromLatin1(scenario.name));
+            QVERIFY(QDir().mkpath(directory));
+            window.setCourse(course, FtpWatts);
+            WorkoutGamePhysics physics;
+            QVERIFY(physics.configure(road));
+            double maximumStanding = 0.0;
+            double maximumLateral = 0.0;
+            int walkingFrames = 0;
+            int visiblyChangedFrames = 0;
+            QImage previous;
+            for (int frameIndex = 0; frameIndex < FrameCount; ++frameIndex) {
+                const double progress = double(frameIndex)
+                        / double(FrameCount - 1);
+                const double distance = start + (end - start) * progress;
+                const auto roadSample = WorkoutGameRoadCourseBuilder::sample(
+                        road, distance);
+                QVERIFY(roadSample.ready);
+                WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+                frame.simulation.activeSection = 0;
+                frame.simulation.sectionProgress = distance
+                        / road.timeline.front().endDistanceMeters;
+                frame.simulation.workoutTimeMs = frameIndex * 25;
+                frame.simulation.route = WorkoutGameRoute::MainLine;
+                frame.simulation.featureOutcome = scenario.watts >= 220.0
+                        ? WorkoutGameFeatureOutcome::Completed
+                        : WorkoutGameFeatureOutcome::Bypassed;
+                frame.simulation.challenge = piece->challenge.profile;
+                frame.simulation.challengeAssessment.effortReadiness =
+                        std::clamp(scenario.watts / 220.0, 0.0, 1.0);
+                frame.simulation.speedKph = 12.0;
+                frame.feature = runtime.update(frame.simulation);
+                WorkoutGamePhysicsInput input;
+                input.workoutTimeMs = frame.simulation.workoutTimeMs;
+                input.courseDistanceMeters = distance;
+                input.terrain = roadSample.terrain;
+                input.gradePercent = roadSample.center.gradePercent;
+                input.difficulty = piece->difficulty;
+                input.desiredSpeedMetersPerSecond = 3.33;
+                input.effortRatio = scenario.watts / 220.0;
+                frame.world = physics.update(input);
+                QVERIFY(frame.world.ready);
+                QVERIFY(!frame.world.rider.airborne);
+                QCOMPARE(frame.feature.route, WorkoutGameRoute::MainLine);
+                maximumLateral = std::max(maximumLateral,
+                        std::abs(frame.feature.lateralOffsetMeters));
+                if (frame.world.rider.walking) ++walkingFrames;
+
+                window.setFrame(frame, scenario.watts, 220.0,
+                        scenario.cadence, 150, 5);
+                QTest::qWait(4);
+                auto *viewModel = qobject_cast<WorkoutGame3DViewModel *>(
+                        window.rootContext()->contextProperty(
+                            QStringLiteral("workoutGame3D"))
+                                .value<QObject *>());
+                QVERIFY(viewModel);
+                QVERIFY(viewModel->powerRequired());
+                QCOMPARE(viewModel->requiredPowerWatts(), 220.0);
+                maximumStanding = std::max(
+                        maximumStanding, viewModel->riderStandingBlend());
+                const QImage image = window.grabWindow();
+                QVERIFY(!image.isNull());
+                QVERIFY(sampledColorCount(image) > 30);
+                if (!previous.isNull()
+                        && changedPixels(previous, image) > 20) {
+                    ++visiblyChangedFrames;
+                }
+                previous = image;
+                const QString path = QDir(directory).filePath(
+                        QStringLiteral("frame-%1.png")
+                            .arg(frameIndex, 4, 10, QLatin1Char('0')));
+                QImageWriter writer(path, "png");
+                writer.setCompression(1);
+                QVERIFY2(writer.write(image), qPrintable(writer.errorString()));
+            }
+            QCOMPARE(maximumLateral, 0.0);
+            QVERIFY(visiblyChangedFrames > FrameCount * 4 / 5);
+            if (QString::fromLatin1(scenario.name) == QStringLiteral("standing")) {
+                QVERIFY(maximumStanding > 0.70);
+            } else if (QString::fromLatin1(scenario.name)
+                    == QStringLiteral("seated")) {
+                QVERIFY(maximumStanding < 0.20);
+            } else {
+                QVERIFY(walkingFrames > FrameCount / 2);
+                QVERIFY(maximumStanding < 0.05);
+            }
+        }
+    }
+
+
     void skinnyUsesDedicatedGeometryAndBoundedDeterministicBalance()
     {
         const WorkoutGameCourse course = catalogCourse(

@@ -9,6 +9,7 @@
 
 #include "Train/WorkoutGameWorld.h"
 #include "Train/WorkoutGameBermGeometry.h"
+#include "Train/WorkoutGameClimbGeometry.h"
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
@@ -26,6 +27,88 @@ class TestWorkoutGameWorld : public QObject
     Q_OBJECT
 
 private slots:
+    void productionClimbStaysGroundedAcrossStepsAndCrest()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 1229u;
+        course.durationMs = 50000;
+        WorkoutGameSection climb;
+        climb.feature = WorkoutGameFeature::Climb;
+        climb.terrain = WorkoutGameTerrainKind::Climb;
+        climb.durationMs = 35000;
+        climb.lengthMeters = 100.0;
+        climb.targetWatts = 230.0;
+        climb.gradePercent = 9.0;
+        climb.difficulty = 0.65;
+        climb.challengeCount = 1;
+        WorkoutGameSection recovery = climb;
+        recovery.feature = WorkoutGameFeature::Trail;
+        recovery.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        recovery.startMs = climb.durationMs;
+        recovery.durationMs = 15000;
+        recovery.lengthMeters = 40.0;
+        recovery.targetWatts = 100.0;
+        recovery.gradePercent = 0.0;
+        recovery.challengeCount = 0;
+        course.sections = {climb, recovery};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const auto profile = WorkoutGameClimbGeometry::profile(
+                piece->difficulty);
+        const double start = piece->challenge.obstacleDistanceMeters
+                + profile.startMeters;
+        const double end = piece->challenge.obstacleDistanceMeters + 2.0;
+
+        for (const double speed : {3.0, 5.0, 7.0}) {
+            WorkoutGamePhysics physics;
+            QVERIFY(physics.configure(road));
+            WorkoutGamePhysicsInput input;
+            input.terrain = WorkoutGameTerrainKind::Climb;
+            input.difficulty = piece->difficulty;
+            input.desiredSpeedMetersPerSecond = speed;
+            input.effortRatio = 1.0;
+            double previousElevation = 0.0;
+            double maximumVerticalStep = 0.0;
+            const int ticks = int(std::ceil(
+                    (end - start) / (speed * 0.02)));
+            for (int tick = 0; tick <= ticks; ++tick) {
+                input.workoutTimeMs = tick * 20;
+                input.courseDistanceMeters = std::min(
+                        end, start + tick * speed * 0.02);
+                const WorkoutGameRoadSample sample =
+                        WorkoutGameRoadCourseBuilder::sample(
+                            road, input.courseDistanceMeters);
+                QVERIFY(sample.ready);
+                input.gradePercent = sample.center.gradePercent;
+                const WorkoutGameWorldSnapshot result = physics.update(input);
+                QVERIFY(result.ready);
+                QVERIFY(!result.rider.airborne);
+                QVERIFY(!result.rider.walking);
+                QCOMPARE(result.rider.airHeightMeters(), 0.0);
+                QVERIFY(std::abs(result.surfaceElevationMeters
+                                 - sample.visualGroundElevationMeters()) < 0.03);
+                if (tick > 0) {
+                    maximumVerticalStep = std::max(
+                            maximumVerticalStep,
+                            std::abs(result.rider.elevationMeters
+                                - previousElevation));
+                }
+                previousElevation = result.rider.elevationMeters;
+            }
+            QVERIFY2(maximumVerticalStep < 0.08,
+                     qPrintable(QStringLiteral(
+                         "climb vertical step %1 at %2 m/s")
+                         .arg(maximumVerticalStep).arg(speed)));
+        }
+    }
+
     void productionSkinnyTracksRaisedDeckAndGroundedSafeLine()
     {
         WorkoutGameCourse course;

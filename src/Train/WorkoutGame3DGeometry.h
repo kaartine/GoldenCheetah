@@ -23,6 +23,7 @@ public:
     {
         Berm,
         Bypass,
+        Climb,
         ForestFloor,
         RockGarden,
         RockSlab,
@@ -53,6 +54,10 @@ private:
             double startDistanceMeters,
             double endDistanceMeters);
     void buildBerms(
+            const WorkoutGameRoadCourse &course,
+            double startDistanceMeters,
+            double endDistanceMeters);
+    void buildClimbs(
             const WorkoutGameRoadCourse &course,
             double startDistanceMeters,
             double endDistanceMeters);

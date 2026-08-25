@@ -9,6 +9,7 @@ SOURCES = testWorkoutGameWorld.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
+          ../../../src/Train/WorkoutGameClimbGeometry.h \
           ../../../src/Train/WorkoutGameFeatureCatalog.h \
           ../../../src/Train/WorkoutGameFeatureChallenge.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \

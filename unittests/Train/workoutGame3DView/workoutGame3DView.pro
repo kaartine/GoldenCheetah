@@ -15,11 +15,13 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
            ../../../src/Train/WorkoutGameFeatureHud.cpp \
            ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
+           ../../../src/Train/WorkoutGameSimulation.cpp \
            ../../../src/Train/WorkoutGameTerrainTransition.cpp \
            ../../../src/Train/WorkoutGameVisualSmoother.cpp \
            ../../../src/Train/WorkoutGameWorld.cpp
 
 HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
+           ../../../src/Train/WorkoutGameClimbGeometry.h \
            ../../../src/Train/WorkoutGame3DFeatureAsset.h \
            ../../../src/Train/WorkoutGame3DTerrainProfile.h \
            ../../../src/Train/WorkoutGame3DViewModel.h \

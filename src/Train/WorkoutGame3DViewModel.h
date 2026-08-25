@@ -29,6 +29,8 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(QObject *trailGeometry READ trailGeometry CONSTANT)
     Q_PROPERTY(QObject *bermGeometry READ bermGeometry CONSTANT)
     Q_PROPERTY(QObject *bypassGeometry READ bypassGeometry CONSTANT)
+    Q_PROPERTY(QObject *climbGeometry READ climbGeometry
+               NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *rootsGeometry READ rootsGeometry
                NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *rockGardenGeometry READ rockGardenGeometry
@@ -48,6 +50,9 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(double riderPitch READ riderPitch NOTIFY sceneChanged)
     Q_PROPERTY(double riderRoll READ riderRoll NOTIFY sceneChanged)
     Q_PROPERTY(double riderPump READ riderPump NOTIFY sceneChanged)
+    Q_PROPERTY(double riderStandingBlend READ riderStandingBlend
+               NOTIFY sceneChanged)
+    Q_PROPERTY(bool riderWalking READ riderWalking NOTIFY sceneChanged)
     Q_PROPERTY(double pedalAngle READ pedalAngle NOTIFY sceneChanged)
     Q_PROPERTY(double speedKph READ speedKph NOTIFY sceneChanged)
     Q_PROPERTY(double distanceMeters READ distanceMeters NOTIFY sceneChanged)
@@ -123,6 +128,10 @@ public:
     QObject *trailGeometry() const { return trail.get(); }
     QObject *bermGeometry() const { return berm.get(); }
     QObject *bypassGeometry() const { return bypass.get(); }
+    QObject *climbGeometry() const
+    {
+        return climbBuffers[std::size_t(activeFloorBuffer)].get();
+    }
     QObject *rootsGeometry() const
     {
         return rootBuffers[std::size_t(activeFloorBuffer)].get();
@@ -152,6 +161,8 @@ public:
     double riderPitch() const { return riderPitchDegrees; }
     double riderRoll() const { return riderRollDegrees; }
     double riderPump() const { return riderPumpMeters; }
+    double riderStandingBlend() const { return currentRiderStandingBlend; }
+    bool riderWalking() const { return currentRiderWalking; }
     double pedalAngle() const { return currentPedalAngle; }
     double speedKph() const { return currentSpeedKph; }
     double distanceMeters() const { return currentDistanceMeters; }
@@ -241,6 +252,7 @@ private:
     std::unique_ptr<WorkoutGame3DGeometry> berm;
     std::unique_ptr<WorkoutGame3DGeometry> bypass;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
+    std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> climbBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rootBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rockGardenBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rockSlabBuffers;
@@ -248,6 +260,7 @@ private:
     int activeFloorBuffer = 0;
     WorkoutGameRoadCourse roadCourse;
     std::vector<std::size_t> rollerChallengePieceIndices;
+    std::vector<std::size_t> climbChallengePieceIndices;
     std::int64_t courseDurationMs = 0;
     QVariantList currentPowerProfile;
     double currentPowerProfileMaximumWatts = 1.0;
@@ -266,6 +279,8 @@ private:
     double riderRollDegrees = 0.0;
     bool riderPoseInitialized = false;
     double riderPumpMeters = 0.0;
+    double currentRiderStandingBlend = 0.0;
+    bool currentRiderWalking = false;
     bool rootCompressionInitialized = false;
     double previousRootCompression = 0.0;
     std::int64_t lastRiderPoseTimeMs = -1;

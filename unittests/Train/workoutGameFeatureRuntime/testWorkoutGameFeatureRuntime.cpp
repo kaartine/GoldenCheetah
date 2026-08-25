@@ -11,6 +11,7 @@
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
 #include "Train/WorkoutGameBermGeometry.h"
+#include "Train/WorkoutGameClimbGeometry.h"
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
@@ -103,6 +104,34 @@ double jumpActionEndDistance(
                         + geometry.endMeters + 1.5));
 }
 
+WorkoutGameCourse climbWithRunoutCourse()
+{
+    WorkoutGameCourse course;
+    course.status = WorkoutGameCourseStatus::Ready;
+    course.seed = 7411u;
+    course.durationMs = 30000;
+    WorkoutGameSection climb;
+    climb.feature = WorkoutGameFeature::Climb;
+    climb.terrain = WorkoutGameTerrainKind::Climb;
+    climb.durationMs = course.durationMs;
+    climb.lengthMeters = 90.0;
+    climb.targetWatts = 220.0;
+    climb.gradePercent = 8.0;
+    climb.difficulty = 0.65;
+    climb.challengeCount = 1;
+    WorkoutGameSection runout;
+    runout.feature = WorkoutGameFeature::RecoveryDescent;
+    runout.terrain = WorkoutGameTerrainKind::SmoothTrail;
+    runout.startMs = climb.durationMs;
+    runout.durationMs = 12000;
+    runout.lengthMeters = 36.0;
+    runout.targetWatts = 100.0;
+    runout.gradePercent = -3.0;
+    course.sections = {climb, runout};
+    course.durationMs += runout.durationMs;
+    return course;
+}
+
 }
 
 class TestWorkoutGameFeatureRuntime : public QObject
@@ -110,6 +139,75 @@ class TestWorkoutGameFeatureRuntime : public QObject
     Q_OBJECT
 
 private slots:
+    void climbUsesTheCanonicalMainLineEffortWindow()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const int section = sectionFor(course, WorkoutGameTerrainKind::Climb);
+        const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
+        QVERIFY(piece != nullptr);
+        const auto profile = WorkoutGameClimbGeometry::profile(piece->difficulty);
+
+        const WorkoutGameFeatureRuntimeSnapshot weak = runtime.update(snapshot(
+                section, 0.98, WorkoutGameFeatureOutcome::Bypassed,
+                WorkoutGameRoute::SafeBypass));
+        QCOMPARE(weak.route, WorkoutGameRoute::MainLine);
+        QCOMPARE(weak.motion, WorkoutGameFeatureMotion::Climb);
+        QCOMPARE(weak.phase, WorkoutGameFeaturePhase::Action);
+        QCOMPARE(weak.lateralOffsetMeters, 0.0);
+        QCOMPARE(weak.actionStartDistanceMeters,
+                 piece->challenge.obstacleDistanceMeters
+                    + profile.activeStartMeters);
+        QCOMPARE(weak.actionEndDistanceMeters,
+                 piece->challenge.obstacleDistanceMeters
+                    + profile.endMeters);
+        QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(weak));
+        for (const WorkoutGameClimbStep &step : profile.steps) {
+            const double distance = piece->challenge.obstacleDistanceMeters
+                    + step.forwardMeters;
+            const auto atStep = runtime.update(snapshot(
+                    section, progressAtDistance(road, section, distance),
+                    WorkoutGameFeatureOutcome::Active));
+            QCOMPARE(atStep.phase, WorkoutGameFeaturePhase::Action);
+            QCOMPARE(atStep.motion, WorkoutGameFeatureMotion::Climb);
+            QCOMPARE(atStep.route, WorkoutGameRoute::MainLine);
+        }
+    }
+
+    void climbResultPersistsForSixMetersOfAnUnchallengedRunout()
+    {
+        const WorkoutGameCourse course = climbWithRunoutCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+
+        WorkoutGameSimulationSnapshot runout = snapshot(
+                1, 3.0 / 36.0, WorkoutGameFeatureOutcome::None);
+        runout.previousFeatureSection = 0;
+        runout.previousFeatureOutcome =
+                WorkoutGameFeatureOutcome::Bypassed;
+        runout.previousFeatureReadiness = 0.0;
+        const WorkoutGameFeatureRuntimeSnapshot result =
+                runtime.update(runout);
+        QVERIFY(result.ready);
+        QCOMPARE(result.sourceSectionIndex, 0);
+        QCOMPARE(result.terrain, WorkoutGameTerrainKind::Climb);
+        QCOMPARE(result.phase, WorkoutGameFeaturePhase::Recovery);
+        QCOMPARE(result.outcome, WorkoutGameFeatureOutcome::Bypassed);
+        QCOMPARE(result.route, WorkoutGameRoute::MainLine);
+
+        runout.sectionProgress = 7.0 / 36.0;
+        const WorkoutGameFeatureRuntimeSnapshot expired =
+                runtime.update(runout);
+        QCOMPARE(expired.sourceSectionIndex, 1);
+        QCOMPARE(expired.terrain, WorkoutGameTerrainKind::SmoothTrail);
+        QCOMPARE(expired.phase, WorkoutGameFeaturePhase::None);
+    }
+
     void skinnyUsesCanonicalBalanceWindowAndSmoothGroundedSafeLine()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);

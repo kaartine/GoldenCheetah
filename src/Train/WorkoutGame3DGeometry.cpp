@@ -10,6 +10,7 @@
 #include "WorkoutGame3DGeometry.h"
 
 #include "WorkoutGameBermGeometry.h"
+#include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
@@ -116,6 +117,25 @@ void appendFeatureSamples(
             append(center + skinny.deckEndMeters);
             append(center + skinny.activeEndMeters);
             append(center + skinny.endMeters);
+            continue;
+        }
+        if (piece.terrain == WorkoutGameTerrainKind::Climb) {
+            const WorkoutGameClimbGeometryProfile climb =
+                    WorkoutGameClimbGeometry::profile(piece.difficulty);
+            const double center = piece.challenge.obstacleDistanceMeters;
+            append(center + climb.startMeters);
+            append(center + climb.activeStartMeters);
+            for (const WorkoutGameClimbStep &step : climb.steps) {
+                append(center + step.forwardMeters
+                        - step.halfLengthMeters - climb.contactRampMeters);
+                append(center + step.forwardMeters - step.halfLengthMeters);
+                append(center + step.forwardMeters);
+                append(center + step.forwardMeters + step.halfLengthMeters);
+                append(center + step.forwardMeters
+                        + step.halfLengthMeters + climb.contactRampMeters);
+            }
+            append(center + climb.crestStartMeters);
+            append(center + climb.endMeters);
             continue;
         }
         const WorkoutGameFeatureGeometryProfile profile =
@@ -231,6 +251,10 @@ void WorkoutGame3DGeometry::build(
         buildBerms(course, startDistanceMeters, endDistanceMeters);
         return;
     }
+    if (layer == Layer::Climb) {
+        buildClimbs(course, startDistanceMeters, endDistanceMeters);
+        return;
+    }
     if (layer == Layer::Roots) {
         buildRoots(course, startDistanceMeters, endDistanceMeters);
         return;
@@ -342,7 +366,9 @@ void WorkoutGame3DGeometry::build(
                         || sample.terrain
                             == WorkoutGameTerrainKind::RockSlab
                         || sample.terrain
-                            == WorkoutGameTerrainKind::Skinny);
+                            == WorkoutGameTerrainKind::Skinny
+                        || sample.terrain
+                            == WorkoutGameTerrainKind::Climb);
             const double elevation = trailVertex
                     ? sample.visualGroundElevationMeters()
                         - (technicalDatum ? sample.surfaceOffsetMeters : 0.0)
@@ -451,6 +477,243 @@ void WorkoutGame3DGeometry::build(
     setBounds(boundsMin, boundsMax);
     geometryReady = true;
     generatedSampleCount = count;
+    update();
+}
+
+void WorkoutGame3DGeometry::buildClimbs(
+        const WorkoutGameRoadCourse &course,
+        double startDistanceMeters,
+        double endDistanceMeters)
+{
+    struct LocalVertex
+    {
+        double forward;
+        double lateral;
+        double up;
+    };
+    constexpr int RampSegments = 4;
+    constexpr int VerticesPerStep = 136;
+    constexpr int TrianglesPerStep = 68;
+    constexpr int MaximumSteps = 120;
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    vertices.reserve(MaximumSteps * VerticesPerStep);
+    indices.reserve(MaximumSteps * TrianglesPerStep * 3);
+    QVector3D boundsMin(
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max());
+    QVector3D boundsMax(
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest());
+    int stepCount = 0;
+
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled
+                || piece.terrain != WorkoutGameTerrainKind::Climb) {
+            continue;
+        }
+        const WorkoutGameClimbGeometryProfile profile =
+                WorkoutGameClimbGeometry::profile(piece.difficulty);
+        const double anchor = piece.challenge.obstacleDistanceMeters;
+        if (!profile.ready || anchor + profile.endMeters < startDistanceMeters
+                || anchor + profile.startMeters > endDistanceMeters) {
+            continue;
+        }
+
+        for (const WorkoutGameClimbStep &step : profile.steps) {
+            if (stepCount >= MaximumSteps) break;
+            const double distance = anchor + step.forwardMeters;
+            const double yaw = step.yawDegrees * Pi / 180.0;
+            const double cosine = std::cos(yaw);
+            const double sine = std::sin(yaw);
+            const double longitudinalExtent =
+                    std::abs(cosine) * (step.halfLengthMeters
+                        + profile.contactRampMeters)
+                    + std::abs(sine) * step.halfWidthMeters;
+            if (distance + longitudinalExtent < startDistanceMeters
+                    || distance - longitudinalExtent > endDistanceMeters) {
+                continue;
+            }
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(course, distance);
+            if (!sample.ready) continue;
+
+            const double halfHeight = step.heightMeters * 0.625;
+            const double centerUp = step.heightMeters * 0.375 + 0.006;
+            const double low = centerUp - halfHeight;
+            const double high = centerUp + halfHeight;
+            const double f = step.halfLengthMeters;
+            const double w = step.halfWidthMeters;
+            const double forwardX = std::sin(sample.center.headingRadians);
+            const double forwardZ = std::cos(sample.center.headingRadians);
+            const double rightX = std::cos(sample.center.headingRadians);
+            const double rightZ = -std::sin(sample.center.headingRadians);
+            const double grade = sample.baseGradePercent / 100.0;
+            const auto appendFace = [&](const std::array<LocalVertex, 4> &face) {
+                const LocalVertex firstEdge{
+                    face[1].forward - face[0].forward,
+                    face[1].lateral - face[0].lateral,
+                    face[1].up - face[0].up};
+                const LocalVertex secondEdge{
+                    face[2].forward - face[0].forward,
+                    face[2].lateral - face[0].lateral,
+                    face[2].up - face[0].up};
+                LocalVertex localNormal{
+                    firstEdge.lateral * secondEdge.up
+                        - firstEdge.up * secondEdge.lateral,
+                    firstEdge.up * secondEdge.forward
+                        - firstEdge.forward * secondEdge.up,
+                    firstEdge.forward * secondEdge.lateral
+                        - firstEdge.lateral * secondEdge.forward};
+                const double normalLength = std::sqrt(
+                        localNormal.forward * localNormal.forward
+                        + localNormal.lateral * localNormal.lateral
+                        + localNormal.up * localNormal.up);
+                if (normalLength <= 1e-9) return;
+                localNormal.forward /= normalLength;
+                localNormal.lateral /= normalLength;
+                localNormal.up /= normalLength;
+                const double normalForward = localNormal.forward * cosine
+                        - localNormal.lateral * sine;
+                const double normalLateral = localNormal.forward * sine
+                        + localNormal.lateral * cosine;
+                const std::uint32_t base = std::uint32_t(vertices.size());
+                for (std::size_t corner = 0; corner < face.size(); ++corner) {
+                    const LocalVertex local = face[corner];
+                    const double forward = local.forward * cosine
+                            - local.lateral * sine;
+                    const double lateral = step.lateralMeters
+                            + local.forward * sine + local.lateral * cosine;
+                    const float x = float(sample.center.xMeters
+                            + forward * forwardX + lateral * rightX);
+                    const double baseElevation =
+                            sample.visualGroundElevationMeters()
+                            - sample.surfaceOffsetMeters;
+                    const float y = float(baseElevation
+                            + forward * grade + local.up);
+                    const float z = float(sample.center.zMeters
+                            + forward * forwardZ + lateral * rightZ);
+                    const float shade = localNormal.up > 0.25 ? 1.0f
+                            : localNormal.up < -0.25 ? 0.55f : 0.78f;
+                    vertices.push_back({
+                        x, y, z,
+                        float(normalForward * forwardX
+                              + normalLateral * rightX),
+                        float(localNormal.up),
+                        float(normalForward * forwardZ
+                              + normalLateral * rightZ),
+                        0.37f * shade, 0.35f * shade, 0.30f * shade, 1.0f,
+                        corner == 0 || corner == 3 ? 0.0f : 1.0f,
+                        corner < 2 ? 0.0f : 1.0f
+                    });
+                    boundsMin.setX(std::min(boundsMin.x(), x));
+                    boundsMin.setY(std::min(boundsMin.y(), y));
+                    boundsMin.setZ(std::min(boundsMin.z(), z));
+                    boundsMax.setX(std::max(boundsMax.x(), x));
+                    boundsMax.setY(std::max(boundsMax.y(), y));
+                    boundsMax.setZ(std::max(boundsMax.z(), z));
+                }
+                indices.insert(indices.end(), {
+                    base, base + 1u, base + 2u,
+                    base, base + 2u, base + 3u
+                });
+            };
+            const std::array<std::array<LocalVertex, 4>, 6> bodyFaces = {{
+                {{{-f, -w, high}, { f, -w, high},
+                   { f,  w, high}, {-f,  w, high}}},
+                {{{-f,  w, low}, { f,  w, low},
+                   { f, -w, low}, {-f, -w, low}}},
+                {{{ f, -w, low}, { f,  w, low},
+                   { f,  w, high}, { f, -w, high}}},
+                {{{-f,  w, low}, {-f, -w, low},
+                   {-f, -w, high}, {-f,  w, high}}},
+                {{{ f,  w, low}, {-f,  w, low},
+                   {-f,  w, high}, { f,  w, high}}},
+                {{{-f, -w, low}, { f, -w, low},
+                   { f, -w, high}, {-f, -w, high}}}
+            }};
+            for (const auto &face : bodyFaces) appendFace(face);
+
+            for (int side : {-1, 1}) {
+                const double inner = side < 0 ? -f : f;
+                const double outer = side < 0
+                        ? -f - profile.contactRampMeters
+                        : f + profile.contactRampMeters;
+                for (int segment = 0; segment < RampSegments; ++segment) {
+                    const double p0 = double(segment) / RampSegments;
+                    const double p1 = double(segment + 1) / RampSegments;
+                    const double forward0 = side < 0
+                            ? outer + (inner - outer) * p0
+                            : inner + (outer - inner) * p0;
+                    const double forward1 = side < 0
+                            ? outer + (inner - outer) * p1
+                            : inner + (outer - inner) * p1;
+                    const double top0 = profile.stepSurfaceOffsetMeters(
+                            step, forward0, 0.0) + 0.006;
+                    const double top1 = profile.stepSurfaceOffsetMeters(
+                            step, forward1, 0.0) + 0.006;
+                    appendFace({{{forward0, -w, top0},
+                                 {forward1, -w, top1},
+                                 {forward1,  w, top1},
+                                 {forward0,  w, top0}}});
+                    appendFace({{{forward0, -w, low},
+                                 {forward1, -w, low},
+                                 {forward1, -w, top1},
+                                 {forward0, -w, top0}}});
+                    appendFace({{{forward0,  w, top0},
+                                 {forward1,  w, top1},
+                                 {forward1,  w, low},
+                                 {forward0,  w, low}}});
+                }
+                const double rangeStart = std::min(inner, outer);
+                const double rangeEnd = std::max(inner, outer);
+                appendFace({{{rangeStart,  w, low},
+                             {rangeEnd,  w, low},
+                             {rangeEnd, -w, low},
+                             {rangeStart, -w, low}}});
+                const double outerTop = profile.stepSurfaceOffsetMeters(
+                        step, outer, 0.0) + 0.006;
+                if (side < 0) {
+                    appendFace({{{outer,  w, low}, {outer, -w, low},
+                                 {outer, -w, outerTop},
+                                 {outer,  w, outerTop}}});
+                } else {
+                    appendFace({{{outer, -w, low}, {outer,  w, low},
+                                 {outer,  w, outerTop},
+                                 {outer, -w, outerTop}}});
+                }
+            }
+            Q_ASSERT(int(vertices.size())
+                    == (stepCount + 1) * VerticesPerStep);
+            ++stepCount;
+        }
+    }
+
+    if (vertices.empty() || indices.empty()) return;
+    QByteArray vertexBytes;
+    vertexBytes.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
+    appendBytes(vertexBytes, vertices.data(), vertices.size() * sizeof(Vertex));
+    QByteArray indexBytes;
+    indexBytes.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
+    appendBytes(indexBytes, indices.data(), indices.size() * sizeof(std::uint32_t));
+    setStride(sizeof(Vertex));
+    setVertexData(vertexBytes);
+    setIndexData(indexBytes);
+    setPrimitiveType(PrimitiveType::Triangles);
+    addAttribute(Attribute::PositionSemantic,
+                 offsetof(Vertex, x), Attribute::F32Type);
+    addAttribute(Attribute::NormalSemantic,
+                 offsetof(Vertex, nx), Attribute::F32Type);
+    addAttribute(Attribute::ColorSemantic,
+                 offsetof(Vertex, r), Attribute::F32Type);
+    addAttribute(Attribute::TexCoordSemantic,
+                 offsetof(Vertex, u), Attribute::F32Type);
+    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
+    setBounds(boundsMin, boundsMax);
+    geometryReady = true;
+    generatedSampleCount = int(vertices.size());
     update();
 }
 

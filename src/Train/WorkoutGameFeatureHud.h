@@ -20,7 +20,8 @@ enum class WorkoutGameFeatureHudState
     Committed,
     ActNow,
     Complete,
-    Bypass
+    Bypass,
+    NoBonus
 };
 
 enum class WorkoutGameFeatureHudDistanceKind

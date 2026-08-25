@@ -57,6 +57,21 @@ WorkoutGameCourse challengeCourse(WorkoutGameTerrainKind terrain)
     return course;
 }
 
+WorkoutGameCourse climbWithRunoutCourse()
+{
+    WorkoutGameCourse course = challengeCourse(
+            WorkoutGameTerrainKind::Climb);
+    WorkoutGameSection runout;
+    runout.feature = WorkoutGameFeature::RecoveryDescent;
+    runout.terrain = WorkoutGameTerrainKind::SmoothTrail;
+    runout.startMs = course.durationMs;
+    runout.durationMs = 5000;
+    runout.targetWatts = 100.0;
+    course.sections.push_back(runout);
+    course.durationMs += runout.durationMs;
+    return course;
+}
+
 WorkoutGameCourse rideCourse(double gradePercent, bool gravityAssisted = false)
 {
     WorkoutGameCourse course;
@@ -205,6 +220,40 @@ private slots:
 
         QCOMPARE(result.featureOutcome, WorkoutGameFeatureOutcome::Bypassed);
         QCOMPARE(result.route, WorkoutGameRoute::MainLine);
+    }
+
+    void weakClimbEffortLosesTheBonusButStaysOnTheTrail()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                challengeCourse(WorkoutGameTerrainKind::Climb), 200.0));
+
+        WorkoutGameSimulationSnapshot result;
+        for (std::int64_t time = 0; time <= 9750; time += 250) {
+            result = simulation.update(sample(time, 70.0, 200.0, 45.0));
+        }
+
+        QCOMPARE(result.featureOutcome, WorkoutGameFeatureOutcome::Bypassed);
+        QCOMPARE(result.route, WorkoutGameRoute::MainLine);
+    }
+
+    void climbResultIsPublishedToTheImmediateRunout()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(climbWithRunoutCourse(), 200.0));
+        simulation.update(sample(0, 70.0, 200.0, 45.0));
+        for (std::int64_t time = 250; time <= 10250; time += 250) {
+            simulation.update(sample(time, 70.0, 200.0, 45.0));
+        }
+        const WorkoutGameSimulationSnapshot result =
+                simulation.update(sample(10500, 100.0, 100.0, 70.0));
+
+        QCOMPARE(result.activeSection, 1);
+        QCOMPARE(result.featureOutcome, WorkoutGameFeatureOutcome::None);
+        QCOMPARE(result.previousFeatureSection, 0);
+        QCOMPARE(result.previousFeatureOutcome,
+                 WorkoutGameFeatureOutcome::Bypassed);
+        QCOMPARE(result.previousFeatureReadiness, 0.0);
     }
 
     void tabletopUsesTargetPowerRegardlessOfSyntheticSpeed()

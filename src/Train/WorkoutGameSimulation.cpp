@@ -364,6 +364,22 @@ WorkoutGameSimulationSnapshot WorkoutGameSimulation::snapshot(
     result.score = std::uint64_t(std::max(0.0, std::floor(scorePoints)));
     result.streakSeconds = double(streakMs) / 1000.0;
 
+    if (activeSection > 0) {
+        const int previousSection = activeSection - 1;
+        const WorkoutGameFeatureOutcome previousOutcome =
+                outcomes[std::size_t(previousSection)];
+        if (challengeProfiles[std::size_t(previousSection)].enabled
+                && (previousOutcome == WorkoutGameFeatureOutcome::Completed
+                    || previousOutcome
+                        == WorkoutGameFeatureOutcome::Bypassed)) {
+            result.previousFeatureSection = previousSection;
+            result.previousFeatureOutcome = previousOutcome;
+            result.previousFeatureReadiness =
+                    previousOutcome == WorkoutGameFeatureOutcome::Completed
+                    ? 1.0 : 0.0;
+        }
+    }
+
     if (activeSection >= 0) {
         const WorkoutGameSection &section = configuredCourse.sections[activeSection];
         result.sectionProgress = std::clamp(
@@ -378,7 +394,8 @@ WorkoutGameSimulationSnapshot WorkoutGameSimulation::snapshot(
         result.challengeMeasurementActive = sectionSampleMs > 0;
         result.challengeReadiness = activeChallengeReadiness;
         if (result.featureOutcome == WorkoutGameFeatureOutcome::Bypassed
-                && section.terrain != WorkoutGameTerrainKind::Rollers) {
+                && section.terrain != WorkoutGameTerrainKind::Rollers
+                && section.terrain != WorkoutGameTerrainKind::Climb) {
             result.route = WorkoutGameRoute::SafeBypass;
         }
     }

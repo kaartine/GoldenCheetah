@@ -57,6 +57,10 @@ struct WorkoutGameSimulationSnapshot
     std::uint64_t score = 0;
     double streakSeconds = 0.0;
     WorkoutGameFeatureOutcome featureOutcome = WorkoutGameFeatureOutcome::None;
+    int previousFeatureSection = -1;
+    WorkoutGameFeatureOutcome previousFeatureOutcome =
+            WorkoutGameFeatureOutcome::None;
+    double previousFeatureReadiness = 0.0;
     WorkoutGameRoute route = WorkoutGameRoute::MainLine;
     WorkoutGameFeatureChallengeProfile challenge;
     WorkoutGameFeatureChallengeMetrics challengeMetrics;

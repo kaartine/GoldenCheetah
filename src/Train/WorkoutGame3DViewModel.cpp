@@ -11,6 +11,7 @@
 
 #include "WorkoutGame3DFeatureAsset.h"
 #include "WorkoutGameBermGeometry.h"
+#include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureChallenge.h"
 #include "WorkoutGameFeatureGeometry.h"
@@ -95,6 +96,10 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
         buffer = std::make_unique<WorkoutGame3DGeometry>(
                 WorkoutGame3DGeometry::Layer::ForestFloor);
     }
+    for (std::unique_ptr<WorkoutGame3DGeometry> &buffer : climbBuffers) {
+        buffer = std::make_unique<WorkoutGame3DGeometry>(
+                WorkoutGame3DGeometry::Layer::Climb);
+    }
     for (std::unique_ptr<WorkoutGame3DGeometry> &buffer : rootBuffers) {
         buffer = std::make_unique<WorkoutGame3DGeometry>(
                 WorkoutGame3DGeometry::Layer::Roots);
@@ -137,11 +142,15 @@ void WorkoutGame3DViewModel::setCourse(
 {
     roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
     rollerChallengePieceIndices.clear();
+    climbChallengePieceIndices.clear();
     for (std::size_t index = 0; index < roadCourse.pieces.size(); ++index) {
         const WorkoutGameRoadPiece &piece = roadCourse.pieces[index];
         if (piece.challenge.enabled
                 && piece.terrain == WorkoutGameTerrainKind::Rollers) {
             rollerChallengePieceIndices.push_back(index);
+        } else if (piece.challenge.enabled
+                && piece.terrain == WorkoutGameTerrainKind::Climb) {
+            climbChallengePieceIndices.push_back(index);
         }
     }
     rebuildPowerProfile(course);
@@ -160,6 +169,8 @@ void WorkoutGame3DViewModel::setCourse(
     currentWorkoutProgress = 0.0;
     currentGradePercent = 0.0;
     riderPumpMeters = 0.0;
+    currentRiderStandingBlend = 0.0;
+    currentRiderWalking = false;
     riderPoseInitialized = false;
     rootCompressionInitialized = false;
     rockCompressionInitialized = false;
@@ -318,6 +329,44 @@ void WorkoutGame3DViewModel::setFrame(
         riderRollDegrees = targetRiderRollDegrees;
     }
     riderPoseInitialized = true;
+    currentRiderWalking = frame.world.rider.walking;
+    double targetStandingBlend = 0.0;
+    if (frame.world.terrain == WorkoutGameTerrainKind::Climb) {
+        const auto climbPiece = std::find_if(
+                climbChallengePieceIndices.begin(),
+                climbChallengePieceIndices.end(),
+                [this, &sample](std::size_t index) {
+                    return roadCourse.pieces[index].sourceSectionIndex
+                            == roadCourse.pieces[sample.pieceIndex]
+                                .sourceSectionIndex;
+                });
+        if (climbPiece != climbChallengePieceIndices.end()) {
+            const WorkoutGameRoadPiece &piece = roadCourse.pieces[*climbPiece];
+            const WorkoutGameClimbGeometryProfile climb =
+                    WorkoutGameClimbGeometry::profile(piece.difficulty);
+            const double effortRatio = currentTargetWatts > 0.0
+                    ? currentWatts / currentTargetWatts : 0.0;
+            targetStandingBlend = climb.standingBlend(
+                    effortRatio, double(currentCadenceRpm),
+                    currentRiderWalking)
+                    * climb.crestRelease(
+                        distanceMeters
+                            - piece.challenge.obstacleDistanceMeters);
+        }
+    }
+    const double poseElapsedSeconds = lastRiderPoseTimeMs >= 0
+            ? std::clamp(double(frame.simulation.workoutTimeMs
+                                - lastRiderPoseTimeMs) / 1000.0,
+                         0.0, 0.25)
+            : 0.08;
+    const double standingTimeConstant = targetStandingBlend
+                > currentRiderStandingBlend ? 0.22 : 0.30;
+    const double standingBlend = 1.0 - std::exp(
+            -poseElapsedSeconds / standingTimeConstant);
+    currentRiderStandingBlend += (targetStandingBlend
+            - currentRiderStandingBlend) * standingBlend;
+    currentRiderStandingBlend = std::clamp(
+            currentRiderStandingBlend, 0.0, 1.0);
     if (frame.world.terrain != WorkoutGameTerrainKind::Roots) {
         rootCompressionInitialized = false;
     }
@@ -677,7 +726,10 @@ QString WorkoutGame3DViewModel::featureText(
     case WorkoutGameFeaturePhase::Action:
         return name;
     case WorkoutGameFeaturePhase::Recovery:
-        return feature.outcome == WorkoutGameFeatureOutcome::Completed
+        return feature.terrain == WorkoutGameTerrainKind::Climb
+                    && feature.outcome == WorkoutGameFeatureOutcome::Bypassed
+                ? tr("%1 complete - no bonus").arg(name)
+                : feature.outcome == WorkoutGameFeatureOutcome::Completed
                 ? tr("%1 completed").arg(name)
                 : tr("%1 bypassed").arg(name);
     case WorkoutGameFeaturePhase::None:
@@ -705,6 +757,8 @@ QString WorkoutGame3DViewModel::featureActionText(
         return tr("Complete");
     case WorkoutGameFeatureHudState::Bypass:
         return tr("Safe line");
+    case WorkoutGameFeatureHudState::NoBonus:
+        return tr("No bonus");
     case WorkoutGameFeatureHudState::Hidden:
         break;
     }
@@ -764,6 +818,8 @@ void WorkoutGame3DViewModel::rebuildFloor(double distanceMeters)
     if (!roadCourse.ready) {
         floorBuffers[0]->setCourse(roadCourse);
         floorBuffers[1]->setCourse(roadCourse);
+        climbBuffers[0]->setCourse(roadCourse);
+        climbBuffers[1]->setCourse(roadCourse);
         rootBuffers[0]->setCourse(roadCourse);
         rootBuffers[1]->setCourse(roadCourse);
         rockGardenBuffers[0]->setCourse(roadCourse);
@@ -789,6 +845,8 @@ void WorkoutGame3DViewModel::rebuildFloor(double distanceMeters)
             roadCourse, start, end);
     if (!floorBuffers[std::size_t(nextBuffer)]->ready()) return;
     rootBuffers[std::size_t(nextBuffer)]->setCourseRange(
+            roadCourse, start, end);
+    climbBuffers[std::size_t(nextBuffer)]->setCourseRange(
             roadCourse, start, end);
     rockGardenBuffers[std::size_t(nextBuffer)]->setCourseRange(
             roadCourse, start, end);

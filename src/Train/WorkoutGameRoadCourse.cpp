@@ -10,6 +10,7 @@
 #include "WorkoutGameRoadCourse.h"
 
 #include "WorkoutGameBermGeometry.h"
+#include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
@@ -86,6 +87,9 @@ double featureSurfaceOffset(
     case WorkoutGameTerrainKind::Skinny:
         return WorkoutGameSkinnyGeometry::profile(
                 piece.difficulty).surfaceOffsetMeters(local, 0.0);
+    case WorkoutGameTerrainKind::Climb:
+        return WorkoutGameClimbGeometry::profile(
+                piece.difficulty).surfaceOffsetMeters(local, 0.0);
     case WorkoutGameTerrainKind::Rollers:
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
@@ -116,8 +120,7 @@ double trailReliefOffset(
     double amplitude = 0.68 + 0.58 * piece.difficulty;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Climb:
-        amplitude *= 1.20;
-        break;
+        return 0.0;
     case WorkoutGameTerrainKind::Skinny:
         amplitude *= 0.35;
         break;
@@ -249,6 +252,16 @@ double estimatedLength(
             ? 8.5
             : 3.0 + 3.2 * std::sqrt(intensity);
     return std::clamp(seconds * speed, 24.0, 1200.0);
+}
+
+int boundedPieceCount(double lengthMeters, int maximum)
+{
+    if (!std::isfinite(lengthMeters) || lengthMeters <= 0.0
+            || maximum <= 1) {
+        return 1;
+    }
+    const double requested = std::ceil(lengthMeters / 90.0);
+    return int(std::clamp(requested, 1.0, double(maximum)));
 }
 
 double pieceTurn(
@@ -464,11 +477,47 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
     for (std::size_t sectionIndex = 0;
          sectionIndex < course.sections.size(); ++sectionIndex) {
         const WorkoutGameSection &section = course.sections[sectionIndex];
-        const double sectionLength = estimatedLength(section, ftpWatts);
+        const WorkoutGameClimbGeometryProfile climbProfile =
+                WorkoutGameClimbGeometry::profile(section.difficulty);
+        const double requestedSectionLength = estimatedLength(section, ftpWatts);
+        const double sectionLength = section.terrain
+                    == WorkoutGameTerrainKind::Climb
+                ? std::max(requestedSectionLength,
+                           climbProfile.minimumLengthMeters)
+                : requestedSectionLength;
+        const double climbEntryLength = section.terrain
+                    == WorkoutGameTerrainKind::Climb
+                ? std::min(climbProfile.entryTransitionMeters,
+                           sectionLength * 0.25)
+                : 0.0;
+        const double climbCrestLength = section.terrain
+                    == WorkoutGameTerrainKind::Climb
+                ? std::min(climbProfile.crestTransitionMeters,
+                           sectionLength * 0.25)
+                : 0.0;
+        const double climbSustainedLength = std::max(
+                0.0, sectionLength - climbEntryLength - climbCrestLength);
+        const int climbSustainedPieceCount = section.terrain
+                    == WorkoutGameTerrainKind::Climb
+                ? boundedPieceCount(climbSustainedLength, 22)
+                : 0;
+        const double climbExitGrade = section.terrain
+                    == WorkoutGameTerrainKind::Climb
+                ? (sectionIndex + 1 < course.sections.size()
+                    ? course.sections[sectionIndex + 1].gradePercent : 0.0)
+                : section.gradePercent;
+        const double climbSustainedGrade = section.terrain
+                    == WorkoutGameTerrainKind::Climb
+                ? climbProfile.sustainedGradePercent(
+                    sectionLength, section.gradePercent,
+                    connector.gradePercent, climbExitGrade,
+                    climbEntryLength, climbCrestLength)
+                : section.gradePercent;
         const int pieceCount = section.terrain == WorkoutGameTerrainKind::Berm
                 ? 1
-                : std::clamp(
-                    int(std::ceil(sectionLength / 90.0)), 1, 24);
+                : section.terrain == WorkoutGameTerrainKind::Climb
+                    ? climbSustainedPieceCount + 2
+                : boundedPieceCount(sectionLength, 24);
         const double pieceLength = sectionLength / double(pieceCount);
         const WorkoutGameFeatureChallengeProfile challenge =
                 WorkoutGameFeatureChallenge::profile(section);
@@ -512,6 +561,9 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             obstacleDistance = std::min(
                     sectionStart + sectionLength - 7.0,
                     challengeDistance + 7.0);
+            break;
+        case WorkoutGameTerrainKind::Climb:
+            obstacleDistance = sectionStart + sectionLength;
             break;
         default:
             break;
@@ -614,19 +666,40 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             }
         }
         for (int part = 0; part < pieceCount; ++part) {
+            const double currentPieceLength = section.terrain
+                        == WorkoutGameTerrainKind::Climb
+                    ? (part == 0 ? climbEntryLength
+                        : part + 1 == pieceCount ? climbCrestLength
+                        : climbSustainedLength
+                            / double(climbSustainedPieceCount))
+                    : pieceLength;
             WorkoutGameRoadPiece piece;
             piece.sourceSectionIndex = sectionIndex;
             piece.terrain = section.terrain;
             piece.startDistanceMeters = result.totalLengthMeters;
-            piece.lengthMeters = pieceLength;
+            piece.lengthMeters = currentPieceLength;
             piece.turnRadians = pieceTurn(
                     section, std::size_t(part));
-            piece.riseMeters = pieceLength * section.gradePercent / 100.0;
             piece.difficulty = std::clamp(section.difficulty, 0.0, 1.0);
             piece.entry = connector;
             piece.exit = connector;
             piece.exit.halfWidthMeters = targetHalfWidth(section.terrain);
-            piece.exit.gradePercent = section.gradePercent;
+            if (section.terrain == WorkoutGameTerrainKind::Climb) {
+                if (part == 0) {
+                    piece.exit.gradePercent = climbSustainedGrade;
+                } else if (part + 1 == pieceCount) {
+                    piece.exit.gradePercent = climbExitGrade;
+                } else {
+                    piece.exit.gradePercent = climbSustainedGrade;
+                }
+                piece.riseMeters = currentPieceLength
+                        * (piece.entry.gradePercent
+                           + piece.exit.gradePercent) / 200.0;
+            } else {
+                piece.exit.gradePercent = section.gradePercent;
+                piece.riseMeters = currentPieceLength
+                        * section.gradePercent / 100.0;
+            }
             piece.exit = connectorAt(piece, 1.0);
 
             const double pieceEnd = piece.startDistanceMeters
@@ -676,6 +749,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                             : featureGeometry.ready
                                 ? featureGeometry.endMeters : 4.0);
                 if (section.terrain == WorkoutGameTerrainKind::Rollers
+                        || section.terrain == WorkoutGameTerrainKind::Climb
                         || section.terrain == WorkoutGameTerrainKind::Berm
                         || section.terrain == WorkoutGameTerrainKind::Roots
                         || section.terrain

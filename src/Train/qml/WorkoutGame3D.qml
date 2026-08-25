@@ -11,6 +11,7 @@ Item {
         if (state === 4) return "#ef7849"
         if (state === 5) return "#70c985"
         if (state === 6) return "#aeb8b5"
+        if (state === 7) return "#e5c151"
         if (state === 3) return "#74c9e8"
         return "#e5c151"
     }
@@ -80,6 +81,21 @@ Item {
                 roughness: 0.95
                 vertexColorsEnabled: true
                 lighting: PrincipledMaterial.FragmentLighting
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
+        Model {
+            objectName: "climbGeometryModel"
+            geometry: workoutGame3D.climbGeometry
+            materials: PrincipledMaterial {
+                baseColor: "white"
+                metalness: 0
+                roughness: 0.94
+                vertexColorsEnabled: true
+                lighting: PrincipledMaterial.FragmentLighting
+                cullMode: Material.NoCulling
             }
             castsShadows: false
             receivesShadows: false
@@ -411,8 +427,12 @@ Item {
                 id: riderBody
                 objectName: "riderBodyNode"
                 y: 1.23 + workoutGame3D.riderPump
-                z: -0.03
+                   + 0.14 * workoutGame3D.riderStandingBlend
+                   - (workoutGame3D.riderWalking ? 0.10 : 0)
+                z: -0.03 + 0.12 * workoutGame3D.riderStandingBlend
                 eulerRotation.x: 12
+                    + 8 * workoutGame3D.riderStandingBlend
+                    - (workoutGame3D.riderWalking ? 5 : 0)
                 Model {
                     source: "#Cylinder"
                     scale: Qt.vector3d(0.0033, 0.0062, 0.0033)

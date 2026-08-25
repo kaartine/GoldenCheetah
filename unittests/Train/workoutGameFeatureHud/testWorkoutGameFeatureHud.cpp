@@ -134,6 +134,29 @@ private slots:
         QCOMPARE(result.distanceMeters, 0.0);
     }
 
+    void missedClimbStaysAnActiveMainLineEffort()
+    {
+        WorkoutGameFeatureRuntimeSnapshot runtime = feature(
+                WorkoutGameFeaturePhase::Action,
+                WorkoutGameFeatureOutcome::Bypassed);
+        runtime.terrain = WorkoutGameTerrainKind::Climb;
+        runtime.route = WorkoutGameRoute::MainLine;
+        const WorkoutGameFeatureHudSnapshot result = WorkoutGameFeatureHud::build(
+                runtime, simulation(0.45, 1.0), 220.0);
+
+        QVERIFY(result.visible);
+        QCOMPARE(result.route, WorkoutGameRoute::MainLine);
+        QCOMPARE(result.state, WorkoutGameFeatureHudState::ActNow);
+
+        runtime.phase = WorkoutGameFeaturePhase::Recovery;
+        runtime.visualDistanceMeters = 29.0;
+        const WorkoutGameFeatureHudSnapshot recovery =
+                WorkoutGameFeatureHud::build(
+                    runtime, simulation(0.45, 1.0), 220.0);
+        QVERIFY(recovery.visible);
+        QCOMPARE(recovery.state, WorkoutGameFeatureHudState::NoBonus);
+    }
+
     void recoveryReportsCompletedAndBypassedOutcomes_data()
     {
         QTest::addColumn<int>("outcome");

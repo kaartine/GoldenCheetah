@@ -10,6 +10,7 @@
 #include "WorkoutGameMesh.h"
 
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
@@ -628,24 +629,29 @@ WorkoutGameMesh rollersModel(double difficulty)
 WorkoutGameMesh climbModel(double difficulty)
 {
     WorkoutGameMesh mesh;
-    for (int index = 0; index < 7; ++index) {
-        const double forward = -3.0 + double(index);
-        const double side = index % 2 == 0 ? -1.0 : 1.0;
-        const double right = side * (0.82 + 0.13 * double(index % 3));
-        const double size = 0.20 + 0.035 * double(index % 4)
-                + 0.08 * difficulty;
-        addIrregularBoulder(
-                mesh, forward, right,
-                size * 1.35, size * 1.15, size,
-                0.91 * double(index));
+    const WorkoutGameClimbGeometryProfile profile =
+            WorkoutGameClimbGeometry::profile(difficulty);
+    for (const WorkoutGameClimbStep &step : profile.steps) {
+        const double halfHeight = step.heightMeters * 0.625;
+        const double centerHeight = step.heightMeters * 0.375;
+        addBox(mesh,
+               step.forwardMeters, step.lateralMeters,
+               centerHeight,
+               step.halfLengthMeters, step.halfWidthMeters, halfHeight,
+               WorkoutGameMeshMaterial::RockSide,
+               WorkoutGameMeshMaterial::RockHighlight);
         mesh.colliders.push_back({
-            forward, right, size * 0.5,
-            size * 0.7, size * 0.6, size * 0.5
+            step.forwardMeters, step.lateralMeters, centerHeight,
+            step.halfLengthMeters, step.halfWidthMeters, halfHeight
         });
     }
-    mesh.lengthMeters = 6.5;
-    mesh.entry = {-3.25, 1.25, 0.0};
-    mesh.exit = {3.25, 1.25, 0.0};
+    mesh.lengthMeters = profile.endMeters - profile.startMeters;
+    mesh.entry = {
+        profile.startMeters, profile.socketHalfWidthMeters, 0.0
+    };
+    mesh.exit = {
+        profile.endMeters, profile.socketHalfWidthMeters, 0.0
+    };
     mesh.ready = true;
     return mesh;
 }

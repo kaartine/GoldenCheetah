@@ -33,7 +33,7 @@ silhouette, scale, trail integration, and line readability from future art.
 | --- | --- | --- | --- |
 | Roots | Track armouring, p. 35; obstacle limits in grading tables | The production tile now embeds eight irregular branches into one widened tread. Five branches cross the main line, the low-relief safe line stays on the same trail, and physics suspension follows the rendered crowns. | Preserve the canonical profile, partial burial and exact sockets when final bark and ground materials replace the current vertex colors. |
 | Rollers | Roller profile and spacing, p. 37 | The continuous strip is a sound base, but the shallow, flat-topped bands resemble a boardwalk more than rounded pump rollers. | Use two or three clearly rounded crests and troughs. Keep spacing near the guideline's ten-times-height rule. |
-| Climb | Gradient design, p. 25 | Edge rocks are visible, but the mesh does not communicate a climb; the road grade carries all of the meaning. | Give the trail a long visible rising face, transverse rock steps, and a readable crest. |
+| Climb | Gradient design, p. 25 | The production climb now preserves authored rise through bounded entry/sustained/crest grades and adds five embedded transverse rock steps to the long rising face. Seated, standing and walking poses remain grounded, and the crest releases the effort pose into the following trail. | Preserve the canonical grade, contact-ramp, crest and result-carry contracts when final rock and ground materials replace the current vertex colors. |
 | Rock garden | Track armouring, p. 35 | The production tile now sinks twelve irregular, rotated stones into one widened tread. Nine stones cross the main line, the low-relief safe line stays on the same trail, and physics suspension follows the same crowns rendered by Quick 3D. | Preserve the canonical profile, partial burial, opaque merged mesh and exact sockets when final rock and ground materials replace the current vertex colors. |
 | Bunny hop | Jump anatomy, p. 38 | A separate project-authored practice hurdle now spans the ordinary trail without raising its ground surface. It has a short preload, feature-specific bounded lift and a grounded safe branch. | Preserve the accepted socket, clearance and timing contract when final pixel materials and rider preload/landing clips replace the current low-poly presentation. |
 | Drop | Drop sections, p. 36 | A sharp level lip now opens into a real physics and render gap, an exposed faceted face, a lower landing and smooth recovery. The separate safe line stays on ordinary ground. | Preserve the shared gap, collision, socket and bypass contract when final materials replace the approved low-poly face. |
@@ -78,6 +78,12 @@ flat deck. Difficulty scales the deck from 0.62 to 0.50 m wide and from 0.28 to
 0.36 m high; its entry and exit ramps remain below six degrees. The packed-dirt
 safe line is 1.05 m right of centre and reconnects through four-metre blends to
 each 1.36 m-wide socket.
+
+The production climb normalizes to at least 14 m and uses five-metre entry and
+crest grade transitions. At catalog difficulty 0.65, five yawed transverse
+steps rise approximately 0.08-0.14 m above the tread and use 0.24 m contact
+ramps. The road retains the exact requested total rise, the crest joins the
+next section grade without overshoot, and the 1.36 m socket remains exact.
 
 ## Airborne Presentation
 

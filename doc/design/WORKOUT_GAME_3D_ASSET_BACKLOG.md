@@ -79,7 +79,7 @@ targets, feature decisions, or trainer resistance.
 | FT-08 | Rock garden | Accepted project-authored group of twelve sunk irregular stones, widened same-tread safe line and exact sockets | Box2D suspension drives bounded torso roughness and line choice; no scripted air or camera vibration |
 | FT-09 | Rock slab | Accepted project-authored asymmetric rollover face, exposed buried sides, four fissures, same-tread safe line and exact sockets | Box2D surface and front/rear suspension drive pitch and bounded torso response; no scripted air or camera vibration |
 | FT-10 | Skinny | Accepted project-authored deck boards, beams/supports, visible ground and exact width transitions | Deterministic subtle balance lean on the narrow line; grounded packed-dirt safe line |
-| FT-11 | Climb | Long visible rising face, optional rock steps and readable crest | Standing pedal pose and crest release |
+| FT-11 | Climb | Accepted project-authored rising same-tread face with five embedded rock steps, bounded grade transitions and a readable crest | Grounded seated/standing/walking effort pose, bounded crest release and six-metre result carry |
 
 ### Environment And Effects
 
@@ -177,7 +177,7 @@ candidate until safe-line geometry and the extracted-AppImage gate pass.
 - [x] `PROD-03` Rollers and berm.
 - [x] `PROD-04` Roots, rock garden and rock slab.
 - [x] `PROD-05` Skinny and width transitions.
-- [ ] `PROD-06` Climb, grade transitions and crest response.
+- [x] `PROD-06` Climb, grade transitions and crest response.
 - [ ] `PROD-07` Feature-specific rider/camera/effect states.
 - [ ] `PROD-08` Completed/bypass catalog and live UI tests for all eleven features.
 
@@ -190,6 +190,12 @@ Skinny uses one canonical socketed profile for deck height, width transitions,
 same-tile safe line, physics contact and both renderers. Its merged Quick 3D
 range is bounded to 1,008 vertices and 504 triangles per tile with at most
 twelve resident tiles and no external asset or additional license obligation.
+
+`PROD-06` is accepted as deterministic project-authored procedural geometry.
+Climb uses one canonical yaw-aware profile for physical contact, visible step
+plateaus and ramps, grade transitions, sockets, effort pose and crest release.
+Its merged Quick 3D range is bounded to 680 vertices and 340 triangles per
+tile, with no external asset or additional license obligation.
 
 ### Phase 5: Release
 

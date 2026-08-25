@@ -255,12 +255,19 @@ ground following and cannot activate either airborne visual path.
 - [x] Berm uses the same curved path for trail, rider lateral position and roll.
 - [x] Skinny uses subtle balance lean without random steering.
 - [x] Roots/rocks/slab move suspension and torso without camera vibration.
-- [ ] Climb selects seated/standing effort and a bounded crest release.
+- [x] Climb selects seated/standing effort and a bounded crest release.
 
 **Tests:** per-feature pose and contact assertions plus approach/action/recovery
 captures.
 
 **Done when:** feature motion is recognisable even with grey materials.
+
+**Current Climb evidence:** the canonical climb profile selects seated pedalling
+at ordinary cadence and effort, blends into a bounded standing pose for high
+effort/low cadence, switches to walking only through the authoritative world
+state, and releases the standing pose through the five-metre crest. All three
+poses remain grounded. A 240-frame capture for each pose verifies visible
+motion through the same climb and crest without lateral movement or airtime.
 
 ### `PHY-03` Make virtual gearing and speed progressive
 
@@ -302,7 +309,7 @@ and a runtime/geometry regression test.
 - [x] `FTR-07` Rock garden: sunk varied rocks and a readable rideable line.
 - [x] `FTR-08` Rock slab: asymmetric mass, crest, sides and surface following.
 - [x] `FTR-09` Skinny: narrow deck, supports, ground clearance and transitions.
-- [ ] `FTR-10` Climb: visible rising face, crest and effort pose.
+- [x] `FTR-10` Climb: visible rising face, crest and effort pose.
 - [ ] `FTR-11` Tabletop: promote the accepted vertical slice to production.
 
 **FTR-01 evidence:** a 16-sided transverse log now extends beyond both
@@ -573,6 +580,41 @@ build host. Both videos are 960 by 540, 60 FPS and 4.8 seconds. Their SHA-256
 values are respectively
 `f51e2eab77dc085db0f3e568f9975a21c95774993c057ecb2b063703c52c8ed0` and
 `b3108494537f3de22f98cb6a6d253b900e03b9767315bbc64eafebaa6ef62928`.
+No external model, image or texture was added.
+
+**FTR-10 evidence:** Climb is a project-owned procedural same-tread feature.
+The road builder preserves the requested section rise while splitting every
+climb into bounded five-metre entry and crest grade transitions around a
+sustained grade. Short authored climbs normalize to a safe 14-metre minimum,
+and even adversarial explicit lengths have a bounded piece count. The final
+14 metres contain five transverse rock steps, an exact 1.36-metre-wide socket
+and a readable crest. Difficulty scales the step heights from approximately
+0.08 to 0.14 metres at the catalog setting.
+
+Road elevation, Box2D contact, the legacy comparison renderer and Quick 3D all
+consume `WorkoutGameClimbGeometry`. Its yaw-aware footprint supplies the same
+plateaus and 0.24-metre smoother-step approach/runout ramps used by the merged
+opaque mesh. Rendered top and ramp vertices are checked against that canonical
+contact surface. Trail relief is carved below the dedicated stones, so the
+680-vertex, 340-triangle range remains visible without z-fighting; range
+filtering includes the rotated ramp footprint. Climb has no artificial bypass,
+lateral teleport or airtime. Missing the target retains the main line, loses
+only the bonus and publishes a distinct `NO BONUS` result for the first six
+metres of an unchallenged runout. The result path is tested end to end from the
+real simulation through runtime, HUD and QML.
+
+Road, simulation, feature-runtime, legacy-mesh, world, Quick 3D geometry, HUD
+and replay/engine suites pass `40 + 32 + 24 + 32 + 39 + 27 + 13 + 13` tests
+normally and under ASan/UBSan. The complete X11/OpenGL view suite passes 52
+tests with eleven explicit opt-in exports skipped under both configurations.
+The separate seated, standing and walking exports pass normally and under
+ASan/UBSan. Each video is 960 by 540, 40 FPS, six seconds and 240 frames; more
+than four fifths of frame transitions visibly change. Review artifacts are in
+`$HOME/Documents/personal/gc-ui-ftr10-final` on the build host. Video SHA-256
+values are respectively
+`10c28b8a217aeb277ae5fdfe23bf962e009c5216cd040add10e969b91cb52f7b`,
+`13b8e6121c76dfd0f5da13574aa34cc72ea345cec5c5f31229774fd97517f694`
+and `2027d76c4de9ae704715322bde5e36332ec8a2238f2486ebc0907c244b7e2ea9`.
 No external model, image or texture was added.
 
 **Feature acceptance:** each feature is identifiable without its name, joins
