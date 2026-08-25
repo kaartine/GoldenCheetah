@@ -100,6 +100,20 @@ Tree placement needs a camera corridor plus distance-based fade or substitution
 so scenery can frame the trail but never hide the rider, action cue, or next
 feature.
 
+The camera composition is also a release blocker. It is currently 8.6 m behind
+but 2.7 m to the side and 4.3 m above the rider. That shoulder offset is roughly
+two normal trail half-widths, so the bicycle reads sideways, the vanishing line
+does not sit behind the rider, and jump/drop silhouettes are foreshortened. The
+high downward view also weakens visible climbs and descents.
+
+The next pass must compare at least three fixed, reproducible compositions: a
+low centred chase view, a medium centred chase view, and a slight shoulder
+view. Start with the rider centred horizontally, lower the camera, and aim
+farther down the trail so the next 25-40 m remain readable. Camera position and
+target must be sampled from the same road, smoothly damped, and protected from
+terrain and tree intersections. Select the final baseline from matching videos
+before adding dynamic camera movement.
+
 The floor currently streams 15 m behind and 130 m ahead while tree placement
 updates in buckets. This is bounded and efficient, but transitions need visual
 validation to prevent late tree pop and ground-chunk changes. Authored terrain
@@ -178,12 +192,14 @@ them.
 3. Replace the primitive rider with a correctly oriented, articulated low-poly
    GLB and animation states for pedal, compress, air, land, absorb, lean, and
    safe bypass.
-4. Fix drop vertical ownership and make one physics source authoritative for
+4. Replace the current high shoulder camera with the selected centred chase
+   baseline and add deterministic camera-composition captures.
+5. Fix drop vertical ownership and make one physics source authoritative for
    each airborne action.
-5. Redesign feature guidance and add grade plus workout power profile.
-6. Make the Data Generator follow the active game target and add deterministic
+6. Redesign feature guidance and add grade plus workout power profile.
+7. Make the Data Generator follow the active game target and add deterministic
    completed/bypassed UI captures for every feature.
-7. Add diagnostics and release tests for backward distance, stalls, actual
+8. Add diagnostics and release tests for backward distance, stalls, actual
    presented FPS, simulation skipped ticks, prop pop-in, and tile joins.
 
 ### P1: Content and feel
@@ -219,5 +235,7 @@ The 3D renderer is ready for a user release only when:
    frame work.
 6. The workout profile, grade, power, cadence, heart rate, target, gear, speed,
    time, and feature action state remain readable during riding.
-7. AppImage and native tests cover startup, save/cancel/continue, renderer
+7. The selected camera keeps the rider aligned with the trail, exposes the next
+   feature and elevation profile, and never intersects scenery or terrain.
+8. AppImage and native tests cover startup, save/cancel/continue, renderer
    selection, fallback, asset packaging, and an isolated-data UI session.
