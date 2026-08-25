@@ -51,6 +51,12 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(int readinessPercent READ readinessPercent NOTIFY sceneChanged)
     Q_PROPERTY(QVariantList features READ features NOTIFY courseChanged)
     Q_PROPERTY(QVariantList trees READ trees NOTIFY treesChanged)
+    Q_PROPERTY(QString cameraComposition READ cameraComposition CONSTANT)
+    Q_PROPERTY(double cameraBackMeters READ cameraBackMeters CONSTANT)
+    Q_PROPERTY(double cameraSideMeters READ cameraSideMeters CONSTANT)
+    Q_PROPERTY(double cameraHeightMeters READ cameraHeightMeters CONSTANT)
+    Q_PROPERTY(double cameraLookAheadMeters READ cameraLookAheadMeters CONSTANT)
+    Q_PROPERTY(double cameraTargetHeightMeters READ cameraTargetHeightMeters CONSTANT)
 
 public:
     explicit WorkoutGame3DViewModel(QObject *parent = nullptr);
@@ -100,6 +106,12 @@ public:
     int readinessPercent() const { return currentReadinessPercent; }
     QVariantList features() const { return courseFeatures; }
     QVariantList trees() const { return visibleTrees; }
+    QString cameraComposition() const { return currentCameraComposition; }
+    double cameraBackMeters() const { return cameraBackDistanceMeters; }
+    double cameraSideMeters() const { return cameraSideDistanceMeters; }
+    double cameraHeightMeters() const { return cameraHeightDistanceMeters; }
+    double cameraLookAheadMeters() const { return cameraLookAheadDistanceMeters; }
+    double cameraTargetHeightMeters() const { return cameraTargetHeightDistanceMeters; }
 
 signals:
     void sceneChanged();
@@ -147,6 +159,12 @@ private:
     QString currentTerrainName;
     QString currentFeatureStatus;
     int currentReadinessPercent = 0;
+    QString currentCameraComposition;
+    double cameraBackDistanceMeters = 8.2;
+    double cameraSideDistanceMeters = 0.0;
+    double cameraHeightDistanceMeters = 3.2;
+    double cameraLookAheadDistanceMeters = 12.0;
+    double cameraTargetHeightDistanceMeters = 0.85;
 };
 
 #endif

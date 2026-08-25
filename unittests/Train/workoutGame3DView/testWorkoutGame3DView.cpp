@@ -30,6 +30,31 @@ namespace {
 
 constexpr double FtpWatts = 200.0;
 
+class ScopedEnvironmentVariable
+{
+public:
+    explicit ScopedEnvironmentVariable(const char *variable) :
+        name(variable),
+        value(qgetenv(variable)),
+        present(qEnvironmentVariableIsSet(variable))
+    {
+    }
+
+    ~ScopedEnvironmentVariable()
+    {
+        if (present) {
+            qputenv(name.constData(), value);
+        } else {
+            qunsetenv(name.constData());
+        }
+    }
+
+private:
+    QByteArray name;
+    QByteArray value;
+    bool present;
+};
+
 struct FeatureCatalogEntry
 {
     WorkoutGameTerrainKind terrain;
@@ -187,6 +212,42 @@ private slots:
     void initTestCase()
     {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+    }
+
+    void cameraCompositionDefaultsToCentreAndSupportsAuditVariants()
+    {
+        const ScopedEnvironmentVariable restore(
+                "GC_WORKOUT_GAME_3D_CAMERA");
+
+        qunsetenv("GC_WORKOUT_GAME_3D_CAMERA");
+        {
+            WorkoutGame3DViewModel medium;
+            QCOMPARE(medium.cameraComposition(),
+                     QStringLiteral("medium-centre"));
+            QCOMPARE(medium.cameraSideMeters(), 0.0);
+            QCOMPARE(medium.cameraBackMeters(), 8.2);
+            QCOMPARE(medium.cameraHeightMeters(), 3.2);
+            QCOMPARE(medium.cameraLookAheadMeters(), 12.0);
+        }
+
+        qputenv("GC_WORKOUT_GAME_3D_CAMERA", "low-centre");
+        {
+            WorkoutGame3DViewModel low;
+            QCOMPARE(low.cameraComposition(), QStringLiteral("low-centre"));
+            QCOMPARE(low.cameraSideMeters(), 0.0);
+            QCOMPARE(low.cameraBackMeters(), 7.4);
+            QCOMPARE(low.cameraHeightMeters(), 2.55);
+            QCOMPARE(low.cameraTargetHeightMeters(), 0.75);
+        }
+
+        qputenv("GC_WORKOUT_GAME_3D_CAMERA", "shoulder");
+        {
+            WorkoutGame3DViewModel shoulder;
+            QCOMPARE(shoulder.cameraComposition(), QStringLiteral("shoulder"));
+            QVERIFY(shoulder.cameraSideMeters() > 0.0);
+            QVERIFY(shoulder.cameraSideMeters() < 0.68);
+        }
+
     }
 
     void loadsRendersAndMovesScene()
@@ -357,6 +418,62 @@ private slots:
                         .arg(QString::fromLatin1(entry.name)));
             QVERIFY2(rendered.save(output), qPrintable(output));
         }
+    }
+
+    void exportsCameraCompositionCatalog()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const QByteArray requestedOutput =
+                qgetenv("GC_WORKOUT_GAME_3D_CAMERA_CATALOG_DIR");
+        const QString outputDirectory = requestedOutput.isEmpty()
+                ? QDir(QDir::tempPath()).filePath(
+                    QStringLiteral("workout-game-3d-camera-catalog"))
+                : QString::fromLocal8Bit(requestedOutput);
+        QVERIFY(QDir().mkpath(outputDirectory));
+        const ScopedEnvironmentVariable restore(
+                "GC_WORKOUT_GAME_3D_CAMERA");
+        const WorkoutGameCourse course = sampleCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const WorkoutGameVisualSnapshot frame = frameAt(
+                road, tabletopApproachDistance(road));
+        const std::array<QByteArray, 3> compositions = {{
+            QByteArrayLiteral("low-centre"),
+            QByteArrayLiteral("medium-centre"),
+            QByteArrayLiteral("shoulder")
+        }};
+        QImage prior;
+
+        for (const QByteArray &composition : compositions) {
+            qputenv("GC_WORKOUT_GAME_3D_CAMERA", composition);
+            WorkoutGame3DWindow window(true);
+            QVERIFY(window.rendererAvailable());
+            window.setCourse(course, FtpWatts);
+            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+            window.resize(1280, 720);
+            window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+            QTest::qWait(350);
+            const QImage rendered = window.grabWindow();
+            QVERIFY(!rendered.isNull());
+            QCOMPARE(rendered.size(), QSize(1280, 720));
+            QVERIFY(sampledColorCount(rendered) > 35);
+            if (!prior.isNull()) {
+                QVERIFY2(changedPixels(prior, rendered) > 500,
+                         qPrintable(QStringLiteral(
+                             "camera composition %1 is not visually distinct")
+                             .arg(QString::fromLatin1(composition))));
+            }
+            const QString output = QDir(outputDirectory).filePath(
+                    QStringLiteral("camera-%1.png")
+                        .arg(QString::fromLatin1(composition)));
+            QVERIFY2(rendered.save(output), qPrintable(output));
+            prior = rendered;
+        }
+
     }
 
     void jumpLiftRemainsVisibleAgainstGroundCamera()
