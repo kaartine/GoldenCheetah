@@ -235,10 +235,12 @@ WorkoutGameMesh logModel(double difficulty)
         for (int index = 0; index < WorkoutGameLogRadialSegments; ++index) {
             const double angle = 2.0 * Pi * double(index)
                     / double(WorkoutGameLogRadialSegments);
+            const double verticalScale = std::sin(angle) >= 0.0
+                    ? profile.heightMeters : profile.heightMeters * 0.13;
             addVertex(mesh,
                     forwardOffset[ring] + std::cos(angle) * localRadius,
                     right[ring],
-                    localRadius + std::sin(angle) * localRadius,
+                    std::sin(angle) * verticalScale * radiusScale[ring],
                     double(ring) / double(Rings - 1),
                     double(index) / double(WorkoutGameLogRadialSegments));
         }
@@ -260,11 +262,11 @@ WorkoutGameMesh logModel(double difficulty)
         }
     }
     const std::uint32_t leftCenter = addVertex(
-            mesh, forwardOffset[0], right[0], radius * radiusScale[0],
+            mesh, forwardOffset[0], right[0], 0.0,
             0.0, 0.5);
     const std::uint32_t rightCenter = addVertex(
-            mesh, forwardOffset[Rings - 1], right[Rings - 1],
-            radius * radiusScale[Rings - 1], 1.0, 0.5);
+            mesh, forwardOffset[Rings - 1], right[Rings - 1], 0.0,
+            1.0, 0.5);
     const std::uint32_t lastRing = std::uint32_t(
             (Rings - 1) * WorkoutGameLogRadialSegments);
     for (int index = 0; index < WorkoutGameLogRadialSegments; ++index) {

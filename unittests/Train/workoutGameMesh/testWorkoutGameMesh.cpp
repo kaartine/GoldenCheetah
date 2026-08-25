@@ -666,11 +666,39 @@ private slots:
                         / double(WorkoutGameLogRadialSegments);
             const double fromX = std::cos(fromAngle) * radius;
             const double toX = std::cos(toAngle) * radius;
-            const double fromY = radius + std::sin(fromAngle) * radius;
-            const double toY = radius + std::sin(toAngle) * radius;
+            const double fromY =
+                    std::sin(fromAngle) * profile.heightMeters;
+            const double toY =
+                    std::sin(toAngle) * profile.heightMeters;
             QVERIFY(std::abs(
                     profile.surfaceOffset((fromX + toX) * 0.5)
                     - (fromY + toY) * 0.5) < 1e-12);
+        }
+    }
+
+    void facetedObstaclesJoinTheTrailWithoutVerticalTeleport()
+    {
+        const WorkoutGameTerrainKind terrains[] = {
+            WorkoutGameTerrainKind::LogOver,
+            WorkoutGameTerrainKind::BunnyHop
+        };
+        for (WorkoutGameTerrainKind terrain : terrains) {
+            const WorkoutGameFeatureGeometryProfile profile =
+                    WorkoutGameFeatureGeometry::profile(terrain, 0.6);
+            QVERIFY(profile.ready);
+            QCOMPARE(profile.surfaceOffset(profile.startMeters), 0.0);
+            QCOMPARE(profile.surfaceOffset(profile.endMeters), 0.0);
+            QCOMPARE(profile.surfaceOffset(0.0), profile.heightMeters);
+            const double epsilon = 1.0e-5;
+            const double entry = profile.surfaceOffset(
+                    profile.startMeters + epsilon);
+            const double exit = profile.surfaceOffset(
+                    profile.endMeters - epsilon);
+            QVERIFY(entry > 0.0);
+            QVERIFY(exit > 0.0);
+            QVERIFY(entry < 0.01);
+            QVERIFY(exit < 0.01);
+            QVERIFY(std::abs(entry - exit) < 1.0e-12);
         }
     }
 

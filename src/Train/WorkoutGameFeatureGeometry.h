@@ -42,6 +42,10 @@ struct WorkoutGameFeatureGeometryProfile
             return 0.0;
         }
         if (shape == WorkoutGameFeatureGeometryShape::FacetedLog) {
+            if (localDistanceMeters <= startMeters
+                    || localDistanceMeters >= endMeters) {
+                return 0.0;
+            }
             const double radius = heightMeters * 0.5;
             constexpr double Pi = 3.14159265358979323846;
             for (int segment = 0;
@@ -58,10 +62,10 @@ struct WorkoutGameFeatureGeometryProfile
                     const double amount = std::clamp(
                             (localDistanceMeters - fromX) / (toX - fromX),
                             0.0, 1.0);
-                    const double fromY = radius
-                            + std::sin(fromAngle) * radius;
-                    const double toY = radius
-                            + std::sin(toAngle) * radius;
+                    const double fromY =
+                            std::sin(fromAngle) * heightMeters;
+                    const double toY =
+                            std::sin(toAngle) * heightMeters;
                     return fromY + (toY - fromY) * amount;
                 }
             }
