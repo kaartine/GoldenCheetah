@@ -9,6 +9,8 @@
 
 #include "Train/WorkoutGameSimulation.h"
 #include "Train/WorkoutGameRoadCourse.h"
+#include "Train/WorkoutGameRoadPhysics.h"
+#include "Train/VirtualDrivetrain.h"
 
 #include <QTest>
 
@@ -53,6 +55,72 @@ WorkoutGameCourse challengeCourse(WorkoutGameTerrainKind terrain)
     section.challengeCount = 1;
     course.sections.push_back(section);
     return course;
+}
+
+WorkoutGameCourse rideCourse(double gradePercent, bool gravityAssisted = false)
+{
+    WorkoutGameCourse course;
+    course.status = WorkoutGameCourseStatus::Ready;
+    course.seed = 123u;
+    course.durationMs = 120000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::Trail;
+    section.terrain = WorkoutGameTerrainKind::SmoothTrail;
+    section.durationMs = course.durationMs;
+    section.targetWatts = 200.0;
+    section.gradePercent = gradePercent;
+    section.gravityAssisted = gravityAssisted;
+    course.sections.push_back(section);
+    return course;
+}
+
+struct GearTrace
+{
+    double finalSpeedKph = 0.0;
+    double maximumStepKph = 0.0;
+};
+
+GearTrace rideTrace(int gear, double gradePercent, bool gravityAssisted)
+{
+    constexpr std::int64_t StepMs = 50;
+    constexpr std::int64_t DurationMs = 60000;
+    constexpr double PowerWatts = 200.0;
+    constexpr double CadenceRpm = 85.0;
+    constexpr double WheelCircumferenceMeters = 2.105;
+
+    WorkoutGameRoadPhysics physics;
+    WorkoutGameSimulation simulation;
+    VirtualDrivetrain drivetrain(gear);
+    const bool physicsReady = physics.configure(
+            WorkoutGameRoadPhysicsParameters());
+    const bool simulationReady = simulation.configure(
+            rideCourse(gradePercent, gravityAssisted), PowerWatts);
+    Q_ASSERT(physicsReady);
+    Q_ASSERT(simulationReady);
+    if (!physicsReady || !simulationReady) return {};
+
+    GearTrace trace;
+    double previousSpeedKph = 0.0;
+    for (std::int64_t timeMs = 0; timeMs <= DurationMs; timeMs += StepMs) {
+        const WorkoutGameRoadPhysicsSnapshot road = physics.update(
+                {PowerWatts, gradePercent, 0.0},
+                timeMs == 0 ? 0 : StepMs);
+        WorkoutGameSimulationInput input = sample(
+                timeMs, PowerWatts, PowerWatts, CadenceRpm);
+        input.authoritativeSpeedKph = road.speedMetersPerSecond * 3.6;
+        input.drivetrainSpeedLimitKph = drivetrain.speedKph(
+                CadenceRpm, WheelCircumferenceMeters);
+        input.virtualGear = gear;
+        const WorkoutGameSimulationSnapshot frame = simulation.update(input);
+        if (timeMs > 0) {
+            trace.maximumStepKph = std::max(
+                    trace.maximumStepKph,
+                    std::abs(frame.speedKph - previousSpeedKph));
+        }
+        previousSpeedKph = frame.speedKph;
+        trace.finalSpeedKph = frame.speedKph;
+    }
+    return trace;
 }
 
 }
@@ -387,6 +455,46 @@ private slots:
                  "an upshift teleported the bicycle to the new cadence speed");
     }
 
+    void everyVirtualGearHasContinuousFlatClimbAndDescentTraces()
+    {
+        constexpr double MaximumStepKph = 7.2 * 0.05 + 1e-9;
+        double previousFlatSpeedKph = 0.0;
+        double previousClimbSpeedKph = 0.0;
+
+        for (int gear = 1; gear <= 12; ++gear) {
+            const GearTrace flat = rideTrace(gear, 0.0, false);
+            const GearTrace climb = rideTrace(gear, 8.0, false);
+            const GearTrace descent = rideTrace(gear, -8.0, true);
+
+            QVERIFY2(flat.maximumStepKph <= MaximumStepKph,
+                     qPrintable(QStringLiteral("flat gear %1 stepped %2 kph")
+                             .arg(gear).arg(flat.maximumStepKph)));
+            QVERIFY2(climb.maximumStepKph <= MaximumStepKph,
+                     qPrintable(QStringLiteral("climb gear %1 stepped %2 kph")
+                             .arg(gear).arg(climb.maximumStepKph)));
+            QVERIFY2(descent.maximumStepKph <= MaximumStepKph,
+                     qPrintable(QStringLiteral("descent gear %1 stepped %2 kph")
+                             .arg(gear).arg(descent.maximumStepKph)));
+            QVERIFY(climb.finalSpeedKph <= flat.finalSpeedKph + 1e-9);
+            QVERIFY2(descent.finalSpeedKph > flat.finalSpeedKph,
+                     qPrintable(QStringLiteral(
+                             "gear %1 descent %2 kph did not exceed flat %3 kph")
+                             .arg(gear)
+                             .arg(descent.finalSpeedKph)
+                             .arg(flat.finalSpeedKph)));
+            QVERIFY(flat.finalSpeedKph + 1e-9 >= previousFlatSpeedKph);
+            QVERIFY(climb.finalSpeedKph + 1e-9 >= previousClimbSpeedKph);
+
+            previousFlatSpeedKph = flat.finalSpeedKph;
+            previousClimbSpeedKph = climb.finalSpeedKph;
+        }
+
+        const GearTrace lowFlat = rideTrace(1, 0.0, false);
+        const GearTrace lowClimb = rideTrace(1, 8.0, false);
+        QVERIFY(lowFlat.finalSpeedKph < 8.0);
+        QVERIFY(lowClimb.finalSpeedKph < 8.0);
+    }
+
     void invalidAuthoritativeSpeedFallsBackToPowerEstimate()
     {
         WorkoutGameSimulation simulation;
@@ -398,6 +506,32 @@ private slots:
                 std::numeric_limits<double>::quiet_NaN();
 
         QVERIFY(simulation.update(input).speedKph > 8.0);
+    }
+
+    void nonTrainerPowerEstimateStillRespectsVirtualGear()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(rideCourse(0.0), 200.0));
+
+        WorkoutGameSimulationInput input = sample(0, 200.0, 200.0, 85.0);
+        input.authoritativeSpeedKph = -1.0;
+        input.drivetrainSpeedLimitKph = 7.2;
+        input.virtualGear = 1;
+
+        QCOMPARE(simulation.update(input).speedKph, 7.2);
+    }
+
+    void nonTrainerDescentCanFreewheelPastVirtualGear()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(rideCourse(-8.0, true), 200.0));
+
+        WorkoutGameSimulationInput input = sample(0, 0.0, 100.0, 0.0);
+        input.authoritativeSpeedKph = -1.0;
+        input.drivetrainSpeedLimitKph = 7.2;
+        input.virtualGear = 1;
+
+        QVERIFY(simulation.update(input).speedKph > 30.0);
     }
 
     void accurateRidingScoresMoreThanMissingTarget()

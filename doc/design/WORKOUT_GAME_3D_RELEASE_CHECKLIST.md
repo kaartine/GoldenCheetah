@@ -246,16 +246,28 @@ captures.
 
 ### `PHY-03` Make virtual gearing and speed progressive
 
-- [ ] Low gear remains slow on flat and climb.
+- [x] Low gear remains slow on flat and climb.
 - [ ] Gear changes alter torque/cadence response, not speed instantaneously.
-- [ ] Grade, gravity, cadence, power and inertia contribute consistently.
-- [ ] Keep manual virtual gears usable outside game mode.
+- [x] Grade, gravity, cadence, power and inertia contribute consistently.
+- [x] Keep manual virtual gears usable outside game mode.
 
 **Tests:** fixed-input acceleration traces for every gear, flat/climb/descent
 comparisons, gear-change continuity and trainer/non-trainer cases.
 
 **Done when:** no gear input causes a visible speed teleport and representative
 traces match agreed cycling ranges.
+
+**Current evidence:** the deterministic 50 ms acceptance trace now composes
+the road-force model, all twelve drivetrain ratios and the game speed gate for
+flat, eight-percent climb and eight-percent descent cases. Gear one remains
+below 8 km/h on both flat and climb, every non-gravity speed sample stays
+within the 7.2 km/h/s acceleration bound, and descents can freewheel beyond the
+selected cadence ratio. Trainer-authoritative and power-estimate fallback
+paths use the same cadence/gear limit; the fallback previously jumped directly
+to 26 km/h in gear one. Existing runtime tests cover Data Generator target
+scaling, Up/W and Down/S command routing, the always-available Train gear
+selector and recorded virtual-gear telemetry. Real-trainer torque/road-feel
+response remains open and must be validated before the second item is checked.
 
 ## P0 Feature Production
 

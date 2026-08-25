@@ -264,10 +264,16 @@ void WorkoutGameSimulation::updateSpeed(
         return;
     }
 
-    const double desiredSpeed = section.gravityAssisted
+    double desiredSpeed = section.gravityAssisted
             ? 32.0 + 3.0 * std::min(actualWatts / configuredFtpWatts, 2.0)
             : 8.0 + 18.0 * std::sqrt(
                     std::min(actualWatts / configuredFtpWatts, 2.5));
+    if (!section.gravityAssisted
+            && std::isfinite(input.drivetrainSpeedLimitKph)
+            && input.drivetrainSpeedLimitKph >= 0.0) {
+        desiredSpeed = std::min(
+                desiredSpeed, input.drivetrainSpeedLimitKph);
+    }
     if (immediate) {
         currentSpeedKph = desiredSpeed;
         return;
