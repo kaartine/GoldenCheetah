@@ -164,7 +164,9 @@ class TestWorkoutGameAssets(unittest.TestCase):
     def test_glb_enforces_triangle_budget(self) -> None:
         document, size = assets.read_glb(GLB_PATH)
         manifest = assets.load_json_file(MANIFEST_PATH)
-        manifest["technical"]["budgets"]["maxTrianglesLod0"] = 100
+        manifest["technical"]["budgets"]["maxTrianglesLod0"] = (
+            manifest["technical"]["trianglesLod0"] - 1
+        )
         with self.assertRaisesRegex(assets.AssetValidationError, "triangle budget"):
             assets.validate_glb_document(document, size, manifest)
 

@@ -12,10 +12,12 @@ low-poly tabletop socket tile without downloading or embedding external assets.
 - Entry and exit dead zones are `0.75 m` and remain flat.
 - The core is `0.446 m` high, with a `1.87 m` takeoff, `1.10 m` flat deck and
   `1.87 m` landing.
-- The joined mesh includes the trail, tapered side terrain, a raised safe
-  bypass and dark outer, front and rear skirts. Side terrain narrows at the
+- The joined mesh includes the trail, tapered side terrain and a raised safe
+  bypass. Side terrain narrows at the
   socket ends so the tile joins the streamed floor without a rectangular lip.
-  It uses four opaque greybox materials and no texture.
+  The continuous streamed forest floor closes the underside in production,
+  avoiding a visible perimeter skirt. The tile uses three opaque greybox
+  materials and no texture.
 - `SOCKET_IN`, `SOCKET_OUT`, `MARKER_PREPARE`, `MARKER_DECISION`,
   `MARKER_ACTION`, `MARKER_LIP`, `MARKER_APEX` and `MARKER_LAND` are exported
   as named nodes with custom metadata.
@@ -59,7 +61,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 The expected output is one self-contained
 `build/workout-game-assets/WG_Tabletop_Greybox.glb`. Blender's console output
-also reports the expected topology of `108` vertices and `156` triangles.
+also reports the expected topology of `78` vertices and `96` triangles.
 No `.blend`, texture, runtime collision or physics file is produced.
 
 Determinism is expected for the same Blender 4.x patch release and export

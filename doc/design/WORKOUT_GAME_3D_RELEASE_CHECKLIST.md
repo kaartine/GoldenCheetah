@@ -120,7 +120,7 @@ sphere as a final visible rider, feature or hero-environment object.
   first project-authored tabletop greybox without external assets.
 - [x] The generator checks the measured profile, exact socket seams, node and
   material names, finite coordinates, transforms and topology before export.
-- [x] The current 13,428-byte GLB has 108 vertices and 156 triangles; Khronos
+- [x] The current 9,856-byte GLB has 78 vertices and 96 triangles; Khronos
   glTF Validator 2.0.0-dev.3.10 reports zero errors, warnings, infos and hints.
 - [x] Two clean Blender invocations produce the same GLB SHA-256.
 - [x] Validate the manifest, file hashes, GLB policy and malformed fixtures in
@@ -173,7 +173,7 @@ completed/bypass captures and bounded speed-dependent flight.
 the wheels meet the landing surface at the reported landing event.
 
 **Current evidence:** the deterministic Blender source now generates tapered
-joined terrain and a raised bypass in the same 108-vertex/156-triangle mesh.
+joined terrain and a raised bypass in the same 78-vertex/96-triangle mesh.
 The production ViewModel derives the asset socket transform and difficulty
 scale from the authoritative road profile, and the actual game QML renders
 the packaged Balsam component. Khronos validation, two reproducible Blender

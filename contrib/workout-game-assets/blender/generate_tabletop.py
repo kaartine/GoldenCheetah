@@ -32,11 +32,9 @@ LANDING_RUN_M = 1.87
 CORE_LENGTH_M = TAKEOFF_RUN_M + DECK_LENGTH_M + LANDING_RUN_M
 TILE_LENGTH_M = DEAD_ZONE_M * 2.0 + CORE_LENGTH_M
 TERRAIN_HALF_WIDTH_M = 4.0
-SKIRT_BOTTOM_Y_M = -0.60
 
 MAT_TRAIL = "MAT_TabletopTrail_Grey"
 MAT_TERRAIN = "MAT_TabletopTerrain_Grey"
-MAT_SKIRT = "MAT_TabletopSkirt_Grey"
 MAT_BYPASS = "MAT_TabletopBypass_Grey"
 
 BYPASS_HALF_WIDTH_M = 0.44
@@ -227,81 +225,6 @@ def build_mesh(root) -> tuple[object, list[tuple[float, float, float]]]:
                 previous_left, current_right, previous_right, material_index,
             )
 
-    left_bottom: list[int] = []
-    right_bottom: list[int] = []
-    for z_forward in sections:
-        outer_width = terrain_half_width(z_forward)
-        left_bottom.append(len(canonical_vertices))
-        canonical_vertices.append(
-            (-outer_width, SKIRT_BOTTOM_Y_M, z_forward)
-        )
-        right_bottom.append(len(canonical_vertices))
-        canonical_vertices.append(
-            (outer_width, SKIRT_BOTTOM_Y_M, z_forward)
-        )
-
-    for row in range(len(sections) - 1):
-        previous_top = row * row_width
-        current_top = (row + 1) * row_width
-
-        add_triangle(
-            faces, material_indices,
-            previous_top, left_bottom[row], left_bottom[row + 1], 2,
-        )
-        add_triangle(
-            faces, material_indices,
-            previous_top, left_bottom[row + 1], current_top, 2,
-        )
-
-        previous_right_top = previous_top + 3
-        current_right_top = current_top + 3
-        add_triangle(
-            faces, material_indices,
-            previous_right_top, current_right_top, right_bottom[row + 1], 2,
-        )
-        add_triangle(
-            faces, material_indices,
-            previous_right_top, right_bottom[row + 1], right_bottom[row], 2,
-        )
-
-    # Close the full front and back below the socket seam. These faces are
-    # hidden when tiles join, but prevent the standalone greybox exposing
-    # background below either the trail or its joined side terrain.
-    for front in (True, False):
-        row = 0 if front else len(sections) - 1
-        top = row * row_width
-        bottom = [left_bottom[row]]
-        for x_value in (-SOCKET_HALF_WIDTH_M, SOCKET_HALF_WIDTH_M):
-            bottom.append(len(canonical_vertices))
-            canonical_vertices.append(
-                (x_value, SKIRT_BOTTOM_Y_M, sections[row])
-            )
-        bottom.append(right_bottom[row])
-
-        for strip in range(3):
-            top_left = top + strip
-            top_right = top + strip + 1
-            low_left = bottom[strip]
-            low_right = bottom[strip + 1]
-            if front:
-                add_triangle(
-                    faces, material_indices,
-                    top_left, low_right, low_left, 2,
-                )
-                add_triangle(
-                    faces, material_indices,
-                    top_left, top_right, low_right, 2,
-                )
-            else:
-                add_triangle(
-                    faces, material_indices,
-                    top_left, low_left, low_right, 2,
-                )
-                add_triangle(
-                    faces, material_indices,
-                    top_left, low_right, top_right, 2,
-                )
-
     bypass_sections = sorted(set(
         [DEAD_ZONE_M * 0.5,
          DEAD_ZONE_M,
@@ -327,11 +250,11 @@ def build_mesh(root) -> tuple[object, list[tuple[float, float, float]]]:
     for previous, current in zip(bypass_rows, bypass_rows[1:]):
         add_triangle(
             faces, material_indices,
-            previous[0], current[0], current[1], 3,
+            previous[0], current[0], current[1], 2,
         )
         add_triangle(
             faces, material_indices,
-            previous[0], current[1], previous[1], 3,
+            previous[0], current[1], previous[1], 2,
         )
 
     blender_vertices = [canonical_to_blender(point) for point in canonical_vertices]
@@ -342,9 +265,6 @@ def build_mesh(root) -> tuple[object, list[tuple[float, float, float]]]:
     )
     mesh.materials.append(
         make_material(MAT_TERRAIN, (0.20, 0.32, 0.17, 1.0))
-    )
-    mesh.materials.append(
-        make_material(MAT_SKIRT, (0.18, 0.19, 0.18, 1.0))
     )
     mesh.materials.append(
         make_material(MAT_BYPASS, (0.47, 0.34, 0.16, 1.0))
@@ -525,10 +445,10 @@ def self_check(root, mesh_object, canonical_vertices) -> None:
         assert_finite(vertex.co, "Non-finite Blender mesh coordinate")
     if any(polygon.loop_total != 3 for polygon in mesh_object.data.polygons):
         raise RuntimeError("Generated mesh contains a non-triangle face")
-    if len(mesh_object.data.vertices) != 108 \
-            or len(mesh_object.data.polygons) != 156:
+    if len(mesh_object.data.vertices) != 78 \
+            or len(mesh_object.data.polygons) != 96:
         raise RuntimeError(
-            "Unexpected greybox topology: expected 108 vertices and 156 "
+            "Unexpected greybox topology: expected 78 vertices and 96 "
             f"triangles, got {len(mesh_object.data.vertices)} vertices and "
             f"{len(mesh_object.data.polygons)} triangles"
         )
@@ -542,8 +462,7 @@ def self_check(root, mesh_object, canonical_vertices) -> None:
                  "Mesh left extent")
     assert_close(max(x_values), TERRAIN_HALF_WIDTH_M,
                  "Mesh right extent")
-    assert_close(min(y_values), SKIRT_BOTTOM_Y_M,
-                 "Mesh skirt depth")
+    assert_close(min(y_values), -0.06, "Mesh terrain depth")
     assert_close(max(y_values), HEIGHT_M, "Mesh profile height")
     assert_close(min(z_values), 0.0, "Mesh start")
     assert_close(max(z_values), TILE_LENGTH_M, "Mesh length")
@@ -584,7 +503,7 @@ def self_check(root, mesh_object, canonical_vertices) -> None:
             or mesh_object.get("physics_authority") != "external":
         raise RuntimeError("GLB must not claim physics authority")
 
-    expected_materials = [MAT_TRAIL, MAT_TERRAIN, MAT_SKIRT, MAT_BYPASS]
+    expected_materials = [MAT_TRAIL, MAT_TERRAIN, MAT_BYPASS]
     actual_materials = [material.name for material in mesh_object.data.materials]
     if actual_materials != expected_materials:
         raise RuntimeError(

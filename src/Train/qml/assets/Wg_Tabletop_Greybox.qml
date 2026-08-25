@@ -22,14 +22,6 @@ Node {
         alphaMode: PrincipledMaterial.Opaque
     }
     PrincipledMaterial {
-        id: mat_TabletopSkirt_Grey_material
-        objectName: "MAT_TabletopSkirt_Grey"
-        baseColor: "#ff2e302e"
-        roughness: 1
-        cullMode: PrincipledMaterial.NoCulling
-        alphaMode: PrincipledMaterial.Opaque
-    }
-    PrincipledMaterial {
         id: mat_TabletopBypass_Grey_material
         objectName: "MAT_TabletopBypass_Grey"
         baseColor: "#ff785729"
@@ -49,7 +41,6 @@ Node {
             materials: [
                 mat_TabletopTrail_Grey_material,
                 mat_TabletopTerrain_Grey_material,
-                mat_TabletopSkirt_Grey_material,
                 mat_TabletopBypass_Grey_material
             ]
         }

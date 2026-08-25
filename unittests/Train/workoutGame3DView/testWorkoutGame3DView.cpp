@@ -528,7 +528,7 @@ private slots:
         QFile mesh(QStringLiteral(
                 ":/qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh"));
         QVERIFY(mesh.open(QIODevice::ReadOnly));
-        QCOMPARE(mesh.size(), qint64(10292));
+        QCOMPARE(mesh.size(), qint64(6976));
     }
 
     void rendersPackagedTabletopAsset()

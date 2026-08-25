@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_tabletop.py",
     "retrievedAt": "2026-08-25",
     "originalFileName": "generate_tabletop.py",
-    "originalSha256": "64153d8bb17c40c22d0f64dc962f43c222f04fc1cd033a44064353b611935de0",
+    "originalSha256": "c383c0a2d6cb7b61a58588abec7b1aa05fc7181dfdfe4d00ad70b819560c7f5f",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_tabletop.py"
@@ -35,22 +35,22 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_tabletop.py",
       "purpose": "source",
-      "sha256": "64153d8bb17c40c22d0f64dc962f43c222f04fc1cd033a44064353b611935de0"
+      "sha256": "c383c0a2d6cb7b61a58588abec7b1aa05fc7181dfdfe4d00ad70b819560c7f5f"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_Tabletop_Greybox.glb",
       "purpose": "intermediate",
-      "sha256": "0cc9a08df21be17978298ce57dc6f0151432a9f2d328d7e6128666ab349db944"
+      "sha256": "2fc4babe4143a3d8152b067bd5b1e51684bc4ada383a8f085cf4fe81270f4d3e"
     },
     {
       "path": "src/Train/qml/assets/Wg_Tabletop_Greybox.qml",
       "purpose": "runtime",
-      "sha256": "c817cb7b56e00af62280d2d629238b6ea25d3337d24882406715902f367d7674"
+      "sha256": "eda5ae6046919aa8e95da83eaa41a4f37c518c2047c560d09170ca710890b623"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "3f440748115daf3285fe5071f5918a383954436c4cf77a7faf25cc14e509db34"
+      "sha256": "1c3eea3bc2482ebbfed84c8ffa51b3162c50e659cde73f284bf5d0b6b31e735c"
     }
   ],
   "processing": {
@@ -69,9 +69,9 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 13428,
-    "trianglesLod0": 156,
-    "materials": 4,
+    "glbBytes": 9856,
+    "trianglesLod0": 96,
+    "materials": 3,
     "textureBytes": 0,
     "nodes": [
       "ROOT_Tabletop",
@@ -88,7 +88,7 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [-4.0, -0.6, 0.0],
+      "minimum": [-4.0, -0.06, 0.0],
       "maximum": [4.0, 0.446, 6.34]
     },
     "sockets": [
@@ -117,6 +117,6 @@
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
     "reviewedAt": "2026-08-25",
-    "notes": "GLB includes tapered joined terrain and a raised safe-bypass strip. Deterministic Blender and Balsam conversion, Khronos validation, production-qrc rendering and game-scene integration pass. Vertical-slice approval still requires HUD-free silhouette and bypass readability."
+    "notes": "GLB includes tapered joined terrain and a raised safe-bypass strip. The streamed forest floor closes the underside, so the tile has no visible perimeter skirt. Deterministic Blender and Balsam conversion, Khronos validation, production-qrc rendering and game-scene integration pass. Vertical-slice approval still requires HUD-free silhouette and bypass readability."
   }
 }
