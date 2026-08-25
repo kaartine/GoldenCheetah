@@ -936,6 +936,50 @@ private slots:
         const double visualGround = sample.center.elevationMeters;
         QVERIFY(std::abs(viewModel.riderY() - visualGround - 0.38) < 1e-9);
     }
+
+    void completedDropKeepsTheNegativeRoadSurfaceOffset()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Drop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.terrain == WorkoutGameTerrainKind::Drop
+                            && candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const double beforeDistance =
+                piece->challenge.obstacleDistanceMeters - 1.0;
+        const double droppedDistance =
+                piece->challenge.obstacleDistanceMeters + 4.0;
+        const WorkoutGameRoadSample beforeSample =
+                WorkoutGameRoadCourseBuilder::sample(road, beforeDistance);
+        const WorkoutGameRoadSample droppedSample =
+                WorkoutGameRoadCourseBuilder::sample(road, droppedDistance);
+        QVERIFY(beforeSample.ready);
+        QVERIFY(droppedSample.ready);
+        QVERIFY(droppedSample.center.elevationMeters
+                < beforeSample.center.elevationMeters - 0.5);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(road, droppedDistance);
+        frame.world.rider.clearanceMeters = 0.82;
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::Drop;
+        frame.feature.phase = WorkoutGameFeaturePhase::Action;
+        frame.feature.motion = WorkoutGameFeatureMotion::Drop;
+        frame.feature.outcome = WorkoutGameFeatureOutcome::Completed;
+        frame.feature.route = WorkoutGameRoute::MainLine;
+        frame.feature.verticalOffsetMeters = -0.45;
+        viewModel.setFrame(frame, 150.0, 150.0, 80, 145, 4);
+
+        QVERIFY(std::abs(viewModel.riderY()
+                - droppedSample.center.elevationMeters) < 1e-9);
+    }
 };
 
 QTEST_MAIN(TestWorkoutGame3DView)

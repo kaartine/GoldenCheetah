@@ -211,8 +211,8 @@ replayed without a visual, physics, recording or performance release blocker.
 
 - [x] Select Box2D or scripted feature motion as authority for each action.
 - [x] Remove the `max(physicsAir, featureAir)` ambiguity.
-- [ ] Preserve negative drop offset instead of clamping it to zero.
-- [ ] Keep bypasses surface-anchored and intentional air time bounded.
+- [x] Preserve negative drop offset instead of clamping it to zero.
+- [x] Keep bypasses surface-anchored and intentional air time bounded.
 
 **Tests:** take-off/apex/landing continuity, no vertical teleport, bounded
 flight duration, drop descent, bypass no-air and wheel/surface clearance.
@@ -225,7 +225,11 @@ authority in both the 3D ViewModel and shared rider visual. Scripted feature
 height remains only as a fallback for isolated render fixtures with no world
 snapshot. Calibrated Box2D launch speeds retain the previous readability
 thresholds; tests cap tabletop height at 1.8 m, continuous flight at 2 s and
-per-20 ms height change at 0.25 m. Negative drop ownership remains open.
+per-20 ms height change at 0.25 m. Drop depth remains in the authoritative
+road surface rather than a second
+scripted rider offset, and a 3D regression verifies that completed-drop rider
+height follows that negative surface. Safe bypass continues to force Box2D
+ground following and cannot activate either airborne visual path.
 
 ### `PHY-02` Add feature-specific rider response
 
