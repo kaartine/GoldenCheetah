@@ -308,8 +308,14 @@ private slots:
         QVERIFY(engine.configure(course, FtpWatts, true));
 
         double maximumLiftPixels = 0.0;
+        double maximumAirHeightMeters = 0.0;
+        double maximumAirHeightStepMeters = 0.0;
         double minimumAirborneShadowScale = 1.0;
         int readableAirborneFrames = 0;
+        int consecutiveAirborneFrames = 0;
+        int maximumConsecutiveAirborneFrames = 0;
+        double priorAirHeightMeters = 0.0;
+        bool hasPriorAirHeight = false;
         for (std::int64_t timeMs = 0; timeMs < course.durationMs;
              timeMs += 20) {
             WorkoutGameEngineInput input;
@@ -321,6 +327,20 @@ private slots:
             const WorkoutGameRiderVisualPose pose =
                     WorkoutGameRiderVisual::pose(
                         frame.visual.world, frame.visual.feature, 188.0);
+            maximumAirHeightMeters = std::max(
+                    maximumAirHeightMeters, pose.airHeightMeters);
+            if (hasPriorAirHeight) {
+                maximumAirHeightStepMeters = std::max(
+                        maximumAirHeightStepMeters,
+                        std::abs(pose.airHeightMeters - priorAirHeightMeters));
+            }
+            priorAirHeightMeters = pose.airHeightMeters;
+            hasPriorAirHeight = true;
+            consecutiveAirborneFrames = pose.airborne
+                    ? consecutiveAirborneFrames + 1 : 0;
+            maximumConsecutiveAirborneFrames = std::max(
+                    maximumConsecutiveAirborneFrames,
+                    consecutiveAirborneFrames);
             maximumLiftPixels = std::max(maximumLiftPixels, pose.liftPixels);
             if (pose.airborne && pose.liftPixels >= 40.0) {
                 ++readableAirborneFrames;
@@ -337,6 +357,15 @@ private slots:
                  qPrintable(QStringLiteral(
                      "tabletop produced only %1 readable airborne frames")
                      .arg(readableAirborneFrames)));
+        QVERIFY(maximumAirHeightMeters <= 1.8);
+        QVERIFY2(maximumConsecutiveAirborneFrames <= 100,
+                 qPrintable(QStringLiteral(
+                     "tabletop remained airborne for %1 ms")
+                     .arg(maximumConsecutiveAirborneFrames * 20)));
+        QVERIFY2(maximumAirHeightStepMeters <= 0.25,
+                 qPrintable(QStringLiteral(
+                     "tabletop air height stepped by %1 m")
+                     .arg(maximumAirHeightStepMeters)));
         QVERIFY(minimumAirborneShadowScale <= 0.70);
     }
 
@@ -355,6 +384,24 @@ private slots:
         QCOMPARE(pose.airHeightMeters, 0.0);
         QCOMPARE(pose.liftPixels, 0.0);
         QCOMPARE(pose.shadowScale, 1.0);
+    }
+
+    void physicsSnapshotOwnsAirHeightOverScriptedFeatureArc()
+    {
+        WorkoutGameWorldSnapshot world;
+        world.ready = true;
+        world.rider.airborne = true;
+        world.rider.clearanceMeters = 0.82 + 0.37;
+        WorkoutGameFeatureRuntimeSnapshot feature;
+        feature.ready = true;
+        feature.outcome = WorkoutGameFeatureOutcome::Completed;
+        feature.route = WorkoutGameRoute::MainLine;
+        feature.verticalOffsetMeters = 1.35;
+
+        const WorkoutGameRiderVisualPose pose =
+                WorkoutGameRiderVisual::pose(world, feature, 188.0);
+        QVERIFY(pose.airborne);
+        QVERIFY(std::abs(pose.airHeightMeters - 0.37) < 1e-9);
     }
 
     void generatedThirtySecondEffortProducesAVisibleJump()

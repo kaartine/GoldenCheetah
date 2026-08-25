@@ -18,17 +18,15 @@ WorkoutGameRiderVisualPose WorkoutGameRiderVisual::pose(
         double riderHeightPixels)
 {
     WorkoutGameRiderVisualPose result;
-    const double physicsAir = world.ready
-            ? world.rider.airHeightMeters() : 0.0;
-    const double featureAir = feature.ready
+    const double featureAir = !world.ready && feature.ready
             && feature.route != WorkoutGameRoute::SafeBypass
             && feature.outcome == WorkoutGameFeatureOutcome::Completed
             ? feature.verticalOffsetMeters : 0.0;
-    result.airHeightMeters = std::max({
-        0.0,
-        std::isfinite(physicsAir) ? physicsAir : 0.0,
-        std::isfinite(featureAir) ? featureAir : 0.0
-    });
+    const double authoritativeAir = world.ready
+            ? world.rider.airHeightMeters() : featureAir;
+    result.airHeightMeters = std::max(
+            0.0,
+            std::isfinite(authoritativeAir) ? authoritativeAir : 0.0);
     result.airborne = result.airHeightMeters > 0.05;
 
     // The on-screen rider establishes the near-field perspective scale.

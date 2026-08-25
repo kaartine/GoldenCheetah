@@ -899,12 +899,42 @@ private slots:
         frame.feature.outcome = WorkoutGameFeatureOutcome::Completed;
         frame.feature.route = WorkoutGameRoute::MainLine;
         frame.feature.verticalOffsetMeters = 1.15;
+        frame.world.rider.clearanceMeters = 0.82 + 1.15;
+        frame.world.rider.airborne = true;
 
         WorkoutGame3DViewModel viewModel;
         viewModel.setCourse(course, FtpWatts);
         viewModel.setFrame(frame, 260.0, 245.0, 95, 155, 10);
 
         QVERIFY(viewModel.riderY() - viewModel.groundY() > 1.0);
+    }
+
+    void physicsOwnsAirHeightWhenAWorldSnapshotIsAvailable()
+    {
+        const WorkoutGameCourse course = sampleCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGameVisualSnapshot frame = frameAt(road, 20.0);
+        frame.world.rider.clearanceMeters = 0.82 + 0.38;
+        frame.world.rider.airborne = true;
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::Tabletop;
+        frame.feature.phase = WorkoutGameFeaturePhase::Action;
+        frame.feature.motion = WorkoutGameFeatureMotion::Jump;
+        frame.feature.outcome = WorkoutGameFeatureOutcome::Completed;
+        frame.feature.route = WorkoutGameRoute::MainLine;
+        frame.feature.verticalOffsetMeters = 1.35;
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frame, 260.0, 245.0, 95, 155, 10);
+
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sample(road, 20.0);
+        QVERIFY(sample.ready);
+        const double visualGround = sample.center.elevationMeters;
+        QVERIFY(std::abs(viewModel.riderY() - visualGround - 0.38) < 1e-9);
     }
 };
 

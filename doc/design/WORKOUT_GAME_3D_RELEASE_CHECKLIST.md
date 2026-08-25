@@ -209,8 +209,8 @@ replayed without a visual, physics, recording or performance release blocker.
 
 ### `PHY-01` Make airborne ownership explicit
 
-- [ ] Select Box2D or scripted feature motion as authority for each action.
-- [ ] Remove the `max(physicsAir, featureAir)` ambiguity.
+- [x] Select Box2D or scripted feature motion as authority for each action.
+- [x] Remove the `max(physicsAir, featureAir)` ambiguity.
 - [ ] Preserve negative drop offset instead of clamping it to zero.
 - [ ] Keep bypasses surface-anchored and intentional air time bounded.
 
@@ -219,6 +219,13 @@ flight duration, drop descent, bypass no-air and wheel/surface clearance.
 
 **Done when:** every airborne frame has one explainable source and visual
 landing agrees with the runtime event.
+
+**Current evidence:** a ready Box2D world snapshot is now the sole airborne
+authority in both the 3D ViewModel and shared rider visual. Scripted feature
+height remains only as a fallback for isolated render fixtures with no world
+snapshot. Calibrated Box2D launch speeds retain the previous readability
+thresholds; tests cap tabletop height at 1.8 m, continuous flight at 2 s and
+per-20 ms height change at 0.25 m. Negative drop ownership remains open.
 
 ### `PHY-02` Add feature-specific rider response
 

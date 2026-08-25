@@ -146,18 +146,20 @@ void WorkoutGame3DViewModel::setFrame(
     riderPositionX = sample.center.xMeters + lateral * rightX;
     cameraGroundY = sample.center.elevationMeters
             - sample.nonPhysicalFeatureOffsetMeters;
-    const double physicsAir = std::max(
-            0.0, finiteOrZero(frame.world.rider.airHeightMeters()));
-    const double featureAir = frame.feature.ready
+    const double featureAir = !frame.world.ready && frame.feature.ready
             && frame.feature.route != WorkoutGameRoute::SafeBypass
             && frame.feature.outcome == WorkoutGameFeatureOutcome::Completed
             ? std::max(0.0,
                 finiteOrZero(frame.feature.verticalOffsetMeters))
             : 0.0;
+    const double authoritativeAir = frame.world.ready
+            ? std::max(0.0,
+                finiteOrZero(frame.world.rider.airHeightMeters()))
+            : featureAir;
     const double visualGround = sample.center.elevationMeters
             - (frame.feature.route == WorkoutGameRoute::SafeBypass
                 ? sample.nonPhysicalFeatureOffsetMeters : 0.0);
-    riderPositionY = visualGround + std::max(physicsAir, featureAir);
+    riderPositionY = visualGround + authoritativeAir;
     riderPositionZ = sample.center.zMeters + lateral * rightZ;
     riderHeadingDegrees = sample.center.headingRadians * 180.0 / Pi;
     updateCameraPose(distanceMeters);
