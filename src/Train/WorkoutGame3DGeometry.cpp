@@ -9,6 +9,7 @@
 
 #include "WorkoutGame3DGeometry.h"
 
+#include "WorkoutGameBermGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameTrailBranch.h"
@@ -125,6 +126,29 @@ void appendFeatureSamples(
             }
         }
     }
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled
+                || piece.terrain != WorkoutGameTerrainKind::Berm) {
+            continue;
+        }
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(piece.difficulty);
+        const double center = piece.challenge.obstacleDistanceMeters;
+        const auto append = [&](double distance) {
+            if (distance >= startDistanceMeters
+                    && distance <= endDistanceMeters) {
+                distances.push_back(distance);
+            }
+        };
+        append(center + profile.startMeters);
+        constexpr int CurveSegments = 16;
+        for (int segment = 0; segment <= CurveSegments; ++segment) {
+            append(center + profile.curveStartMeters
+                    + (profile.curveEndMeters - profile.curveStartMeters)
+                        * double(segment) / double(CurveSegments));
+        }
+        append(center + profile.endMeters);
+    }
 }
 
 }
@@ -174,6 +198,10 @@ void WorkoutGame3DGeometry::build(
         buildBypasses(course, startDistanceMeters, endDistanceMeters);
         return;
     }
+    if (layer == Layer::Berm) {
+        buildBerms(course, startDistanceMeters, endDistanceMeters);
+        return;
+    }
     const double rangeMeters = endDistanceMeters - startDistanceMeters;
 
     std::vector<double> sampleDistances;
@@ -215,8 +243,10 @@ void WorkoutGame3DGeometry::build(
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<bool> rideableSamples;
+    std::vector<bool> renderableTrailSamples;
     vertices.reserve(std::size_t(count * verticesPerSample));
     rideableSamples.reserve(std::size_t(count));
+    renderableTrailSamples.reserve(std::size_t(count));
     indices.reserve(std::size_t(
             (count - 1) * stripsPerSample * 6));
 
@@ -238,6 +268,7 @@ void WorkoutGame3DGeometry::build(
             return;
         }
         rideableSamples.push_back(sample.rideableSurface);
+        renderableTrailSamples.push_back(sample.renderableTrailSurface);
         const double rightX = std::cos(sample.center.headingRadians);
         const double rightZ = -std::sin(sample.center.headingRadians);
         const TerrainColor color = layer == Layer::Trail
@@ -268,7 +299,8 @@ void WorkoutGame3DGeometry::build(
                     : terrain.vertices[std::size_t(nextVertex)].lateralMeters
                         - terrain.vertices[std::size_t(previousVertex)]
                             .lateralMeters;
-            const double crossSlope = trailVertex ? 0.0
+            const double crossSlope = trailVertex
+                    ? 0.0
                     : (terrain.vertices[std::size_t(nextVertex)].elevationMeters
                         - terrain.vertices[std::size_t(previousVertex)]
                             .elevationMeters)
@@ -317,10 +349,17 @@ void WorkoutGame3DGeometry::build(
         }
         if (index > 0 && (layer != Layer::Trail
                 || (rideableSamples[std::size_t(index - 1)]
-                    && rideableSamples[std::size_t(index)]))) {
+                    && rideableSamples[std::size_t(index)]
+                    && renderableTrailSamples[std::size_t(index - 1)]
+                    && renderableTrailSamples[std::size_t(index)]))) {
             const std::uint32_t base = std::uint32_t(
                     index * verticesPerSample);
             for (int strip = 0; strip < stripsPerSample; ++strip) {
+                if (layer == Layer::ForestFloor && strip == 3
+                        && (!renderableTrailSamples[std::size_t(index - 1)]
+                            || !renderableTrailSamples[std::size_t(index)])) {
+                    continue;
+                }
                 const std::uint32_t left = std::uint32_t(strip);
                 indices.insert(indices.end(), {
                     base - std::uint32_t(verticesPerSample) + left,
@@ -357,6 +396,161 @@ void WorkoutGame3DGeometry::build(
     setBounds(boundsMin, boundsMax);
     geometryReady = true;
     generatedSampleCount = count;
+    update();
+}
+
+void WorkoutGame3DGeometry::buildBerms(
+        const WorkoutGameRoadCourse &course,
+        double startDistanceMeters,
+        double endDistanceMeters)
+{
+    constexpr int VerticesPerSample = 7;
+    constexpr double SampleSpacingMeters = 0.15;
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    QVector3D boundsMin(
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max());
+    QVector3D boundsMax(
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest());
+    int totalSamples = 0;
+
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled
+                || piece.terrain != WorkoutGameTerrainKind::Berm) {
+            continue;
+        }
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(piece.difficulty);
+        if (!profile.ready) continue;
+        const double center = piece.challenge.obstacleDistanceMeters;
+        const double start = std::max(
+                startDistanceMeters, center + profile.startMeters);
+        const double end = std::min(
+                endDistanceMeters, center + profile.endMeters);
+        if (end <= start) continue;
+        const int remaining = MaximumSamples - totalSamples;
+        if (remaining < 2) break;
+        const int count = std::clamp(
+                int(std::ceil((end - start) / SampleSpacingMeters)) + 1,
+                2, remaining);
+        const std::uint32_t featureVertexStart =
+                std::uint32_t(vertices.size());
+
+        for (int row = 0; row < count; ++row) {
+            const double distance = row + 1 == count
+                    ? end
+                    : start + (end - start) * double(row)
+                        / double(count - 1);
+            const WorkoutGameRoadSample road =
+                    WorkoutGameRoadCourseBuilder::sample(course, distance);
+            if (!road.ready) {
+                clear();
+                return;
+            }
+            const double local = distance - center;
+            const double halfWidth = profile.halfWidthMeters(local);
+            const double rightX = std::cos(road.center.headingRadians);
+            const double rightZ = -std::sin(road.center.headingRadians);
+            const double grade = road.center.gradePercent / 100.0;
+            for (int column = 0; column < VerticesPerSample; ++column) {
+                const bool leftSkirt = column == 0;
+                const bool rightSkirt = column + 1 == VerticesPerSample;
+                const int treadColumn = std::clamp(column - 1, 0, 4);
+                const double lateral = -halfWidth
+                        + 2.0 * halfWidth * double(treadColumn) / 4.0;
+                const double epsilon = std::max(0.001, halfWidth * 0.01);
+                const double left = profile.surfaceOffsetMeters(
+                        local, lateral - epsilon, halfWidth,
+                        piece.turnRadians);
+                const double right = profile.surfaceOffsetMeters(
+                        local, lateral + epsilon, halfWidth,
+                        piece.turnRadians);
+                const double crossSlope = (right - left)
+                        / (2.0 * epsilon);
+                const QVector3D forward{
+                        float(std::sin(road.center.headingRadians)),
+                        float(grade),
+                        float(std::cos(road.center.headingRadians))};
+                const QVector3D across{
+                        float(rightX), float(crossSlope), float(rightZ)};
+                QVector3D normal = QVector3D::crossProduct(forward, across);
+                normal.normalize();
+                const float x = float(road.center.xMeters
+                        + lateral * rightX);
+                const float y = float(road.visualGroundElevationMeters()
+                        + profile.surfaceOffsetMeters(
+                            local, lateral, halfWidth, piece.turnRadians)
+                        + ((leftSkirt || rightSkirt) ? -0.020 : 0.015));
+                const float z = float(road.center.zMeters
+                        + lateral * rightZ);
+                const double outsideDirection =
+                        -std::copysign(1.0, piece.turnRadians);
+                const float outside = float(std::clamp(
+                        (outsideDirection * lateral / halfWidth + 1.0) * 0.5,
+                        0.0, 1.0));
+                const float shade = leftSkirt || rightSkirt
+                        ? 0.88f
+                        : 1.0f - 0.18f * outside;
+                vertices.push_back({
+                    x, y, z,
+                    normal.x(), normal.y(), normal.z(),
+                    0.50f * shade, 0.32f * shade, 0.16f * shade, 1.0f,
+                    float(treadColumn) / 4.0f,
+                    float(distance * 0.22)
+                });
+                boundsMin.setX(std::min(boundsMin.x(), x));
+                boundsMin.setY(std::min(boundsMin.y(), y));
+                boundsMin.setZ(std::min(boundsMin.z(), z));
+                boundsMax.setX(std::max(boundsMax.x(), x));
+                boundsMax.setY(std::max(boundsMax.y(), y));
+                boundsMax.setZ(std::max(boundsMax.z(), z));
+            }
+            if (row > 0) {
+                const std::uint32_t base = featureVertexStart
+                        + std::uint32_t(row * VerticesPerSample);
+                for (int strip = 0; strip < VerticesPerSample - 1; ++strip) {
+                    const std::uint32_t offset = std::uint32_t(strip);
+                    indices.insert(indices.end(), {
+                        base - std::uint32_t(VerticesPerSample) + offset,
+                        base + offset,
+                        base - std::uint32_t(VerticesPerSample) + offset + 1u,
+                        base - std::uint32_t(VerticesPerSample) + offset + 1u,
+                        base + offset,
+                        base + offset + 1u
+                    });
+                }
+            }
+        }
+        totalSamples += count;
+    }
+
+    if (vertices.empty() || indices.empty()) return;
+    QByteArray vertexData;
+    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
+    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
+    QByteArray indexData;
+    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
+    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
+    setStride(sizeof(Vertex));
+    setVertexData(vertexData);
+    setIndexData(indexData);
+    setPrimitiveType(PrimitiveType::Triangles);
+    addAttribute(Attribute::PositionSemantic,
+                 offsetof(Vertex, x), Attribute::F32Type);
+    addAttribute(Attribute::NormalSemantic,
+                 offsetof(Vertex, nx), Attribute::F32Type);
+    addAttribute(Attribute::ColorSemantic,
+                 offsetof(Vertex, r), Attribute::F32Type);
+    addAttribute(Attribute::TexCoordSemantic,
+                 offsetof(Vertex, u), Attribute::F32Type);
+    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
+    setBounds(boundsMin, boundsMax);
+    geometryReady = true;
+    generatedSampleCount = totalSamples;
     update();
 }
 

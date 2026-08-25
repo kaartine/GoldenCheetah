@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameRoadCourse.h"
+#include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameRoadProjection.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameHorizon.h"
@@ -81,6 +82,185 @@ class TestWorkoutGameRoadCourse : public QObject
     Q_OBJECT
 
 private slots:
+    void bermProfileHasLevelSocketsAndAConsistentBankDirection()
+    {
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(0.65);
+        QVERIFY(profile.ready);
+        QCOMPARE(profile.startMeters, -3.87);
+        QCOMPARE(profile.curveStartMeters, -2.62);
+        QCOMPARE(profile.curveEndMeters, 2.62);
+        QCOMPARE(profile.endMeters, 3.87);
+        QCOMPARE(profile.socketHalfWidthMeters, 0.68 * 1.17);
+        QCOMPARE(profile.activeHalfWidthMeters, 0.95);
+        QCOMPARE(profile.headingProgress(profile.startMeters), 0.0);
+        QCOMPARE(profile.headingProgress(profile.curveStartMeters), 0.0);
+        QCOMPARE(profile.headingProgress(0.0), 0.5);
+        QCOMPARE(profile.headingProgress(profile.curveEndMeters), 1.0);
+        QCOMPARE(profile.headingProgress(profile.endMeters), 1.0);
+
+        constexpr double RightTurnRadians = 1.0;
+        constexpr double HalfWidthMeters = 0.95;
+        const double rightBank = profile.bankRadians(
+                0.0, RightTurnRadians);
+        const double leftBank = profile.bankRadians(
+                0.0, -RightTurnRadians);
+        QVERIFY(rightBank < 0.0);
+        QVERIFY(leftBank > 0.0);
+        QCOMPARE(rightBank, -leftBank);
+        QCOMPARE(profile.bankRadians(profile.startMeters,
+                                     RightTurnRadians), 0.0);
+        QCOMPARE(profile.bankRadians(profile.endMeters,
+                                     RightTurnRadians), 0.0);
+        const double rightTurnLeftEdge = profile.surfaceOffsetMeters(
+                0.0, -HalfWidthMeters, HalfWidthMeters, RightTurnRadians);
+        const double rightTurnCenter = profile.surfaceOffsetMeters(
+                0.0, 0.0, HalfWidthMeters, RightTurnRadians);
+        const double rightTurnRightEdge = profile.surfaceOffsetMeters(
+                0.0, HalfWidthMeters, HalfWidthMeters, RightTurnRadians);
+        QVERIFY(rightTurnLeftEdge > rightTurnCenter + 0.30);
+        QCOMPARE(rightTurnCenter, 0.0);
+        QVERIFY(rightTurnRightEdge < rightTurnCenter - 0.30);
+        QCOMPARE(profile.halfWidthMeters(profile.startMeters),
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(profile.halfWidthMeters(0.0),
+                 profile.activeHalfWidthMeters);
+        QCOMPARE(profile.safeLineLateralMeters(
+                     profile.startMeters, RightTurnRadians), 0.0);
+        QVERIFY(profile.safeLineLateralMeters(
+                    0.0, RightTurnRadians) > 0.44);
+        QCOMPARE(profile.safeLineLateralMeters(
+                     profile.endMeters, RightTurnRadians), 0.0);
+        QVERIFY(profile.riderWorldRollRadians(
+                    0.0, RightTurnRadians, 5.0, false) < -0.25);
+        QVERIFY(std::abs(profile.riderWorldRollRadians(
+                    0.0, RightTurnRadians, 5.0, true))
+                < std::abs(profile.riderWorldRollRadians(
+                    0.0, RightTurnRadians, 5.0, false)));
+    }
+
+    void bermRoadSampleUsesTheSameLocalCurveAndBankProfile()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 407u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::Berm;
+        section.durationMs = source.durationMs;
+        section.lengthMeters = 70.0;
+        section.targetWatts = 180.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        section.visualVariant = 0u;
+        source.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(piece->difficulty);
+        const double center = piece->challenge.obstacleDistanceMeters;
+        QCOMPARE(std::abs(piece->turnRadians),
+                 profile.turnMagnitudeRadians);
+        const WorkoutGameRoadSample entry =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, center + profile.curveStartMeters);
+        const WorkoutGameRoadSample middle =
+                WorkoutGameRoadCourseBuilder::sample(road, center);
+        const WorkoutGameRoadSample exit =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, center + profile.curveEndMeters);
+        QVERIFY(entry.ready && middle.ready && exit.ready);
+        QVERIFY(std::abs(entry.center.headingRadians
+                         - piece->entry.headingRadians) < 1e-5);
+        QVERIFY(std::abs(middle.center.headingRadians
+                         - (piece->entry.headingRadians
+                            + piece->turnRadians * 0.5)) < 1e-5);
+        QVERIFY(std::abs(exit.center.headingRadians
+                         - (piece->entry.headingRadians
+                            + piece->turnRadians)) < 1e-5);
+        QCOMPARE(entry.bermBankRadians, 0.0);
+        QVERIFY(std::abs(middle.bermBankRadians) > 0.30);
+        QCOMPARE(exit.bermBankRadians, 0.0);
+        QVERIFY(middle.bermBankRadians * piece->turnRadians < 0.0);
+    }
+
+    void bermCenterlineIsContinuousMonotonicAndMirrored()
+    {
+        const auto buildBerm = [](std::uint32_t variant) {
+            WorkoutGameCourse source;
+            source.status = WorkoutGameCourseStatus::Ready;
+            source.seed = 407u;
+            source.durationMs = 60000;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::Trail;
+            section.terrain = WorkoutGameTerrainKind::Berm;
+            section.durationMs = source.durationMs;
+            section.lengthMeters = 400.0;
+            section.targetWatts = 180.0;
+            section.difficulty = 0.65;
+            section.challengeCount = 1;
+            section.visualVariant = variant;
+            source.sections = {section};
+            return WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        };
+        const WorkoutGameRoadCourse left = buildBerm(0u);
+        const WorkoutGameRoadCourse right = buildBerm(1u);
+        QVERIFY(left.ready && right.ready);
+        QCOMPARE(left.pieces.size(), std::size_t(1));
+        QCOMPARE(right.pieces.size(), std::size_t(1));
+        const WorkoutGameRoadPiece &leftPiece = left.pieces.front();
+        const WorkoutGameRoadPiece &rightPiece = right.pieces.front();
+        QVERIFY(leftPiece.challenge.enabled);
+        QVERIFY(rightPiece.challenge.enabled);
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(leftPiece.difficulty);
+        QVERIFY(leftPiece.challenge.obstacleDistanceMeters
+                    + profile.startMeters > 0.0);
+        QVERIFY(leftPiece.challenge.obstacleDistanceMeters
+                    + profile.endMeters < left.totalLengthMeters);
+
+        const double start = leftPiece.challenge.obstacleDistanceMeters
+                + profile.startMeters;
+        const double end = leftPiece.challenge.obstacleDistanceMeters
+                + profile.endMeters;
+        WorkoutGameRoadSample previous =
+                WorkoutGameRoadCourseBuilder::sample(left, start);
+        constexpr double StepMeters = 0.02;
+        for (double distance = start + StepMeters;
+             distance <= end; distance += StepMeters) {
+            const WorkoutGameRoadSample current =
+                    WorkoutGameRoadCourseBuilder::sample(left, distance);
+            QVERIFY(current.ready);
+            const double displacement = std::hypot(
+                    current.center.xMeters - previous.center.xMeters,
+                    current.center.zMeters - previous.center.zMeters);
+            QVERIFY(displacement > StepMeters * 0.995);
+            QVERIFY(displacement < StepMeters * 1.005);
+            QVERIFY(current.center.headingRadians
+                    <= previous.center.headingRadians + 1e-9);
+            previous = current;
+        }
+
+        const WorkoutGameRoadSample leftExit =
+                WorkoutGameRoadCourseBuilder::sample(left, left.totalLengthMeters);
+        const WorkoutGameRoadSample rightExit =
+                WorkoutGameRoadCourseBuilder::sample(right, right.totalLengthMeters);
+        QVERIFY(leftExit.ready && rightExit.ready);
+        QVERIFY(std::abs(leftExit.center.xMeters
+                         + rightExit.center.xMeters) < 1e-6);
+        QVERIFY(std::abs(leftExit.center.zMeters
+                         - rightExit.center.zMeters) < 1e-6);
+        QVERIFY(std::abs(leftExit.center.headingRadians
+                         + rightExit.center.headingRadians) < 1e-9);
+    }
+
     void invalidInputsFailClosed()
     {
         QVERIFY(!WorkoutGameRoadCourseBuilder::build({}, 200.0).ready);

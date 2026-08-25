@@ -60,8 +60,13 @@ WorkoutGame3DTerrainProfileSnapshot WorkoutGame3DTerrainProfile::build(
         return result;
     }
 
-    const double seamElevation =
-            road.visualGroundElevationMeters() - TrailSeamDropMeters;
+    // The authored berm bowl raises each edge by two thirds of the linear
+    // bank height. Keep the surrounding terrain on those exact sockets.
+    const double bankSlope = 2.0 / 3.0 * std::tan(road.bermBankRadians);
+    const double leftSeamElevation = road.visualGroundElevationMeters()
+            - halfWidth * bankSlope - TrailSeamDropMeters;
+    const double rightSeamElevation = road.visualGroundElevationMeters()
+            + halfWidth * bankSlope - TrailSeamDropMeters;
     const double leftRidge = ridgeHeight(distanceMeters, seed, -1.0);
     const double rightRidge = ridgeHeight(distanceMeters, seed, 1.0);
     const double leftOuterElevation = road.baseElevationMeters + leftRidge;
@@ -70,10 +75,10 @@ WorkoutGame3DTerrainProfileSnapshot WorkoutGame3DTerrainProfile::build(
             + leftRidge * 0.58;
     const double rightMidElevation = road.baseElevationMeters
             + rightRidge * 0.58;
-    const double leftShoulderElevation = seamElevation
-            + (leftMidElevation - seamElevation) * 0.34;
-    const double rightShoulderElevation = seamElevation
-            + (rightMidElevation - seamElevation) * 0.34;
+    const double leftShoulderElevation = leftSeamElevation
+            + (leftMidElevation - leftSeamElevation) * 0.34;
+    const double rightShoulderElevation = rightSeamElevation
+            + (rightMidElevation - rightSeamElevation) * 0.34;
 
     const float leftShade = float(std::clamp(
             (leftRidge - 0.72) / 0.63, 0.0, 1.0));
@@ -86,8 +91,8 @@ WorkoutGame3DTerrainProfileSnapshot WorkoutGame3DTerrainProfile::build(
                0.18f, 0.34f + leftShade * 0.06f, 0.17f),
         vertex(-(halfWidth + ShoulderWidthMeters), leftShoulderElevation,
                0.25f, 0.32f, 0.17f),
-        vertex(-halfWidth, seamElevation, 0.36f, 0.29f, 0.15f),
-        vertex(halfWidth, seamElevation, 0.36f, 0.29f, 0.15f),
+        vertex(-halfWidth, leftSeamElevation, 0.36f, 0.29f, 0.15f),
+        vertex(halfWidth, rightSeamElevation, 0.36f, 0.29f, 0.15f),
         vertex(halfWidth + ShoulderWidthMeters, rightShoulderElevation,
                0.25f, 0.32f, 0.17f),
         vertex(MidTerrainMeters, rightMidElevation,

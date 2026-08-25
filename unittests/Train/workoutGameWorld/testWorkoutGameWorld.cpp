@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameWorld.h"
+#include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameRoadCourse.h"
 
 #include <QTest>
@@ -843,6 +844,61 @@ private slots:
                 WorkoutGameTerrainKind::RockSlab}) {
             QCOMPARE(WorkoutGameCamera::preferredMode(terrain),
                      WorkoutGameCameraMode::ThreeQuarter);
+        }
+    }
+
+    void bermRemainsGroundedAtRepresentativeRidingSpeeds()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 407u;
+        course.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::Berm;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 70.0;
+        section.targetWatts = 180.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(piece->difficulty);
+
+        for (double speed : {3.0, 5.0, 7.0}) {
+            WorkoutGamePhysics physics;
+            QVERIFY(physics.configure(road));
+            WorkoutGamePhysicsInput input;
+            input.terrain = WorkoutGameTerrainKind::Berm;
+            input.desiredSpeedMetersPerSecond = speed;
+            input.effortRatio = 1.0;
+            const double start = piece->challenge.obstacleDistanceMeters
+                    + profile.startMeters - 1.0;
+            const double end = piece->challenge.obstacleDistanceMeters
+                    + profile.endMeters + 1.0;
+            for (int tick = 0; tick <= 160; ++tick) {
+                input.workoutTimeMs = tick * 20;
+                input.courseDistanceMeters = start
+                        + (end - start) * double(tick) / 160.0;
+                const WorkoutGameRoadSample roadSample =
+                        WorkoutGameRoadCourseBuilder::sample(
+                            road, input.courseDistanceMeters);
+                input.gradePercent = roadSample.center.gradePercent;
+                const WorkoutGameWorldSnapshot frame = physics.update(input);
+                QVERIFY(frame.ready);
+                QVERIFY2(!frame.rider.airborne,
+                         qPrintable(QStringLiteral(
+                             "berm became airborne at %1 m/s and %2 m")
+                             .arg(speed).arg(input.courseDistanceMeters)));
+            }
         }
     }
 

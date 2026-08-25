@@ -12,6 +12,9 @@ Reference:
 - Recreation Aotearoa, *New Zealand Mountain Bike Trail Design Guidelines*,
   pages 25, 30, 35-40, 48, and 70:
   <https://sportnz.org.nz/media/3j3pmk0y/new-zealand-mountain-bike-trail-design-guidelines.pdf>
+- OpenStax, *University Physics Volume 1*, section 6.3, supplies the standard
+  centripetal-force relation used for the speed/curvature rider-lean model:
+  <https://openstax.org/books/university-physics-volume-1/pages/6-3-centripetal-force>
 
 ## Reproducible Catalog
 
@@ -35,7 +38,7 @@ silhouette, scale, trail integration, and line readability from future art.
 | Bunny hop | Jump anatomy, p. 38 | A separate project-authored practice hurdle now spans the ordinary trail without raising its ground surface. It has a short preload, feature-specific bounded lift and a grounded safe branch. | Preserve the accepted socket, clearance and timing contract when final pixel materials and rider preload/landing clips replace the current low-poly presentation. |
 | Drop | Drop sections, p. 36 | A sharp level lip now opens into a real physics and render gap, an exposed faceted face, a lower landing and smooth recovery. The separate safe line stays on ordinary ground. | Preserve the shared gap, collision, socket and bypass contract when final materials replace the approved low-poly face. |
 | Skinny | Boardwalk construction, p. 48 | Width and raised line are credible, but the uninterrupted brown strip resembles a narrow road. | Add deck boards, beams, supports, visible ground below, and aligned entry and exit transitions. |
-| Berm | Berm cross-section, p. 30 | Curvature and raised outside edge are directionally correct. The surface is a narrow wedge and the rider still follows the ordinary centre line. | Build a broad bowl-shaped tread and make road centre, rider lateral position, roll, and mesh use the same curve. |
+| Berm | Berm cross-section, p. 30 | The production tile now has a 75-degree curved centreline, broad banked bowl, level sockets and an integrated slower inside line. Road, rider, mesh and camera share the same distance profile. | Preserve the canonical profile and socket contract when final ground materials replace the current low-poly shading. |
 | Log over | Drop/obstacle examples, p. 36 | The tapered round log is one of the clearest current features. | Extend it beyond the trail, partly bury it, and add end-grain and broken branch details. |
 | Tabletop | Jump anatomy and examples, pp. 38-40 | The main proportions are plausible, but the current solid mound hides the take-off belly, lip, knuckle, and landing transition. | Preserve the measured dimensions while exposing those named parts in the silhouette and shading. |
 | Rock slab | Track armouring, p. 35 | The wide raised stone strip reads as a manufactured ramp. | Use one asymmetric rock face with a rollover crest, exposed sides, fissures, and irregular edges. |
@@ -51,6 +54,13 @@ larger problems.
 The current 7.2 m roller strip reaches only about 0.26 m. Its height is
 credible for an easy roller, but the sampled profile and material bands need
 to read as smooth ground rather than separate planks.
+
+The production berm turns 75 degrees over a 5.24 m active centreline with
+1.25 m level transitions at each end. Difficulty scales bank from 20 to 30
+degrees. The maximum banked tread width is 1.90 m and the slower inside line
+moves no more than 0.45 m from centre. These dimensions follow the Grade 2-3
+range in the reference while keeping the feature readable in the fixed chase
+camera.
 
 ## Airborne Presentation
 

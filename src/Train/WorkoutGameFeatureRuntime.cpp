@@ -9,6 +9,7 @@
 
 #include "WorkoutGameFeatureRuntime.h"
 
+#include "WorkoutGameBermGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include "WorkoutGameFeatureGeometry.h"
@@ -204,7 +205,16 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     double actionStart = result.obstacleDistanceMeters;
     double actionEnd = std::min(
             layout.endDistanceMeters, actionStart + 6.0);
-    if (result.motion == WorkoutGameFeatureMotion::Jump) {
+    if (piece->terrain == WorkoutGameTerrainKind::Berm) {
+        const WorkoutGameBermGeometryProfile berm =
+                WorkoutGameBermGeometry::profile(piece->difficulty);
+        actionStart = std::max(
+                layout.startDistanceMeters,
+                result.obstacleDistanceMeters + berm.startMeters);
+        actionEnd = std::min(
+                layout.endDistanceMeters,
+                result.obstacleDistanceMeters + berm.endMeters);
+    } else if (result.motion == WorkoutGameFeatureMotion::Jump) {
         const WorkoutGameFeatureGeometryProfile geometry =
                 WorkoutGameFeatureGeometry::profile(
                     piece->terrain, piece->difficulty);
@@ -254,14 +264,24 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             && (result.outcome == WorkoutGameFeatureOutcome::Bypassed
                 || result.route == WorkoutGameRoute::SafeBypass);
     if (bypass) {
-        const double branchStart = piece->challenge.bypassStartDistanceMeters;
-        const double branchEnd = std::max(
-                branchStart + 0.01,
-                piece->challenge.bypassEndDistanceMeters);
-        result.lateralOffsetMeters = WorkoutGameTrailBranch::lateralAt(
-                result.visualDistanceMeters,
-                branchStart, branchEnd,
-                piece->challenge.bypassLateralMeters);
+        if (piece->terrain == WorkoutGameTerrainKind::Berm) {
+            const WorkoutGameBermGeometryProfile berm =
+                    WorkoutGameBermGeometry::profile(piece->difficulty);
+            result.lateralOffsetMeters = berm.safeLineLateralMeters(
+                    result.visualDistanceMeters
+                        - piece->challenge.obstacleDistanceMeters,
+                    piece->turnRadians);
+        } else {
+            const double branchStart =
+                    piece->challenge.bypassStartDistanceMeters;
+            const double branchEnd = std::max(
+                    branchStart + 0.01,
+                    piece->challenge.bypassEndDistanceMeters);
+            result.lateralOffsetMeters = WorkoutGameTrailBranch::lateralAt(
+                    result.visualDistanceMeters,
+                    branchStart, branchEnd,
+                    piece->challenge.bypassLateralMeters);
+        }
     }
 
     if (result.phase == WorkoutGameFeaturePhase::Action) {

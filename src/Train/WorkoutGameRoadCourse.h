@@ -97,6 +97,8 @@ struct WorkoutGameRoadSample
     double surfaceOffsetMeters = 0.0;
     double nonPhysicalFeatureOffsetMeters = 0.0;
     bool rideableSurface = true;
+    bool renderableTrailSurface = true;
+    double bermBankRadians = 0.0;
     WorkoutGameRoadConnector center;
 
     double surfaceElevationMeters() const

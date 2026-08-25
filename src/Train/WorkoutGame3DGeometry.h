@@ -21,6 +21,7 @@ class WorkoutGame3DGeometry : public QQuick3DGeometry
 public:
     enum class Layer
     {
+        Berm,
         Bypass,
         ForestFloor,
         Trail
@@ -44,6 +45,10 @@ private:
             double startDistanceMeters,
             double endDistanceMeters);
     void buildBypasses(
+            const WorkoutGameRoadCourse &course,
+            double startDistanceMeters,
+            double endDistanceMeters);
+    void buildBerms(
             const WorkoutGameRoadCourse &course,
             double startDistanceMeters,
             double endDistanceMeters);

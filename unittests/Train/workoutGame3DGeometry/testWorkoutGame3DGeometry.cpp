@@ -73,6 +73,24 @@ WorkoutGameRoadCourse dropCourse()
     return WorkoutGameRoadCourseBuilder::build(source, 200.0);
 }
 
+WorkoutGameRoadCourse bermCourse()
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 407u;
+    source.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::Trail;
+    section.terrain = WorkoutGameTerrainKind::Berm;
+    section.durationMs = source.durationMs;
+    section.lengthMeters = 70.0;
+    section.targetWatts = 180.0;
+    section.difficulty = 0.65;
+    section.challengeCount = 1;
+    source.sections = {section};
+    return WorkoutGameRoadCourseBuilder::build(source, 200.0);
+}
+
 }
 
 class TestWorkoutGame3DGeometry : public QObject
@@ -184,6 +202,77 @@ private slots:
         QVERIFY(std::abs(trailRightX - floorRightX) < 0.001f);
         QVERIFY(std::abs(trailY - floorLeftY) < 0.04f);
         QVERIFY(std::abs(trailY - floorRightY) < 0.04f);
+    }
+
+    void bermMeshAndForestUseTheSameBankedEdgeSockets()
+    {
+        const WorkoutGameRoadCourse course = bermCourse();
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const double center = piece->challenge.obstacleDistanceMeters;
+        WorkoutGame3DGeometry trail(WorkoutGame3DGeometry::Layer::Trail);
+        WorkoutGame3DGeometry berm(WorkoutGame3DGeometry::Layer::Berm);
+        WorkoutGame3DGeometry floor(
+                WorkoutGame3DGeometry::Layer::ForestFloor);
+        trail.setCourse(course);
+        berm.setCourse(course);
+        floor.setCourse(course);
+        QVERIFY(trail.ready() && berm.ready() && floor.ready());
+
+        int bermRow = -1;
+        for (int row = 0; row < berm.sampleCount(); ++row) {
+            const double distance = vertexFloat(
+                    berm.vertexData(), berm.stride(), row * 7, 44) / 0.22;
+            if (std::abs(distance - center) < 0.001) bermRow = row;
+        }
+        int floorRow = -1;
+        for (int row = 0; row < floor.sampleCount(); ++row) {
+            const double distance = vertexFloat(
+                    floor.vertexData(), floor.stride(), row * 8, 44) / 0.22;
+            if (std::abs(distance - center) < 0.001) floorRow = row;
+        }
+        QVERIFY(bermRow >= 0 && floorRow >= 0);
+        const float trailLeftY = vertexFloat(
+                berm.vertexData(), berm.stride(), bermRow * 7 + 1, 4);
+        const float trailRightY = vertexFloat(
+                berm.vertexData(), berm.stride(), bermRow * 7 + 5, 4);
+        const float floorLeftY = vertexFloat(
+                floor.vertexData(), floor.stride(), floorRow * 8 + 3, 4);
+        const float floorRightY = vertexFloat(
+                floor.vertexData(), floor.stride(), floorRow * 8 + 4, 4);
+        QVERIFY(std::abs(trailLeftY - trailRightY) > 0.60f);
+        QVERIFY(std::abs(trailLeftY - floorLeftY - 0.035f) < 0.002f);
+        QVERIFY(std::abs(trailRightY - floorRightY - 0.035f) < 0.002f);
+
+        const WorkoutGameRoadSample road =
+                WorkoutGameRoadCourseBuilder::sample(course, center);
+        QVERIFY(road.ready);
+        QVERIFY(std::abs(road.bermBankRadians) > 0.30);
+        QVERIFY((trailLeftY - trailRightY) * piece->turnRadians > 0.0);
+        QCOMPARE(berm.vertexData().size(),
+                 berm.sampleCount() * 7 * berm.stride());
+        QVERIFY(berm.sampleCount() >= 52);
+        QVERIFY(berm.indexData().size()
+                / int(3 * sizeof(quint32)) <= 768);
+        QVERIFY(trail.indexData().size()
+                < (trail.sampleCount() - 1) * 6 * int(sizeof(quint32)));
+        QVERIFY(floor.indexData().size()
+                < (floor.sampleCount() - 1) * 42 * int(sizeof(quint32)));
+    }
+
+    void bermDoesNotCreateASeparateBypassRibbon()
+    {
+        WorkoutGame3DGeometry bypass(
+                WorkoutGame3DGeometry::Layer::Bypass);
+        bypass.setCourse(bermCourse());
+        QVERIFY(!bypass.ready());
+        QCOMPARE(bypass.sampleCount(), 0);
+        QVERIFY(bypass.vertexData().isEmpty());
+        QVERIFY(bypass.indexData().isEmpty());
     }
 
     void forestFloorHasReliefMaterialsAndUnitNormals()

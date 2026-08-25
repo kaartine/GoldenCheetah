@@ -174,7 +174,7 @@ candidate until safe-line geometry and the extracted-AppImage gate pass.
 
 - [ ] `PROD-01` Log over and bunny hop.
 - [x] `PROD-02` Drop and its safe bypass.
-- [ ] `PROD-03` Rollers and berm.
+- [x] `PROD-03` Rollers and berm.
 - [ ] `PROD-04` Roots, rock garden and rock slab.
 - [ ] `PROD-05` Skinny and width transitions.
 - [ ] `PROD-06` Climb, grade transitions and crest response.

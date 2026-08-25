@@ -10,6 +10,7 @@
 #include "WorkoutGame3DViewModel.h"
 
 #include "WorkoutGame3DFeatureAsset.h"
+#include "WorkoutGameBermGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureChallenge.h"
 #include "WorkoutGameFeatureGeometry.h"
@@ -81,6 +82,8 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     QObject(parent),
     trail(std::make_unique<WorkoutGame3DGeometry>(
             WorkoutGame3DGeometry::Layer::Trail)),
+    berm(std::make_unique<WorkoutGame3DGeometry>(
+            WorkoutGame3DGeometry::Layer::Berm)),
     bypass(std::make_unique<WorkoutGame3DGeometry>(
             WorkoutGame3DGeometry::Layer::Bypass))
 {
@@ -121,6 +124,7 @@ void WorkoutGame3DViewModel::setCourse(
     }
     rebuildPowerProfile(course);
     trail->setCourse(roadCourse);
+    berm->setCourse(roadCourse);
     bypass->setCourse(roadCourse);
     floorBucket = std::numeric_limits<int>::min();
     featureBucket = std::numeric_limits<int>::min();
@@ -134,6 +138,7 @@ void WorkoutGame3DViewModel::setCourse(
     currentWorkoutProgress = 0.0;
     currentGradePercent = 0.0;
     riderPumpMeters = 0.0;
+    riderPoseInitialized = false;
     rebuildFloor(0.0);
     sceneReady = roadCourse.ready && trail->ready()
             && floorBuffers[std::size_t(activeFloorBuffer)]->ready();
@@ -200,13 +205,52 @@ void WorkoutGame3DViewModel::setFrame(
                 ? WorkoutGame3DTerrainProfile::elevationAtLateral(
                     terrain, lateral) + treadLift
                 : sample.visualGroundElevationMeters();
+        if (sample.terrain == WorkoutGameTerrainKind::Berm
+                && sample.pieceIndex < roadCourse.pieces.size()) {
+            const WorkoutGameRoadPiece &piece =
+                    roadCourse.pieces[sample.pieceIndex];
+            const WorkoutGameBermGeometryProfile bermProfile =
+                    WorkoutGameBermGeometry::profile(piece.difficulty);
+            const double local = distanceMeters
+                    - piece.challenge.obstacleDistanceMeters;
+            visualGround = sample.visualGroundElevationMeters()
+                    + bermProfile.surfaceOffsetMeters(
+                        local, lateral,
+                        bermProfile.halfWidthMeters(local),
+                        piece.turnRadians);
+        }
     }
     riderPositionY = visualGround + authoritativeAir;
     riderPositionZ = sample.center.zMeters + lateral * rightZ;
     riderHeadingDegrees = sample.center.headingRadians * 180.0 / Pi;
-    updateCameraPose(distanceMeters);
+    updateCameraPose(distanceMeters, lateral);
     riderPitchDegrees = finiteOrZero(frame.world.rider.pitchDegrees);
-    riderRollDegrees = finiteOrZero(frame.world.rider.rollDegrees);
+    double targetRiderRollDegrees =
+            finiteOrZero(frame.world.rider.rollDegrees);
+    if (frame.world.terrain == WorkoutGameTerrainKind::Berm
+            && sample.pieceIndex < roadCourse.pieces.size()) {
+        const WorkoutGameRoadPiece &piece =
+                roadCourse.pieces[sample.pieceIndex];
+        const WorkoutGameBermGeometryProfile bermProfile =
+                WorkoutGameBermGeometry::profile(piece.difficulty);
+        targetRiderRollDegrees = bermProfile.riderWorldRollRadians(
+                distanceMeters - piece.challenge.obstacleDistanceMeters,
+                piece.turnRadians,
+                std::max(0.0, frame.simulation.speedKph) / 3.6,
+                frame.feature.route == WorkoutGameRoute::SafeBypass)
+                * 180.0 / Pi;
+    }
+    constexpr double MaximumBermRollStepDegrees = 1.5;
+    if (riderPoseInitialized
+            && frame.world.terrain == WorkoutGameTerrainKind::Berm) {
+        riderRollDegrees += std::clamp(
+                targetRiderRollDegrees - riderRollDegrees,
+                -MaximumBermRollStepDegrees,
+                MaximumBermRollStepDegrees);
+    } else {
+        riderRollDegrees = targetRiderRollDegrees;
+    }
+    riderPoseInitialized = true;
     if (frame.world.terrain == WorkoutGameTerrainKind::Rollers
             && frame.feature.route == WorkoutGameRoute::MainLine
             && !frame.world.rider.airborne) {
@@ -318,7 +362,9 @@ void WorkoutGame3DViewModel::rebuildPowerProfile(
     }
 }
 
-void WorkoutGame3DViewModel::updateCameraPose(double distanceMeters)
+void WorkoutGame3DViewModel::updateCameraPose(
+        double distanceMeters,
+        double lateralMeters)
 {
     const double cameraDistance = std::max(
             0.0, distanceMeters - cameraBackDistanceMeters);
@@ -363,6 +409,66 @@ void WorkoutGame3DViewModel::updateCameraPose(double distanceMeters)
             + targetForwardZ * missingAhead;
     cameraTargetPositionY = targetSample.visualGroundElevationMeters()
             + cameraTargetHeightDistanceMeters;
+
+    const WorkoutGameRoadSample riderSample =
+            WorkoutGameRoadCourseBuilder::sample(roadCourse, distanceMeters);
+    if (!riderSample.ready
+            || riderSample.terrain != WorkoutGameTerrainKind::Berm
+            || riderSample.pieceIndex >= roadCourse.pieces.size()) {
+        return;
+    }
+    const WorkoutGameRoadPiece &piece =
+            roadCourse.pieces[riderSample.pieceIndex];
+    if (!piece.challenge.enabled) return;
+    const WorkoutGameBermGeometryProfile berm =
+            WorkoutGameBermGeometry::profile(piece.difficulty);
+    const double local = distanceMeters
+            - piece.challenge.obstacleDistanceMeters;
+    if (local <= berm.startMeters || local >= berm.endMeters) return;
+    const double progress = std::clamp(
+            (local - berm.startMeters) / (berm.endMeters - berm.startMeters),
+            0.0, 1.0);
+    const double blend = std::pow(std::sin(Pi * progress), 2.0);
+    constexpr double BermCameraBackMeters = 6.2;
+    constexpr double BermCameraLookAheadMeters = 2.5;
+    const double riderForwardX = std::sin(
+            riderSample.center.headingRadians);
+    const double riderForwardZ = std::cos(
+            riderSample.center.headingRadians);
+    const double riderRightX = std::cos(
+            riderSample.center.headingRadians);
+    const double riderRightZ = -std::sin(
+            riderSample.center.headingRadians);
+    const double chaseX = riderSample.center.xMeters
+            + lateralMeters * riderRightX
+            - BermCameraBackMeters * riderForwardX;
+    const double chaseZ = riderSample.center.zMeters
+            + lateralMeters * riderRightZ
+            - BermCameraBackMeters * riderForwardZ;
+    const double chaseY = riderSample.visualGroundElevationMeters()
+            + cameraHeightDistanceMeters;
+    const WorkoutGameRoadSample bermTarget =
+            WorkoutGameRoadCourseBuilder::sample(
+                roadCourse,
+                std::min(roadCourse.totalLengthMeters,
+                    distanceMeters + BermCameraLookAheadMeters));
+    if (!bermTarget.ready) return;
+    const double targetRightX = std::cos(
+            bermTarget.center.headingRadians);
+    const double targetRightZ = -std::sin(
+            bermTarget.center.headingRadians);
+    const double chaseTargetX = bermTarget.center.xMeters
+            + lateralMeters * targetRightX;
+    const double chaseTargetZ = bermTarget.center.zMeters
+            + lateralMeters * targetRightZ;
+    const double chaseTargetY = bermTarget.visualGroundElevationMeters()
+            + cameraTargetHeightDistanceMeters;
+    cameraPositionX += (chaseX - cameraPositionX) * blend;
+    cameraPositionY += (chaseY - cameraPositionY) * blend;
+    cameraPositionZ += (chaseZ - cameraPositionZ) * blend;
+    cameraTargetPositionX += (chaseTargetX - cameraTargetPositionX) * blend;
+    cameraTargetPositionY += (chaseTargetY - cameraTargetPositionY) * blend;
+    cameraTargetPositionZ += (chaseTargetZ - cameraTargetPositionZ) * blend;
 }
 
 void WorkoutGame3DViewModel::setTelemetry(

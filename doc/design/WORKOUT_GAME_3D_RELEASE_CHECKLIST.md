@@ -252,7 +252,7 @@ ground following and cannot activate either airborne visual path.
 ### `PHY-02` Add feature-specific rider response
 
 - [x] Rollers pump/absorb while both wheels track the surface.
-- [ ] Berm uses the same curved path for trail, rider lateral position and roll.
+- [x] Berm uses the same curved path for trail, rider lateral position and roll.
 - [ ] Skinny uses subtle balance lean without random steering.
 - [ ] Roots/rocks/slab move suspension and torso without camera vibration.
 - [ ] Climb selects seated/standing effort and a bounded crest release.
@@ -297,7 +297,7 @@ and a runtime/geometry regression test.
 - [x] `FTR-02` Bunny hop: distinct hurdle/kicker and short preload window.
 - [x] `FTR-03` Drop: sharp ledge, exposed face, lower landing and downward pose.
 - [x] `FTR-04` Rollers: rounded continuous crests/troughs and pump motion.
-- [ ] `FTR-05` Berm: broad banked bowl and shared curved rider line.
+- [x] `FTR-05` Berm: broad banked bowl and shared curved rider line.
 - [ ] `FTR-06` Roots: branching embedded network and bounded roughness.
 - [ ] `FTR-07` Rock garden: sunk varied rocks and a readable rideable line.
 - [ ] `FTR-08` Rock slab: asymmetric mass, crest, sides and surface following.
@@ -407,6 +407,37 @@ under ASan/UBSan; the five normal suite skips are explicitly opt-in exports and
 the roller export passes separately. Review artifacts are `rollers-completed.mp4`,
 `rollers-contact-sheet.png`, `rollers-crest.png` and the full catalog under
 `/home/jkaartinen/Documents/personal/gc-ui-ftr04` on the build host.
+
+**FTR-05 evidence:** Berm is one project-owned procedural trail tile driven by
+`WorkoutGameBermGeometry`. Its `7.74 m` canonical profile has `1.25 m` level
+entry and exit sockets, a C2-continuous `75 degree` centreline turn, a
+difficulty-scaled `20-30 degree` bank and a bowl-shaped five-point tread. Two
+closing edge skirts join the forest-floor sockets; ordinary trail and the
+forest centre strip are suppressed under the tile, preventing duplicate
+surfaces, cracks and background holes. At most 624 opaque triangles are
+generated at 0.15-metre spacing.
+
+Road heading, trail width, bank, mesh, rider height and rider roll all consume
+that profile. A weak effort uses a bounded 0.45-metre inside line on the same
+tread; it does not create a second bypass ribbon or change the Box2D surface.
+Main-line roll follows speed and signed road curvature, the inside line is
+capped at eight degrees, and presented roll changes by at most 1.5 degrees per
+frame. A socket-blended tangent chase camera keeps both lines inside the
+central view through the apex without changing the accepted camera outside the
+tile.
+
+Road, geometry, runtime, world and headless view suites pass
+`29 + 17 + 18 + 34 + 32` tests normally and under ASan/UBSan. The complete
+X11/OpenGL view suite passes 44 tests with only six explicit opt-in exports
+skipped. The berm export separately passes both 96-frame routes, including
+bounded lateral steps and roll; both videos are 3.2 seconds at 30 FPS. Focused
+interactive ASan/UBSan rendering also passes. Physics remains grounded at 3,
+5 and 7 m/s. Review artifacts are
+`berm-main-line.mp4`, `berm-safe-line.mp4`, their frames and catalog images in
+the `gc-ui-ftr05` artifact directory on the build host.
+The design uses the Recreation Aotearoa NZ trail guidelines for dimensional
+reference and OpenStax's centripetal-force relation for lean; no diagram, code
+or third-party model is copied into the repository.
 
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct

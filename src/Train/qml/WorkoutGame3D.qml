@@ -86,6 +86,20 @@ Item {
         }
 
         Model {
+            objectName: "bermGeometryModel"
+            geometry: workoutGame3D.bermGeometry
+            materials: PrincipledMaterial {
+                baseColor: "white"
+                roughness: 0.95
+                vertexColorsEnabled: true
+                lighting: PrincipledMaterial.FragmentLighting
+                cullMode: Material.NoCulling
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
+        Model {
             objectName: "bypassGeometryModel"
             geometry: workoutGame3D.bypassGeometry
             materials: PrincipledMaterial {

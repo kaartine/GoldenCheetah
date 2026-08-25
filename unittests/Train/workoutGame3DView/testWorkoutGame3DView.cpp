@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGame3DViewModel.h"
+#include "WorkoutGameBermGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGame3DWindow.h"
 #include "WorkoutGameFeatureGeometry.h"
@@ -530,6 +531,108 @@ private slots:
         frame.feature.route = WorkoutGameRoute::SafeBypass;
         viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
         QCOMPARE(viewModel.riderPump(), 0.0);
+    }
+
+    void bermRiderRollUsesTheRoadBankAndNotASeparateAnimation()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Berm);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const double distance = piece->challenge.obstacleDistanceMeters;
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sample(road, distance);
+        QVERIFY(sample.ready);
+        QVERIFY(std::abs(sample.bermBankRadians) > 0.30);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        auto *bermGeometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.bermGeometry());
+        QVERIFY(bermGeometry);
+        QVERIFY(bermGeometry->ready());
+        WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+        frame.world.terrain = WorkoutGameTerrainKind::Berm;
+        frame.world.rider.rollDegrees = 0.0;
+        frame.simulation.speedKph = 20.0;
+        frame.feature.route = WorkoutGameRoute::MainLine;
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        const double mainRoll = viewModel.riderRoll();
+        QVERIFY(std::abs(mainRoll) > 15.0);
+        QVERIFY(viewModel.riderRoll() * sample.bermBankRadians > 0.0);
+        const auto riderCameraAngleDegrees = [&viewModel]() {
+            const double viewX = viewModel.cameraTargetX()
+                    - viewModel.cameraX();
+            const double viewZ = viewModel.cameraTargetZ()
+                    - viewModel.cameraZ();
+            const double riderX = viewModel.riderX()
+                    - viewModel.cameraX();
+            const double riderZ = viewModel.riderZ()
+                    - viewModel.cameraZ();
+            const double dot = viewX * riderX + viewZ * riderZ;
+            const double lengths = std::hypot(viewX, viewZ)
+                    * std::hypot(riderX, riderZ);
+            return std::acos(std::clamp(dot / lengths, -1.0, 1.0))
+                    * 180.0 / std::acos(-1.0);
+        };
+        QVERIFY2(riderCameraAngleDegrees() < 10.0,
+                 qPrintable(QStringLiteral("main-line camera offset %1 degrees")
+                     .arg(riderCameraAngleDegrees())));
+
+        frame.feature.route = WorkoutGameRoute::SafeBypass;
+        frame.feature.lateralOffsetMeters = 0.45;
+        viewModel.setFrame(frame, 150.0, 220.0, 72, 145, 4);
+        QVERIFY(std::abs(viewModel.riderRoll()) > 3.0);
+        QVERIFY(std::abs(viewModel.riderRoll()) < std::abs(mainRoll));
+        QVERIFY2(riderCameraAngleDegrees() < 10.0,
+                 qPrintable(QStringLiteral("safe-line camera offset %1 degrees")
+                     .arg(riderCameraAngleDegrees())));
+    }
+
+    void bermRollChangesByAtMostOneAndAHalfDegreesPerPresentedFrame()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Berm);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(piece->difficulty);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        constexpr double SpeedMetersPerSecond = 5.0;
+        constexpr double FrameDistance = SpeedMetersPerSecond / 60.0;
+        const double start = piece->challenge.obstacleDistanceMeters
+                + profile.startMeters;
+        const double end = piece->challenge.obstacleDistanceMeters
+                + profile.endMeters;
+        double priorRoll = 0.0;
+        bool first = true;
+        for (double distance = start; distance <= end;
+             distance += FrameDistance) {
+            WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+            frame.world.terrain = WorkoutGameTerrainKind::Berm;
+            frame.simulation.speedKph = SpeedMetersPerSecond * 3.6;
+            frame.feature.route = WorkoutGameRoute::MainLine;
+            viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+            if (!first) {
+                QVERIFY(std::abs(viewModel.riderRoll() - priorRoll)
+                        <= 1.500001);
+            }
+            first = false;
+            priorRoll = viewModel.riderRoll();
+        }
     }
 
     void featureHudSeparatesPowerCadenceDistanceAndState()
@@ -1305,7 +1408,10 @@ private slots:
         QVERIFY(viewModel.ready());
         auto *bypassGeometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.bypassGeometry());
+        auto *bermGeometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.bermGeometry());
         QVERIFY(bypassGeometry);
+        QVERIFY(bermGeometry);
         QVERIFY(bypassGeometry->ready());
         QVERIFY(bypassGeometry->sampleCount() >= 20);
         QVERIFY(viewModel.trees().size() <= 19);
@@ -1385,6 +1491,8 @@ private slots:
         QVERIFY(rootItem);
         QVERIFY(rootItem->findChild<QObject *>(
                     QStringLiteral("bypassGeometryModel")));
+        QVERIFY(rootItem->findChild<QObject *>(
+                    QStringLiteral("bermGeometryModel")));
         QTRY_VERIFY_WITH_TIMEOUT(
                 findVisualItem(rootItem, QStringLiteral("fpsValue"))
                     && findVisualItem(rootItem, QStringLiteral("fpsValue"))
@@ -1762,6 +1870,113 @@ private slots:
                  qPrintable(QStringLiteral("roller body range was %1 m")
                      .arg(maximumBodyY - minimumBodyY)));
         QVERIFY(visiblyChangedFrames > FrameCount * 4 / 5);
+    }
+
+    void exportsBankedBermMainAndSafeLineMotionFrames()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const QString outputRoot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_BERM_VIDEO_DIR");
+        if (outputRoot.isEmpty()) {
+            QSKIP("Set GC_WORKOUT_GAME_BERM_VIDEO_DIR to export frames");
+        }
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Berm);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(piece->difficulty);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        auto *bermViewModel = qobject_cast<WorkoutGame3DViewModel *>(
+                window.rootContext()->contextProperty(
+                    QStringLiteral("workoutGame3D")).value<QObject *>());
+        QVERIFY(bermViewModel);
+        constexpr int FrameCount = 96;
+        const double start = piece->challenge.obstacleDistanceMeters
+                + profile.startMeters - 2.0;
+        const double end = piece->challenge.obstacleDistanceMeters
+                + profile.endMeters + 2.0;
+
+        for (WorkoutGameRoute route : {
+                 WorkoutGameRoute::MainLine,
+                 WorkoutGameRoute::SafeBypass}) {
+            window.setCourse(course, FtpWatts);
+            const bool safe = route == WorkoutGameRoute::SafeBypass;
+            const QString directory = QDir(outputRoot).filePath(
+                    safe ? QStringLiteral("safe-line")
+                         : QStringLiteral("main-line"));
+            QVERIFY(QDir().mkpath(directory));
+            double maximumLateral = 0.0;
+            double maximumRoll = 0.0;
+            double previousLateral = 0.0;
+            for (int frameIndex = 0; frameIndex < FrameCount; ++frameIndex) {
+                const double progress = double(frameIndex)
+                        / double(FrameCount - 1);
+                const double distance = start + (end - start) * progress;
+                WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+                frame.simulation.activeSection = 0;
+                frame.simulation.sectionProgress = std::clamp(
+                        distance / road.totalLengthMeters, 0.0, 1.0);
+                frame.simulation.route = route;
+                frame.simulation.featureOutcome = safe
+                        ? WorkoutGameFeatureOutcome::Bypassed
+                        : WorkoutGameFeatureOutcome::Completed;
+                frame.simulation.speedKph = 20.0;
+                frame.feature = runtime.update(frame.simulation);
+                frame.world.terrain = WorkoutGameTerrainKind::Berm;
+                frame.world.rider.airborne = false;
+                window.setFrame(frame,
+                        safe ? 150.0 : 225.0, 220.0,
+                        safe ? 72 : 88, 150, safe ? 4 : 7);
+                QTest::qWait(12);
+                maximumLateral = std::max(
+                        maximumLateral,
+                        std::abs(frame.feature.lateralOffsetMeters));
+                if (frameIndex > 0) {
+                    QVERIFY(std::abs(frame.feature.lateralOffsetMeters
+                                - previousLateral) < 0.04);
+                }
+                previousLateral = frame.feature.lateralOffsetMeters;
+                maximumRoll = std::max(
+                        maximumRoll, std::abs(bermViewModel->riderRoll()));
+                const QImage image = window.grabWindow();
+                QVERIFY(!image.isNull());
+                QVERIFY(sampledColorCount(image) > 30);
+                const QString path = QDir(directory).filePath(
+                        QStringLiteral("frame-%1.png")
+                            .arg(frameIndex, 4, 10, QLatin1Char('0')));
+                QImageWriter writer(path, "png");
+                writer.setCompression(1);
+                QVERIFY2(writer.write(image), qPrintable(writer.errorString()));
+            }
+            if (safe) {
+                QVERIFY(maximumLateral > 0.40);
+                QVERIFY(maximumRoll > 4.0);
+                QVERIFY2(maximumRoll < 12.0,
+                         qPrintable(QStringLiteral(
+                             "safe-line roll reached %1 degrees")
+                             .arg(maximumRoll)));
+            } else {
+                QCOMPARE(maximumLateral, 0.0);
+                QVERIFY(maximumRoll > 20.0);
+                QVERIFY(maximumRoll <= 28.0);
+            }
+        }
     }
 
     void exportsAuthoredChallengeCompletedAndBypassedMotionFrames()

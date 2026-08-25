@@ -21,6 +21,10 @@ only by them are retired after the acceptance gates below pass.
   metre-based connectors are also the authoritative 3D path.
 - `WorkoutGame3DGeometry` converts a complete road course into immutable trail
   and forest-floor triangle meshes. It does no work in the frame loop.
+- `WorkoutGameBermGeometry` owns the distance-parameterized berm centreline,
+  bank, tread, safe line and speed-derived rider roll. `WorkoutGame3DGeometry`
+  extrudes it into a bounded immutable tile instead of placing a model over the
+  ordinary trail.
 - `WorkoutGame3DTerrainProfile` generates the deterministic eight-vertex
   course-space cross-section shared by forest geometry and grounded prop
   anchors. Global course distance and seed make independently streamed chunks

@@ -9,6 +9,7 @@
 
 #include "WorkoutGameRoadCourse.h"
 
+#include "WorkoutGameBermGeometry.h"
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameFeatureGeometry.h"
 
@@ -235,12 +236,18 @@ double pieceTurn(
         const WorkoutGameSection &section,
         std::size_t pieceIndex)
 {
+    if (section.terrain == WorkoutGameTerrainKind::Berm) {
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(section.difficulty);
+        const bool left = ((section.visualVariant + pieceIndex) & 1u) == 0u;
+        return left ? -profile.turnMagnitudeRadians
+                    : profile.turnMagnitudeRadians;
+    }
     double amount = 0.0;
     switch (section.terrain) {
     case WorkoutGameTerrainKind::SmoothTrail:
         amount = section.visualVariant == 0u ? 0.0 : 0.10;
         break;
-    case WorkoutGameTerrainKind::Berm: amount = 0.52; break;
     case WorkoutGameTerrainKind::Rollers: amount = 0.16; break;
     case WorkoutGameTerrainKind::Roots:
     case WorkoutGameTerrainKind::RockGarden: amount = 0.12; break;
@@ -301,8 +308,20 @@ WorkoutGameRoadConnector connectorAt(
 {
     const double progress = std::clamp(requestedProgress, 0.0, 1.0);
     WorkoutGameRoadConnector result = piece.entry;
+    const auto headingProgress = [&piece](double sampleProgress) {
+        if (piece.terrain == WorkoutGameTerrainKind::Berm
+                && piece.challenge.enabled) {
+            const WorkoutGameBermGeometryProfile profile =
+                    WorkoutGameBermGeometry::profile(piece.difficulty);
+            const double distance = piece.startDistanceMeters
+                    + piece.lengthMeters * sampleProgress;
+            return profile.headingProgress(
+                    distance - piece.challenge.obstacleDistanceMeters);
+        }
+        return smoothStep(sampleProgress);
+    };
     result.headingRadians = piece.entry.headingRadians
-            + piece.turnRadians * smoothStep(progress);
+            + piece.turnRadians * headingProgress(progress);
     const double startElevation = piece.entry.elevationMeters;
     const double endElevation = startElevation + piece.riseMeters;
     const double startTangent = piece.entry.gradePercent
@@ -330,6 +349,62 @@ WorkoutGameRoadConnector connectorAt(
 
     double x = piece.entry.xMeters;
     double z = piece.entry.zMeters;
+    if (piece.terrain == WorkoutGameTerrainKind::Berm
+            && piece.challenge.enabled) {
+        const WorkoutGameBermGeometryProfile berm =
+                WorkoutGameBermGeometry::profile(piece.difficulty);
+        const double travelMeters = piece.lengthMeters * progress;
+        const double curveStartMeters = std::clamp(
+                piece.challenge.obstacleDistanceMeters
+                    + berm.curveStartMeters - piece.startDistanceMeters,
+                0.0, piece.lengthMeters);
+        const double curveEndMeters = std::clamp(
+                piece.challenge.obstacleDistanceMeters
+                    + berm.curveEndMeters - piece.startDistanceMeters,
+                curveStartMeters, piece.lengthMeters);
+        const double straightEntryMeters = std::min(
+                travelMeters, curveStartMeters);
+        x += std::sin(piece.entry.headingRadians) * straightEntryMeters;
+        z += std::cos(piece.entry.headingRadians) * straightEntryMeters;
+
+        const double activeEndMeters = std::min(
+                travelMeters, curveEndMeters);
+        if (activeEndMeters > curveStartMeters) {
+            constexpr int SimpsonIntervals = 128;
+            const double stepMeters =
+                    (activeEndMeters - curveStartMeters)
+                    / double(SimpsonIntervals);
+            double sumX = 0.0;
+            double sumZ = 0.0;
+            for (int interval = 0;
+                 interval <= SimpsonIntervals; ++interval) {
+                const double localPieceDistance = curveStartMeters
+                        + stepMeters * double(interval);
+                const double sampleProgress = piece.lengthMeters > 0.0
+                        ? localPieceDistance / piece.lengthMeters : 0.0;
+                const double heading = piece.entry.headingRadians
+                        + piece.turnRadians
+                            * headingProgress(sampleProgress);
+                const double weight = interval == 0
+                            || interval == SimpsonIntervals
+                        ? 1.0 : (interval & 1 ? 4.0 : 2.0);
+                sumX += weight * std::sin(heading);
+                sumZ += weight * std::cos(heading);
+            }
+            x += sumX * stepMeters / 3.0;
+            z += sumZ * stepMeters / 3.0;
+        }
+        const double straightExitMeters = std::max(
+                0.0, travelMeters - curveEndMeters);
+        x += std::sin(piece.entry.headingRadians + piece.turnRadians)
+                * straightExitMeters;
+        z += std::cos(piece.entry.headingRadians + piece.turnRadians)
+                * straightExitMeters;
+        result.xMeters = x;
+        result.zMeters = z;
+        return result;
+    }
+
     double priorProgress = 0.0;
     const int steps = std::max(1, int(std::ceil(
             progress * double(IntegrationSteps))));
@@ -337,7 +412,7 @@ WorkoutGameRoadConnector connectorAt(
         const double currentProgress = progress * double(step) / double(steps);
         const double middle = (priorProgress + currentProgress) * 0.5;
         const double heading = piece.entry.headingRadians
-                + piece.turnRadians * smoothStep(middle);
+                + piece.turnRadians * headingProgress(middle);
         const double distance = piece.lengthMeters
                 * (currentProgress - priorProgress);
         x += std::sin(heading) * distance;
@@ -371,8 +446,10 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
          sectionIndex < course.sections.size(); ++sectionIndex) {
         const WorkoutGameSection &section = course.sections[sectionIndex];
         const double sectionLength = estimatedLength(section, ftpWatts);
-        const int pieceCount = std::clamp(
-                int(std::ceil(sectionLength / 90.0)), 1, 24);
+        const int pieceCount = section.terrain == WorkoutGameTerrainKind::Berm
+                ? 1
+                : std::clamp(
+                    int(std::ceil(sectionLength / 90.0)), 1, 24);
         const double pieceLength = sectionLength / double(pieceCount);
         const WorkoutGameFeatureChallengeProfile challenge =
                 WorkoutGameFeatureChallenge::profile(section);
@@ -421,6 +498,21 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                                     - featureGeometry.startMeters + 1.5),
                         minimumObstacle, maximumObstacle);
             }
+        } else if (challenge.enabled
+                && section.terrain == WorkoutGameTerrainKind::Berm) {
+            const WorkoutGameBermGeometryProfile berm =
+                    WorkoutGameBermGeometry::profile(section.difficulty);
+            const double minimumObstacle = sectionStart
+                    - berm.startMeters + 1.5;
+            const double maximumObstacle = sectionStart + sectionLength
+                    - berm.endMeters - 1.5;
+            if (maximumObstacle >= minimumObstacle) {
+                obstacleDistance = std::clamp(
+                        std::max(obstacleDistance,
+                                 challengeDistance
+                                    - berm.startMeters + 1.5),
+                        minimumObstacle, maximumObstacle);
+            }
         }
         for (int part = 0; part < pieceCount; ++part) {
             WorkoutGameRoadPiece piece;
@@ -465,9 +557,10 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 const double featureEnd = obstacleDistance
                         + (featureGeometry.ready
                             ? featureGeometry.endMeters : 4.0);
-                if (section.terrain == WorkoutGameTerrainKind::Rollers) {
-                    // Rollers are fully rollable trail, not an obstacle with a
-                    // separate safe line. A missed flow score stays centred.
+                if (section.terrain == WorkoutGameTerrainKind::Rollers
+                        || section.terrain == WorkoutGameTerrainKind::Berm) {
+                    // These are fully rollable trail surfaces. A berm's
+                    // slower inside line is part of the same tread.
                     piece.challenge.bypassStartDistanceMeters =
                             challengeDistance;
                     piece.challenge.bypassEndDistanceMeters =
@@ -497,6 +590,16 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 piece.challenge.profile.decisionProgress =
                         (piece.challenge.decisionDistanceMeters - sectionStart)
                         / sectionLength;
+            }
+
+            if (section.terrain == WorkoutGameTerrainKind::Berm) {
+                if (!ownsChallenge) piece.turnRadians = 0.0;
+                piece.exit = connector;
+                piece.exit.halfWidthMeters = targetHalfWidth(section.terrain);
+                piece.exit.gradePercent = section.gradePercent;
+                piece.exit = connectorAt(piece, 1.0);
+                piece.animation = animationFor(
+                        section.terrain, piece.turnRadians, ownsChallenge);
             }
 
             connector = piece.exit;
@@ -578,6 +681,17 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     result.nonPhysicalFeatureOffsetMeters =
             nonPhysicalFeatureOffsetAt(course, distance);
     result.rideableSurface = rideableSurfaceAt(course, distance);
+    if (piece.terrain == WorkoutGameTerrainKind::Berm
+            && piece.challenge.enabled) {
+        const WorkoutGameBermGeometryProfile berm =
+                WorkoutGameBermGeometry::profile(piece.difficulty);
+        const double local = distance
+                - piece.challenge.obstacleDistanceMeters;
+        result.bermBankRadians = berm.bankRadians(local, piece.turnRadians);
+        result.center.halfWidthMeters = berm.halfWidthMeters(local);
+        result.renderableTrailSurface = local <= berm.startMeters
+                || local >= berm.endMeters;
+    }
     const double reliefOffset = trailReliefOffset(piece, distance);
     result.center.elevationMeters += reliefOffset
             + result.surfaceOffsetMeters;

@@ -112,12 +112,12 @@ opposite direction or treating normal chassis clearance as flight.
 
 The camera pose is continuous: renderers consume interpolated yaw, pitch, zoom,
 look-ahead and target coordinates rather than switching between unrelated scene
-implementations. A later pseudo-3D chase projection can therefore blend from the
-side projection while the same world snapshot, workout clock and recording path
-continue uninterrupted. Projection changes must never recreate the physics
-world or reset course progress. Skinny and berm remain disabled as generated
-features until that projection communicates trail width and lateral line choice
-and has deterministic transition tests.
+implementations. The Qt Quick 3D chase projection uses the same world snapshot,
+workout clock and recording path. Projection changes must never recreate the
+physics world or reset course progress. Berm is enabled after deterministic
+tests established shared trail width, bank, main/inside lines, bounded roll and
+socket-blended camera motion. Skinny remains pending the same line-choice and
+transition gates.
 
 The initial physics backend is vendored Box2D 3.1.1 (MIT license, pinned to
 commit `8c661469c9507d3ad6fbd2fea3f1aa71669c2fe3`). Box2D controls terrain
@@ -1053,5 +1053,5 @@ or recorded physiological data.
 9. Blend camera pose during live side, three-quarter, and chase transitions.
    Transition tests must cover workout continuity, renderer fallback, frame
    bounds, and fixed-step physics independence.
-10. Enable skinny and berm only after chase-view line choice, trail edges, and
-    low-end GPU frame-budget tests pass.
+10. Enable berm after chase-view line choice and trail-edge tests pass; keep
+    skinny pending its own geometry and low-end GPU frame-budget gates.
