@@ -11,6 +11,7 @@
 #include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
+#include "Train/WorkoutGameRockSlabGeometry.h"
 #include "Train/WorkoutGameRoadCourse.h"
 
 #include <QTest>
@@ -576,6 +577,111 @@ private slots:
         }
     }
 
+    void productionRockSlabTracksCanonicalMainAndSafeSurfaces()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 1147u;
+        course.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::RockSlab;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 76.0;
+        section.targetWatts = 210.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameRockSlabGeometryProfile slab =
+                WorkoutGameRockSlabGeometry::profile(piece->difficulty);
+        const double center = piece->challenge.obstacleDistanceMeters;
+        const double start = center + slab.startMeters;
+        const double end = center + slab.endMeters;
+
+        for (const double speed : {3.0, 5.0, 7.0}) {
+            for (int route = 0; route < 2; ++route) {
+                const bool safe = route == 1;
+                WorkoutGamePhysics physics;
+                QVERIFY(physics.configure(road));
+                WorkoutGamePhysicsInput input;
+                input.terrain = WorkoutGameTerrainKind::RockSlab;
+                input.desiredSpeedMetersPerSecond = speed;
+                input.effortRatio = safe ? 0.75 : 1.0;
+                input.forceGroundFollowing = safe;
+                double previousDistance = -1.0;
+                double previousElevation = 0.0;
+                double maximumVerticalStep = 0.0;
+                double maximumSurfaceRise = 0.0;
+                double minimumPitch = 90.0;
+                double maximumPitch = -90.0;
+                const int ticks = int(std::ceil(
+                        (end - start) / (speed * 0.02)));
+                for (int tick = 0; tick <= ticks; ++tick) {
+                    input.workoutTimeMs = tick * 20;
+                    input.courseDistanceMeters = std::min(
+                            end, start + tick * speed * 0.02);
+                    const WorkoutGameRoadSample roadSample =
+                            WorkoutGameRoadCourseBuilder::sample(
+                                road, input.courseDistanceMeters);
+                    const WorkoutGameWorldSnapshot result =
+                            physics.update(input);
+                    QVERIFY(result.ready);
+                    QVERIFY(!result.rider.airborne);
+                    QCOMPARE(result.rider.airHeightMeters(), 0.0);
+                    QVERIFY(result.rider.distanceMeters >= previousDistance);
+                    const double datum = roadSample.center.elevationMeters
+                            - roadSample.surfaceOffsetMeters;
+                    const double expectedSurface = safe
+                            ? datum : roadSample.visualGroundElevationMeters();
+                    QVERIFY(std::abs(result.surfaceElevationMeters
+                                - expectedSurface) < 0.03);
+                    maximumSurfaceRise = std::max(
+                            maximumSurfaceRise,
+                            result.surfaceElevationMeters - datum);
+                    if (input.courseDistanceMeters >= center
+                                + slab.activeStartMeters
+                            && input.courseDistanceMeters <= center
+                                + slab.activeEndMeters) {
+                        minimumPitch = std::min(
+                                minimumPitch, result.rider.pitchDegrees);
+                        maximumPitch = std::max(
+                                maximumPitch, result.rider.pitchDegrees);
+                    }
+                    if (tick > 0) {
+                        maximumVerticalStep = std::max(
+                                maximumVerticalStep,
+                                std::abs(result.rider.elevationMeters
+                                    - previousElevation));
+                    }
+                    previousDistance = result.rider.distanceMeters;
+                    previousElevation = result.rider.elevationMeters;
+                }
+                QVERIFY(maximumVerticalStep < 0.12);
+                if (safe) {
+                    QVERIFY(maximumSurfaceRise <= 0.025);
+                } else {
+                    QVERIFY(maximumSurfaceRise >= slab.heightMeters * 0.95);
+                    QVERIFY2(maximumPitch > 3.0,
+                             qPrintable(QStringLiteral(
+                                 "slab climb pitch reached only %1 degrees")
+                                 .arg(maximumPitch)));
+                    QVERIFY2(minimumPitch < -3.0,
+                             qPrintable(QStringLiteral(
+                                 "slab descent pitch reached only %1 degrees")
+                                 .arg(minimumPitch)));
+                }
+            }
+        }
+    }
+
     void jumpableFeaturesLeaveGroundAndLand_data()
     {
         QTest::addColumn<int>("terrain");
@@ -1058,17 +1164,19 @@ private slots:
     void addedFeaturesHaveDistinctRideableProfiles()
     {
         const double flat = WorkoutGamePhysics::terrainHeight(
-                WorkoutGameTerrainKind::SmoothTrail, 30.0, 0.0, 0.7, 0u);
+                WorkoutGameTerrainKind::SmoothTrail, 7.25, 0.0, 0.7, 0u);
         const double log = WorkoutGamePhysics::terrainHeight(
                 WorkoutGameTerrainKind::LogOver, 30.0, 0.0, 0.7, 0u);
         const double tabletop = WorkoutGamePhysics::terrainHeight(
                 WorkoutGameTerrainKind::Tabletop, 30.0, 0.0, 0.7, 0u);
         const double slab = WorkoutGamePhysics::terrainHeight(
-                WorkoutGameTerrainKind::RockSlab, 30.0, 0.0, 0.7, 0u);
+                WorkoutGameTerrainKind::RockSlab, 7.25, 0.0, 0.7, 0u);
 
         QVERIFY(log > flat + 0.15);
         QVERIFY(tabletop > flat + 0.3);
-        QVERIFY(slab > flat + 0.1);
+        QCOMPARE(slab - flat,
+                 WorkoutGameRockSlabGeometry::profile(0.7)
+                    .surfaceOffsetMeters(0.25, 0.0));
     }
 
     void initialSnapshotFramesTheRider()

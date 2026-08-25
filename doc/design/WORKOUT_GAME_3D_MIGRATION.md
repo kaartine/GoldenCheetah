@@ -106,6 +106,10 @@ never allowed to join that worker.
   in the resident range. Twelve stones produce 180 vertices and 252 triangles
   per tile in one merged draw range. That range uses the same double-buffered
   floor-bucket lifecycle and is never rebuilt by the per-frame pose path.
+- Rock slabs are project-authored procedural geometry with at most 12 slabs in
+  the resident range. A slab uses 147 vertices and 224 triangles in one merged
+  draw range. The range follows the same double-buffered floor-bucket lifecycle;
+  only rider transform and suspension-derived torso response change per frame.
 - Textures use mipmaps and explicit size budgets. Repeated props use instancing
   once authored assets replace the initial primitives.
 - Shadows and expensive post-processing default off on the low-power profile.

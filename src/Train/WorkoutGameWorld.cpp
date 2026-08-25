@@ -11,6 +11,7 @@
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameRockGardenGeometry.h"
+#include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 
 #include <box2d/box2d.h>
@@ -268,6 +269,7 @@ struct WorkoutGamePhysics::Impl
         if (!roadCourse.ready) {
             return terrain == WorkoutGameTerrainKind::Roots
                     || terrain == WorkoutGameTerrainKind::RockGarden
+                    || terrain == WorkoutGameTerrainKind::RockSlab
                     ? 0.04 : TerrainSampleMeters;
         }
         const double distance = distanceBase + localX - RiderStartMeters;
@@ -296,6 +298,14 @@ struct WorkoutGamePhysics::Impl
                         piece.difficulty);
             return local >= rocks.activeStartMeters - 0.5
                     && local <= rocks.activeEndMeters + 0.5
+                    ? 0.04 : TerrainSampleMeters;
+        }
+        if (piece.terrain == WorkoutGameTerrainKind::RockSlab) {
+            const WorkoutGameRockSlabGeometryProfile slab =
+                    WorkoutGameRockSlabGeometry::profile(
+                        piece.difficulty);
+            return local >= slab.activeStartMeters - 0.5
+                    && local <= slab.activeEndMeters + 0.5
                     ? 0.04 : TerrainSampleMeters;
         }
         return TerrainSampleMeters;
@@ -756,13 +766,9 @@ double WorkoutGamePhysics::terrainHeight(
         return slope + height * (1.0 - smoothStep((phase - 34.0) / 4.0));
     }
     case WorkoutGameTerrainKind::RockSlab: {
-        const double height = 0.2 + 0.24 * challenge;
-        if (phase < 27.0 || phase >= 36.0) return slope;
-        if (phase < 29.0) {
-            return slope + height * smoothStep((phase - 27.0) / 2.0);
-        }
-        if (phase < 34.0) return slope + height;
-        return slope + height * (1.0 - smoothStep((phase - 34.0) / 2.0));
+        const double slabTile = std::fmod(phase, 14.0) - 7.0;
+        return slope + WorkoutGameRockSlabGeometry::profile(
+                challenge).surfaceOffsetMeters(slabTile, 0.0);
     }
     case WorkoutGameTerrainKind::Drop:
         if (phase < 30.0) return slope;

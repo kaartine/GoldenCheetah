@@ -41,7 +41,7 @@ silhouette, scale, trail integration, and line readability from future art.
 | Berm | Berm cross-section, p. 30 | The production tile now has a 75-degree curved centreline, broad banked bowl, level sockets and an integrated slower inside line. Road, rider, mesh and camera share the same distance profile. | Preserve the canonical profile and socket contract when final ground materials replace the current low-poly shading. |
 | Log over | Drop/obstacle examples, p. 36 | The tapered round log is one of the clearest current features. | Extend it beyond the trail, partly bury it, and add end-grain and broken branch details. |
 | Tabletop | Jump anatomy and examples, pp. 38-40 | The main proportions are plausible, but the current solid mound hides the take-off belly, lip, knuckle, and landing transition. | Preserve the measured dimensions while exposing those named parts in the silhouette and shading. |
-| Rock slab | Track armouring, p. 35 | The wide raised stone strip reads as a manufactured ramp. | Use one asymmetric rock face with a rollover crest, exposed sides, fissures, and irregular edges. |
+| Rock slab | Track armouring, p. 35 | The production tile now forms one asymmetric rollover face with an irregular footprint, exposed buried sides and fissures. The low-relief safe line stays on the widened tread and physics follows the same surface rendered by Quick 3D. | Preserve the canonical rounded crest, same-tread safe line and exact sockets when final rock and ground materials replace the current vertex colors. |
 
 ## Numeric Checks
 
@@ -67,6 +67,11 @@ branching roots are 0.026-0.135 m in radius after difficulty scaling and are
 partly buried. The main line reaches at least 0.07 m of relief at catalog
 difficulty, while the 0.82 m lateral safe line remains below one quarter of
 that relief and reconnects before each 1.36 m-wide socket.
+
+The production rock slab tile is 14 m long with a 7.4 m active face. At
+difficulty 0.65 it rises approximately 0.84 m to a single rounded crest. Its
+asymmetric footprint varies from 1.44 to 1.76 m wide; the 1.05 m lateral safe
+line has at most 2.5 cm of relief and reconnects to each 1.36 m-wide socket.
 
 ## Airborne Presentation
 

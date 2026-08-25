@@ -115,6 +115,21 @@ Item {
         }
 
         Model {
+            objectName: "rockSlabGeometryModel"
+            geometry: workoutGame3D.rockSlabGeometry
+            materials: PrincipledMaterial {
+                baseColor: "white"
+                metalness: 0
+                roughness: 0.90
+                vertexColorsEnabled: true
+                lighting: PrincipledMaterial.FragmentLighting
+                cullMode: Material.NoCulling
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
+        Model {
             objectName: "bermGeometryModel"
             geometry: workoutGame3D.bermGeometry
             materials: PrincipledMaterial {
@@ -177,16 +192,6 @@ Item {
                 position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
                 eulerRotation.y: modelData.yaw
 
-                Model {
-                    visible: modelData.kind === 11
-                    source: "#Sphere"
-                    y: 0.26
-                    scale: Qt.vector3d(0.012, 0.0065, 0.010)
-                    materials: PrincipledMaterial {
-                        baseColor: "#77766e"
-                        roughness: 1
-                    }
-                }
                 Model {
                     visible: modelData.kind === 7
                     source: "#Cube"

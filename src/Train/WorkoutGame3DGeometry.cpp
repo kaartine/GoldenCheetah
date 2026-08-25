@@ -13,6 +13,7 @@
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
+#include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
@@ -65,7 +66,7 @@ TerrainColor colorFor(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::Roots: return {0.43f, 0.27f, 0.13f};
     case WorkoutGameTerrainKind::RockGarden: return {0.45f, 0.42f, 0.35f};
     case WorkoutGameTerrainKind::Skinny: return {0.48f, 0.31f, 0.15f};
-    case WorkoutGameTerrainKind::RockSlab: return {0.50f, 0.48f, 0.43f};
+    case WorkoutGameTerrainKind::RockSlab: return {0.50f, 0.32f, 0.16f};
     case WorkoutGameTerrainKind::Climb: return {0.49f, 0.31f, 0.15f};
     default: return {0.50f, 0.32f, 0.16f};
     }
@@ -91,6 +92,18 @@ void appendFeatureSamples(
     };
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
         if (!piece.challenge.enabled) continue;
+        if (piece.terrain == WorkoutGameTerrainKind::RockSlab) {
+            const WorkoutGameRockSlabGeometryProfile slab =
+                    WorkoutGameRockSlabGeometry::profile(
+                        piece.difficulty);
+            const double center = piece.challenge.obstacleDistanceMeters;
+            append(center + slab.startMeters);
+            append(center + slab.activeStartMeters);
+            append(center + slab.crestMeters);
+            append(center + slab.activeEndMeters);
+            append(center + slab.endMeters);
+            continue;
+        }
         const WorkoutGameFeatureGeometryProfile profile =
                 WorkoutGameFeatureGeometry::profile(
                     piece.terrain, piece.difficulty);
@@ -212,6 +225,10 @@ void WorkoutGame3DGeometry::build(
         buildRockGardens(course, startDistanceMeters, endDistanceMeters);
         return;
     }
+    if (layer == Layer::RockSlab) {
+        buildRockSlabs(course, startDistanceMeters, endDistanceMeters);
+        return;
+    }
     const double rangeMeters = endDistanceMeters - startDistanceMeters;
 
     std::vector<double> sampleDistances;
@@ -303,7 +320,9 @@ void WorkoutGame3DGeometry::build(
             const bool technicalDatum = trailVertex
                     && (sample.terrain == WorkoutGameTerrainKind::Roots
                         || sample.terrain
-                            == WorkoutGameTerrainKind::RockGarden);
+                            == WorkoutGameTerrainKind::RockGarden
+                        || sample.terrain
+                            == WorkoutGameTerrainKind::RockSlab);
             const double elevation = trailVertex
                     ? sample.visualGroundElevationMeters()
                         - (technicalDatum ? sample.surfaceOffsetMeters : 0.0)
@@ -627,6 +646,313 @@ void WorkoutGame3DGeometry::buildRockGardens(
     setBounds(boundsMin, boundsMax);
     geometryReady = true;
     generatedSampleCount = stoneCount * VerticesPerStone;
+    update();
+}
+
+void WorkoutGame3DGeometry::buildRockSlabs(
+        const WorkoutGameRoadCourse &course,
+        double startDistanceMeters,
+        double endDistanceMeters)
+{
+    constexpr int Stations = 13;
+    constexpr int Columns = 7;
+    constexpr int MaximumSlabs = 12;
+    constexpr int FissureCount = 4;
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    QVector3D boundsMin(
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max());
+    QVector3D boundsMax(
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest());
+    int slabCount = 0;
+
+    const auto appendVertex = [&](
+            const WorkoutGameRoadSample &sample,
+            double distance,
+            double lateral,
+            double up,
+            double normalForward,
+            double normalLateral,
+            double normalUp,
+            float red,
+            float green,
+            float blue,
+            float u,
+            float v) {
+        const WorkoutGame3DTerrainProfileSnapshot terrain =
+                WorkoutGame3DTerrainProfile::build(
+                    sample, distance, course.seed);
+        if (!terrain.ready) return false;
+        const double rightX = std::cos(sample.center.headingRadians);
+        const double rightZ = -std::sin(sample.center.headingRadians);
+        const double forwardX = std::sin(sample.center.headingRadians);
+        const double forwardZ = std::cos(sample.center.headingRadians);
+        const double datum =
+                WorkoutGame3DTerrainProfile::elevationAtLateral(
+                    terrain, lateral)
+                - sample.surfaceOffsetMeters;
+        const double normalLength = std::sqrt(
+                normalForward * normalForward
+                + normalLateral * normalLateral
+                + normalUp * normalUp);
+        const double inverseNormal = normalLength > 1e-9
+                ? 1.0 / normalLength : 1.0;
+        const float x = float(sample.center.xMeters + lateral * rightX);
+        const float y = float(datum + up);
+        const float z = float(sample.center.zMeters + lateral * rightZ);
+        vertices.push_back({
+            x, y, z,
+            float((normalForward * forwardX
+                   + normalLateral * rightX) * inverseNormal),
+            float(normalUp * inverseNormal),
+            float((normalForward * forwardZ
+                   + normalLateral * rightZ) * inverseNormal),
+            red, green, blue, 1.0f, u, v
+        });
+        boundsMin.setX(std::min(boundsMin.x(), x));
+        boundsMin.setY(std::min(boundsMin.y(), y));
+        boundsMin.setZ(std::min(boundsMin.z(), z));
+        boundsMax.setX(std::max(boundsMax.x(), x));
+        boundsMax.setY(std::max(boundsMax.y(), y));
+        boundsMax.setZ(std::max(boundsMax.z(), z));
+        return true;
+    };
+    const auto position = [&vertices](std::uint32_t index) {
+        const Vertex &vertex = vertices[std::size_t(index)];
+        return QVector3D(vertex.x, vertex.y, vertex.z);
+    };
+
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled
+                || piece.terrain != WorkoutGameTerrainKind::RockSlab) {
+            continue;
+        }
+        const WorkoutGameRockSlabGeometryProfile profile =
+                WorkoutGameRockSlabGeometry::profile(piece.difficulty);
+        if (!profile.ready) continue;
+        const double center = piece.challenge.obstacleDistanceMeters;
+        if (center + profile.activeEndMeters < startDistanceMeters
+                || center + profile.activeStartMeters > endDistanceMeters) {
+            continue;
+        }
+        if (slabCount >= MaximumSlabs) break;
+        const std::uint32_t topStart = std::uint32_t(vertices.size());
+        for (int station = 0; station < Stations; ++station) {
+            const double progress = double(station) / double(Stations - 1);
+            const double local = profile.activeStartMeters
+                    + progress * (
+                        profile.activeEndMeters
+                            - profile.activeStartMeters);
+            const double distance = center + local;
+            const double slabCenter =
+                    profile.slabCenterLateralMeters(local);
+            const double halfWidth = profile.slabHalfWidthMeters(local);
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(course, distance);
+            if (!sample.ready) {
+                clear();
+                return;
+            }
+            for (int column = 0; column < Columns; ++column) {
+                const double across = -1.0
+                        + 2.0 * double(column) / double(Columns - 1);
+                const double lateral = slabCenter + across * halfWidth;
+                const double up = profile.surfaceOffsetMeters(local, lateral);
+                const float shade = float((station + column * 2) % 5) / 4.0f;
+                if (!appendVertex(
+                        sample, distance, lateral, up,
+                        0.0, 0.0, 1.0,
+                        0.28f + 0.09f * shade,
+                        0.30f + 0.08f * shade,
+                        0.28f + 0.07f * shade,
+                        float(column) / float(Columns - 1),
+                        float(progress))) {
+                    clear();
+                    return;
+                }
+            }
+        }
+        const auto topIndex = [topStart](int station, int column) {
+            return topStart + std::uint32_t(station * Columns + column);
+        };
+        for (int station = 0; station < Stations; ++station) {
+            for (int column = 0; column < Columns; ++column) {
+                const int priorStation = std::max(0, station - 1);
+                const int nextStation = std::min(Stations - 1, station + 1);
+                const int priorColumn = std::max(0, column - 1);
+                const int nextColumn = std::min(Columns - 1, column + 1);
+                const QVector3D forward =
+                        position(topIndex(nextStation, column))
+                        - position(topIndex(priorStation, column));
+                const QVector3D right =
+                        position(topIndex(station, nextColumn))
+                        - position(topIndex(station, priorColumn));
+                QVector3D normal = QVector3D::crossProduct(forward, right);
+                if (normal.y() < 0.0f) normal = -normal;
+                normal.normalize();
+                Vertex &vertex = vertices[std::size_t(
+                        topIndex(station, column))];
+                vertex.nx = normal.x();
+                vertex.ny = normal.y();
+                vertex.nz = normal.z();
+            }
+        }
+        for (int station = 0; station < Stations - 1; ++station) {
+            for (int column = 0; column < Columns - 1; ++column) {
+                const std::uint32_t a = topIndex(station, column);
+                const std::uint32_t b = topIndex(station + 1, column);
+                const std::uint32_t c = topIndex(station, column + 1);
+                const std::uint32_t d = topIndex(station + 1, column + 1);
+                indices.insert(indices.end(), {a, b, c, c, b, d});
+            }
+        }
+
+        for (int side = 0; side < 2; ++side) {
+            const int column = side == 0 ? 0 : Columns - 1;
+            std::array<std::uint32_t, Stations> bottom = {};
+            for (int station = 0; station < Stations; ++station) {
+                const double progress =
+                        double(station) / double(Stations - 1);
+                const double local = profile.activeStartMeters
+                        + progress * (profile.activeEndMeters
+                            - profile.activeStartMeters);
+                const double distance = center + local;
+                const double slabCenter =
+                        profile.slabCenterLateralMeters(local);
+                const double lateral = slabCenter
+                        + (side == 0 ? -1.0 : 1.0)
+                            * profile.slabHalfWidthMeters(local);
+                const WorkoutGameRoadSample sample =
+                        WorkoutGameRoadCourseBuilder::sample(course, distance);
+                bottom[std::size_t(station)] =
+                        std::uint32_t(vertices.size());
+                if (!sample.ready || !appendVertex(
+                        sample, distance, lateral,
+                        -profile.sideDepthMeters,
+                        0.0, side == 0 ? -1.0 : 1.0, 0.12,
+                        0.20f, 0.21f, 0.19f,
+                        float(progress), 0.0f)) {
+                    clear();
+                    return;
+                }
+            }
+            for (int station = 0; station < Stations - 1; ++station) {
+                const std::uint32_t a = topIndex(station, column);
+                const std::uint32_t b = topIndex(station + 1, column);
+                const std::uint32_t c = bottom[std::size_t(station)];
+                const std::uint32_t d = bottom[std::size_t(station + 1)];
+                indices.insert(indices.end(), {a, c, b, b, c, d});
+            }
+        }
+
+        for (int end = 0; end < 2; ++end) {
+            const int station = end == 0 ? 0 : Stations - 1;
+            const double progress = double(station) / double(Stations - 1);
+            const double local = profile.activeStartMeters
+                    + progress * (profile.activeEndMeters
+                        - profile.activeStartMeters);
+            const double distance = center + local;
+            const double slabCenter =
+                    profile.slabCenterLateralMeters(local);
+            const double halfWidth = profile.slabHalfWidthMeters(local);
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(course, distance);
+            std::array<std::uint32_t, Columns> bottom = {};
+            for (int column = 0; column < Columns; ++column) {
+                const double across = -1.0
+                        + 2.0 * double(column) / double(Columns - 1);
+                bottom[std::size_t(column)] =
+                        std::uint32_t(vertices.size());
+                if (!sample.ready || !appendVertex(
+                        sample, distance, slabCenter + across * halfWidth,
+                        -profile.sideDepthMeters,
+                        end == 0 ? -1.0 : 1.0, 0.0, 0.12,
+                        0.18f, 0.19f, 0.17f,
+                        float(column) / float(Columns - 1), 0.0f)) {
+                    clear();
+                    return;
+                }
+            }
+            for (int column = 0; column < Columns - 1; ++column) {
+                const std::uint32_t a = topIndex(station, column);
+                const std::uint32_t b = topIndex(station, column + 1);
+                const std::uint32_t c = bottom[std::size_t(column)];
+                const std::uint32_t d = bottom[std::size_t(column + 1)];
+                indices.insert(indices.end(), {a, c, b, b, c, d});
+            }
+        }
+
+        const std::array<double, FissureCount> fissureCenters = {
+            -2.25, -0.95, 0.85, 2.20
+        };
+        for (int fissure = 0; fissure < FissureCount; ++fissure) {
+            const double local = fissureCenters[std::size_t(fissure)];
+            const double halfLength = 0.28 + 0.05 * double(fissure);
+            const double halfWidth = 0.018 + 0.004 * double(fissure);
+            const double direction = fissure % 2 == 0 ? 1.0 : -1.0;
+            const double slabCenter =
+                    profile.slabCenterLateralMeters(local);
+            const double fromLateral = slabCenter - direction * 0.24;
+            const double toLateral = slabCenter + direction * 0.24;
+            const std::uint32_t first = std::uint32_t(vertices.size());
+            for (int corner = 0; corner < 4; ++corner) {
+                const bool endCorner = corner >= 2;
+                const bool rightCorner = corner % 2 == 1;
+                const double cornerLocal = local
+                        + (endCorner ? halfLength : -halfLength);
+                const double lateral = (endCorner
+                        ? toLateral : fromLateral)
+                        + (rightCorner ? halfWidth : -halfWidth);
+                const double distance = center + cornerLocal;
+                const WorkoutGameRoadSample sample =
+                        WorkoutGameRoadCourseBuilder::sample(course, distance);
+                if (!sample.ready || !appendVertex(
+                        sample, distance, lateral,
+                        profile.surfaceOffsetMeters(cornerLocal, lateral)
+                            + 0.007,
+                        0.0, 0.0, 1.0,
+                        0.08f, 0.09f, 0.08f,
+                        endCorner ? 1.0f : 0.0f,
+                        rightCorner ? 1.0f : 0.0f)) {
+                    clear();
+                    return;
+                }
+            }
+            indices.insert(indices.end(), {
+                first, first + 2u, first + 1u,
+                first + 1u, first + 2u, first + 3u
+            });
+        }
+        ++slabCount;
+    }
+    if (vertices.empty() || indices.empty()) return;
+
+    QByteArray vertexData;
+    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
+    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
+    QByteArray indexData;
+    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
+    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
+    setStride(sizeof(Vertex));
+    setVertexData(vertexData);
+    setIndexData(indexData);
+    setPrimitiveType(PrimitiveType::Triangles);
+    addAttribute(Attribute::PositionSemantic,
+                 offsetof(Vertex, x), Attribute::F32Type);
+    addAttribute(Attribute::NormalSemantic,
+                 offsetof(Vertex, nx), Attribute::F32Type);
+    addAttribute(Attribute::ColorSemantic,
+                 offsetof(Vertex, r), Attribute::F32Type);
+    addAttribute(Attribute::TexCoordSemantic,
+                 offsetof(Vertex, u), Attribute::F32Type);
+    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
+    setBounds(boundsMin, boundsMax);
+    geometryReady = true;
+    generatedSampleCount = int(vertices.size());
     update();
 }
 

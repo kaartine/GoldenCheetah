@@ -14,6 +14,7 @@
 
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
+#include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 
 #include <algorithm>
@@ -48,6 +49,7 @@ WorkoutGameFeatureMotion motionFor(WorkoutGameTerrainKind terrain)
         return WorkoutGameFeatureMotion::Jump;
     case WorkoutGameTerrainKind::Roots:
     case WorkoutGameTerrainKind::RockGarden:
+    case WorkoutGameTerrainKind::RockSlab:
         return WorkoutGameFeatureMotion::Absorb;
     case WorkoutGameTerrainKind::Drop:
         return WorkoutGameFeatureMotion::Drop;
@@ -234,6 +236,15 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         actionEnd = std::min(
                 layout.endDistanceMeters,
                 result.obstacleDistanceMeters + rocks.activeEndMeters);
+    } else if (piece->terrain == WorkoutGameTerrainKind::RockSlab) {
+        const WorkoutGameRockSlabGeometryProfile slab =
+                WorkoutGameRockSlabGeometry::profile(piece->difficulty);
+        actionStart = std::max(
+                layout.startDistanceMeters,
+                result.obstacleDistanceMeters + slab.activeStartMeters);
+        actionEnd = std::min(
+                layout.endDistanceMeters,
+                result.obstacleDistanceMeters + slab.activeEndMeters);
     } else if (result.motion == WorkoutGameFeatureMotion::Jump) {
         const WorkoutGameFeatureGeometryProfile geometry =
                 WorkoutGameFeatureGeometry::profile(
@@ -302,6 +313,13 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                     WorkoutGameRockGardenGeometry::profile(
                         piece->difficulty);
             result.lateralOffsetMeters = rocks.safeLineOffsetMeters(
+                    result.visualDistanceMeters
+                        - piece->challenge.obstacleDistanceMeters);
+        } else if (piece->terrain == WorkoutGameTerrainKind::RockSlab) {
+            const WorkoutGameRockSlabGeometryProfile slab =
+                    WorkoutGameRockSlabGeometry::profile(
+                        piece->difficulty);
+            result.lateralOffsetMeters = slab.safeLineOffsetMeters(
                     result.visualDistanceMeters
                         - piece->challenge.obstacleDistanceMeters);
         } else {

@@ -15,6 +15,7 @@
 #include "WorkoutGameFeatureChallenge.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
+#include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
@@ -102,6 +103,11 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
         buffer = std::make_unique<WorkoutGame3DGeometry>(
                 WorkoutGame3DGeometry::Layer::RockGarden);
     }
+    for (std::unique_ptr<WorkoutGame3DGeometry> &buffer
+            : rockSlabBuffers) {
+        buffer = std::make_unique<WorkoutGame3DGeometry>(
+                WorkoutGame3DGeometry::Layer::RockSlab);
+    }
     const QByteArray requested = qgetenv("GC_WORKOUT_GAME_3D_CAMERA")
             .trimmed().toLower();
     if (requested == "low-centre") {
@@ -152,6 +158,7 @@ void WorkoutGame3DViewModel::setCourse(
     riderPoseInitialized = false;
     rootCompressionInitialized = false;
     rockCompressionInitialized = false;
+    slabCompressionInitialized = false;
     lastRiderPoseTimeMs = -1;
     rebuildFloor(0.0);
     sceneReady = roadCourse.ready && trail->ready()
@@ -219,7 +226,8 @@ void WorkoutGame3DViewModel::setFrame(
                 ? WorkoutGame3DTerrainProfile::elevationAtLateral(
                     terrain, lateral) + treadLift
                 : sample.visualGroundElevationMeters();
-        if (sample.terrain == WorkoutGameTerrainKind::Roots
+        if ((sample.terrain == WorkoutGameTerrainKind::Roots
+                || sample.terrain == WorkoutGameTerrainKind::RockSlab)
                 && frame.feature.route == WorkoutGameRoute::SafeBypass) {
             visualGround -= sample.surfaceOffsetMeters;
         }
@@ -288,6 +296,9 @@ void WorkoutGame3DViewModel::setFrame(
     if (frame.world.terrain != WorkoutGameTerrainKind::RockGarden) {
         rockCompressionInitialized = false;
     }
+    if (frame.world.terrain != WorkoutGameTerrainKind::RockSlab) {
+        slabCompressionInitialized = false;
+    }
     if (frame.world.terrain == WorkoutGameTerrainKind::Roots
             && frame.feature.route == WorkoutGameRoute::MainLine
             && !frame.world.rider.airborne) {
@@ -335,6 +346,29 @@ void WorkoutGame3DViewModel::setFrame(
         riderPumpMeters += (target - riderPumpMeters) * blend;
         riderPumpMeters = std::clamp(riderPumpMeters, -0.08, 0.04);
         previousRockCompression = compression;
+    } else if (frame.world.terrain == WorkoutGameTerrainKind::RockSlab
+            && frame.feature.route == WorkoutGameRoute::MainLine
+            && !frame.world.rider.airborne) {
+        const double compression = std::clamp(0.5 * (
+                finiteOrZero(frame.world.rider.rearSuspension)
+                + finiteOrZero(frame.world.rider.frontSuspension)), 0.0, 1.0);
+        if (!slabCompressionInitialized) {
+            previousSlabCompression = compression;
+            slabCompressionInitialized = true;
+        }
+        const double target = std::clamp(
+                -0.14 * (compression - previousSlabCompression),
+                -0.07, 0.035);
+        const double elapsedSeconds = lastRiderPoseTimeMs >= 0
+                ? std::clamp(double(frame.simulation.workoutTimeMs
+                                    - lastRiderPoseTimeMs) / 1000.0,
+                             0.0, 0.25)
+                : 0.075;
+        const double blend = 1.0 - std::exp(
+                -elapsedSeconds / 0.075);
+        riderPumpMeters += (target - riderPumpMeters) * blend;
+        riderPumpMeters = std::clamp(riderPumpMeters, -0.07, 0.035);
+        previousSlabCompression = compression;
     } else if (frame.world.terrain == WorkoutGameTerrainKind::Rollers
             && frame.feature.route == WorkoutGameRoute::MainLine
             && !frame.world.rider.airborne) {
@@ -704,6 +738,8 @@ void WorkoutGame3DViewModel::rebuildFloor(double distanceMeters)
         rootBuffers[1]->setCourse(roadCourse);
         rockGardenBuffers[0]->setCourse(roadCourse);
         rockGardenBuffers[1]->setCourse(roadCourse);
+        rockSlabBuffers[0]->setCourse(roadCourse);
+        rockSlabBuffers[1]->setCourse(roadCourse);
         activeFloorBuffer = 0;
         emit floorGeometryChanged();
         return;
@@ -723,6 +759,8 @@ void WorkoutGame3DViewModel::rebuildFloor(double distanceMeters)
     rootBuffers[std::size_t(nextBuffer)]->setCourseRange(
             roadCourse, start, end);
     rockGardenBuffers[std::size_t(nextBuffer)]->setCourseRange(
+            roadCourse, start, end);
+    rockSlabBuffers[std::size_t(nextBuffer)]->setCourseRange(
             roadCourse, start, end);
     activeFloorBuffer = nextBuffer;
     emit floorGeometryChanged();

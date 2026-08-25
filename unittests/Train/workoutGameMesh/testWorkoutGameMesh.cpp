@@ -12,6 +12,7 @@
 #include "Train/WorkoutGameForestFloor.h"
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
+#include "Train/WorkoutGameRockSlabGeometry.h"
 #include "Train/WorkoutGameOcclusion.h"
 #include "Train/WorkoutGameTrailBranch.h"
 #include "Train/WorkoutGameTrailTile.h"
@@ -67,6 +68,47 @@ class TestWorkoutGameMesh : public QObject
     Q_OBJECT
 
 private slots:
+    void rockSlabMeshUsesCanonicalAsymmetricMassAndFissureBudget()
+    {
+        const WorkoutGameRockSlabGeometryProfile profile =
+                WorkoutGameRockSlabGeometry::profile(0.65);
+        const WorkoutGameMesh mesh = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::RockSlab, 0.65);
+        QVERIFY(mesh.ready);
+        QCOMPARE(mesh.entry.forwardMeters, profile.startMeters);
+        QCOMPARE(mesh.exit.forwardMeters, profile.endMeters);
+        QCOMPARE(mesh.entry.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.exit.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.lengthMeters, profile.endMeters - profile.startMeters);
+        QVERIFY(mesh.vertices.size() <= 160u);
+        QVERIFY(mesh.triangles.size() <= 228u);
+        QVERIFY(mesh.colliders.size() >= 8u);
+
+        double minimumRight = 0.0;
+        double maximumRight = 0.0;
+        double minimumUp = 0.0;
+        double maximumUp = 0.0;
+        int fissureTriangles = 0;
+        for (const WorkoutGameMeshVertex &vertex : mesh.vertices) {
+            minimumRight = std::min(minimumRight, vertex.rightMeters);
+            maximumRight = std::max(maximumRight, vertex.rightMeters);
+            minimumUp = std::min(minimumUp, vertex.upMeters);
+            maximumUp = std::max(maximumUp, vertex.upMeters);
+        }
+        for (const WorkoutGameMeshTriangle &triangle : mesh.triangles) {
+            if (triangle.material == WorkoutGameMeshMaterial::RockSide) {
+                ++fissureTriangles;
+            }
+        }
+        QVERIFY(minimumRight < -1.10);
+        QVERIFY(maximumRight > 0.50);
+        QVERIFY(minimumUp <= -profile.sideDepthMeters * 0.95);
+        QVERIFY(maximumUp >= profile.heightMeters * 0.95);
+        QVERIFY(fissureTriangles >= 6);
+    }
+
     void rockGardenMeshUsesTheCanonicalBuriedStoneBudget()
     {
         const WorkoutGameRockGardenGeometryProfile profile =
@@ -710,8 +752,7 @@ private slots:
     {
         const WorkoutGameTerrainKind terrains[] = {
             WorkoutGameTerrainKind::LogOver,
-            WorkoutGameTerrainKind::Tabletop,
-            WorkoutGameTerrainKind::RockSlab
+            WorkoutGameTerrainKind::Tabletop
         };
         constexpr double Difficulty = 0.6;
         for (WorkoutGameTerrainKind terrain : terrains) {
@@ -743,7 +784,6 @@ private slots:
         const WorkoutGameTerrainKind terrains[] = {
             WorkoutGameTerrainKind::LogOver,
             WorkoutGameTerrainKind::Tabletop,
-            WorkoutGameTerrainKind::RockSlab,
             WorkoutGameTerrainKind::Drop
         };
         constexpr double Difficulty = 0.6;

@@ -11,6 +11,7 @@
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
+#include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <QTest>
@@ -129,6 +130,24 @@ WorkoutGameRoadCourse rockGardenCourse()
     return WorkoutGameRoadCourseBuilder::build(source, 200.0);
 }
 
+WorkoutGameRoadCourse rockSlabCourse()
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 1147u;
+    source.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::Trail;
+    section.terrain = WorkoutGameTerrainKind::RockSlab;
+    section.durationMs = source.durationMs;
+    section.lengthMeters = 76.0;
+    section.targetWatts = 210.0;
+    section.difficulty = 0.65;
+    section.challengeCount = 1;
+    source.sections = {section};
+    return WorkoutGameRoadCourseBuilder::build(source, 200.0);
+}
+
 }
 
 class TestWorkoutGame3DGeometry : public QObject
@@ -136,6 +155,38 @@ class TestWorkoutGame3DGeometry : public QObject
     Q_OBJECT
 
 private slots:
+    void rockSlabBuildsOneMergedAsymmetricMassWithinBudget()
+    {
+        const WorkoutGameRoadCourse course = rockSlabCourse();
+        WorkoutGame3DGeometry slab(WorkoutGame3DGeometry::Layer::RockSlab);
+        slab.setCourse(course);
+
+        QVERIFY(slab.ready());
+        QVERIFY(slab.sampleCount() >= 120);
+        QVERIFY(slab.sampleCount() <= 160);
+        QCOMPARE(slab.vertexData().size(),
+                 slab.sampleCount() * slab.stride());
+        const int triangleCount = slab.indexData().size()
+                / int(3 * sizeof(quint32));
+        QVERIFY(triangleCount >= 180);
+        QVERIFY(triangleCount <= 228);
+        QVERIFY(slab.boundsMax().x() - slab.boundsMin().x() > 1.5f);
+        QVERIFY(slab.boundsMax().y() - slab.boundsMin().y() > 0.9f);
+        QVERIFY(slab.boundsMax().z() - slab.boundsMin().z() > 7.0f);
+    }
+
+    void rockSlabRangeBuildExcludesDistantTiles()
+    {
+        WorkoutGame3DGeometry slab(WorkoutGame3DGeometry::Layer::RockSlab);
+        const WorkoutGameRoadCourse course = rockSlabCourse();
+        slab.setCourseRange(course, 0.0, 5.0);
+        QVERIFY(!slab.ready());
+        QCOMPARE(slab.sampleCount(), 0);
+
+        slab.setCourse(course);
+        QVERIFY(slab.ready());
+    }
+
     void rockGardenBuildsOneMergedBuriedStoneNetwork()
     {
         const WorkoutGameRoadCourse course = rockGardenCourse();

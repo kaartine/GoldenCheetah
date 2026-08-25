@@ -226,10 +226,6 @@ public:
             };
             break;
         }
-        case WorkoutGameTerrainKind::RockSlab:
-            result = {true, -3.0, 0.0, 3.0, 6.0,
-                      0.30 + 0.25 * difficulty};
-            break;
         case WorkoutGameTerrainKind::Drop:
             result = {true, -10.0, 0.0, 1.25, 12.0,
                       -(0.35 + 0.35 * difficulty),

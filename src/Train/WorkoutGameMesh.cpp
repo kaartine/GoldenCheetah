@@ -11,6 +11,7 @@
 
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
+#include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
@@ -120,7 +121,8 @@ void addSculptedStrip(
         WorkoutGameMeshMaterial highlight,
         WorkoutGameMeshMaterial side,
         bool fillToGround = false,
-        int highlightStride = 3)
+        int highlightStride = 3,
+        double burialDepthMeters = 0.0)
 {
     if (samples.size() < 2u) return;
     const std::uint32_t start = std::uint32_t(mesh.vertices.size());
@@ -134,7 +136,8 @@ void addSculptedStrip(
                   sample.centerRight + sample.halfWidth,
                   sample.up, progress, 1.0);
         const double bottomUp = fillToGround
-                ? std::min(0.0, sample.up) : sample.up - thickness;
+                ? std::min(0.0, sample.up) - burialDepthMeters
+                : sample.up - thickness;
         addVertex(mesh, sample.forward,
                   sample.centerRight - sample.halfWidth,
                   bottomUp, progress, 0.0);
@@ -428,37 +431,80 @@ WorkoutGameMesh tabletopModel(double difficulty)
 WorkoutGameMesh rockSlabModel(double difficulty)
 {
     WorkoutGameMesh mesh;
-    const WorkoutGameFeatureGeometryProfile profile =
-            WorkoutGameFeatureGeometry::profile(
-                    WorkoutGameTerrainKind::RockSlab, difficulty);
-    const double height = profile.heightMeters;
+    const WorkoutGameRockSlabGeometryProfile profile =
+            WorkoutGameRockSlabGeometry::profile(difficulty);
     std::vector<SculptedStripSample> samples;
-    constexpr int Samples = 10;
+    constexpr int Samples = 12;
     for (int index = 0; index <= Samples; ++index) {
         const double progress = double(index) / double(Samples);
-        const double forward = profile.startMeters
-                + progress * (profile.endMeters - profile.startMeters);
+        const double forward = profile.activeStartMeters
+                + progress
+                    * (profile.activeEndMeters - profile.activeStartMeters);
+        const double center = profile.slabCenterLateralMeters(forward);
         samples.push_back({
             forward,
-            profile.surfaceOffset(forward),
-            1.05 + 0.18 * std::sin(Pi * progress)
-                + 0.06 * std::sin(5.0 * Pi * progress),
-            0.05 * std::sin(4.0 * Pi * progress)
+            profile.surfaceOffsetMeters(forward, center),
+            profile.slabHalfWidthMeters(forward),
+            center
         });
     }
     addSculptedStrip(
-            mesh, samples, 0.22,
+            mesh, samples, profile.sideDepthMeters,
             WorkoutGameMeshMaterial::RockTop,
             WorkoutGameMeshMaterial::RockHighlight,
             WorkoutGameMeshMaterial::RockSide,
-            true);
-    mesh.colliders.push_back({
-        1.5, 0.0, height * 0.5,
-        4.5, 1.30, height * 0.5
-    });
+            true, 4, profile.sideDepthMeters);
+
+    const std::array<double, 4> fissureCenters = {
+        -2.25, -0.95, 0.85, 2.20
+    };
+    for (std::size_t index = 0; index < fissureCenters.size(); ++index) {
+        const double forward = fissureCenters[index];
+        const double center = profile.slabCenterLateralMeters(forward);
+        const double direction = index % 2u == 0u ? 1.0 : -1.0;
+        const double halfLength = 0.28 + 0.05 * double(index);
+        const double halfWidth = 0.018 + 0.004 * double(index);
+        const double left = center - direction * 0.24;
+        const double right = center + direction * 0.24;
+        const std::uint32_t first = std::uint32_t(mesh.vertices.size());
+        addVertex(mesh, forward - halfLength, left - halfWidth,
+                  profile.surfaceOffsetMeters(
+                      forward - halfLength, left) + 0.006,
+                  0.0, 0.0);
+        addVertex(mesh, forward - halfLength, left + halfWidth,
+                  profile.surfaceOffsetMeters(
+                      forward - halfLength, left) + 0.006,
+                  0.0, 1.0);
+        addVertex(mesh, forward + halfLength, right - halfWidth,
+                  profile.surfaceOffsetMeters(
+                      forward + halfLength, right) + 0.006,
+                  1.0, 0.0);
+        addVertex(mesh, forward + halfLength, right + halfWidth,
+                  profile.surfaceOffsetMeters(
+                      forward + halfLength, right) + 0.006,
+                  1.0, 1.0);
+        addQuad(mesh, first, first + 2u, first + 3u, first + 1u,
+                WorkoutGameMeshMaterial::RockSide);
+    }
+
+    for (int index = 0; index < Samples; ++index) {
+        const SculptedStripSample &from = samples[std::size_t(index)];
+        const SculptedStripSample &to = samples[std::size_t(index + 1)];
+        const double top = 0.5 * (from.up + to.up);
+        mesh.colliders.push_back({
+            0.5 * (from.forward + to.forward),
+            0.5 * (from.centerRight + to.centerRight),
+            0.5 * top,
+            0.5 * (to.forward - from.forward),
+            std::min(from.halfWidth, to.halfWidth),
+            std::max(0.05, 0.5 * top)
+        });
+    }
     mesh.lengthMeters = profile.endMeters - profile.startMeters;
-    mesh.entry = {profile.startMeters, 1.30, 0.0};
-    mesh.exit = {profile.endMeters, 1.30, 0.0};
+    mesh.entry = {
+        profile.startMeters, profile.socketHalfWidthMeters, 0.0};
+    mesh.exit = {
+        profile.endMeters, profile.socketHalfWidthMeters, 0.0};
     mesh.ready = true;
     return mesh;
 }

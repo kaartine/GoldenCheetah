@@ -389,6 +389,15 @@ profile rather than maintaining separate rock layouts. Box2D samples only the
 rock range with the floor bucket; per-frame work is limited to rider transform
 and suspension-derived torso pump, with no synthetic air or camera shake.
 
+Rock slabs use `WorkoutGameRockSlabGeometry` as their sole course-space
+authority. It owns the 14-metre sockets, asymmetric active face, rounded crest,
+widened same-tread safe line, side depth and surface function. Road and Box2D,
+the legacy comparison mesh and the dedicated merged Quick 3D range all consume
+that profile. Physics samples the 7.4-metre active face at 0.04-metre spacing;
+the view double-buffers at most twelve slabs with the floor bucket. Per-frame
+work is limited to rider transform and a filtered suspension-derived torso
+response, with no synthetic airtime, camera vibration or geometry rebuild.
+
 #### Course-Space 2.5D Geometry
 
 `WorkoutGameMesh` is the presentation-neutral geometry contract for reusable

@@ -13,6 +13,7 @@
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
+#include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 
 #include <algorithm>
@@ -78,11 +79,13 @@ double featureSurfaceOffset(
     case WorkoutGameTerrainKind::RockGarden:
         return WorkoutGameRockGardenGeometry::profile(
                 piece.difficulty).surfaceOffsetMeters(local, 0.0);
+    case WorkoutGameTerrainKind::RockSlab:
+        return WorkoutGameRockSlabGeometry::profile(
+                piece.difficulty).surfaceOffsetMeters(local, 0.0);
     case WorkoutGameTerrainKind::Rollers:
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
     case WorkoutGameTerrainKind::Tabletop:
-    case WorkoutGameTerrainKind::RockSlab:
     case WorkoutGameTerrainKind::Drop:
         return WorkoutGameFeatureGeometry::profile(
                 piece.terrain, piece.difficulty).surfaceOffset(local);
@@ -149,7 +152,7 @@ double featureClearanceHalfWidth(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::Skinny: return 0.38;
     case WorkoutGameTerrainKind::Berm: return 1.4;
     case WorkoutGameTerrainKind::Tabletop: return 1.10;
-    case WorkoutGameTerrainKind::RockSlab: return 1.30;
+    case WorkoutGameTerrainKind::RockSlab: return 1.42;
     case WorkoutGameTerrainKind::SmoothTrail: return 0.68;
     }
     return 1.4;
@@ -487,8 +490,9 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     challengeDistance + 4.0);
             break;
         case WorkoutGameTerrainKind::RockSlab:
-            obstacleDistance = sectionStart + sectionLength * std::min(
-                    0.92, challenge.decisionProgress + 0.05);
+            obstacleDistance = std::min(
+                    sectionStart + sectionLength - 7.0,
+                    challengeDistance + 7.0);
             break;
         case WorkoutGameTerrainKind::Roots:
             obstacleDistance = std::min(
@@ -506,7 +510,28 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
         const WorkoutGameFeatureGeometryProfile featureGeometry =
                 WorkoutGameFeatureGeometry::profile(
                     section.terrain, section.difficulty);
-        if (challenge.enabled && featureGeometry.ready) {
+        if (challenge.enabled
+                && section.terrain == WorkoutGameTerrainKind::RockSlab) {
+            const WorkoutGameRockSlabGeometryProfile slab =
+                    WorkoutGameRockSlabGeometry::profile(
+                        section.difficulty);
+            const double localObstacle = std::clamp(
+                    obstacleDistance - sectionStart,
+                    0.0, std::max(0.0, sectionLength - 1e-9));
+            const int ownerPart = std::min(
+                    pieceCount - 1,
+                    int(std::floor(localObstacle / pieceLength)));
+            const double ownerStart = sectionStart
+                    + double(ownerPart) * pieceLength;
+            const double minimumObstacle = ownerStart - slab.startMeters;
+            const double maximumObstacle = ownerStart + pieceLength
+                    - slab.endMeters;
+            if (maximumObstacle >= minimumObstacle) {
+                obstacleDistance = std::clamp(
+                        obstacleDistance, minimumObstacle, maximumObstacle);
+                challengeDistance = obstacleDistance + slab.startMeters;
+            }
+        } else if (challenge.enabled && featureGeometry.ready) {
             const double minimumObstacle = sectionStart
                     - featureGeometry.startMeters + 1.5;
             const double maximumObstacle = sectionStart + sectionLength
@@ -595,6 +620,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         section.terrain == WorkoutGameTerrainKind::Roots
                             || section.terrain
                                 == WorkoutGameTerrainKind::RockGarden
+                            || section.terrain
+                                == WorkoutGameTerrainKind::RockSlab
                     ? std::max(measuredPreparationDistance,
                                challengeDistance
                                     - maximumPreparationMeters)
@@ -607,13 +634,19 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 piece.challenge.decisionDistanceMeters = challengeDistance;
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;
                 const double featureEnd = obstacleDistance
-                        + (featureGeometry.ready
-                            ? featureGeometry.endMeters : 4.0);
+                        + (section.terrain
+                                    == WorkoutGameTerrainKind::RockSlab
+                            ? WorkoutGameRockSlabGeometry::profile(
+                                piece.difficulty).endMeters
+                            : featureGeometry.ready
+                                ? featureGeometry.endMeters : 4.0);
                 if (section.terrain == WorkoutGameTerrainKind::Rollers
                         || section.terrain == WorkoutGameTerrainKind::Berm
                         || section.terrain == WorkoutGameTerrainKind::Roots
                         || section.terrain
-                            == WorkoutGameTerrainKind::RockGarden) {
+                            == WorkoutGameTerrainKind::RockGarden
+                        || section.terrain
+                            == WorkoutGameTerrainKind::RockSlab) {
                     // These are fully rollable trail surfaces. Their easier
                     // lines remain part of the same widened tread.
                     piece.challenge.bypassStartDistanceMeters =
@@ -760,6 +793,13 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
         const double local = distance
                 - piece.challenge.obstacleDistanceMeters;
         result.center.halfWidthMeters = rocks.halfWidthMeters(local);
+    } else if (piece.terrain == WorkoutGameTerrainKind::RockSlab
+            && piece.challenge.enabled) {
+        const WorkoutGameRockSlabGeometryProfile slab =
+                WorkoutGameRockSlabGeometry::profile(piece.difficulty);
+        const double local = distance
+                - piece.challenge.obstacleDistanceMeters;
+        result.center.halfWidthMeters = slab.halfWidthMeters(local);
     }
     const double reliefOffset = trailReliefOffset(piece, distance);
     result.center.elevationMeters += reliefOffset

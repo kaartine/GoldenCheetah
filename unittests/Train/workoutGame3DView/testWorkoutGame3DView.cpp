@@ -14,6 +14,7 @@
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
+#include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
 #include "Train/WorkoutGameWorld.h"
@@ -645,6 +646,62 @@ private slots:
 
         frame.feature.route = WorkoutGameRoute::SafeBypass;
         frame.simulation.workoutTimeMs = 1140;
+        viewModel.setFrame(frame, 170.0, 220.0, 78, 145, 4);
+        QCOMPARE(viewModel.riderPump(), 0.0);
+    }
+
+    void rockSlabUsesFilteredSuspensionMotionWithoutCameraVibration()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::RockSlab);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(
+                road, piece->challenge.obstacleDistanceMeters - 1.0);
+        frame.world.terrain = WorkoutGameTerrainKind::RockSlab;
+        frame.world.rider.rearSuspension = 0.2;
+        frame.world.rider.frontSuspension = 0.2;
+        frame.simulation.workoutTimeMs = 1000;
+        frame.simulation.activeSection = 0;
+        frame.simulation.sectionProgress = std::clamp(
+                frame.world.rider.distanceMeters / road.totalLengthMeters,
+                0.0, 1.0);
+        frame.simulation.challenge = piece->challenge.profile;
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        frame.feature = runtime.update(frame.simulation);
+        viewModel.setFrame(frame, 225.0, 220.0, 88, 150, 7);
+        QVERIFY(viewModel.powerRequired());
+        auto *slabGeometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.rockSlabGeometry());
+        QVERIFY(slabGeometry);
+        QVERIFY(slabGeometry->ready());
+        QCOMPARE(slabGeometry->sampleCount(), 147);
+        QCOMPARE(viewModel.riderPump(), 0.0);
+
+        const double cameraX = viewModel.cameraX();
+        const double cameraY = viewModel.cameraY();
+        const double cameraZ = viewModel.cameraZ();
+        frame.world.rider.rearSuspension = 1.0;
+        frame.world.rider.frontSuspension = 1.0;
+        frame.simulation.workoutTimeMs = 1075;
+        viewModel.setFrame(frame, 225.0, 220.0, 88, 150, 7);
+        QVERIFY(viewModel.riderPump() < -0.01);
+        QVERIFY(viewModel.riderPump() >= -0.07);
+        QCOMPARE(viewModel.cameraX(), cameraX);
+        QCOMPARE(viewModel.cameraY(), cameraY);
+        QCOMPARE(viewModel.cameraZ(), cameraZ);
+
+        frame.feature.route = WorkoutGameRoute::SafeBypass;
+        frame.simulation.workoutTimeMs = 1150;
         viewModel.setFrame(frame, 170.0, 220.0, 78, 145, 4);
         QCOMPARE(viewModel.riderPump(), 0.0);
     }
@@ -1530,10 +1587,13 @@ private slots:
                 viewModel.rootsGeometry());
         auto *rockGardenGeometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.rockGardenGeometry());
+        auto *rockSlabGeometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.rockSlabGeometry());
         QVERIFY(bypassGeometry);
         QVERIFY(bermGeometry);
         QVERIFY(rootsGeometry);
         QVERIFY(rockGardenGeometry);
+        QVERIFY(rockSlabGeometry);
         QVERIFY(bypassGeometry->ready());
         QVERIFY(bypassGeometry->sampleCount() >= 20);
         QVERIFY(viewModel.trees().size() <= 19);
@@ -1619,6 +1679,8 @@ private slots:
                     QStringLiteral("rootsGeometryModel")));
         QVERIFY(rootItem->findChild<QObject *>(
                     QStringLiteral("rockGardenGeometryModel")));
+        QVERIFY(rootItem->findChild<QObject *>(
+                    QStringLiteral("rockSlabGeometryModel")));
         QTRY_VERIFY_WITH_TIMEOUT(
                 findVisualItem(rootItem, QStringLiteral("fpsValue"))
                     && findVisualItem(rootItem, QStringLiteral("fpsValue"))
@@ -2448,6 +2510,171 @@ private slots:
                  qPrintable(QStringLiteral(
                      "safe suspension range %1 exceeded 40 percent of main %2")
                      .arg(safeSuspensionRange).arg(mainSuspensionRange)));
+    }
+
+    void exportsRockSlabMainAndSafeLineMotionFrames()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const QString outputRoot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_ROCK_SLAB_VIDEO_DIR");
+        if (outputRoot.isEmpty()) {
+            QSKIP("Set GC_WORKOUT_GAME_ROCK_SLAB_VIDEO_DIR to export frames");
+        }
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::RockSlab);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameRockSlabGeometryProfile slab =
+                WorkoutGameRockSlabGeometry::profile(piece->difficulty);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        constexpr int FrameCount = 288;
+        constexpr double SpeedMetersPerSecond = 5.0;
+        const double start = piece->challenge.obstacleDistanceMeters
+                + slab.startMeters - 5.0;
+        const double end = piece->challenge.obstacleDistanceMeters
+                + slab.endMeters + 5.0;
+
+        for (WorkoutGameRoute route : {
+                 WorkoutGameRoute::MainLine,
+                 WorkoutGameRoute::SafeBypass}) {
+            const bool safe = route == WorkoutGameRoute::SafeBypass;
+            const QString directory = QDir(outputRoot).filePath(
+                    safe ? QStringLiteral("safe-line")
+                         : QStringLiteral("main-line"));
+            QVERIFY(QDir().mkpath(directory));
+            window.setCourse(course, FtpWatts);
+            WorkoutGamePhysics physics;
+            QVERIFY(physics.configure(road));
+            double maximumLateral = 0.0;
+            double previousLateral = 0.0;
+            double previousDistance = -1.0;
+            double previousElevation = 0.0;
+            double maximumVerticalStep = 0.0;
+            double maximumSurfaceRise = 0.0;
+            int visiblyChangedFrames = 0;
+            QImage previous;
+            for (int frameIndex = 0; frameIndex < FrameCount; ++frameIndex) {
+                const double progress = double(frameIndex)
+                        / double(FrameCount - 1);
+                const double distance = start + (end - start) * progress;
+                WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+                frame.simulation.activeSection = 0;
+                frame.simulation.sectionProgress = std::clamp(
+                        distance / road.totalLengthMeters, 0.0, 1.0);
+                frame.simulation.workoutTimeMs = std::int64_t(std::llround(
+                        (distance - start) / SpeedMetersPerSecond * 1000.0));
+                frame.simulation.route = route;
+                frame.simulation.featureOutcome = safe
+                        ? WorkoutGameFeatureOutcome::Bypassed
+                        : WorkoutGameFeatureOutcome::Completed;
+                frame.simulation.challenge = piece->challenge.profile;
+                WorkoutGameFeatureChallengeMetrics metrics;
+                metrics.averageActualWatts = safe ? 165.0 : 225.0;
+                metrics.averageTargetWatts = 220.0;
+                metrics.averageEffortRatio = safe ? 0.75 : 225.0 / 220.0;
+                metrics.averageCadenceRpm = safe ? 78.0 : 88.0;
+                metrics.averageSpeedKph = SpeedMetersPerSecond * 3.6;
+                metrics.averageAdherence = safe ? 0.75 : 1.0;
+                frame.simulation.challengeAssessment =
+                        WorkoutGameFeatureChallenge::assess(
+                            frame.simulation.challenge, metrics);
+                frame.simulation.speedKph = SpeedMetersPerSecond * 3.6;
+                frame.feature = runtime.update(frame.simulation);
+                WorkoutGamePhysicsInput input;
+                input.workoutTimeMs = frame.simulation.workoutTimeMs;
+                input.courseDistanceMeters = distance;
+                input.terrain = WorkoutGameTerrainKind::RockSlab;
+                input.desiredSpeedMetersPerSecond = SpeedMetersPerSecond;
+                input.effortRatio = safe ? 0.75 : 1.0;
+                input.forceGroundFollowing = safe;
+                frame.world = physics.update(input);
+                QVERIFY(frame.world.ready);
+                QVERIFY(!frame.world.rider.airborne);
+                QCOMPARE(frame.world.rider.airHeightMeters(), 0.0);
+                QVERIFY(frame.world.rider.distanceMeters > previousDistance);
+                if (frameIndex > 0) {
+                    maximumVerticalStep = std::max(
+                            maximumVerticalStep,
+                            std::abs(frame.world.rider.elevationMeters
+                                - previousElevation));
+                }
+                previousDistance = frame.world.rider.distanceMeters;
+                previousElevation = frame.world.rider.elevationMeters;
+                const WorkoutGameRoadSample roadSample =
+                        WorkoutGameRoadCourseBuilder::sample(road, distance);
+                const double datum = roadSample.center.elevationMeters
+                        - roadSample.surfaceOffsetMeters;
+                maximumSurfaceRise = std::max(
+                        maximumSurfaceRise,
+                        frame.world.surfaceElevationMeters - datum);
+                maximumLateral = std::max(
+                        maximumLateral,
+                        std::abs(frame.feature.lateralOffsetMeters));
+                if (frameIndex > 0) {
+                    QVERIFY(std::abs(frame.feature.lateralOffsetMeters
+                                - previousLateral) < 0.05);
+                }
+                previousLateral = frame.feature.lateralOffsetMeters;
+
+                window.setFrame(frame,
+                        safe ? 165.0 : 225.0, 220.0,
+                        safe ? 78 : 88, 150, safe ? 4 : 7);
+                QTest::qWait(8);
+                if (frame.feature.phase
+                            == WorkoutGameFeaturePhase::Action) {
+                    auto *rootItem = qobject_cast<QQuickItem *>(
+                            window.rootObject());
+                    auto *powerValue = rootItem
+                            ? findVisualItem(
+                                rootItem,
+                                QStringLiteral("featurePowerValue"))
+                            : nullptr;
+                    QVERIFY(powerValue);
+                    QVERIFY2(powerValue->property("text").toString()
+                                    .contains(QStringLiteral("/ 220 W")),
+                             qPrintable(powerValue->property("text")
+                                    .toString()));
+                }
+                const QImage image = window.grabWindow();
+                QVERIFY(!image.isNull());
+                QVERIFY(sampledColorCount(image) > 30);
+                if (!previous.isNull()
+                        && changedPixels(previous, image) > 20) {
+                    ++visiblyChangedFrames;
+                }
+                previous = image;
+                const QString path = QDir(directory).filePath(
+                        QStringLiteral("frame-%1.png")
+                            .arg(frameIndex, 4, 10, QLatin1Char('0')));
+                QImageWriter writer(path, "png");
+                writer.setCompression(1);
+                QVERIFY2(writer.write(image), qPrintable(writer.errorString()));
+            }
+            QVERIFY(visiblyChangedFrames > FrameCount * 9 / 10);
+            QVERIFY(maximumVerticalStep < 0.12);
+            if (safe) {
+                QCOMPARE(maximumLateral, slab.safeLineLateralMeters);
+                QVERIFY(maximumSurfaceRise <= 0.025);
+            } else {
+                QCOMPARE(maximumLateral, 0.0);
+                QVERIFY(maximumSurfaceRise >= slab.heightMeters * 0.95);
+            }
+        }
     }
 
     void exportsAuthoredChallengeCompletedAndBypassedMotionFrames()

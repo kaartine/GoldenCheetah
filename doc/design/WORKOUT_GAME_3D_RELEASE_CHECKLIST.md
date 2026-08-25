@@ -254,7 +254,7 @@ ground following and cannot activate either airborne visual path.
 - [x] Rollers pump/absorb while both wheels track the surface.
 - [x] Berm uses the same curved path for trail, rider lateral position and roll.
 - [ ] Skinny uses subtle balance lean without random steering.
-- [ ] Roots/rocks/slab move suspension and torso without camera vibration.
+- [x] Roots/rocks/slab move suspension and torso without camera vibration.
 - [ ] Climb selects seated/standing effort and a bounded crest release.
 
 **Tests:** per-feature pose and contact assertions plus approach/action/recovery
@@ -300,7 +300,7 @@ and a runtime/geometry regression test.
 - [x] `FTR-05` Berm: broad banked bowl and shared curved rider line.
 - [x] `FTR-06` Roots: branching embedded network and bounded roughness.
 - [x] `FTR-07` Rock garden: sunk varied rocks and a readable rideable line.
-- [ ] `FTR-08` Rock slab: asymmetric mass, crest, sides and surface following.
+- [x] `FTR-08` Rock slab: asymmetric mass, crest, sides and surface following.
 - [ ] `FTR-09` Skinny: narrow deck, supports, ground clearance and transitions.
 - [ ] `FTR-10` Climb: visible rising face, crest and effort pose.
 - [ ] `FTR-11` Tabletop: promote the accepted vertical slice to production.
@@ -503,6 +503,38 @@ transitions. Review videos and approach/core/exit images are in the
 4.8 seconds and 288 frames. Their SHA-256 values are respectively
 `f7ed58649c25407d9955b887b1b376b57500c4fe87352fd5f8aff7f82a14fc7b` and
 `00fb385a528b8c4216a041e6f25a0c2f80ff88bf0c73fdc21b64a8bad50c5db7`.
+No external model, image or texture was added.
+
+**FTR-08 evidence:** The rock slab is a project-owned procedural 14-metre
+same-tread tile driven only by `WorkoutGameRockSlabGeometry`. Its active face
+runs from -3.8 to +3.6 metres around a rounded crest at +0.25 metres. Height
+scales from 0.62 to 0.96 metres, the irregular asymmetric stone footprint is
+approximately 1.44-1.76 metres wide, and exposed buried sides plus four dark
+fissures make the mass readable without a texture. The widened trail reaches a
+1.42-metre half-width while the low-relief safe line stays 1.05 metres right of
+centre and joins the exact 0.68-metre entry and exit sockets.
+
+Road elevation and width, runtime line choice, Box2D tyre contact, legacy
+comparison geometry and one merged Quick 3D draw range consume the canonical
+profile. The active physics surface is sampled at 0.04-metre spacing. One slab
+uses 147 vertices and 224 opaque triangles; at most twelve are resident, and
+the range is rebuilt into one of two buffers only when the floor streaming
+bucket changes. Ordinary trail relief is suppressed under the stone. The slab
+never synthesizes airtime or camera vibration; real front/rear suspension
+drives a 75-ms-filtered torso response while the safe line remains grounded.
+
+Road, geometry, runtime, mesh and world suites pass
+`35 + 23 + 21 + 29 + 37` tests normally and under ASan/UBSan. The complete
+X11/OpenGL view suite passes 47 tests with nine explicit opt-in exports skipped
+under both configurations. The separate 288-frame main- and safe-line export
+passes normally and under ASan/UBSan with zero airborne frames, lateral steps
+below five centimetres and changing pixels in more than 90 percent of frame
+transitions. Review videos, baseline/catalog comparisons and approach/core/exit
+images are in `$HOME/Documents/personal/gc-ui-ftr08` on the build
+host. Both videos are 960 by 540, 60 FPS and 4.8 seconds. Their SHA-256 values
+are respectively
+`dd1efa6beb2c527c4b0123e54534d303a624268a9691f1dc89b1c1c901602001` and
+`f0208a9cd8261ef1e6ea73d638ac61302ca95ef70979e945b3e1389b511e5fd8`.
 No external model, image or texture was added.
 
 **Feature acceptance:** each feature is identifiable without its name, joins

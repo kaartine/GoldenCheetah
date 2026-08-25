@@ -25,6 +25,7 @@ public:
         Bypass,
         ForestFloor,
         RockGarden,
+        RockSlab,
         Roots,
         Trail
     };
@@ -59,6 +60,10 @@ private:
             double startDistanceMeters,
             double endDistanceMeters);
     void buildRockGardens(
+            const WorkoutGameRoadCourse &course,
+            double startDistanceMeters,
+            double endDistanceMeters);
+    void buildRockSlabs(
             const WorkoutGameRoadCourse &course,
             double startDistanceMeters,
             double endDistanceMeters);
