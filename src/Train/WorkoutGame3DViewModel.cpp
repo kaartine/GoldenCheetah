@@ -113,6 +113,11 @@ void WorkoutGame3DViewModel::setCourse(
     featureBucket = std::numeric_limits<int>::min();
     treeBucket = std::numeric_limits<int>::min();
     visibleTrees.clear();
+    currentFeatureHud = {};
+    currentFeatureName.clear();
+    currentFeatureActionText.clear();
+    currentFeatureStatus.clear();
+    currentReadinessPercent = 0;
     rebuildFloor(0.0);
     sceneReady = roadCourse.ready && trail->ready()
             && floorBuffers[std::size_t(activeFloorBuffer)]->ready();
@@ -176,6 +181,11 @@ void WorkoutGame3DViewModel::setFrame(
     currentFeatureStatus = featureText(frame.feature);
     currentReadinessPercent = int(std::lround(std::clamp(
             finiteOrZero(frame.feature.readiness), 0.0, 1.0) * 100.0));
+    currentFeatureHud = WorkoutGameFeatureHud::build(
+            frame.feature, frame.simulation, currentTargetWatts);
+    currentFeatureName = currentFeatureHud.visible
+            ? terrainText(currentFeatureHud.terrain) : QString();
+    currentFeatureActionText = featureActionText(currentFeatureHud);
     rebuildFloor(currentDistanceMeters);
     rebuildFeatures(currentDistanceMeters);
     rebuildTrees(currentDistanceMeters);
@@ -294,6 +304,29 @@ QString WorkoutGame3DViewModel::featureText(
                 ? tr("%1 completed").arg(name)
                 : tr("%1 bypassed").arg(name);
     case WorkoutGameFeaturePhase::None:
+        break;
+    }
+    return QString();
+}
+
+QString WorkoutGame3DViewModel::featureActionText(
+        const WorkoutGameFeatureHudSnapshot &hud)
+{
+    switch (hud.state) {
+    case WorkoutGameFeatureHudState::Prepare:
+        return tr("Prepare");
+    case WorkoutGameFeatureHudState::Measure:
+        return tr("Build power");
+    case WorkoutGameFeatureHudState::Committed:
+        return hud.route == WorkoutGameRoute::SafeBypass
+                ? tr("Safe line") : tr("Line committed");
+    case WorkoutGameFeatureHudState::ActNow:
+        return tr("Ride now");
+    case WorkoutGameFeatureHudState::Complete:
+        return tr("Complete");
+    case WorkoutGameFeatureHudState::Bypass:
+        return tr("Safe line");
+    case WorkoutGameFeatureHudState::Hidden:
         break;
     }
     return QString();

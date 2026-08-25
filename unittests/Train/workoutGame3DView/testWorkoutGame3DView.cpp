@@ -21,6 +21,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickView>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QSet>
 #include <QSGRendererInterface>
@@ -432,6 +433,142 @@ private slots:
                          .arg(maximumYawAcceleration)));
     }
 
+    void featureHudSeparatesPowerCadenceDistanceAndState()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        WorkoutGameVisualSnapshot frame = frameAt(road, 12.0);
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::Tabletop;
+        frame.feature.phase = WorkoutGameFeaturePhase::Measure;
+        frame.feature.visualDistanceMeters = 12.0;
+        frame.feature.decisionDistanceMeters = 17.5;
+        frame.feature.actionStartDistanceMeters = 21.0;
+        frame.simulation.challenge.enabled = true;
+        frame.simulation.challenge.minimumEffortRatio = 1.0;
+        frame.simulation.challenge.minimumCadenceRpm = 0.0;
+        frame.simulation.challengeAssessment.effortReadiness = 0.75;
+        frame.simulation.challengeAssessment.cadenceReadiness = 1.0;
+
+        viewModel.setFrame(frame, 165.0, 220.0, 72, 148, 6);
+
+        QVERIFY(viewModel.featureHudVisible());
+        QCOMPARE(viewModel.featureName(), QStringLiteral("Tabletop"));
+        QCOMPARE(viewModel.featureState(),
+                 int(WorkoutGameFeatureHudState::Measure));
+        QCOMPARE(viewModel.featureDistanceKind(),
+                 int(WorkoutGameFeatureHudDistanceKind::Decision));
+        QCOMPARE(viewModel.featureDistanceMeters(), 5.5);
+        QCOMPARE(viewModel.requiredPowerWatts(), 220.0);
+        QCOMPARE(viewModel.powerReadinessPercent(), 75);
+        QVERIFY(!viewModel.cadenceRequired());
+        QCOMPARE(viewModel.requiredCadenceRpm(), 0.0);
+        QCOMPARE(viewModel.cadenceReadinessPercent(), 100);
+    }
+
+    void settingCourseClearsFeatureHudState()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        WorkoutGameVisualSnapshot frame = frameAt(road, 12.0);
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::Tabletop;
+        frame.feature.phase = WorkoutGameFeaturePhase::Measure;
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        QVERIFY(viewModel.featureHudVisible());
+
+        viewModel.setCourse(sampleCourse(), FtpWatts);
+
+        QVERIFY(!viewModel.featureHudVisible());
+        QVERIFY(viewModel.featureName().isEmpty());
+        QVERIFY(viewModel.featureActionText().isEmpty());
+        QVERIFY(viewModel.featureStatus().isEmpty());
+        QCOMPARE(viewModel.readinessPercent(), 0);
+    }
+
+    void featureHudFitsSupportedWidths_data()
+    {
+        QTest::addColumn<QSize>("size");
+        QTest::addColumn<double>("expectedHeight");
+        QTest::newRow("narrow") << QSize(360, 640) << 166.0;
+        QTest::newRow("desktop") << QSize(1280, 720) << 112.0;
+        QTest::newRow("full-hd") << QSize(1920, 1080) << 112.0;
+    }
+
+    void featureHudFitsSupportedWidths()
+    {
+        QFETCH(QSize, size);
+        QFETCH(double, expectedHeight);
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(road, 12.0);
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::Tabletop;
+        frame.feature.phase = WorkoutGameFeaturePhase::Measure;
+        frame.feature.visualDistanceMeters = 12.0;
+        frame.feature.decisionDistanceMeters = 17.5;
+        frame.simulation.challenge.enabled = true;
+        frame.simulation.challenge.minimumEffortRatio = 1.0;
+        frame.simulation.challengeAssessment.effortReadiness = 0.75;
+        frame.simulation.challengeAssessment.cadenceReadiness = 1.0;
+        viewModel.setFrame(frame, 165.0, 220.0, 72, 148, 6);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(size);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QCoreApplication::processEvents();
+
+        auto *rootItem = qobject_cast<QQuickItem *>(window.rootObject());
+        QVERIFY(rootItem);
+        auto *hud = rootItem->findChild<QQuickItem *>(
+                QStringLiteral("featureHud"));
+        QVERIFY(hud);
+        QVERIFY(hud->isVisible());
+        QCOMPARE(hud->height(), expectedHeight);
+        QVERIFY(hud->x() >= 0.0);
+        QVERIFY(hud->y() >= 0.0);
+        QVERIFY(hud->x() + hud->width() <= rootItem->width() + 1e-9);
+        QVERIFY(hud->y() + hud->height() <= rootItem->height() + 1e-9);
+
+        auto *stateLabel = rootItem->findChild<QQuickItem *>(
+                QStringLiteral("featureStateLabel"));
+        auto *powerBar = rootItem->findChild<QQuickItem *>(
+                QStringLiteral("featurePowerBar"));
+        auto *cadenceBar = rootItem->findChild<QQuickItem *>(
+                QStringLiteral("featureCadenceBar"));
+        QVERIFY(stateLabel && powerBar && cadenceBar);
+        QVERIFY(stateLabel->width() > 0.0);
+        QVERIFY(stateLabel->x() >= 0.0);
+        QVERIFY(stateLabel->x() + stateLabel->width()
+                <= stateLabel->parentItem()->width() + 1e-9);
+        QVERIFY(powerBar->width() >= 0.0);
+        QVERIFY(powerBar->width() <= powerBar->parentItem()->width() + 1e-9);
+        QVERIFY(cadenceBar->width() >= 0.0);
+        QVERIFY(cadenceBar->width()
+                <= cadenceBar->parentItem()->width() + 1e-9);
+    }
+
     void tabletopAssetUsesAuthoritativeRoadAnchorAndProfile()
     {
         const WorkoutGameCourse course = catalogCourse(
@@ -700,6 +837,17 @@ private slots:
             simulation.featureOutcome = WorkoutGameFeatureOutcome::Completed;
             simulation.route = WorkoutGameRoute::MainLine;
             simulation.challengeReadiness = 1.0;
+            simulation.challenge = challenge->challenge.profile;
+            WorkoutGameFeatureChallengeMetrics metrics;
+            metrics.averageActualWatts = 220.0;
+            metrics.averageTargetWatts = 220.0;
+            metrics.averageEffortRatio = 1.0;
+            metrics.averageCadenceRpm = 88.0;
+            metrics.averageSpeedKph = 20.0;
+            metrics.averageAdherence = 1.0;
+            simulation.challengeAssessment =
+                    WorkoutGameFeatureChallenge::assess(
+                        simulation.challenge, metrics);
             WorkoutGameFeatureRuntime runtime;
             QVERIFY(runtime.configure(road));
             WorkoutGameVisualSnapshot frame;

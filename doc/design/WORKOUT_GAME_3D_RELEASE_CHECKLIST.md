@@ -295,16 +295,25 @@ completed and bypassed outcome.
 
 ### `HUD-01` Replace the combined readiness percentage
 
-- [ ] Show feature name and distance to decision/action point.
-- [ ] Show power and cadence readiness separately.
-- [ ] Use distinct prepare, act-now, committed, complete and bypass states.
-- [ ] Keep cue duration short and aligned to physical feature position.
+- [x] Show feature name and distance to decision/action point.
+- [x] Show power and cadence readiness separately.
+- [x] Use distinct prepare, act-now, committed, complete and bypass states.
+- [x] Keep cue duration short and aligned to physical feature position.
 
 **Tests:** state-machine text/value tests, 720p/1080p screenshot bounds, long
 translation layout and deterministic timing captures.
 
 **Done when:** a rider can explain what to do, when to do it and why a line was
 selected without reading logs.
+
+**Current evidence:** `WorkoutGameFeatureHud` converts immutable runtime and
+simulation snapshots into a presentation-only state. Twelve headless tests
+cover every state, independent requirement values, malformed telemetry, a
+12-metre prepare lead and a six-metre result tail; the same suite passes under
+ASan and UBSan. ViewModel and QML tests cover state reset on course changes,
+bounded bars and labels at 360 by 640, 1280 by 720 and 1920 by 1080. The complete
+X11/OpenGL suite passes 20 tests, including nonblank production rendering and
+motion, with only the explicitly opt-in video export skipped.
 
 ### `HUD-02` Restore complete training instrumentation
 

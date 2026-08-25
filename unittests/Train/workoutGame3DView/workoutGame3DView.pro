@@ -11,6 +11,7 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGame3DWindow.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
            ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+           ../../../src/Train/WorkoutGameFeatureHud.cpp \
            ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
            ../../../src/Train/WorkoutGameTerrainTransition.cpp \
            ../../../src/Train/WorkoutGameVisualSmoother.cpp
@@ -24,6 +25,7 @@ HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGameFeatureChallenge.h \
            ../../../src/Train/WorkoutGameCourse.h \
            ../../../src/Train/WorkoutGameEngine.h \
+           ../../../src/Train/WorkoutGameFeatureHud.h \
            ../../../src/Train/WorkoutGameFeatureRuntime.h \
            ../../../src/Train/WorkoutGameSimulation.h \
            ../../../src/Train/WorkoutGameVisualSmoother.h \

@@ -12,6 +12,7 @@
 
 #include "WorkoutGame3DGeometry.h"
 #include "WorkoutGameEngine.h"
+#include "WorkoutGameFeatureHud.h"
 
 #include <QObject>
 #include <QString>
@@ -49,6 +50,23 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(QString terrainName READ terrainName NOTIFY sceneChanged)
     Q_PROPERTY(QString featureStatus READ featureStatus NOTIFY sceneChanged)
     Q_PROPERTY(int readinessPercent READ readinessPercent NOTIFY sceneChanged)
+    Q_PROPERTY(bool featureHudVisible READ featureHudVisible NOTIFY sceneChanged)
+    Q_PROPERTY(QString featureName READ featureName NOTIFY sceneChanged)
+    Q_PROPERTY(QString featureActionText READ featureActionText NOTIFY sceneChanged)
+    Q_PROPERTY(int featureState READ featureState NOTIFY sceneChanged)
+    Q_PROPERTY(int featureDistanceKind READ featureDistanceKind NOTIFY sceneChanged)
+    Q_PROPERTY(double featureDistanceMeters READ featureDistanceMeters
+               NOTIFY sceneChanged)
+    Q_PROPERTY(bool powerRequired READ powerRequired NOTIFY sceneChanged)
+    Q_PROPERTY(double requiredPowerWatts READ requiredPowerWatts
+               NOTIFY sceneChanged)
+    Q_PROPERTY(int powerReadinessPercent READ powerReadinessPercent
+               NOTIFY sceneChanged)
+    Q_PROPERTY(bool cadenceRequired READ cadenceRequired NOTIFY sceneChanged)
+    Q_PROPERTY(double requiredCadenceRpm READ requiredCadenceRpm
+               NOTIFY sceneChanged)
+    Q_PROPERTY(int cadenceReadinessPercent READ cadenceReadinessPercent
+               NOTIFY sceneChanged)
     Q_PROPERTY(QVariantList features READ features NOTIFY courseChanged)
     Q_PROPERTY(QVariantList trees READ trees NOTIFY treesChanged)
     Q_PROPERTY(QString cameraComposition READ cameraComposition CONSTANT)
@@ -110,6 +128,36 @@ public:
     QString terrainName() const { return currentTerrainName; }
     QString featureStatus() const { return currentFeatureStatus; }
     int readinessPercent() const { return currentReadinessPercent; }
+    bool featureHudVisible() const { return currentFeatureHud.visible; }
+    QString featureName() const { return currentFeatureName; }
+    QString featureActionText() const { return currentFeatureActionText; }
+    int featureState() const { return int(currentFeatureHud.state); }
+    int featureDistanceKind() const
+    {
+        return int(currentFeatureHud.distanceKind);
+    }
+    double featureDistanceMeters() const
+    {
+        return currentFeatureHud.distanceMeters;
+    }
+    bool powerRequired() const { return currentFeatureHud.powerRequired; }
+    double requiredPowerWatts() const
+    {
+        return currentFeatureHud.requiredPowerWatts;
+    }
+    int powerReadinessPercent() const
+    {
+        return currentFeatureHud.powerReadinessPercent;
+    }
+    bool cadenceRequired() const { return currentFeatureHud.cadenceRequired; }
+    double requiredCadenceRpm() const
+    {
+        return currentFeatureHud.requiredCadenceRpm;
+    }
+    int cadenceReadinessPercent() const
+    {
+        return currentFeatureHud.cadenceReadinessPercent;
+    }
     QVariantList features() const { return courseFeatures; }
     QVariantList trees() const { return visibleTrees; }
     QString cameraComposition() const { return currentCameraComposition; }
@@ -137,6 +185,8 @@ private:
     static QString terrainText(WorkoutGameTerrainKind terrain);
     static QString featureText(
             const WorkoutGameFeatureRuntimeSnapshot &feature);
+    static QString featureActionText(
+            const WorkoutGameFeatureHudSnapshot &hud);
     void rebuildFeatures(double distanceMeters);
     void rebuildFloor(double distanceMeters);
     void rebuildTrees(double distanceMeters);
@@ -172,6 +222,9 @@ private:
     QString currentTerrainName;
     QString currentFeatureStatus;
     int currentReadinessPercent = 0;
+    WorkoutGameFeatureHudSnapshot currentFeatureHud;
+    QString currentFeatureName;
+    QString currentFeatureActionText;
     QString currentCameraComposition;
     double cameraBackDistanceMeters = 8.2;
     double cameraSideDistanceMeters = 0.0;

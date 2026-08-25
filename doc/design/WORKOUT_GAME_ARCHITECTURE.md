@@ -341,6 +341,16 @@ sprite sideways in one frame. A challenge branch retains at least 18 metres of
 visible trail when its source section permits it, including ten metres of exit
 runout after the physical feature.
 
+`WorkoutGameFeatureHud` is the presentation boundary for feature guidance. It
+maps immutable feature-runtime and simulation snapshots to prepare, measure,
+committed, act-now, complete and bypass states without changing route selection
+or trainer targets. It keeps power and cadence requirements independent; a
+feature with no cadence gate displays that fact instead of inventing a cadence
+failure condition. Prepare guidance starts at most 12 metres before its marker,
+and completed or bypassed feedback expires six metres after the action surface.
+`WorkoutGame3DViewModel` translates and publishes this snapshot to QML and
+clears it when a course changes, so state cannot leak between rides.
+
 #### Course-Space 2.5D Geometry
 
 `WorkoutGameMesh` is the presentation-neutral geometry contract for reusable

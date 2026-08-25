@@ -13,6 +13,20 @@ Item {
         return minutes + ":" + (seconds < 10 ? "0" : "") + seconds
     }
 
+    function featureAccent(state) {
+        if (state === 4) return "#ef7849"
+        if (state === 5) return "#70c985"
+        if (state === 6) return "#aeb8b5"
+        if (state === 3) return "#74c9e8"
+        return "#e5c151"
+    }
+
+    function featureDistanceText(kind, meters) {
+        if (kind === 1) return qsTr("DECISION") + "  " + meters.toFixed(1) + " M"
+        if (kind === 2) return qsTr("FEATURE") + "  " + meters.toFixed(1) + " M"
+        return ""
+    }
+
     View3D {
         anchors.fill: parent
 
@@ -359,21 +373,175 @@ Item {
     }
 
     Rectangle {
-        visible: workoutGame3D.featureStatus.length > 0
+        id: featureHud
+        objectName: "featureHud"
+        visible: workoutGame3D.featureHudVisible
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 28
-        width: Math.min(parent.width - 40, 430)
-        height: 58
+        width: Math.min(parent.width - 32, 620)
+        height: width < 480 ? 166 : 112
         color: "#e3191e20"
-        border.color: workoutGame3D.readinessPercent >= 100 ? "#77d07b" : "#e5c151"
+        border.color: root.featureAccent(workoutGame3D.featureState)
         border.width: 2
-        Text {
-            anchors.centerIn: parent
-            text: workoutGame3D.featureStatus + "  " + workoutGame3D.readinessPercent + "%"
-            color: "white"
-            font.pixelSize: 18
-            font.bold: true
+
+        Column {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 8
+
+            Row {
+                width: parent.width
+                height: 25
+                spacing: 10
+
+                Rectangle {
+                    id: featureStatePill
+                    width: Math.min(118, parent.width * 0.30)
+                    height: 24
+                    color: root.featureAccent(workoutGame3D.featureState)
+                    Text {
+                        objectName: "featureStateLabel"
+                        anchors.centerIn: parent
+                        width: parent.width - 8
+                        text: workoutGame3D.featureActionText.toUpperCase()
+                        color: "#101616"
+                        font.pixelSize: 13
+                        fontSizeMode: Text.HorizontalFit
+                        minimumPixelSize: 9
+                        font.bold: true
+                        elide: Text.ElideRight
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+
+                Text {
+                    width: Math.max(70, parent.width - featureStatePill.width
+                                    - featureDistance.width - 20)
+                    height: parent.height
+                    text: workoutGame3D.featureName
+                    color: "white"
+                    font.pixelSize: 18
+                    font.bold: true
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    id: featureDistance
+                    objectName: "featureDistanceLabel"
+                    visible: parent.width >= 430
+                    width: visible ? 162 : 0
+                    height: parent.height
+                    text: root.featureDistanceText(
+                              workoutGame3D.featureDistanceKind,
+                              workoutGame3D.featureDistanceMeters)
+                    color: "#dbe8e5"
+                    font.pixelSize: 14
+                    font.bold: true
+                    horizontalAlignment: Text.AlignRight
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            Grid {
+                width: parent.width
+                height: featureHud.width < 480 ? 106 : 49
+                columns: featureHud.width < 480 ? 1 : 2
+                columnSpacing: 14
+                rowSpacing: 8
+
+                Item {
+                    width: featureHud.width < 480
+                           ? parent.width : (parent.width - 14) / 2
+                    height: parent.height
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        text: qsTr("POWER")
+                        color: "#c7d2cf"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    Text {
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        text: workoutGame3D.powerRequired
+                              ? Math.round(workoutGame3D.watts) + " / "
+                                + Math.round(workoutGame3D.requiredPowerWatts) + " W"
+                              : Math.round(workoutGame3D.watts) + " W  "
+                                + qsTr("NO TARGET")
+                        color: "white"
+                        font.pixelSize: 13
+                        font.bold: true
+                    }
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: 13
+                        color: "#35403e"
+                        Rectangle {
+                            objectName: "featurePowerBar"
+                            width: parent.width * (workoutGame3D.powerRequired
+                                   ? Math.min(1,
+                                      workoutGame3D.powerReadinessPercent / 100)
+                                   : 1)
+                            height: parent.height
+                            color: !workoutGame3D.powerRequired
+                                   || workoutGame3D.powerReadinessPercent >= 100
+                                   ? "#70c985" : "#e5c151"
+                        }
+                    }
+                }
+
+                Item {
+                    width: featureHud.width < 480
+                           ? parent.width : (parent.width - 14) / 2
+                    height: parent.height
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        text: qsTr("CADENCE")
+                        color: "#c7d2cf"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    Text {
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        text: workoutGame3D.cadenceRequired
+                              ? workoutGame3D.cadenceRpm + " / "
+                                + Math.round(workoutGame3D.requiredCadenceRpm)
+                                + " RPM"
+                              : workoutGame3D.cadenceRpm + " RPM  "
+                                + qsTr("NO TARGET")
+                        color: "white"
+                        font.pixelSize: 13
+                        font.bold: true
+                    }
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: 13
+                        color: "#35403e"
+                        Rectangle {
+                            objectName: "featureCadenceBar"
+                            width: parent.width * (workoutGame3D.cadenceRequired
+                                   ? Math.min(1,
+                                      workoutGame3D.cadenceReadinessPercent / 100)
+                                   : 1)
+                            height: parent.height
+                            color: !workoutGame3D.cadenceRequired
+                                   || workoutGame3D.cadenceReadinessPercent >= 100
+                                   ? "#70c985" : "#74c9e8"
+                        }
+                    }
+                }
+            }
         }
     }
 
