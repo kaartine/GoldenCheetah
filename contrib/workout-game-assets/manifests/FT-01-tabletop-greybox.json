@@ -1,0 +1,87 @@
+{
+  "assetId": "FT-01-tabletop-greybox",
+  "displayName": "Workout Game Tabletop Greybox",
+  "role": "feature",
+  "source": {
+    "kind": "project-authored",
+    "provider": "GoldenCheetah",
+    "author": "GoldenCheetah contributors",
+    "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_tabletop.py",
+    "retrievedAt": "2026-08-25",
+    "originalFileName": "generate_tabletop.py",
+    "originalSha256": "253216a3b73ea76f6956034607c97abeed99056f93488e37bf3be6c987ab7b0b",
+    "generator": "Blender",
+    "generatorVersion": "4.0.2",
+    "promptOrScript": "contrib/workout-game-assets/blender/generate_tabletop.py"
+  },
+  "license": {
+    "spdxId": "GPL-2.0-or-later",
+    "licenseUrl": "https://www.gnu.org/licenses/old-licenses/gpl-2.0.html",
+    "attribution": "GoldenCheetah contributors",
+    "modificationAllowed": true,
+    "redistributionAllowed": true,
+    "decision": "allow",
+    "policyVersion": "2026-08-25",
+    "archivedLicensePath": "COPYING",
+    "distributionScopes": [
+      "source",
+      "appimage",
+      "screenshots-video"
+    ],
+    "conditions": [],
+    "reviewNotes": "Project-authored geometry with no external model, texture or material."
+  },
+  "files": [
+    {
+      "path": "contrib/workout-game-assets/blender/generate_tabletop.py",
+      "purpose": "source",
+      "sha256": "253216a3b73ea76f6956034607c97abeed99056f93488e37bf3be6c987ab7b0b"
+    },
+    {
+      "path": "build/workout-game-assets/WG_Tabletop_Greybox.glb",
+      "purpose": "runtime",
+      "sha256": "ec51bc5849c591256ac147cdf66067181ecd904f8098771aed43c41a6b4539f0"
+    }
+  ],
+  "processing": {
+    "tool": "Blender",
+    "toolVersion": "4.0.2",
+    "steps": [
+      "Start Blender with --background --factory-startup.",
+      "Run generate_tabletop.py with its internal geometry checks.",
+      "Export glTF 2.0 GLB with opaque materials, extras and no cameras, lights or animations.",
+      "Validate with Khronos glTF Validator 2.0.0-dev.3.10."
+    ]
+  },
+  "technical": {
+    "format": "glb",
+    "unitMeters": 1.0,
+    "upAxis": "+Y",
+    "forwardAxis": "+Z",
+    "trianglesLod0": 122,
+    "materials": 3,
+    "textureBytes": 0,
+    "nodes": [
+      "ROOT_Tabletop",
+      "GEO_Tabletop_LOD0",
+      "SOCKET_IN",
+      "SOCKET_OUT",
+      "MARKER_PREPARE",
+      "MARKER_DECISION",
+      "MARKER_ACTION",
+      "MARKER_LIP",
+      "MARKER_APEX",
+      "MARKER_LAND"
+    ],
+    "animations": []
+  },
+  "review": {
+    "status": "candidate",
+    "trademarkStatus": "not-applicable",
+    "personReleaseStatus": "not-applicable",
+    "propertyReleaseStatus": "not-applicable",
+    "reviewer": "GoldenCheetah engineering audit",
+    "reviewedAt": "2026-08-25",
+    "notes": "GLB validation passed. Runtime approval waits for bypass geometry, Balsam conversion, qrc packaging and AppImage rendering tests."
+  }
+}
