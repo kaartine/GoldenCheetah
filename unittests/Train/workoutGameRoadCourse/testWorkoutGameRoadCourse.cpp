@@ -249,6 +249,58 @@ private slots:
         QCOMPARE(runout.surfaceOffsetMeters, landing.surfaceOffsetMeters);
     }
 
+    void rollersUseThreeRoundedCanonicalCrestsAndTroughs()
+    {
+        WorkoutGameCourse course = sampleCourse();
+        course.sections.back().terrain = WorkoutGameTerrainKind::Rollers;
+        course.sections.back().difficulty = 0.5;
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto rollers = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.challenge.enabled
+                            && piece.terrain
+                                == WorkoutGameTerrainKind::Rollers;
+                });
+        QVERIFY(rollers != road.pieces.end());
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    rollers->terrain, rollers->difficulty);
+        QVERIFY(profile.ready);
+        QCOMPARE(profile.startMeters, -5.25);
+        QCOMPARE(profile.plateauStartMeters, -4.5);
+        QCOMPARE(profile.plateauEndMeters, 4.5);
+        QCOMPARE(profile.endMeters, 5.25);
+        QCOMPARE(profile.heightMeters, 0.24);
+        QCOMPARE(rollers->challenge.bypassStartDistanceMeters,
+                 rollers->challenge.bypassEndDistanceMeters);
+        QCOMPARE(rollers->challenge.bypassLateralMeters, 0.0);
+
+        const double obstacle = rollers->challenge.obstacleDistanceMeters;
+        for (double local : {-5.25, -4.5, -1.5, 1.5, 4.5, 5.25}) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, obstacle + local);
+            QVERIFY(sample.ready);
+            QVERIFY2(std::abs(sample.surfaceOffsetMeters) < 1e-9,
+                     qPrintable(QStringLiteral(
+                         "roller trough at %1 m was %2 m")
+                         .arg(local).arg(sample.surfaceOffsetMeters)));
+        }
+        for (double local : {-3.0, 0.0, 3.0}) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, obstacle + local);
+            QVERIFY(sample.ready);
+            QVERIFY2(std::abs(sample.surfaceOffsetMeters
+                              - profile.heightMeters) < 1e-9,
+                     qPrintable(QStringLiteral(
+                         "roller crest at %1 m was %2 m")
+                         .arg(local).arg(sample.surfaceOffsetMeters)));
+        }
+    }
+
     void generationAndSamplingAreDeterministic()
     {
         const WorkoutGameRoadCourse first =

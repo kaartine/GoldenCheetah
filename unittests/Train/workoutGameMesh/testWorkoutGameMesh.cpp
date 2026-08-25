@@ -176,6 +176,37 @@ private slots:
         QCOMPARE(hard.surfaceOffset(0.0), 0.0);
     }
 
+    void rollersMeshMatchesTheCanonicalThreeCrestProfile()
+    {
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::Rollers, 0.5);
+        QVERIFY(profile.ready);
+        const WorkoutGameMesh mesh = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::Rollers, 0.5);
+        QVERIFY(WorkoutGameMeshLibrary::valid(mesh));
+        QCOMPARE(mesh.entry.forwardMeters, profile.startMeters);
+        QCOMPARE(mesh.exit.forwardMeters, profile.endMeters);
+        QCOMPARE(mesh.entry.halfWidthMeters, 0.68);
+        QCOMPARE(mesh.exit.halfWidthMeters, 0.68);
+        for (double local : {-4.5, -3.0, -1.5, 0.0, 1.5, 3.0, 4.5}) {
+            double visibleTop = -1.0;
+            for (const WorkoutGameMeshVertex &vertex : mesh.vertices) {
+                if (std::abs(vertex.forwardMeters - local) < 1e-9) {
+                    visibleTop = std::max(visibleTop, vertex.upMeters);
+                }
+            }
+            QVERIFY2(visibleTop >= 0.0,
+                     qPrintable(QStringLiteral(
+                         "roller mesh has no row at %1 m").arg(local)));
+            QVERIFY2(std::abs(visibleTop - profile.surfaceOffset(local)) < 1e-9,
+                     qPrintable(QStringLiteral(
+                         "roller mesh/profile mismatch at %1 m: %2 vs %3")
+                         .arg(local).arg(visibleTop)
+                         .arg(profile.surfaceOffset(local))));
+        }
+    }
+
     void trailTilesExposeMatchingPuzzlePieceConnectors()
     {
         const WorkoutGameMesh first = WorkoutGameMeshLibrary::trailTile(

@@ -12,6 +12,7 @@
 #include "WorkoutGame3DFeatureAsset.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureChallenge.h"
+#include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <QByteArray>
@@ -110,6 +111,14 @@ void WorkoutGame3DViewModel::setCourse(
         double ftpWatts)
 {
     roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
+    rollerChallengePieceIndices.clear();
+    for (std::size_t index = 0; index < roadCourse.pieces.size(); ++index) {
+        const WorkoutGameRoadPiece &piece = roadCourse.pieces[index];
+        if (piece.challenge.enabled
+                && piece.terrain == WorkoutGameTerrainKind::Rollers) {
+            rollerChallengePieceIndices.push_back(index);
+        }
+    }
     rebuildPowerProfile(course);
     trail->setCourse(roadCourse);
     bypass->setCourse(roadCourse);
@@ -124,6 +133,7 @@ void WorkoutGame3DViewModel::setCourse(
     currentReadinessPercent = 0;
     currentWorkoutProgress = 0.0;
     currentGradePercent = 0.0;
+    riderPumpMeters = 0.0;
     rebuildFloor(0.0);
     sceneReady = roadCourse.ready && trail->ready()
             && floorBuffers[std::size_t(activeFloorBuffer)]->ready();
@@ -197,6 +207,38 @@ void WorkoutGame3DViewModel::setFrame(
     updateCameraPose(distanceMeters);
     riderPitchDegrees = finiteOrZero(frame.world.rider.pitchDegrees);
     riderRollDegrees = finiteOrZero(frame.world.rider.rollDegrees);
+    if (frame.world.terrain == WorkoutGameTerrainKind::Rollers
+            && frame.feature.route == WorkoutGameRoute::MainLine
+            && !frame.world.rider.airborne) {
+        const double compression = std::clamp(0.5 * (
+                finiteOrZero(frame.world.rider.rearSuspension)
+                + finiteOrZero(frame.world.rider.frontSuspension)), 0.0, 1.0);
+        double profilePose = 0.0;
+        for (const std::size_t index : rollerChallengePieceIndices) {
+            const WorkoutGameRoadPiece &piece = roadCourse.pieces[index];
+            const WorkoutGameFeatureGeometryProfile profile =
+                    WorkoutGameFeatureGeometry::profile(
+                        piece.terrain, piece.difficulty);
+            const double local = distanceMeters
+                    - piece.challenge.obstacleDistanceMeters;
+            if (!profile.ready || local < profile.plateauStartMeters
+                    || local > profile.plateauEndMeters) {
+                continue;
+            }
+            const double crestPhase = profile.heightMeters > 0.0
+                    ? std::clamp(profile.surfaceOffset(local)
+                            / profile.heightMeters, 0.0, 1.0)
+                    : 0.0;
+            profilePose = 0.06 - 0.16 * crestPhase;
+            break;
+        }
+        const double suspensionFineMotion =
+                (0.5 - compression) * 0.04;
+        riderPumpMeters = std::clamp(
+                profilePose + suspensionFineMotion, -0.10, 0.06);
+    } else {
+        riderPumpMeters = 0.0;
+    }
     currentPedalAngle = std::fmod(
             finiteOrZero(frame.riderPedalCycles) * 360.0, 360.0);
     currentSpeedKph = std::max(0.0, finiteOrZero(frame.simulation.speedKph));

@@ -251,7 +251,7 @@ ground following and cannot activate either airborne visual path.
 
 ### `PHY-02` Add feature-specific rider response
 
-- [ ] Rollers pump/absorb while both wheels track the surface.
+- [x] Rollers pump/absorb while both wheels track the surface.
 - [ ] Berm uses the same curved path for trail, rider lateral position and roll.
 - [ ] Skinny uses subtle balance lean without random steering.
 - [ ] Roots/rocks/slab move suspension and torso without camera vibration.
@@ -296,7 +296,7 @@ and a runtime/geometry regression test.
 - [x] `FTR-01` Log over: buried volumetric log and front/rear clearance.
 - [x] `FTR-02` Bunny hop: distinct hurdle/kicker and short preload window.
 - [x] `FTR-03` Drop: sharp ledge, exposed face, lower landing and downward pose.
-- [ ] `FTR-04` Rollers: rounded continuous crests/troughs and pump motion.
+- [x] `FTR-04` Rollers: rounded continuous crests/troughs and pump motion.
 - [ ] `FTR-05` Berm: broad banked bowl and shared curved rider line.
 - [ ] `FTR-06` Roots: branching embedded network and bounded roughness.
 - [ ] `FTR-07` Rock garden: sunk varied rocks and a readable rideable line.
@@ -379,9 +379,38 @@ limits keep flight at `0.2-1.2 s`, clearance below `1.10 m`, airborne pitch
 inside `-18..+4 degrees`, per-frame elevation change below `0.20 m`, and
 landing impact inside `0.05-0.65`.
 
+**FTR-04 evidence:** Rollers are one project-authored procedural trail tile,
+not a decorative model over ordinary ground. The `10.50 m` canonical profile
+has exact `0.75 m` level entry and exit sockets around a `9.00 m` active section.
+Three raised-cosine crests are spaced `3.00 m` apart and scale from `0.20` to
+`0.28 m`; the same profile supplies road sampling, Quick 3D mesh rows and Box2D
+segments. Exact crest and trough samples prevent the renderer from flattening
+the feature between generic spacing points.
+
+Rollers remain the centre trail for both successful and weak efforts. They do
+not generate a side branch or switch Box2D to an ordinary flat bypass surface;
+a weak effort only misses its flow bonus. Active curvature weighting and a
+bounded pitch controller keep both tyres in real Box2D contact without adding
+longitudinal energy. Acceptance traces stay grounded at `3.33`, `5.0` and
+`7.0 m/s`, exercise at least `0.08` suspension travel and keep pitch inside the
+`+/-18 degree` design envelope. The rider torso pose is distance-anchored:
+approximately `0.10 m` compression over each crest and `0.06 m` extension in
+each trough, with measured suspension providing only fine motion.
+
+The X11/OpenGL feature catalog confirms three readable crests, exact trail
+joins and no roller bypass. The opt-in 72-frame production render uses real
+Box2D snapshots at `7.0 m/s`; it reports zero airborne frames, over `0.05 m`
+visible torso range and changing pixels in more than four fifths of frame
+transitions. Road, simulation, runtime, world, mesh, geometry and X11/OpenGL
+view suites pass `26 + 30 + 17 + 33 + 26 + 15 + 42` tests both normally and
+under ASan/UBSan; the five normal suite skips are explicitly opt-in exports and
+the roller export passes separately. Review artifacts are `rollers-completed.mp4`,
+`rollers-contact-sheet.png`, `rollers-crest.png` and the full catalog under
+`/home/jkaartinen/Documents/personal/gc-ui-ftr04` on the build host.
+
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct
-completed and bypassed outcome.
+completed outcome plus a bypassed outcome where that feature has a safe branch.
 
 ## P0 HUD And Testability
 

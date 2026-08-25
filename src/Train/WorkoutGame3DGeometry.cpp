@@ -102,6 +102,18 @@ void appendFeatureSamples(
             append(center + profile.landingStartMeters);
             append(center + profile.recoveryStartMeters);
         }
+        if (profile.shape
+                == WorkoutGameFeatureGeometryShape::RoundedRollers) {
+            constexpr int RollerHalfWaves = 6;
+            for (int halfWave = 0;
+                    halfWave <= RollerHalfWaves; ++halfWave) {
+                append(center + profile.plateauStartMeters
+                        + (profile.plateauEndMeters
+                           - profile.plateauStartMeters)
+                            * double(halfWave)
+                            / double(RollerHalfWaves));
+            }
+        }
         if (profile.shape == WorkoutGameFeatureGeometryShape::FacetedLog) {
             const double radius = profile.heightMeters * 0.5;
             for (int segment = 0;

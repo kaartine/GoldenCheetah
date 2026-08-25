@@ -506,19 +506,21 @@ WorkoutGameMesh roughModel(
 WorkoutGameMesh rollersModel(double difficulty)
 {
     WorkoutGameMesh mesh;
+    const WorkoutGameFeatureGeometryProfile profile =
+            WorkoutGameFeatureGeometry::profile(
+                WorkoutGameTerrainKind::Rollers, difficulty);
+    if (!profile.ready) return mesh;
     std::vector<SculptedStripSample> samples;
-    constexpr int Samples = 24;
-    constexpr double Length = 7.2;
+    constexpr int Samples = 42;
     for (int index = 0; index <= Samples; ++index) {
         const double progress = double(index) / double(Samples);
-        const double envelope = std::pow(std::sin(Pi * progress), 2.0);
-        const double humps = std::pow(
-                std::max(0.0, std::sin(3.0 * Pi * progress)), 1.35);
+        const double forward = profile.startMeters
+                + (profile.endMeters - profile.startMeters) * progress;
         samples.push_back({
-            -Length * 0.5 + Length * progress,
-            (0.18 + 0.12 * difficulty) * envelope * humps,
-            0.92 + 0.06 * std::sin(2.0 * Pi * progress),
-            0.03 * std::sin(4.0 * Pi * progress)
+            forward,
+            profile.surfaceOffset(forward),
+            0.68,
+            0.0
         });
     }
     addSculptedStrip(
@@ -527,10 +529,15 @@ WorkoutGameMesh rollersModel(double difficulty)
             WorkoutGameMeshMaterial::DirtHighlight,
             WorkoutGameMeshMaterial::DirtEdge,
             true);
-    mesh.colliders.push_back({0.0, 0.0, 0.12, 3.6, 1.0, 0.18});
-    mesh.lengthMeters = Length;
-    mesh.entry = {-Length * 0.5, 1.0, 0.0};
-    mesh.exit = {Length * 0.5, 1.0, 0.0};
+    for (double crest : {-3.0, 0.0, 3.0}) {
+        mesh.colliders.push_back({
+            crest, 0.0, profile.heightMeters * 0.5,
+            0.45, 0.68, profile.heightMeters * 0.5
+        });
+    }
+    mesh.lengthMeters = profile.endMeters - profile.startMeters;
+    mesh.entry = {profile.startMeters, 0.68, 0.0};
+    mesh.exit = {profile.endMeters, 0.68, 0.0};
     mesh.ready = true;
     return mesh;
 }

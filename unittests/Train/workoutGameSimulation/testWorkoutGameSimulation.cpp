@@ -192,6 +192,21 @@ private slots:
         QCOMPARE(result.route, WorkoutGameRoute::SafeBypass);
     }
 
+    void weakRollerEffortMissesFlowButStaysOnTheTrail()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                challengeCourse(WorkoutGameTerrainKind::Rollers), 200.0));
+
+        WorkoutGameSimulationSnapshot result;
+        for (std::int64_t time = 0; time <= 9500; time += 250) {
+            result = simulation.update(sample(time, 80.0, 200.0, 45.0));
+        }
+
+        QCOMPARE(result.featureOutcome, WorkoutGameFeatureOutcome::Bypassed);
+        QCOMPARE(result.route, WorkoutGameRoute::MainLine);
+    }
+
     void tabletopUsesTargetPowerRegardlessOfSyntheticSpeed()
     {
         WorkoutGameSimulation strong;

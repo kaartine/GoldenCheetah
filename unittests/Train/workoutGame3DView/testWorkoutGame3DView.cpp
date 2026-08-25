@@ -484,6 +484,54 @@ private slots:
                          .arg(maximumYawAcceleration)));
     }
 
+    void rollerSuspensionDrivesTheRiderPumpPose()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Rollers);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(
+                road, piece->challenge.obstacleDistanceMeters);
+        frame.world.terrain = WorkoutGameTerrainKind::Rollers;
+        frame.world.rider.rearSuspension = 1.0;
+        frame.world.rider.frontSuspension = 1.0;
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        QCOMPARE(viewModel.riderPump(), -0.10);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(1280, 720);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QCoreApplication::processEvents();
+        QObject *body = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderBodyNode"));
+        QVERIFY(body);
+        QVERIFY(std::abs(body->property("y").toDouble() - 1.13) < 1.0e-6);
+
+        frame.world.rider.rearSuspension = 0.0;
+        frame.world.rider.frontSuspension = 0.0;
+        frame.world.rider.distanceMeters =
+                piece->challenge.obstacleDistanceMeters + 1.5;
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        QCOMPARE(viewModel.riderPump(), 0.06);
+
+        frame.feature.route = WorkoutGameRoute::SafeBypass;
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        QCOMPARE(viewModel.riderPump(), 0.0);
+    }
+
     void featureHudSeparatesPowerCadenceDistanceAndState()
     {
         const WorkoutGameCourse course = catalogCourse(
@@ -1609,6 +1657,111 @@ private slots:
         QTest::newRow("drop")
                 << int(WorkoutGameTerrainKind::Drop)
                 << QByteArray("GC_WORKOUT_GAME_DROP_VIDEO_DIR") << 1.10;
+    }
+
+    void exportsGroundedRollerPumpMotionFrames()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const QString outputDirectory = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_ROLLERS_VIDEO_DIR");
+        if (outputDirectory.isEmpty()) {
+            QSKIP("Set GC_WORKOUT_GAME_ROLLERS_VIDEO_DIR to export frames");
+        }
+        QVERIFY(QDir().mkpath(outputDirectory));
+
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Rollers);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::Rollers, piece->difficulty);
+        QVERIFY(profile.ready);
+
+        WorkoutGameFeatureRuntime runtime;
+        WorkoutGamePhysics physics;
+        QVERIFY(runtime.configure(road));
+        QVERIFY(physics.configure(road));
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.setCourse(course, FtpWatts);
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+
+        constexpr int FrameCount = 72;
+        constexpr double SpeedMetersPerSecond = 7.0;
+        const double start = piece->challenge.obstacleDistanceMeters
+                + profile.startMeters;
+        const double end = piece->challenge.obstacleDistanceMeters
+                + profile.endMeters;
+        int airborneFrames = 0;
+        int visiblyChangedFrames = 0;
+        double minimumBodyY = 10.0;
+        double maximumBodyY = -10.0;
+        double maximumPitch = 0.0;
+        QImage previous;
+        for (int frameIndex = 0; frameIndex < FrameCount; ++frameIndex) {
+            const double progress = double(frameIndex)
+                    / double(FrameCount - 1);
+            const double distance = start + (end - start) * progress;
+            WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+            frame.simulation.activeSection = 0;
+            frame.simulation.sectionProgress = std::clamp(
+                    distance / road.totalLengthMeters, 0.0, 1.0);
+            frame.simulation.route = WorkoutGameRoute::MainLine;
+            frame.simulation.featureOutcome =
+                    WorkoutGameFeatureOutcome::Completed;
+            frame.simulation.speedKph = SpeedMetersPerSecond * 3.6;
+            frame.feature = runtime.update(frame.simulation);
+            WorkoutGamePhysicsInput input;
+            input.workoutTimeMs = std::int64_t(std::llround(
+                    (distance - start) / SpeedMetersPerSecond * 1000.0));
+            input.courseDistanceMeters = distance;
+            input.terrain = WorkoutGameTerrainKind::Rollers;
+            input.desiredSpeedMetersPerSecond = SpeedMetersPerSecond;
+            input.effortRatio = 1.0;
+            frame.world = physics.update(input);
+            QVERIFY(frame.world.ready);
+            if (frame.world.rider.airborne) ++airborneFrames;
+            maximumPitch = std::max(
+                    maximumPitch, std::abs(frame.world.rider.pitchDegrees));
+
+            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+            QTest::qWait(12);
+            QObject *body = window.rootObject()->findChild<QObject *>(
+                    QStringLiteral("riderBodyNode"));
+            QVERIFY(body);
+            const double bodyY = body->property("y").toDouble();
+            minimumBodyY = std::min(minimumBodyY, bodyY);
+            maximumBodyY = std::max(maximumBodyY, bodyY);
+            const QImage image = window.grabWindow();
+            QVERIFY(!image.isNull());
+            QVERIFY(sampledColorCount(image) > 30);
+            if (!previous.isNull() && changedPixels(previous, image) > 20) {
+                ++visiblyChangedFrames;
+            }
+            previous = image;
+            const QString path = QDir(outputDirectory).filePath(
+                    QStringLiteral("frame-%1.png")
+                        .arg(frameIndex, 4, 10, QLatin1Char('0')));
+            QVERIFY(image.save(path));
+        }
+
+        QCOMPARE(airborneFrames, 0);
+        QVERIFY(maximumPitch <= 18.0);
+        QVERIFY2(maximumBodyY - minimumBodyY >= 0.05,
+                 qPrintable(QStringLiteral("roller body range was %1 m")
+                     .arg(maximumBodyY - minimumBodyY)));
+        QVERIFY(visiblyChangedFrames > FrameCount * 4 / 5);
     }
 
     void exportsAuthoredChallengeCompletedAndBypassedMotionFrames()

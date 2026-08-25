@@ -524,7 +524,7 @@ private slots:
         QCOMPARE(recovery.landingImpact, 0.0);
     }
 
-    void airbornePolicyDistinguishesRollersFromAnchoredFeatures()
+    void airbornePolicyKeepsSurfaceFollowingRollersGrounded()
     {
         WorkoutGameFeatureRuntimeSnapshot feature;
         QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(feature));
@@ -532,7 +532,7 @@ private slots:
         feature.ready = true;
         feature.terrain = WorkoutGameTerrainKind::Rollers;
         feature.phase = WorkoutGameFeaturePhase::Approach;
-        QVERIFY(WorkoutGameFeatureRuntime::airborneExpected(feature));
+        QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(feature));
 
         feature.terrain = WorkoutGameTerrainKind::LogOver;
         feature.motion = WorkoutGameFeatureMotion::Jump;
@@ -570,7 +570,28 @@ private slots:
         QVERIFY(feature.ready);
         QCOMPARE(feature.terrain, WorkoutGameTerrainKind::Rollers);
         QCOMPARE(feature.phase, WorkoutGameFeaturePhase::None);
-        QVERIFY(WorkoutGameFeatureRuntime::airborneExpected(feature));
+        QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(feature));
+    }
+
+    void failedRollerFlowDoesNotCreateABypassMotion()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const int section = sectionFor(course, WorkoutGameTerrainKind::Rollers);
+
+        const WorkoutGameFeatureRuntimeSnapshot feature = runtime.update(
+                snapshot(section, 0.8,
+                         WorkoutGameFeatureOutcome::Bypassed,
+                         WorkoutGameRoute::SafeBypass));
+
+        QVERIFY(feature.ready);
+        QCOMPARE(feature.terrain, WorkoutGameTerrainKind::Rollers);
+        QCOMPARE(feature.route, WorkoutGameRoute::MainLine);
+        QCOMPARE(feature.lateralOffsetMeters, 0.0);
+        QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(feature));
     }
 };
 

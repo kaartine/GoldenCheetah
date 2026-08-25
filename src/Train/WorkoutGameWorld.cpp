@@ -106,6 +106,7 @@ bool retainsOrdinaryGroundContact(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::SmoothTrail:
     case WorkoutGameTerrainKind::Roots:
     case WorkoutGameTerrainKind::RockGarden:
+    case WorkoutGameTerrainKind::Rollers:
     case WorkoutGameTerrainKind::Climb:
     case WorkoutGameTerrainKind::Skinny:
     case WorkoutGameTerrainKind::Berm:
@@ -347,6 +348,80 @@ struct WorkoutGamePhysics::Impl
         b2Body_ApplyForceToCenter(chassis, {force, 0.0f}, true);
     }
 
+    void applyRollerPumpForce(double metersPerSecond)
+    {
+        if (terrain != WorkoutGameTerrainKind::Rollers
+                || safeBypassActive) {
+            return;
+        }
+
+        // A rider actively weights the bike over a roller crest. Gravity alone
+        // cannot keep the tyres on a tight crest at riding speed, so derive the
+        // additional normal acceleration from the local trail curvature.
+        constexpr double sampleDistance = 0.10;
+        const double x = b2Body_GetPosition(chassis).x;
+        const double curvature = (
+                surfaceHeight(x + sampleDistance)
+                - 2.0 * surfaceHeight(x)
+                + surfaceHeight(x - sampleDistance))
+                / (sampleDistance * sampleDistance);
+        const double speed = std::clamp(
+                std::abs(finiteOr(metersPerSecond, 0.0)), 0.0, 12.0);
+        constexpr double gravityMetersPerSecondSquared = 9.81;
+        const double curvatureAcceleration = std::clamp(
+                1.25 * speed * speed * std::max(0.0, -curvature)
+                    - gravityMetersPerSecondSquared,
+                0.0, 50.0);
+        bool onRollerSurface = !roadCourse.ready;
+        if (roadCourse.ready) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        roadCourse,
+                        distanceBase + x - RiderStartMeters);
+            onRollerSurface = sample.ready
+                    && sample.surfaceOffsetMeters > 0.001;
+        }
+        const double additionalAcceleration = onRollerSurface
+                ? std::max(9.0, curvatureAcceleration)
+                : curvatureAcceleration;
+        if (additionalAcceleration <= 0.0) return;
+
+        for (const b2BodyId body : {chassis, rearWheel, frontWheel}) {
+            const float force = b2Body_GetMass(body)
+                    * float(additionalAcceleration);
+            b2Body_ApplyForceToCenter(body, {0.0f, -force}, true);
+        }
+    }
+
+    void stabilizeRollerPitch()
+    {
+        if (terrain != WorkoutGameTerrainKind::Rollers
+                || safeBypassActive) {
+            return;
+        }
+
+        constexpr double halfWheelbase = 0.62;
+        const double x = b2Body_GetPosition(chassis).x;
+        const double targetAngle = std::atan2(
+                surfaceHeight(x + halfWheelbase)
+                    - surfaceHeight(x - halfWheelbase),
+                2.0 * halfWheelbase);
+        const double currentAngle = b2Rot_GetAngle(
+                b2Body_GetRotation(chassis));
+        const double angleError = std::remainder(
+                targetAngle - currentAngle, 2.0 * Pi);
+        const double angularVelocity = b2Body_GetAngularVelocity(chassis);
+        constexpr double stiffnessPerInertia = 180.0;
+        constexpr double dampingPerInertia = 24.0;
+        const double angularAcceleration = std::clamp(
+                stiffnessPerInertia * angleError
+                    - dampingPerInertia * angularVelocity,
+                -100.0, 100.0);
+        const float torque = b2Body_GetRotationalInertia(chassis)
+                * float(angularAcceleration);
+        b2Body_ApplyTorque(chassis, torque, true);
+    }
+
     void synchronizeDistance(double distanceMeters, bool forceGroundFollowing)
     {
         if (!std::isfinite(distanceMeters) || distanceMeters < 0.0
@@ -477,6 +552,8 @@ struct WorkoutGamePhysics::Impl
                     finiteOr(input.desiredSpeedMetersPerSecond, 0.0),
                     0.0, 16.0);
         setDriveSpeed(requestedSpeed);
+        applyRollerPumpForce(requestedSpeed);
+        stabilizeRollerPitch();
 
         if (input.jumpRequested
                 && WorkoutGameFeatureCatalog::definition(terrain).jumpable

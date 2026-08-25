@@ -127,7 +127,6 @@ bool WorkoutGameFeatureRuntime::airborneExpected(
         const WorkoutGameFeatureRuntimeSnapshot &feature)
 {
     if (!feature.ready) return false;
-    if (feature.terrain == WorkoutGameTerrainKind::Rollers) return true;
     if (feature.motion == WorkoutGameFeatureMotion::Jump
             && feature.phase == WorkoutGameFeaturePhase::Committed) {
         return feature.visualDistanceMeters
@@ -180,6 +179,9 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     const WorkoutGameRoadPiece *piece =
             &configuredCourse.pieces[layout.challengePieceIndex];
     result.terrain = piece->terrain;
+    if (result.terrain == WorkoutGameTerrainKind::Rollers) {
+        result.route = WorkoutGameRoute::MainLine;
+    }
     result.motion = motionFor(piece->terrain);
     result.prepareDistanceMeters = piece->challenge.prepareDistanceMeters;
     result.decisionDistanceMeters = piece->challenge.decisionDistanceMeters;
@@ -248,9 +250,9 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             | (std::uint64_t(piece->terrain) + 1u);
     const bool completed = result.outcome
             == WorkoutGameFeatureOutcome::Completed;
-    const bool bypass = result.outcome
-            == WorkoutGameFeatureOutcome::Bypassed
-            || result.route == WorkoutGameRoute::SafeBypass;
+    const bool bypass = result.terrain != WorkoutGameTerrainKind::Rollers
+            && (result.outcome == WorkoutGameFeatureOutcome::Bypassed
+                || result.route == WorkoutGameRoute::SafeBypass);
     if (bypass) {
         const double branchStart = piece->challenge.bypassStartDistanceMeters;
         const double branchEnd = std::max(

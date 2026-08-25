@@ -737,6 +737,72 @@ private slots:
         QVERIFY(maximumImpact < 0.01);
     }
 
+    void roadCourseRollersStayGroundedAndExerciseSuspension()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 905u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::Rollers;
+        section.durationMs = source.durationMs;
+        section.targetWatts = 180.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        source.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+
+        const double start = piece->challenge.obstacleDistanceMeters - 5.0;
+        for (const double speed : {3.33, 5.0, 7.0}) {
+            WorkoutGamePhysics physics;
+            QVERIFY(physics.configure(road));
+            WorkoutGamePhysicsInput input;
+            input.terrain = WorkoutGameTerrainKind::Rollers;
+            input.desiredSpeedMetersPerSecond = speed;
+            input.effortRatio = 1.0;
+            double minimumSuspension = 1.0;
+            double maximumSuspension = 0.0;
+            double minimumPitch = 180.0;
+            double maximumPitch = -180.0;
+            int airborneTicks = 0;
+            const int ticks = int(std::ceil(11.0 / (speed * 0.02)));
+            for (int tick = 0; tick <= ticks; ++tick) {
+                input.workoutTimeMs = tick * 20;
+                input.courseDistanceMeters = start + tick * speed * 0.02;
+                const WorkoutGameWorldSnapshot result = physics.update(input);
+                QVERIFY(result.ready);
+                if (result.rider.airborne) ++airborneTicks;
+                const double suspension = 0.5 * (
+                        result.rider.rearSuspension
+                        + result.rider.frontSuspension);
+                minimumSuspension = std::min(minimumSuspension, suspension);
+                maximumSuspension = std::max(maximumSuspension, suspension);
+                minimumPitch = std::min(
+                        minimumPitch, result.rider.pitchDegrees);
+                maximumPitch = std::max(
+                        maximumPitch, result.rider.pitchDegrees);
+            }
+            QVERIFY2(airborneTicks == 0,
+                     qPrintable(QStringLiteral(
+                         "rollers at %1 m/s: %2 airborne ticks, suspension "
+                         "%3..%4, pitch %5..%6")
+                         .arg(speed).arg(airborneTicks)
+                         .arg(minimumSuspension).arg(maximumSuspension)
+                         .arg(minimumPitch).arg(maximumPitch)));
+            QVERIFY(maximumSuspension - minimumSuspension >= 0.08);
+            QVERIFY(minimumPitch < -1.0);
+            QVERIFY(maximumPitch > 1.0);
+        }
+    }
+
     void longRunRebasesWithoutFallingOffWorld()
     {
         WorkoutGamePhysics physics;

@@ -377,7 +377,9 @@ Item {
                 }
             }
             Node {
-                y: 1.23
+                id: riderBody
+                objectName: "riderBodyNode"
+                y: 1.23 + workoutGame3D.riderPump
                 z: -0.03
                 eulerRotation.x: 12
                 Model {

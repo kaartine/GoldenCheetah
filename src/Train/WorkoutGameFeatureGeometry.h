@@ -21,7 +21,8 @@ enum class WorkoutGameFeatureGeometryShape
     Hurdle,
     FacetedLog,
     CurvedTabletop,
-    DropLedge
+    DropLedge,
+    RoundedRollers
 };
 
 constexpr int WorkoutGameLogRadialSegments = 16;
@@ -71,6 +72,19 @@ struct WorkoutGameFeatureGeometryProfile
             const double smooth = progress * progress
                     * (3.0 - 2.0 * progress);
             return heightMeters * (1.0 - smooth);
+        }
+        if (shape == WorkoutGameFeatureGeometryShape::RoundedRollers) {
+            if (localDistanceMeters < plateauStartMeters
+                    || localDistanceMeters > plateauEndMeters) {
+                return 0.0;
+            }
+            constexpr double Pi = 3.14159265358979323846;
+            const double coreProgress = std::clamp(
+                    (localDistanceMeters - plateauStartMeters)
+                        / (plateauEndMeters - plateauStartMeters),
+                    0.0, 1.0);
+            return heightMeters * 0.5 * (
+                    1.0 - std::cos(6.0 * Pi * coreProgress));
         }
         if (shape == WorkoutGameFeatureGeometryShape::FacetedLog) {
             if (localDistanceMeters <= startMeters
@@ -166,6 +180,13 @@ public:
                 0.0, 1.0);
         WorkoutGameFeatureGeometryProfile result;
         switch (terrain) {
+        case WorkoutGameTerrainKind::Rollers:
+            result = {
+                true, -5.25, -4.5, 4.5, 5.25,
+                0.20 + 0.08 * difficulty,
+                WorkoutGameFeatureGeometryShape::RoundedRollers
+            };
+            break;
         case WorkoutGameTerrainKind::BunnyHop: {
             constexpr double HalfRun = 0.07;
             constexpr double HalfTop = 0.05;

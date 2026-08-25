@@ -51,10 +51,6 @@ double technicalSurfaceOffset(
                 * (0.35 + 0.65
                     * std::pow(std::sin(2.0 * Pi * progress), 2.0));
         break;
-    case WorkoutGameTerrainKind::Rollers:
-        offset += 0.10 * curvatureScale * envelope
-                * std::sin(2.0 * Pi * progress);
-        break;
     default:
         break;
     }
@@ -69,6 +65,7 @@ double featureSurfaceOffset(
     const double local = distanceMeters
             - piece.challenge.obstacleDistanceMeters;
     switch (piece.terrain) {
+    case WorkoutGameTerrainKind::Rollers:
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
     case WorkoutGameTerrainKind::Tabletop:
@@ -468,22 +465,32 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 const double featureEnd = obstacleDistance
                         + (featureGeometry.ready
                             ? featureGeometry.endMeters : 4.0);
-                piece.challenge.bypassStartDistanceMeters =
-                        challengeDistance;
-                constexpr double MinimumBypassLengthMeters = 18.0;
-                constexpr double BypassExitRunoutMeters = 10.0;
-                piece.challenge.bypassEndDistanceMeters = std::min(
-                        sectionStart + sectionLength,
-                        std::max(
-                            featureEnd + BypassExitRunoutMeters,
-                            piece.challenge.bypassStartDistanceMeters
-                                + MinimumBypassLengthMeters));
-                const double bypassClearance =
-                        featureClearanceHalfWidth(section.terrain)
-                        + 0.35 + 0.38 + 0.25;
-                piece.challenge.bypassLateralMeters =
-                        (sectionIndex & 1u) == 0u
-                        ? -bypassClearance : bypassClearance;
+                if (section.terrain == WorkoutGameTerrainKind::Rollers) {
+                    // Rollers are fully rollable trail, not an obstacle with a
+                    // separate safe line. A missed flow score stays centred.
+                    piece.challenge.bypassStartDistanceMeters =
+                            challengeDistance;
+                    piece.challenge.bypassEndDistanceMeters =
+                            challengeDistance;
+                    piece.challenge.bypassLateralMeters = 0.0;
+                } else {
+                    piece.challenge.bypassStartDistanceMeters =
+                            challengeDistance;
+                    constexpr double MinimumBypassLengthMeters = 18.0;
+                    constexpr double BypassExitRunoutMeters = 10.0;
+                    piece.challenge.bypassEndDistanceMeters = std::min(
+                            sectionStart + sectionLength,
+                            std::max(
+                                featureEnd + BypassExitRunoutMeters,
+                                piece.challenge.bypassStartDistanceMeters
+                                    + MinimumBypassLengthMeters));
+                    const double bypassClearance =
+                            featureClearanceHalfWidth(section.terrain)
+                            + 0.35 + 0.38 + 0.25;
+                    piece.challenge.bypassLateralMeters =
+                            (sectionIndex & 1u) == 0u
+                            ? -bypassClearance : bypassClearance;
+                }
                 piece.challenge.profile.measurementStartProgress =
                         (piece.challenge.prepareDistanceMeters - sectionStart)
                         / sectionLength;

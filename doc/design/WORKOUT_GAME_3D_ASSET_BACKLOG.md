@@ -73,7 +73,7 @@ targets, feature decisions, or trainer resistance.
 | FT-02 | Log over | Partly buried tapered log, end grain, root/branch remnants and bypass | Front lift, rear clearance, landing/absorb |
 | FT-03 | Bunny hop | Low hurdle or compact kicker, take-off mark and clear landing | Short compress/lift/land sequence |
 | FT-04 | Drop | Level approach, sharp lip, exposed face, lower transition and bypass | Forward/down pitch, short air, landing impact |
-| FT-05 | Rollers | Two/three rounded crests and troughs formed in the trail surface | Pump/absorb with both wheels surface-anchored |
+| FT-05 | Rollers | Three rounded crests and troughs formed in the trail surface; no separate bypass | Pump/absorb with both wheels surface-anchored |
 | FT-06 | Berm | Broad bowl-shaped bank, inner edge and joined approach/exit | Shared curved line, rider lean and roll |
 | FT-07 | Roots | Buried branching network extending from trail edges | Small suspension/torso roughness; optional hop line |
 | FT-08 | Rock garden | Sunk irregular rock group and deformed rideable tread | Continuous roughness and line choice |

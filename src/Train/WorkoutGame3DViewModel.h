@@ -21,6 +21,7 @@
 #include <array>
 #include <memory>
 #include <limits>
+#include <vector>
 
 class WorkoutGame3DViewModel : public QObject
 {
@@ -37,6 +38,7 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(double riderYaw READ riderYaw NOTIFY sceneChanged)
     Q_PROPERTY(double riderPitch READ riderPitch NOTIFY sceneChanged)
     Q_PROPERTY(double riderRoll READ riderRoll NOTIFY sceneChanged)
+    Q_PROPERTY(double riderPump READ riderPump NOTIFY sceneChanged)
     Q_PROPERTY(double pedalAngle READ pedalAngle NOTIFY sceneChanged)
     Q_PROPERTY(double speedKph READ speedKph NOTIFY sceneChanged)
     Q_PROPERTY(double distanceMeters READ distanceMeters NOTIFY sceneChanged)
@@ -123,6 +125,7 @@ public:
     double riderYaw() const { return riderHeadingDegrees; }
     double riderPitch() const { return riderPitchDegrees; }
     double riderRoll() const { return riderRollDegrees; }
+    double riderPump() const { return riderPumpMeters; }
     double pedalAngle() const { return currentPedalAngle; }
     double speedKph() const { return currentSpeedKph; }
     double distanceMeters() const { return currentDistanceMeters; }
@@ -213,6 +216,7 @@ private:
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
     int activeFloorBuffer = 0;
     WorkoutGameRoadCourse roadCourse;
+    std::vector<std::size_t> rollerChallengePieceIndices;
     std::int64_t courseDurationMs = 0;
     QVariantList currentPowerProfile;
     double currentPowerProfileMaximumWatts = 1.0;
@@ -229,6 +233,7 @@ private:
     double riderHeadingDegrees = 0.0;
     double riderPitchDegrees = 0.0;
     double riderRollDegrees = 0.0;
+    double riderPumpMeters = 0.0;
     double currentPedalAngle = 0.0;
     double currentSpeedKph = 0.0;
     double currentDistanceMeters = 0.0;

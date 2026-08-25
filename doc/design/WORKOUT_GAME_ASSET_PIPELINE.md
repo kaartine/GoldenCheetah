@@ -32,6 +32,30 @@ Sources:
 - https://www.nzrecreation.org.nz/new-zealand-mountain-bike-trail-design-guidelines
 - https://sportnz.org.nz/media/3j3pmk0y/new-zealand-mountain-bike-trail-design-guidelines.pdf
 
+## Roller reference contract
+
+The production roller tile follows the same New Zealand Grade 2 guidance. It
+uses three elongated, fully rollable crests below `300 mm`, with spacing close
+to ten times their height. This is continuous trail, so failure affects flow
+scoring but must not create a side bypass.
+
+| Property | Contract |
+| --- | ---: |
+| Total socket-to-socket length | 10.50 m |
+| Level entry and exit | 0.75 m each |
+| Active section | 9.00 m |
+| Crest count and spacing | 3 at 3.00 m |
+| Height | `0.20 + 0.08 * difficulty` m |
+| Trail half-width | 0.68 m |
+| Canonical profile | `h/2 * (1 - cos(2*pi*s/3))` |
+| Continuous-contact acceptance | 3.33, 5.0 and 7.0 m/s |
+
+The C++ profile is the sole trail-height authority for road generation, Box2D
+and Quick 3D. The visible mesh is generated directly from that profile, so a
+separate GLB would duplicate the tread and is intentionally not used. Rider
+pump pose is tied to distance through the same profile rather than wall-clock
+animation time.
+
 ## Production workflow
 
 1. Select an owned, generated, or clearly licensed reference.
