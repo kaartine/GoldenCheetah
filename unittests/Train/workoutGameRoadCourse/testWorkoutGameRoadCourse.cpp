@@ -12,6 +12,7 @@
 #include "Train/WorkoutGameRoadProjection.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameHorizon.h"
+#include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameTrailBranch.h"
 
 #include <QTest>
@@ -82,6 +83,111 @@ class TestWorkoutGameRoadCourse : public QObject
     Q_OBJECT
 
 private slots:
+    void rootProfileHasLevelSocketsAndAConnectedBuriedNetwork()
+    {
+        const WorkoutGameRootGeometryProfile profile =
+                WorkoutGameRootGeometry::profile(0.65);
+        QVERIFY(profile.ready);
+        QVERIFY(profile.activeStartMeters > profile.startMeters);
+        QVERIFY(profile.activeEndMeters < profile.endMeters);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.startMeters, 0.0), 0.0);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.activeStartMeters, 0.0), 0.0);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.activeEndMeters, 0.0), 0.0);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.endMeters, 0.0), 0.0);
+        QCOMPARE(profile.halfWidthMeters(profile.startMeters),
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(profile.halfWidthMeters(0.0),
+                 profile.activeHalfWidthMeters);
+        QCOMPARE(profile.safeLineOffsetMeters(-5.0), 0.0);
+        QCOMPARE(profile.safeLineOffsetMeters(0.0),
+                 profile.safeLineLateralMeters);
+        QCOMPARE(profile.safeLineOffsetMeters(5.0), 0.0);
+        QVERIFY(profile.segments.size() >= 7u);
+
+        double maximumCenterHeight = 0.0;
+        double maximumSafeLineHeight = 0.0;
+        int centerCrossings = 0;
+        for (const WorkoutGameRootSegment &root : profile.segments) {
+            QVERIFY(root.startForwardMeters >= profile.activeStartMeters);
+            QVERIFY(root.endForwardMeters <= profile.activeEndMeters);
+            QVERIFY(root.startRadiusMeters > root.endRadiusMeters);
+            QVERIFY(root.endRadiusMeters > 0.0);
+            if (root.startLateralMeters * root.endLateralMeters <= 0.0) {
+                ++centerCrossings;
+            }
+        }
+        for (double local = profile.activeStartMeters;
+             local <= profile.activeEndMeters; local += 0.01) {
+            maximumCenterHeight = std::max(
+                    maximumCenterHeight,
+                    profile.surfaceOffsetMeters(local, 0.0));
+            maximumSafeLineHeight = std::max(
+                    maximumSafeLineHeight,
+                    profile.surfaceOffsetMeters(
+                        local, profile.safeLineLateralMeters));
+        }
+        QVERIFY(centerCrossings >= 5);
+        QVERIFY(maximumCenterHeight >= 0.07);
+        QVERIFY(maximumCenterHeight <= 0.16);
+        QVERIFY(maximumSafeLineHeight <= 0.015);
+        QVERIFY(maximumSafeLineHeight
+                <= maximumCenterHeight * 0.25);
+    }
+
+    void rootRoadUsesTheCanonicalTyreContactProfile()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 713u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::Roots;
+        section.durationMs = source.durationMs;
+        section.lengthMeters = 70.0;
+        section.targetWatts = 180.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        source.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameRootGeometryProfile profile =
+                WorkoutGameRootGeometry::profile(piece->difficulty);
+        const double center = piece->challenge.obstacleDistanceMeters;
+        QCOMPARE(piece->challenge.decisionDistanceMeters,
+                 center + profile.startMeters);
+        QVERIFY(piece->challenge.decisionDistanceMeters
+                - piece->challenge.prepareDistanceMeters > 0.0);
+        QVERIFY(piece->challenge.decisionDistanceMeters
+                - piece->challenge.prepareDistanceMeters <= 6.0 + 1e-9);
+        QCOMPARE(piece->challenge.bypassStartDistanceMeters,
+                 piece->challenge.bypassEndDistanceMeters);
+        QCOMPARE(piece->challenge.bypassLateralMeters, 0.0);
+        const WorkoutGameRoadSample middle =
+                WorkoutGameRoadCourseBuilder::sample(road, center);
+        QVERIFY(middle.ready);
+        QCOMPARE(middle.center.halfWidthMeters,
+                 profile.activeHalfWidthMeters);
+
+        double maximumDifference = 0.0;
+        for (double local = profile.startMeters;
+             local <= profile.endMeters; local += 0.02) {
+            const WorkoutGameRoadSample roadSample =
+                    WorkoutGameRoadCourseBuilder::sample(road, center + local);
+            QVERIFY(roadSample.ready);
+            const double expected = profile.surfaceOffsetMeters(local, 0.0);
+            QVERIFY(std::abs(roadSample.surfaceOffsetMeters - expected) < 1e-9);
+            maximumDifference = std::max(maximumDifference, expected);
+        }
+        QVERIFY(maximumDifference >= 0.07);
+    }
+
     void bermProfileHasLevelSocketsAndAConsistentBankDirection()
     {
         const WorkoutGameBermGeometryProfile profile =

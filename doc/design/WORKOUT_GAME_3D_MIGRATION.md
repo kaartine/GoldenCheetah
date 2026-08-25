@@ -98,6 +98,10 @@ never allowed to join that worker.
   rebuild the course mesh.
 - Trees and feature props are bounded distance windows and update only when the
   rider crosses a placement bucket.
+- Root networks are project-authored procedural geometry with at most 512
+  segments in the resident range. Their 40 vertices and 512 triangles per tile
+  are rebuilt into one of two buffers only when the floor streaming bucket
+  changes; no root vertex data is uploaded from the per-frame pose path.
 - Textures use mipmaps and explicit size budgets. Repeated props use instancing
   once authored assets replace the initial primitives.
 - Shadows and expensive post-processing default off on the low-power profile.

@@ -11,6 +11,7 @@
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
 #include "Train/WorkoutGameBermGeometry.h"
+#include "Train/WorkoutGameRootGeometry.h"
 
 #include <QTest>
 
@@ -267,7 +268,7 @@ private slots:
         QVERIFY(std::abs(recovered.lateralOffsetMeters) < 1e-9);
     }
 
-    void rootsAndRockGardenExposeDifferentRoughness()
+    void rootsUseSuspensionAuthorityWhileRocksRetainSurfaceVibration()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
         WorkoutGameFeatureRuntime runtime;
@@ -283,8 +284,42 @@ private slots:
 
         QCOMPARE(roots.motion, WorkoutGameFeatureMotion::Absorb);
         QCOMPARE(rocks.motion, WorkoutGameFeatureMotion::Absorb);
-        QVERIFY(roots.vibration > 0.0);
-        QVERIFY(rocks.vibration > roots.vibration);
+        QCOMPARE(roots.vibration, 0.0);
+        QVERIFY(rocks.vibration > 0.0);
+    }
+
+    void rootsSafeLineStaysOnTheWidenedTileAndRejoinsTheSockets()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const int section = sectionFor(course, WorkoutGameTerrainKind::Roots);
+        const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
+        QVERIFY(piece != nullptr);
+        const WorkoutGameRootGeometryProfile roots =
+                WorkoutGameRootGeometry::profile(piece->difficulty);
+        const double center = piece->challenge.obstacleDistanceMeters;
+
+        const auto bypassAt = [&](double distance) {
+            return runtime.update(snapshot(
+                    section, progressAtDistance(road, section, distance),
+                    WorkoutGameFeatureOutcome::Bypassed,
+                    WorkoutGameRoute::SafeBypass));
+        };
+        QCOMPARE(bypassAt(center + roots.startMeters).lateralOffsetMeters, 0.0);
+        const WorkoutGameFeatureRuntimeSnapshot middle = bypassAt(center);
+        QCOMPARE(std::abs(middle.lateralOffsetMeters),
+                 roots.safeLineLateralMeters);
+        QVERIFY(std::abs(middle.lateralOffsetMeters)
+                < roots.activeHalfWidthMeters);
+        QCOMPARE(bypassAt(center + roots.endMeters).lateralOffsetMeters, 0.0);
+        QVERIFY(!middle.triggerJump);
+        QCOMPARE(middle.actionStartDistanceMeters,
+                 center + roots.activeStartMeters);
+        QCOMPARE(middle.actionEndDistanceMeters,
+                 center + roots.activeEndMeters);
     }
 
     void tabletopHasMoreAirThanTheLog()

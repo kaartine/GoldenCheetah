@@ -24,6 +24,7 @@ public:
         Berm,
         Bypass,
         ForestFloor,
+        Roots,
         Trail
     };
 
@@ -49,6 +50,10 @@ private:
             double startDistanceMeters,
             double endDistanceMeters);
     void buildBerms(
+            const WorkoutGameRoadCourse &course,
+            double startDistanceMeters,
+            double endDistanceMeters);
+    void buildRoots(
             const WorkoutGameRoadCourse &course,
             double startDistanceMeters,
             double endDistanceMeters);

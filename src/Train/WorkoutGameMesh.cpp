@@ -10,6 +10,7 @@
 #include "WorkoutGameMesh.h"
 
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <algorithm>
@@ -239,7 +240,7 @@ void addRootSegment(
             addVertex(mesh,
                     centerForward + perpendicularForward * sideOffset,
                     centerRight + perpendicularRight * sideOffset,
-                    radius * 0.72 + std::sin(angle) * radius,
+                    -0.25 * radius + std::sin(angle) * radius,
                     double(end), double(index) / double(Sides));
         }
     }
@@ -455,28 +456,34 @@ WorkoutGameMesh roughModel(
 {
     WorkoutGameMesh mesh;
     if (terrain == WorkoutGameTerrainKind::Roots) {
-        const double scale = 1.0 + 0.22 * difficulty;
-        addRootSegment(mesh, -1.7, -1.25, -0.35, -0.18,
-                       0.105 * scale, 0.075 * scale);
-        addRootSegment(mesh, -0.35, -0.18, 1.55, 1.16,
-                       0.075 * scale, 0.045 * scale);
-        addRootSegment(mesh, -0.52, -0.30, 0.55, -1.24,
-                       0.080 * scale, 0.035 * scale);
-        addRootSegment(mesh, -1.05, 1.25, -0.10, 0.18,
-                       0.090 * scale, 0.060 * scale);
-        addRootSegment(mesh, -0.10, 0.18, 1.32, -1.12,
-                       0.060 * scale, 0.035 * scale);
-        addRootSegment(mesh, 0.42, 1.20, 1.42, 0.30,
-                       0.080 * scale, 0.040 * scale);
-        addRootSegment(mesh, -1.42, 0.42, -0.72, 1.28,
-                       0.070 * scale, 0.030 * scale);
-        for (int index = -2; index <= 2; ++index) {
+        const WorkoutGameRootGeometryProfile profile =
+                WorkoutGameRootGeometry::profile(difficulty);
+        for (const WorkoutGameRootSegment &root : profile.segments) {
+            addRootSegment(
+                    mesh,
+                    root.startForwardMeters, root.startLateralMeters,
+                    root.endForwardMeters, root.endLateralMeters,
+                    root.startRadiusMeters, root.endRadiusMeters);
+            const double maximumRadius = std::max(
+                    root.startRadiusMeters, root.endRadiusMeters);
+            const double visibleHeight =
+                    (1.0 - profile.burialRatio) * maximumRadius;
             mesh.colliders.push_back({
-                double(index) * 0.65, 0.0, 0.07 * scale,
-                0.18, 1.20, 0.07 * scale
+                0.5 * (root.startForwardMeters + root.endForwardMeters),
+                0.5 * (root.startLateralMeters + root.endLateralMeters),
+                0.5 * visibleHeight,
+                0.5 * std::abs(root.endForwardMeters
+                               - root.startForwardMeters) + maximumRadius,
+                0.5 * std::abs(root.endLateralMeters
+                               - root.startLateralMeters) + maximumRadius,
+                0.5 * visibleHeight
             });
         }
-        mesh.lengthMeters = 3.6;
+        mesh.lengthMeters = profile.endMeters - profile.startMeters;
+        mesh.entry = {
+            profile.startMeters, profile.socketHalfWidthMeters, 0.0};
+        mesh.exit = {
+            profile.endMeters, profile.socketHalfWidthMeters, 0.0};
     } else {
         for (int index = 0; index < 9; ++index) {
             const double forward = -2.65 + double(index) * 0.67;
@@ -497,8 +504,10 @@ WorkoutGameMesh roughModel(
         }
         mesh.lengthMeters = 5.8;
     }
-    mesh.entry = {-mesh.lengthMeters * 0.5, 1.4, 0.0};
-    mesh.exit = {mesh.lengthMeters * 0.5, 1.4, 0.0};
+    if (terrain != WorkoutGameTerrainKind::Roots) {
+        mesh.entry = {-mesh.lengthMeters * 0.5, 1.4, 0.0};
+        mesh.exit = {mesh.lengthMeters * 0.5, 1.4, 0.0};
+    }
     mesh.ready = true;
     return mesh;
 }

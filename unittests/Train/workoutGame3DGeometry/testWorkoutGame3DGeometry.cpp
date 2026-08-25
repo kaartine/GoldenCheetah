@@ -9,6 +9,7 @@
 
 #include "WorkoutGame3DGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
+#include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <QTest>
@@ -91,6 +92,24 @@ WorkoutGameRoadCourse bermCourse()
     return WorkoutGameRoadCourseBuilder::build(source, 200.0);
 }
 
+WorkoutGameRoadCourse rootsCourse()
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 713u;
+    source.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::Trail;
+    section.terrain = WorkoutGameTerrainKind::Roots;
+    section.durationMs = source.durationMs;
+    section.lengthMeters = 70.0;
+    section.targetWatts = 180.0;
+    section.difficulty = 0.65;
+    section.challengeCount = 1;
+    source.sections = {section};
+    return WorkoutGameRoadCourseBuilder::build(source, 200.0);
+}
+
 }
 
 class TestWorkoutGame3DGeometry : public QObject
@@ -98,6 +117,45 @@ class TestWorkoutGame3DGeometry : public QObject
     Q_OBJECT
 
 private slots:
+    void rootsBuildAProceduralBuriedTubeNetwork()
+    {
+        const WorkoutGameRoadCourse course = rootsCourse();
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const WorkoutGameRootGeometryProfile profile =
+                WorkoutGameRootGeometry::profile(piece->difficulty);
+        WorkoutGame3DGeometry roots(WorkoutGame3DGeometry::Layer::Roots);
+        roots.setCourse(course);
+
+        QVERIFY(roots.ready());
+        QCOMPARE(roots.sampleCount(),
+                 int(profile.segments.size()) * 5);
+        QCOMPARE(roots.vertexData().size(),
+                 roots.sampleCount() * 8 * roots.stride());
+        QCOMPARE(roots.indexData().size(),
+                 int(profile.segments.size()) * 4 * 8 * 6
+                    * int(sizeof(quint32)));
+        QVERIFY(roots.boundsMax().x() - roots.boundsMin().x() > 1.4f);
+        QVERIFY(roots.boundsMax().y() > roots.boundsMin().y() + 0.07f);
+        QVERIFY(roots.boundsMax().z() > roots.boundsMin().z() + 3.0f);
+    }
+
+    void rootsRangeBuildExcludesDistantTiles()
+    {
+        WorkoutGame3DGeometry roots(WorkoutGame3DGeometry::Layer::Roots);
+        const WorkoutGameRoadCourse course = rootsCourse();
+        roots.setCourseRange(course, 0.0, 5.0);
+        QVERIFY(!roots.ready());
+        QCOMPARE(roots.sampleCount(), 0);
+
+        roots.setCourse(course);
+        QVERIFY(roots.ready());
+    }
+
     void invalidCourseClearsGeometry()
     {
         WorkoutGame3DGeometry geometry(

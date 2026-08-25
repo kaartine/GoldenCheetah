@@ -298,7 +298,7 @@ and a runtime/geometry regression test.
 - [x] `FTR-03` Drop: sharp ledge, exposed face, lower landing and downward pose.
 - [x] `FTR-04` Rollers: rounded continuous crests/troughs and pump motion.
 - [x] `FTR-05` Berm: broad banked bowl and shared curved rider line.
-- [ ] `FTR-06` Roots: branching embedded network and bounded roughness.
+- [x] `FTR-06` Roots: branching embedded network and bounded roughness.
 - [ ] `FTR-07` Rock garden: sunk varied rocks and a readable rideable line.
 - [ ] `FTR-08` Rock slab: asymmetric mass, crest, sides and surface following.
 - [ ] `FTR-09` Skinny: narrow deck, supports, ground clearance and transitions.
@@ -438,6 +438,39 @@ the `gc-ui-ftr05` artifact directory on the build host.
 The design uses the Recreation Aotearoa NZ trail guidelines for dimensional
 reference and OpenStax's centripetal-force relation for lean; no diagram, code
 or third-party model is copied into the repository.
+
+**FTR-06 evidence:** Roots are a project-owned procedural 12-metre trail tile
+driven only by `WorkoutGameRootGeometry`. Five of its eight irregular branches
+cross the main tread, radii scale with difficulty and seven percent burial
+keeps the network embedded instead of floating above the trail. The active
+four-metre root bed widens from 0.68-metre socket half-width to 1.25 metres and
+returns through quintic transitions. A 0.82-metre safe line remains on that
+same tread, rejoins the exact entry and exit sockets and has less than one
+quarter of the main-line surface relief.
+
+Road elevation, trail width, Quick 3D tubes, legacy comparison geometry,
+runtime line choice and Box2D contact all consume the canonical profile.
+Ordinary trail and forest datum are suppressed beneath the raised root
+surface, while adaptive 0.04-metre collider samples preserve the short crowns.
+Roots never create scripted airtime or camera shake; real front/rear suspension
+drives a bounded, 80-ms-filtered torso pump. The Quick 3D network is 512 opaque
+triangles per tile and is rebuilt into one of two buffers only when its bounded
+streaming range changes.
+
+Road, geometry, runtime, mesh and world suites pass
+`31 + 19 + 19 + 27 + 35` tests normally and under ASan/UBSan. The complete
+X11/OpenGL view suite passes 45 tests with seven explicit opt-in exports
+skipped, and focused sanitizer rendering passes the same gate. The separate
+192-frame main- and safe-line export passes at 60 Hz with zero airborne frames,
+bounded lateral movement, changing pixels in more than four fifths of frame
+transitions and safe-line suspension travel below 25 percent of the main line.
+The rendered HUD also verifies the 220-watt main target instead of inventing a
+cadence requirement. Review videos and approach/core/exit images are in
+the `gc-ui-ftr06` artifact directory on the build host. The final main-line and
+safe-line MP4 SHA-256 values are respectively
+`bb7766231198aaec48b33438be823e06e98425d276f405c5775326b8b164c658` and
+`8a33f9bb61d114b88522010aca14ae1c6a7506d2cf78fe6fee178a0a17b25f46`.
+No external model, image or texture was added.
 
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct

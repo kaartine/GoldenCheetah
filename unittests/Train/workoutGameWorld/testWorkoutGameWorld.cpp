@@ -9,6 +9,7 @@
 
 #include "Train/WorkoutGameWorld.h"
 #include "Train/WorkoutGameBermGeometry.h"
+#include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRoadCourse.h"
 
 #include <QTest>
@@ -421,6 +422,68 @@ private slots:
             maximum = std::max(maximum, result.rider.frontSuspension);
         }
         QVERIFY(maximum - minimum > 0.08);
+    }
+
+    void productionRootsStayGroundedAndExerciseSuspensionAtRideSpeeds()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 713u;
+        course.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::Roots;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 70.0;
+        section.targetWatts = 180.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameRootGeometryProfile roots =
+                WorkoutGameRootGeometry::profile(piece->difficulty);
+        const double start = piece->challenge.obstacleDistanceMeters
+                + roots.activeStartMeters - 1.0;
+        const double end = piece->challenge.obstacleDistanceMeters
+                + roots.activeEndMeters + 1.0;
+
+        for (const double speed : {3.0, 5.0, 7.0}) {
+            WorkoutGamePhysics physics;
+            QVERIFY(physics.configure(road));
+            WorkoutGamePhysicsInput input;
+            input.terrain = WorkoutGameTerrainKind::Roots;
+            input.desiredSpeedMetersPerSecond = speed;
+            input.effortRatio = 1.0;
+            double minimumSuspension = 1.0;
+            double maximumSuspension = 0.0;
+            int airborneTicks = 0;
+            const int ticks = int(std::ceil((end - start) / (speed * 0.02)));
+            for (int tick = 0; tick <= ticks; ++tick) {
+                input.workoutTimeMs = tick * 20;
+                input.courseDistanceMeters = std::min(
+                        end, start + tick * speed * 0.02);
+                const WorkoutGameWorldSnapshot result = physics.update(input);
+                QVERIFY(result.ready);
+                if (result.rider.airborne) ++airborneTicks;
+                const double suspension = 0.5 * (
+                        result.rider.rearSuspension
+                        + result.rider.frontSuspension);
+                minimumSuspension = std::min(minimumSuspension, suspension);
+                maximumSuspension = std::max(maximumSuspension, suspension);
+            }
+            QVERIFY2(airborneTicks == 0,
+                     qPrintable(QStringLiteral(
+                         "roots became airborne at %1 m/s")
+                         .arg(speed)));
+            QVERIFY(maximumSuspension - minimumSuspension > 0.03);
+        }
     }
 
     void jumpableFeaturesLeaveGroundAndLand_data()

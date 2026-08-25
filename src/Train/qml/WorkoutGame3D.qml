@@ -86,6 +86,20 @@ Item {
         }
 
         Model {
+            objectName: "rootsGeometryModel"
+            geometry: workoutGame3D.rootsGeometry
+            materials: PrincipledMaterial {
+                baseColor: "white"
+                roughness: 1
+                vertexColorsEnabled: true
+                lighting: PrincipledMaterial.FragmentLighting
+                cullMode: Material.NoCulling
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
+        Model {
             objectName: "bermGeometryModel"
             geometry: workoutGame3D.bermGeometry
             materials: PrincipledMaterial {
@@ -148,17 +162,6 @@ Item {
                 position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
                 eulerRotation.y: modelData.yaw
 
-                Model {
-                    visible: modelData.kind === 1
-                    source: "#Cylinder"
-                    y: 0.19
-                    eulerRotation.z: 90
-                    scale: Qt.vector3d(0.0038, 0.018, 0.0038)
-                    materials: PrincipledMaterial {
-                        baseColor: "#64401f"
-                        roughness: 1
-                    }
-                }
                 Model {
                     visible: modelData.kind === 4 || modelData.kind === 11
                     source: "#Sphere"
@@ -520,6 +523,7 @@ Item {
                         font.bold: true
                     }
                     Text {
+                        objectName: "featurePowerValue"
                         anchors.right: parent.right
                         anchors.top: parent.top
                         text: workoutGame3D.powerRequired
@@ -565,6 +569,7 @@ Item {
                         font.bold: true
                     }
                     Text {
+                        objectName: "featureCadenceValue"
                         anchors.right: parent.right
                         anchors.top: parent.top
                         text: workoutGame3D.cadenceRequired

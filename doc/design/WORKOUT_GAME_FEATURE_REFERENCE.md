@@ -31,7 +31,7 @@ silhouette, scale, trail integration, and line readability from future art.
 
 | Feature | NZ reference | Current assessment | Required correction |
 | --- | --- | --- | --- |
-| Roots | Track armouring, p. 35; obstacle limits in grading tables | Branched geometry is recognisable, but reads as loose branches placed on top of the trail. | Start roots at one or two off-trail trunks, bury part of each root, and form low transverse ridges in the tread. |
+| Roots | Track armouring, p. 35; obstacle limits in grading tables | The production tile now embeds eight irregular branches into one widened tread. Five branches cross the main line, the low-relief safe line stays on the same trail, and physics suspension follows the rendered crowns. | Preserve the canonical profile, partial burial and exact sockets when final bark and ground materials replace the current vertex colors. |
 | Rollers | Roller profile and spacing, p. 37 | The continuous strip is a sound base, but the shallow, flat-topped bands resemble a boardwalk more than rounded pump rollers. | Use two or three clearly rounded crests and troughs. Keep spacing near the guideline's ten-times-height rule. |
 | Climb | Gradient design, p. 25 | Edge rocks are visible, but the mesh does not communicate a climb; the road grade carries all of the meaning. | Give the trail a long visible rising face, transverse rock steps, and a readable crest. |
 | Rock garden | Track armouring, p. 35 | Irregular rocks make the feature recognisable, but many look like detached upright blocks. | Sink and overlap rocks into an uneven rideable surface, with varied size and orientation. |
@@ -61,6 +61,12 @@ degrees. The maximum banked tread width is 1.90 m and the slower inside line
 moves no more than 0.45 m from centre. These dimensions follow the Grade 2-3
 range in the reference while keeping the feature readable in the fixed chase
 camera.
+
+The production root tile is 12 m long with a 4 m active bed. Its eight
+branching roots are 0.026-0.135 m in radius after difficulty scaling and are
+partly buried. The main line reaches at least 0.07 m of relief at catalog
+difficulty, while the 0.82 m lateral safe line remains below one quarter of
+that relief and reconnects before each 1.36 m-wide socket.
 
 ## Airborne Presentation
 

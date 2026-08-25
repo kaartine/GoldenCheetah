@@ -370,6 +370,16 @@ shared edge values, and trees cannot independently estimate a flat base height.
 Profile construction occurs only during bounded floor or prop-bucket rebuilds,
 never on the simulation thread or trainer-control path.
 
+Roots have one additional canonical course-space authority:
+`WorkoutGameRootGeometry` owns their socket, active envelope, width, safe line,
+burial and branch segments. Road sampling and Box2D use its surface function;
+the legacy comparison mesh and Quick 3D tube mesh consume the same segments.
+The physics adapter samples only the short active bed at 0.04-metre spacing,
+and the Quick 3D view double-buffers a bounded root range alongside the floor
+bucket. Per-frame work therefore changes only rider pose and suspension-derived
+torso pump; it does not rebuild root geometry or touch trainer and recording
+owners.
+
 #### Course-Space 2.5D Geometry
 
 `WorkoutGameMesh` is the presentation-neutral geometry contract for reusable

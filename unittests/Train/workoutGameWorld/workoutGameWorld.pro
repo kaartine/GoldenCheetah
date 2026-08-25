@@ -12,6 +12,7 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameFeatureCatalog.h \
           ../../../src/Train/WorkoutGameFeatureChallenge.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
+          ../../../src/Train/WorkoutGameRootGeometry.h \
           ../../../src/Train/WorkoutGameWorld.h
 
 BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)

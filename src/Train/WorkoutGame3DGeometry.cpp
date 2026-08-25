@@ -12,6 +12,7 @@
 #include "WorkoutGameBermGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <QByteArray>
@@ -202,6 +203,10 @@ void WorkoutGame3DGeometry::build(
         buildBerms(course, startDistanceMeters, endDistanceMeters);
         return;
     }
+    if (layer == Layer::Roots) {
+        buildRoots(course, startDistanceMeters, endDistanceMeters);
+        return;
+    }
     const double rangeMeters = endDistanceMeters - startDistanceMeters;
 
     std::vector<double> sampleDistances;
@@ -290,8 +295,12 @@ void WorkoutGame3DGeometry::build(
                         ? -sample.center.halfWidthMeters
                         : sample.center.halfWidthMeters)
                     : terrain.vertices[std::size_t(vertex)].lateralMeters;
+            const bool rootDatum = trailVertex
+                    && sample.terrain == WorkoutGameTerrainKind::Roots;
             const double elevation = trailVertex
-                    ? sample.visualGroundElevationMeters() + 0.015
+                    ? sample.visualGroundElevationMeters()
+                        - (rootDatum ? sample.surfaceOffsetMeters : 0.0)
+                        + 0.015
                     : terrain.vertices[std::size_t(vertex)].elevationMeters;
             const int previousVertex = std::max(0, vertex - 1);
             const int nextVertex = std::min(verticesPerSample - 1, vertex + 1);
@@ -396,6 +405,179 @@ void WorkoutGame3DGeometry::build(
     setBounds(boundsMin, boundsMax);
     geometryReady = true;
     generatedSampleCount = count;
+    update();
+}
+
+void WorkoutGame3DGeometry::buildRoots(
+        const WorkoutGameRoadCourse &course,
+        double startDistanceMeters,
+        double endDistanceMeters)
+{
+    constexpr int RingsPerRoot = 5;
+    constexpr int Sides = 8;
+    constexpr int MaximumRootSegments = 512;
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    QVector3D boundsMin(
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max());
+    QVector3D boundsMax(
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest());
+    int rootCount = 0;
+
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled
+                || piece.terrain != WorkoutGameTerrainKind::Roots) {
+            continue;
+        }
+        const WorkoutGameRootGeometryProfile profile =
+                WorkoutGameRootGeometry::profile(piece.difficulty);
+        if (!profile.ready) continue;
+        const std::array<double, 1> centers = {{
+            piece.challenge.obstacleDistanceMeters
+        }};
+        for (const double center : centers) {
+            if (center + profile.activeEndMeters < startDistanceMeters
+                    || center + profile.activeStartMeters > endDistanceMeters) {
+                continue;
+            }
+            for (const WorkoutGameRootSegment &root : profile.segments) {
+            if (rootCount >= MaximumRootSegments) break;
+            const std::uint32_t first = std::uint32_t(vertices.size());
+            const double localForwardDelta = root.endForwardMeters
+                    - root.startForwardMeters;
+            const double localLateralDelta = root.endLateralMeters
+                    - root.startLateralMeters;
+            for (int ring = 0; ring < RingsPerRoot; ++ring) {
+                const double progress = double(ring)
+                        / double(RingsPerRoot - 1);
+                const double localForward = root.startForwardMeters
+                        + progress * localForwardDelta;
+                const double lateral = root.startLateralMeters
+                        + progress * localLateralDelta;
+                const double radius = root.startRadiusMeters
+                        + progress * (root.endRadiusMeters
+                                      - root.startRadiusMeters);
+                const double distance = center + localForward;
+                const WorkoutGameRoadSample sample =
+                        WorkoutGameRoadCourseBuilder::sample(course, distance);
+                if (!sample.ready) {
+                    clear();
+                    return;
+                }
+                const double rightX = std::cos(sample.center.headingRadians);
+                const double rightZ = -std::sin(sample.center.headingRadians);
+                const double forwardX = std::sin(sample.center.headingRadians);
+                const double forwardZ = std::cos(sample.center.headingRadians);
+                double axisX = localForwardDelta * forwardX
+                        + localLateralDelta * rightX;
+                double axisZ = localForwardDelta * forwardZ
+                        + localLateralDelta * rightZ;
+                const double axisLength = std::hypot(axisX, axisZ);
+                if (axisLength <= 1e-9) {
+                    clear();
+                    return;
+                }
+                axisX /= axisLength;
+                axisZ /= axisLength;
+                const double perpendicularX = -axisZ;
+                const double perpendicularZ = axisX;
+                const WorkoutGame3DTerrainProfileSnapshot terrain =
+                        WorkoutGame3DTerrainProfile::build(
+                            sample, distance, course.seed);
+                if (!terrain.ready) {
+                    clear();
+                    return;
+                }
+                const double datum =
+                        WorkoutGame3DTerrainProfile::elevationAtLateral(
+                            terrain, lateral)
+                        - sample.surfaceOffsetMeters;
+                const double centerX = sample.center.xMeters
+                        + lateral * rightX;
+                const double centerY = datum - profile.burialRatio * radius;
+                const double centerZ = sample.center.zMeters
+                        + lateral * rightZ;
+                for (int side = 0; side < Sides; ++side) {
+                    const double angle = 2.0 * Pi * double(side)
+                            / double(Sides);
+                    const double horizontal = std::cos(angle);
+                    const double vertical = std::sin(angle);
+                    const float x = float(centerX
+                            + perpendicularX * horizontal * radius);
+                    const float y = float(centerY + vertical * radius);
+                    const float z = float(centerZ
+                            + perpendicularZ * horizontal * radius);
+                    vertices.push_back({
+                        x, y, z,
+                        float(perpendicularX * horizontal),
+                        float(vertical),
+                        float(perpendicularZ * horizontal),
+                        side % 3 == 0 ? 0.48f : 0.34f,
+                        side % 3 == 0 ? 0.29f : 0.19f,
+                        side % 3 == 0 ? 0.13f : 0.08f,
+                        1.0f,
+                        float(side) / float(Sides),
+                        float(progress)
+                    });
+                    boundsMin.setX(std::min(boundsMin.x(), x));
+                    boundsMin.setY(std::min(boundsMin.y(), y));
+                    boundsMin.setZ(std::min(boundsMin.z(), z));
+                    boundsMax.setX(std::max(boundsMax.x(), x));
+                    boundsMax.setY(std::max(boundsMax.y(), y));
+                    boundsMax.setZ(std::max(boundsMax.z(), z));
+                }
+            }
+            for (int ring = 1; ring < RingsPerRoot; ++ring) {
+                const std::uint32_t prior = first
+                        + std::uint32_t((ring - 1) * Sides);
+                const std::uint32_t current = first
+                        + std::uint32_t(ring * Sides);
+                for (int side = 0; side < Sides; ++side) {
+                    const std::uint32_t next = std::uint32_t((side + 1) % Sides);
+                    indices.insert(indices.end(), {
+                        prior + std::uint32_t(side),
+                        current + std::uint32_t(side),
+                        prior + next,
+                        prior + next,
+                        current + std::uint32_t(side),
+                        current + next
+                    });
+                }
+            }
+            ++rootCount;
+            }
+            if (rootCount >= MaximumRootSegments) break;
+        }
+        if (rootCount >= MaximumRootSegments) break;
+    }
+    if (vertices.empty() || indices.empty()) return;
+
+    QByteArray vertexData;
+    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
+    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
+    QByteArray indexData;
+    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
+    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
+    setStride(sizeof(Vertex));
+    setVertexData(vertexData);
+    setIndexData(indexData);
+    setPrimitiveType(PrimitiveType::Triangles);
+    addAttribute(Attribute::PositionSemantic,
+                 offsetof(Vertex, x), Attribute::F32Type);
+    addAttribute(Attribute::NormalSemantic,
+                 offsetof(Vertex, nx), Attribute::F32Type);
+    addAttribute(Attribute::ColorSemantic,
+                 offsetof(Vertex, r), Attribute::F32Type);
+    addAttribute(Attribute::TexCoordSemantic,
+                 offsetof(Vertex, u), Attribute::F32Type);
+    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
+    setBounds(boundsMin, boundsMax);
+    geometryReady = true;
+    generatedSampleCount = rootCount * RingsPerRoot;
     update();
 }
 

@@ -10,6 +10,7 @@
 #include "WorkoutGameWorld.h"
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameRoadCourse.h"
+#include "WorkoutGameRootGeometry.h"
 
 #include <box2d/box2d.h>
 
@@ -246,6 +247,33 @@ struct WorkoutGamePhysics::Impl
         return sample.ready && sample.rideableSurface;
     }
 
+    double terrainSampleSpacing(double localX) const
+    {
+        if (!roadCourse.ready) {
+            return terrain == WorkoutGameTerrainKind::Roots
+                    ? 0.04 : TerrainSampleMeters;
+        }
+        const double distance = distanceBase + localX - RiderStartMeters;
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sample(roadCourse, distance);
+        if (!sample.ready || sample.pieceIndex >= roadCourse.pieces.size()) {
+            return TerrainSampleMeters;
+        }
+        const WorkoutGameRoadPiece &piece =
+                roadCourse.pieces[sample.pieceIndex];
+        if (!piece.challenge.enabled
+                || piece.terrain != WorkoutGameTerrainKind::Roots) {
+            return TerrainSampleMeters;
+        }
+        const WorkoutGameRootGeometryProfile roots =
+                WorkoutGameRootGeometry::profile(piece.difficulty);
+        const double local = distance
+                - piece.challenge.obstacleDistanceMeters;
+        return local >= roots.activeStartMeters - 0.5
+                && local <= roots.activeEndMeters + 0.5
+                ? 0.04 : TerrainSampleMeters;
+    }
+
     void createWorld()
     {
         destroyWorld();
@@ -262,9 +290,10 @@ struct WorkoutGamePhysics::Impl
         double priorX = TerrainStartMeters;
         double priorY = surfaceHeight(priorX);
         bool priorSurfacePresent = surfacePresent(priorX);
-        for (double x = TerrainStartMeters + TerrainSampleMeters;
-                x <= TerrainEndMeters + 0.001;
-                x += TerrainSampleMeters) {
+        double x = TerrainStartMeters;
+        while (x < TerrainEndMeters - 0.001) {
+            x = std::min(TerrainEndMeters,
+                         x + terrainSampleSpacing(x));
             const double y = surfaceHeight(x);
             const bool currentSurfacePresent = surfacePresent(x);
             if (priorSurfacePresent && currentSurfacePresent) {
@@ -494,10 +523,12 @@ struct WorkoutGamePhysics::Impl
                 b2Body_GetRotation(rearWheel));
         result.rider.frontWheelRadians = b2Rot_GetAngle(
                 b2Body_GetRotation(frontWheel));
+        const double groundDistance = authoritativeDistanceMeters >= 0.0
+                ? authoritativeDistanceMeters
+                : distanceBase + double(position.x) - RiderStartMeters;
         const WorkoutGameRoadSample ground = roadCourse.ready
                 ? WorkoutGameRoadCourseBuilder::sample(
-                    roadCourse, distanceBase + double(position.x)
-                        - RiderStartMeters)
+                    roadCourse, groundDistance)
                 : WorkoutGameRoadSample();
         const double groundY = ground.ready && groundOrigin.ready
                 ? physicalSurfaceElevation(ground, safeBypassActive)
@@ -509,7 +540,8 @@ struct WorkoutGamePhysics::Impl
                 ? physicalSurfaceElevation(ground, safeBypassActive)
                 : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
-        result.rider.airborne = !grounded();
+        result.rider.airborne = !grounded()
+                && !retainsOrdinaryGroundContact(terrain);
         result.rider.walking = weakClimbMicroseconds
                 >= WalkDecisionMicroseconds;
         result.speedMetersPerSecond = std::max(0.0, double(velocity.x));
@@ -657,12 +689,9 @@ double WorkoutGamePhysics::terrainHeight(
 
     switch (terrain) {
     case WorkoutGameTerrainKind::Roots: {
-        const double root = std::pow(
-                std::max(0.0, std::sin(2.0 * Pi * phase / 1.6)), 6.0);
-        const double crossRoot = std::pow(
-                std::max(0.0, std::sin(2.0 * Pi * phase / 2.5 + 0.8)), 8.0);
-        return slope + (0.06 + 0.09 * challenge) * root
-                + (0.02 + 0.05 * challenge) * crossRoot;
+        const double rootTile = std::fmod(phase, 12.0) - 6.0;
+        return slope + WorkoutGameRootGeometry::profile(
+                challenge).surfaceOffsetMeters(rootTile, 0.0);
     }
     case WorkoutGameTerrainKind::Rollers:
         return slope + (0.25 + 0.4 * challenge)

@@ -12,6 +12,7 @@
 #include "WorkoutGameBermGeometry.h"
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameRootGeometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -44,8 +45,10 @@ double technicalSurfaceOffset(
     double offset = 0.0;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Roots:
-        offset += 0.012 * curvatureScale * envelope
-                * std::pow(std::sin(2.0 * Pi * progress), 2.0);
+        if (!piece.challenge.enabled) {
+            offset += 0.012 * curvatureScale * envelope
+                    * std::pow(std::sin(2.0 * Pi * progress), 2.0);
+        }
         break;
     case WorkoutGameTerrainKind::RockGarden:
         offset += 0.04 * curvatureScale * envelope
@@ -66,6 +69,9 @@ double featureSurfaceOffset(
     const double local = distanceMeters
             - piece.challenge.obstacleDistanceMeters;
     switch (piece.terrain) {
+    case WorkoutGameTerrainKind::Roots:
+        return WorkoutGameRootGeometry::profile(
+                piece.difficulty).surfaceOffsetMeters(local, 0.0);
     case WorkoutGameTerrainKind::Rollers:
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
@@ -461,7 +467,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             sectionStart,
             sectionStart + sectionLength
         });
-        const double challengeDistance = result.totalLengthMeters
+        double challengeDistance = result.totalLengthMeters
                 + sectionLength * challenge.decisionProgress;
         double obstacleDistance = sectionStart + sectionLength * std::min(
                 0.98, challenge.decisionProgress + 0.03);
@@ -474,11 +480,15 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     sectionStart + sectionLength * 0.80,
                     challengeDistance + 4.0);
             break;
-        case WorkoutGameTerrainKind::Roots:
         case WorkoutGameTerrainKind::RockGarden:
         case WorkoutGameTerrainKind::RockSlab:
             obstacleDistance = sectionStart + sectionLength * std::min(
                     0.92, challenge.decisionProgress + 0.05);
+            break;
+        case WorkoutGameTerrainKind::Roots:
+            obstacleDistance = std::min(
+                    sectionStart + sectionLength - 6.0,
+                    challengeDistance + 6.0);
             break;
         default:
             break;
@@ -513,6 +523,18 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                                     - berm.startMeters + 1.5),
                         minimumObstacle, maximumObstacle);
             }
+        } else if (challenge.enabled
+                && section.terrain == WorkoutGameTerrainKind::Roots) {
+            const WorkoutGameRootGeometryProfile roots =
+                    WorkoutGameRootGeometry::profile(section.difficulty);
+            const double minimumObstacle = sectionStart - roots.startMeters;
+            const double maximumObstacle = sectionStart + sectionLength
+                    - roots.endMeters;
+            if (maximumObstacle >= minimumObstacle) {
+                obstacleDistance = std::clamp(
+                        obstacleDistance, minimumObstacle, maximumObstacle);
+                challengeDistance = obstacleDistance + roots.startMeters;
+            }
         }
         for (int part = 0; part < pieceCount; ++part) {
             WorkoutGameRoadPiece piece;
@@ -546,7 +568,12 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         + sectionLength * challenge.measurementStartProgress;
                 const double maximumPreparationMeters = section.terrain
                         == WorkoutGameTerrainKind::BunnyHop ? 3.0 : 6.0;
-                piece.challenge.prepareDistanceMeters = challenge.cue
+                piece.challenge.prepareDistanceMeters =
+                        section.terrain == WorkoutGameTerrainKind::Roots
+                    ? std::max(measuredPreparationDistance,
+                               challengeDistance
+                                    - maximumPreparationMeters)
+                    : challenge.cue
                         == WorkoutGameChallengeCue::Jump
                     ? std::max(measuredPreparationDistance,
                                challengeDistance
@@ -558,7 +585,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         + (featureGeometry.ready
                             ? featureGeometry.endMeters : 4.0);
                 if (section.terrain == WorkoutGameTerrainKind::Rollers
-                        || section.terrain == WorkoutGameTerrainKind::Berm) {
+                        || section.terrain == WorkoutGameTerrainKind::Berm
+                        || section.terrain == WorkoutGameTerrainKind::Roots) {
                     // These are fully rollable trail surfaces. A berm's
                     // slower inside line is part of the same tread.
                     piece.challenge.bypassStartDistanceMeters =
@@ -691,6 +719,13 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
         result.center.halfWidthMeters = berm.halfWidthMeters(local);
         result.renderableTrailSurface = local <= berm.startMeters
                 || local >= berm.endMeters;
+    } else if (piece.terrain == WorkoutGameTerrainKind::Roots
+            && piece.challenge.enabled) {
+        const WorkoutGameRootGeometryProfile roots =
+                WorkoutGameRootGeometry::profile(piece.difficulty);
+        const double local = distance
+                - piece.challenge.obstacleDistanceMeters;
+        result.center.halfWidthMeters = roots.halfWidthMeters(local);
     }
     const double reliefOffset = trailReliefOffset(piece, distance);
     result.center.elevationMeters += reliefOffset

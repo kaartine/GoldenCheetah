@@ -10,6 +10,7 @@
 #include "Train/WorkoutGameMesh.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameForestFloor.h"
+#include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameOcclusion.h"
 #include "Train/WorkoutGameTrailBranch.h"
 #include "Train/WorkoutGameTrailTile.h"
@@ -65,6 +66,24 @@ class TestWorkoutGameMesh : public QObject
     Q_OBJECT
 
 private slots:
+    void rootsMeshUsesTheCanonicalNetworkAndSocketBudget()
+    {
+        const WorkoutGameRootGeometryProfile profile =
+                WorkoutGameRootGeometry::profile(0.65);
+        const WorkoutGameMesh mesh = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::Roots, 0.65);
+        QVERIFY(mesh.ready);
+        QCOMPARE(mesh.entry.forwardMeters, profile.startMeters);
+        QCOMPARE(mesh.exit.forwardMeters, profile.endMeters);
+        QCOMPARE(mesh.entry.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.exit.halfWidthMeters,
+                 profile.socketHalfWidthMeters);
+        QCOMPARE(mesh.colliders.size(), profile.segments.size());
+        QVERIFY(mesh.triangles.size() <= 160u);
+        QCOMPARE(mesh.triangles.size(), profile.segments.size() * 16u);
+    }
+
     void featureModelsAreValidAndReadyForTexturesAndCollision()
     {
         const WorkoutGameTerrainKind terrains[] = {
