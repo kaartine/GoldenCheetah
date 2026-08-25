@@ -29,31 +29,18 @@ Item {
             clipNear: 0.15
             clipFar: 650
             position: Qt.vector3d(
-                workoutGame3D.riderX
-                    - Math.sin(workoutGame3D.riderYaw * Math.PI / 180)
-                        * workoutGame3D.cameraBackMeters
-                    - Math.cos(workoutGame3D.riderYaw * Math.PI / 180)
-                        * workoutGame3D.cameraSideMeters,
-                workoutGame3D.groundY + workoutGame3D.cameraHeightMeters,
-                workoutGame3D.riderZ
-                    - Math.cos(workoutGame3D.riderYaw * Math.PI / 180)
-                        * workoutGame3D.cameraBackMeters
-                    + Math.sin(workoutGame3D.riderYaw * Math.PI / 180)
-                        * workoutGame3D.cameraSideMeters)
+                workoutGame3D.cameraX,
+                workoutGame3D.cameraY,
+                workoutGame3D.cameraZ)
             lookAtNode: cameraTarget
         }
 
         Node {
             id: cameraTarget
             position: Qt.vector3d(
-                workoutGame3D.riderX
-                    + Math.sin(workoutGame3D.riderYaw * Math.PI / 180)
-                        * workoutGame3D.cameraLookAheadMeters,
-                workoutGame3D.groundY
-                    + workoutGame3D.cameraTargetHeightMeters,
-                workoutGame3D.riderZ
-                    + Math.cos(workoutGame3D.riderYaw * Math.PI / 180)
-                        * workoutGame3D.cameraLookAheadMeters)
+                workoutGame3D.cameraTargetX,
+                workoutGame3D.cameraTargetY,
+                workoutGame3D.cameraTargetZ)
         }
 
         DirectionalLight {

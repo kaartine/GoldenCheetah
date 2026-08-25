@@ -46,10 +46,10 @@ sideways.
 
 ### `CAM-02` Prevent camera and scenery intersections
 
-- [ ] Define a camera exclusion corridor and near-camera prop bounds.
-- [ ] Prevent terrain from crossing the near plane.
-- [ ] Fade, replace or reject a tree that would block rider, cue or feature.
-- [ ] Smooth camera position/target without adding trainer or recording work.
+- [x] Define a camera exclusion corridor and near-camera prop bounds.
+- [x] Prevent terrain from crossing the near plane.
+- [x] Fade, replace or reject a tree that would block rider, cue or feature.
+- [x] Smooth camera position/target without adding trainer or recording work.
 
 **Tests:** deterministic course sweep records the maximum occluded trail/rider
 area, near-plane intersections, camera displacement and yaw acceleration.
@@ -136,6 +136,13 @@ sphere as a final visible rider, feature or hero-environment object.
   visibly changing frame transitions. The encoded 30 FPS videos are exactly
   12 seconds long; `medium-centre` remains the provisional baseline pending
   user review.
+- [x] Camera position and target now sample the authoritative road behind and
+  ahead of the rider instead of projecting both from one instantaneous yaw.
+  The existing presentation smoother remains the single timing authority.
+  A deterministic sweep bounds height, displacement, yaw step and yaw
+  acceleration, while crown-aware placement rejects trees intersecting the
+  camera-to-cue corridor. The complete X11/OpenGL suite passed 13 tests with
+  no failures after the change.
 
 ## P0 Vertical Slice
 

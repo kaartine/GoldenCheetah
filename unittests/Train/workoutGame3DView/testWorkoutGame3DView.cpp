@@ -197,6 +197,35 @@ int changedPixels(const QImage &first, const QImage &second)
     return changed;
 }
 
+double horizontalDistanceToSegment(
+        double pointX,
+        double pointZ,
+        double startX,
+        double startZ,
+        double endX,
+        double endZ)
+{
+    const double segmentX = endX - startX;
+    const double segmentZ = endZ - startZ;
+    const double lengthSquared = segmentX * segmentX + segmentZ * segmentZ;
+    const double projection = lengthSquared > 1.0e-9
+            ? std::clamp(((pointX - startX) * segmentX
+                    + (pointZ - startZ) * segmentZ) / lengthSquared,
+                    0.0, 1.0)
+            : 0.0;
+    const double offsetX = pointX - (startX + projection * segmentX);
+    const double offsetZ = pointZ - (startZ + projection * segmentZ);
+    return std::hypot(offsetX, offsetZ);
+}
+
+double normalizedRadians(double angle)
+{
+    constexpr double pi = 3.14159265358979323846;
+    while (angle > pi) angle -= 2.0 * pi;
+    while (angle < -pi) angle += 2.0 * pi;
+    return angle;
+}
+
 double tabletopApproachDistance(const WorkoutGameRoadCourse &road)
 {
     for (const WorkoutGameRoadPiece &piece : road.pieces) {
@@ -262,6 +291,144 @@ private slots:
             QVERIFY(shoulder.cameraSideMeters() < 0.68);
         }
 
+    }
+
+    void cameraFollowsRoadAndMaintainsTerrainClearance()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        for (double distance = 0.0;
+             distance <= road.totalLengthMeters; distance += 1.0) {
+            viewModel.setFrame(
+                    frameAt(road, distance), 220.0, 220.0, 88, 150, 7);
+            QVERIFY(std::isfinite(viewModel.cameraX()));
+            QVERIFY(std::isfinite(viewModel.cameraY()));
+            QVERIFY(std::isfinite(viewModel.cameraZ()));
+            QVERIFY(std::isfinite(viewModel.cameraTargetX()));
+            QVERIFY(std::isfinite(viewModel.cameraTargetY()));
+            QVERIFY(std::isfinite(viewModel.cameraTargetZ()));
+
+            const double cameraDistance = std::max(
+                    0.0, distance - viewModel.cameraBackMeters());
+            const WorkoutGameRoadSample cameraSample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                            road, cameraDistance);
+            QVERIFY(cameraSample.ready);
+            const double cameraSurface =
+                    cameraSample.center.elevationMeters
+                    - cameraSample.nonPhysicalFeatureOffsetMeters;
+            QVERIFY2(viewModel.cameraY() - cameraSurface >= 2.54,
+                     "camera entered the terrain exclusion height");
+
+            const double cameraToTarget = std::hypot(
+                    viewModel.cameraTargetX() - viewModel.cameraX(),
+                    viewModel.cameraTargetZ() - viewModel.cameraZ());
+            QVERIFY2(cameraToTarget >= 10.0,
+                     "camera target collapsed into the camera position");
+            QVERIFY2(cameraToTarget <= 24.0,
+                     "camera target escaped the bounded chase composition");
+        }
+    }
+
+    void treesStayOutsideCameraAndCueCorridor()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        int inspectedTrees = 0;
+
+        for (double distance = 0.0;
+             distance <= road.totalLengthMeters; distance += 0.5) {
+            viewModel.setFrame(
+                    frameAt(road, distance), 220.0, 220.0, 88, 150, 7);
+            for (const QVariant &entry : viewModel.trees()) {
+                const QVariantMap tree = entry.toMap();
+                const double clearance = horizontalDistanceToSegment(
+                        tree.value(QStringLiteral("x")).toDouble(),
+                        tree.value(QStringLiteral("z")).toDouble(),
+                        viewModel.cameraX(), viewModel.cameraZ(),
+                        viewModel.cameraTargetX(), viewModel.cameraTargetZ());
+                const double required = tree.value(
+                        QStringLiteral("crownRadius")).toDouble() + 0.85;
+                QVERIFY2(clearance + 1.0e-6 >= required,
+                         qPrintable(QStringLiteral(
+                             "tree clearance %1 is below required %2")
+                             .arg(clearance).arg(required)));
+                ++inspectedTrees;
+            }
+        }
+        QVERIFY2(inspectedTrees >= 1000,
+                 "camera exclusion removed the forest instead of relocating it");
+    }
+
+    void cameraMotionIsContinuousAndBounded()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        constexpr int frameCount = 360;
+        double priorX = 0.0;
+        double priorY = 0.0;
+        double priorZ = 0.0;
+        double priorYaw = 0.0;
+        double priorYawStep = 0.0;
+        double maximumStep = 0.0;
+        double maximumYawStep = 0.0;
+        double maximumYawAcceleration = 0.0;
+
+        for (int frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
+            const double progress = double(frameIndex)
+                    / double(frameCount - 1);
+            const double distance = 2.0
+                    + (road.totalLengthMeters - 4.0) * progress;
+            viewModel.setFrame(
+                    frameAt(road, distance), 220.0, 220.0, 88, 150, 7);
+            const double yaw = std::atan2(
+                    viewModel.cameraTargetX() - viewModel.cameraX(),
+                    viewModel.cameraTargetZ() - viewModel.cameraZ());
+            if (frameIndex > 0) {
+                maximumStep = std::max(maximumStep, std::sqrt(
+                        std::pow(viewModel.cameraX() - priorX, 2.0)
+                        + std::pow(viewModel.cameraY() - priorY, 2.0)
+                        + std::pow(viewModel.cameraZ() - priorZ, 2.0)));
+                const double yawStep = normalizedRadians(yaw - priorYaw);
+                maximumYawStep = std::max(
+                        maximumYawStep, std::abs(yawStep));
+                if (frameIndex > 1) {
+                    maximumYawAcceleration = std::max(
+                            maximumYawAcceleration,
+                            std::abs(normalizedRadians(
+                                    yawStep - priorYawStep)));
+                }
+                priorYawStep = yawStep;
+            }
+            priorX = viewModel.cameraX();
+            priorY = viewModel.cameraY();
+            priorZ = viewModel.cameraZ();
+            priorYaw = yaw;
+        }
+
+        QVERIFY2(maximumStep <= 0.55,
+                 qPrintable(QStringLiteral("camera step reached %1 m")
+                         .arg(maximumStep)));
+        QVERIFY2(maximumYawStep <= 0.10,
+                 qPrintable(QStringLiteral("camera yaw step reached %1 rad")
+                         .arg(maximumYawStep)));
+        QVERIFY2(maximumYawAcceleration <= 0.05,
+                 qPrintable(QStringLiteral(
+                         "camera yaw acceleration reached %1 rad/frame^2")
+                         .arg(maximumYawAcceleration)));
     }
 
     void packagedTabletopAssetLoadsWithRequiredNodes()

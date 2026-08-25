@@ -135,7 +135,7 @@ targets, feature decisions, or trainer resistance.
 - [x] `CAM-02A` Capture matched stills on the same deterministic state.
 - [x] `CAM-02B` Capture matched videos on the same deterministic route.
 - [ ] `CAM-03` Select and regression-test the fixed baseline camera.
-- [ ] `CAM-04` Add camera/vegetation exclusion and terrain intersection tests.
+- [x] `CAM-04` Add camera/vegetation exclusion and terrain intersection tests.
 
 The first `CAM-01` catalog is retained as a build artifact. The provisional
 default is `medium-centre`; `low-centre` and `shoulder` remain audit modes via
@@ -143,6 +143,10 @@ default is `medium-centre`; `low-centre` and `shoulder` remain audit modes via
 per camera at 960 by 540 and 30 FPS. Automated checks require nonblank output
 and visible changes in more than 90 percent of frame transitions. Final
 selection still requires user review of the encoded 12-second videos.
+The post-exclusion comparison video has SHA-256
+`ecbf4e840eea5adee10fe06c3f054ca09da6e963b6f89626fe5156d6d63445c2`.
+All three source videos contain exactly 360 frames at 30 FPS and the complete
+interactive X11/OpenGL view suite passes 13 tests with no failures.
 
 The first generated tabletop audit artifact is stored outside the source tree
 and is reproducible from

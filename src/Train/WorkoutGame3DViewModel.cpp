@@ -28,10 +28,35 @@ constexpr double FeatureBehindMeters = 15.0;
 constexpr double FeatureAheadMeters = 180.0;
 constexpr int MaximumVisibleFeatures = 32;
 constexpr double TreeSpacingMeters = 6.0;
+constexpr double TreeCrownRadiusMeters = 1.35;
+constexpr double CameraCorridorClearanceMeters = 0.85;
 
 double finiteOrZero(double value)
 {
     return std::isfinite(value) ? value : 0.0;
+}
+
+double horizontalDistanceToSegmentSquared(
+        double pointX,
+        double pointZ,
+        double startX,
+        double startZ,
+        double endX,
+        double endZ)
+{
+    const double segmentX = endX - startX;
+    const double segmentZ = endZ - startZ;
+    const double lengthSquared = segmentX * segmentX + segmentZ * segmentZ;
+    const double projection = lengthSquared > 1.0e-9
+            ? std::clamp(((pointX - startX) * segmentX
+                    + (pointZ - startZ) * segmentZ) / lengthSquared,
+                    0.0, 1.0)
+            : 0.0;
+    const double closestX = startX + projection * segmentX;
+    const double closestZ = startZ + projection * segmentZ;
+    const double offsetX = pointX - closestX;
+    const double offsetZ = pointZ - closestZ;
+    return offsetX * offsetX + offsetZ * offsetZ;
 }
 
 std::uint32_t mix(std::uint32_t value)
@@ -87,7 +112,6 @@ void WorkoutGame3DViewModel::setCourse(
     sceneReady = roadCourse.ready && trail->ready()
             && floorBuffers[std::size_t(activeFloorBuffer)]->ready();
     rebuildFeatures(0.0);
-    rebuildTrees(0.0);
     emit courseChanged();
     emit sceneChanged();
 }
@@ -131,6 +155,7 @@ void WorkoutGame3DViewModel::setFrame(
     riderPositionY = visualGround + std::max(physicsAir, featureAir);
     riderPositionZ = sample.center.zMeters + lateral * rightZ;
     riderHeadingDegrees = sample.center.headingRadians * 180.0 / Pi;
+    updateCameraPose(distanceMeters);
     riderPitchDegrees = finiteOrZero(frame.world.rider.pitchDegrees)
             + finiteOrZero(frame.feature.pitchDegrees);
     riderRollDegrees = finiteOrZero(frame.world.rider.rollDegrees);
@@ -148,6 +173,55 @@ void WorkoutGame3DViewModel::setFrame(
     rebuildFeatures(currentDistanceMeters);
     rebuildTrees(currentDistanceMeters);
     emit sceneChanged();
+}
+
+void WorkoutGame3DViewModel::updateCameraPose(double distanceMeters)
+{
+    const double cameraDistance = std::max(
+            0.0, distanceMeters - cameraBackDistanceMeters);
+    const WorkoutGameRoadSample cameraSample =
+            WorkoutGameRoadCourseBuilder::sample(roadCourse, cameraDistance);
+    const double targetDistance = std::min(
+            roadCourse.totalLengthMeters,
+            distanceMeters + cameraLookAheadDistanceMeters);
+    const WorkoutGameRoadSample targetSample =
+            WorkoutGameRoadCourseBuilder::sample(roadCourse, targetDistance);
+    if (!cameraSample.ready || !targetSample.ready) return;
+
+    const double cameraForwardX = std::sin(
+            cameraSample.center.headingRadians);
+    const double cameraForwardZ = std::cos(
+            cameraSample.center.headingRadians);
+    const double cameraRightX = std::cos(
+            cameraSample.center.headingRadians);
+    const double cameraRightZ = -std::sin(
+            cameraSample.center.headingRadians);
+    const double missingBehind = std::max(
+            0.0, cameraBackDistanceMeters - distanceMeters);
+    cameraPositionX = cameraSample.center.xMeters
+            - cameraForwardX * missingBehind
+            - cameraRightX * cameraSideDistanceMeters;
+    cameraPositionZ = cameraSample.center.zMeters
+            - cameraForwardZ * missingBehind
+            - cameraRightZ * cameraSideDistanceMeters;
+    cameraPositionY = cameraSample.center.elevationMeters
+            - cameraSample.nonPhysicalFeatureOffsetMeters
+            + cameraHeightDistanceMeters;
+
+    const double targetForwardX = std::sin(
+            targetSample.center.headingRadians);
+    const double targetForwardZ = std::cos(
+            targetSample.center.headingRadians);
+    const double missingAhead = std::max(
+            0.0, distanceMeters + cameraLookAheadDistanceMeters
+                    - roadCourse.totalLengthMeters);
+    cameraTargetPositionX = targetSample.center.xMeters
+            + targetForwardX * missingAhead;
+    cameraTargetPositionZ = targetSample.center.zMeters
+            + targetForwardZ * missingAhead;
+    cameraTargetPositionY = targetSample.center.elevationMeters
+            - targetSample.nonPhysicalFeatureOffsetMeters
+            + cameraTargetHeightDistanceMeters;
 }
 
 void WorkoutGame3DViewModel::setTelemetry(
@@ -302,12 +376,26 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
         const double lateral = side * (3.3 + double((random >> 8) & 255u) / 85.0);
         const double rightX = std::cos(sample.center.headingRadians);
         const double rightZ = -std::sin(sample.center.headingRadians);
+        const double scale =
+                0.75 + double((random >> 16) & 255u) / 510.0;
+        const double crownRadius = TreeCrownRadiusMeters * scale;
+        const double treeX = sample.center.xMeters + lateral * rightX;
+        const double treeZ = sample.center.zMeters + lateral * rightZ;
+        const double requiredClearance =
+                crownRadius + CameraCorridorClearanceMeters;
+        if (horizontalDistanceToSegmentSquared(
+                    treeX, treeZ,
+                    cameraPositionX, cameraPositionZ,
+                    cameraTargetPositionX, cameraTargetPositionZ)
+                < requiredClearance * requiredClearance) {
+            continue;
+        }
         QVariantMap tree;
-        tree.insert(QStringLiteral("x"), sample.center.xMeters + lateral * rightX);
+        tree.insert(QStringLiteral("x"), treeX);
         tree.insert(QStringLiteral("y"), sample.baseElevationMeters - 0.10);
-        tree.insert(QStringLiteral("z"), sample.center.zMeters + lateral * rightZ);
-        tree.insert(QStringLiteral("scale"),
-                    0.75 + double((random >> 16) & 255u) / 510.0);
+        tree.insert(QStringLiteral("z"), treeZ);
+        tree.insert(QStringLiteral("scale"), scale);
+        tree.insert(QStringLiteral("crownRadius"), crownRadius);
         tree.insert(QStringLiteral("variant"), int((random >> 24) & 3u));
         visibleTrees.push_back(tree);
     }

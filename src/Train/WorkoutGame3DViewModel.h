@@ -57,6 +57,12 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(double cameraHeightMeters READ cameraHeightMeters CONSTANT)
     Q_PROPERTY(double cameraLookAheadMeters READ cameraLookAheadMeters CONSTANT)
     Q_PROPERTY(double cameraTargetHeightMeters READ cameraTargetHeightMeters CONSTANT)
+    Q_PROPERTY(double cameraX READ cameraX NOTIFY sceneChanged)
+    Q_PROPERTY(double cameraY READ cameraY NOTIFY sceneChanged)
+    Q_PROPERTY(double cameraZ READ cameraZ NOTIFY sceneChanged)
+    Q_PROPERTY(double cameraTargetX READ cameraTargetX NOTIFY sceneChanged)
+    Q_PROPERTY(double cameraTargetY READ cameraTargetY NOTIFY sceneChanged)
+    Q_PROPERTY(double cameraTargetZ READ cameraTargetZ NOTIFY sceneChanged)
 
 public:
     explicit WorkoutGame3DViewModel(QObject *parent = nullptr);
@@ -112,6 +118,12 @@ public:
     double cameraHeightMeters() const { return cameraHeightDistanceMeters; }
     double cameraLookAheadMeters() const { return cameraLookAheadDistanceMeters; }
     double cameraTargetHeightMeters() const { return cameraTargetHeightDistanceMeters; }
+    double cameraX() const { return cameraPositionX; }
+    double cameraY() const { return cameraPositionY; }
+    double cameraZ() const { return cameraPositionZ; }
+    double cameraTargetX() const { return cameraTargetPositionX; }
+    double cameraTargetY() const { return cameraTargetPositionY; }
+    double cameraTargetZ() const { return cameraTargetPositionZ; }
 
 signals:
     void sceneChanged();
@@ -128,6 +140,7 @@ private:
     void rebuildFeatures(double distanceMeters);
     void rebuildFloor(double distanceMeters);
     void rebuildTrees(double distanceMeters);
+    void updateCameraPose(double distanceMeters);
 
     std::unique_ptr<WorkoutGame3DGeometry> trail;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
@@ -165,6 +178,12 @@ private:
     double cameraHeightDistanceMeters = 3.2;
     double cameraLookAheadDistanceMeters = 12.0;
     double cameraTargetHeightDistanceMeters = 0.85;
+    double cameraPositionX = 0.0;
+    double cameraPositionY = 3.2;
+    double cameraPositionZ = -8.2;
+    double cameraTargetPositionX = 0.0;
+    double cameraTargetPositionY = 0.85;
+    double cameraTargetPositionZ = 12.0;
 };
 
 #endif
