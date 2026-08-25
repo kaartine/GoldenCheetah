@@ -34,6 +34,14 @@ LOG_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_LogOver_Greybox.glb"
 )
+BUNNY_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/FT-03-bunny-hop-greybox.json"
+)
+BUNNY_GLB_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generated/WG_BunnyHop_Greybox.glb"
+)
 
 
 def sha256(path: Path) -> str:
@@ -75,7 +83,11 @@ class TestWorkoutGameAssets(unittest.TestCase):
     def test_repository_assets_pass_all_gates(self) -> None:
         self.assertEqual(
             assets.validate_repository(REPOSITORY),
-            ["FT-01-tabletop-greybox", "FT-02-log-over-greybox"],
+            [
+                "FT-01-tabletop-greybox",
+                "FT-02-log-over-greybox",
+                "FT-03-bunny-hop-greybox",
+            ],
         )
 
     def test_schema_rejects_unknown_property(self) -> None:
@@ -192,6 +204,27 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         bounds = manifest["technical"]["boundsMeters"]
         self.assertLessEqual(bounds["maximum"][0] - bounds["minimum"][0], 2.24)
+
+    def test_bunny_hop_is_a_compact_supported_hurdle(self) -> None:
+        document, size = assets.read_glb(BUNNY_GLB_PATH)
+        manifest = assets.load_json_file(BUNNY_MANIFEST_PATH)
+        assets.validate_glb_document(document, size, manifest)
+
+        self.assertEqual(
+            {material["name"] for material in document["materials"]},
+            {
+                "MAT_BunnyHopBar_Grey",
+                "MAT_BunnyHopSupport_Grey",
+            },
+        )
+        bounds = manifest["technical"]["boundsMeters"]
+        self.assertLessEqual(bounds["maximum"][1], 0.20)
+        self.assertGreater(bounds["maximum"][0], 0.68 + 0.25)
+        self.assertEqual(
+            manifest["technical"]["sockets"][1]["positionMeters"],
+            [0.0, 0.0, 3.5],
+        )
+        self.assertLessEqual(manifest["technical"]["materials"], 2)
 
     def test_malformed_glb_structure_fails_cleanly(self) -> None:
         document, size = assets.read_glb(GLB_PATH)

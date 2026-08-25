@@ -293,7 +293,7 @@ trail/terrain, rider response, catalog stills, completed/bypassed motion video,
 and a runtime/geometry regression test.
 
 - [x] `FTR-01` Log over: buried volumetric log and front/rear clearance.
-- [ ] `FTR-02` Bunny hop: distinct hurdle/kicker and short preload window.
+- [x] `FTR-02` Bunny hop: distinct hurdle/kicker and short preload window.
 - [ ] `FTR-03` Drop: sharp ledge, exposed face, lower landing and downward pose.
 - [ ] `FTR-04` Rollers: rounded continuous crests/troughs and pump motion.
 - [ ] `FTR-05` Berm: broad banked bowl and shared curved rider line.
@@ -328,6 +328,29 @@ mesh, simulation and geometry pass 23, 15, 22, 29 and 14 tests. The full
 interactive view suite and its ASan/UBSan run pass, and the opt-in motion export
 passes both 72-frame routes. The generated GLB is therefore approved for this
 feature slice.
+
+**FTR-02 evidence:** bunny hop no longer dispatches to the log mesh or a QML
+primitive. A deterministic project-authored `4,864`-byte GLB supplies a
+distinct `0.10-0.20 m` timber practice hurdle with two materials, 28 triangles,
+exact `3.50 m` ordinary-trail sockets and named prepare, decision, action,
+preload, takeoff, apex and landing markers. The asset contains no ground, so
+the authoritative trail remains flat under the independent obstacle; runtime
+difficulty scales only its height.
+
+The preload window is capped at three metres. Scripted presentation reaches
+at most `0.42 m`, while Box2D uses its own `3.0 m/s` launch impulse; regression
+tests prove both air paths are lower and shorter than log-over, land within the
+bounded window and cannot retrigger the same anchored action. The existing
+terrain-following safe branch clears the hurdle, remains grounded and rejoins
+without a lateral teleport.
+
+Two clean Blender 4.0.2 exports and two Qt Balsam 6.8.3 conversions are
+byte-identical. Khronos validation reports zero errors, warnings, infos and
+hints. Asset, road, runtime, mesh, world and direct placement suites pass 15,
+24, 16, 24, 30 and 6 tests. The 36-test X11/OpenGL view suite passes with only
+three explicit opt-in video skips; the bunny opt-in completed and bypassed
+72-frame exports both pass. ASan/UBSan passes the changed core suites and the
+packaged/integrated Quick 3D bunny render.
 
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct

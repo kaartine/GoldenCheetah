@@ -2,8 +2,26 @@
 
 This directory contains deterministic Blender source generators for custom
 Workout Game assets. `generate_tabletop.py` creates the first stylized
-low-poly tabletop socket tile and `generate_log_over.py` creates a socketed,
-partly buried log-over tile without downloading or embedding external assets.
+low-poly tabletop socket tile, `generate_log_over.py` creates a socketed,
+partly buried log-over tile, and `generate_bunny_hop.py` creates a compact
+practice hurdle. None of the generators downloads or embeds external assets.
+
+## Bunny-hop contract
+
+- The `3.50 m` visual tile uses exact `0.68 m` ordinary-trail sockets and a
+  self-contained project-authored obstacle. It does not duplicate trail or
+  terrain geometry.
+- The crossbar is `0.20 m` high and extends to `X = +/-1.02 m`; its supports
+  remain outside the `1.36 m` tread. Runtime difficulty scales height from
+  `0.10 m` to `0.20 m` without changing the socket length.
+- Named prepare, decision, action, preload, takeoff, apex and landing markers
+  are visual authoring metadata. The road gate, Box2D impulse and outcome
+  remain authoritative runtime data.
+- The ordinary trail remains flat under the hurdle. A completed line uses a
+  bounded feature-specific lift, while the common safe branch stays grounded
+  and rejoins the main trail continuously.
+- The generator validates topology, finite coordinates, two opaque materials,
+  socket placement, marker inventory and applied transforms before export.
 
 ## Log-over contract
 
@@ -78,9 +96,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
   --output /work/build/workout-game-assets/WG_Tabletop_Greybox.glb
 ```
 
-The expected output is one self-contained
-`build/workout-game-assets/WG_Tabletop_Greybox.glb`. Blender's console output
-also reports the expected topology of `78` vertices and `96` triangles.
+The expected output is one self-contained GLB at the requested path. Blender's
+console output reports the expected topology for the selected generator.
 No `.blend`, texture, runtime collision or physics file is produced.
 
 Determinism is expected for the same Blender 4.x patch release and export

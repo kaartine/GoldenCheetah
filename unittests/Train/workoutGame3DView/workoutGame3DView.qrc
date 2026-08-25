@@ -4,5 +4,6 @@
         <file alias="qml/WorkoutGameTrainingHud.qml">../../../src/Train/qml/WorkoutGameTrainingHud.qml</file>
         <file alias="qml/assets/TabletopAssetHarness.qml">TabletopAssetHarness.qml</file>
         <file alias="qml/assets/LogOverAssetHarness.qml">LogOverAssetHarness.qml</file>
+        <file alias="qml/assets/BunnyHopAssetHarness.qml">BunnyHopAssetHarness.qml</file>
     </qresource>
 </RCC>

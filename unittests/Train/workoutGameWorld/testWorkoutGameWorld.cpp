@@ -469,6 +469,52 @@ private slots:
                      .arg(maximumAirHeightMeters)));
     }
 
+    void bunnyHopPhysicsIsShorterAndLowerThanLogOver()
+    {
+        struct Flight {
+            bool landed = false;
+            double maximumAirMeters = 0.0;
+            int durationMs = 0;
+        };
+        const auto measure = [](WorkoutGameTerrainKind terrain) {
+            WorkoutGamePhysics physics;
+            Flight flight;
+            if (!physics.configure(997u)) return flight;
+            WorkoutGamePhysicsInput input;
+            input.terrain = terrain;
+            input.desiredSpeedMetersPerSecond = 6.0;
+            input.effortRatio = 1.0;
+            input.jumpRequested = true;
+            input.featureActionId = 42u;
+            physics.update(input);
+            int takeoffMs = -1;
+            for (int time = 20; time <= 5000; time += 20) {
+                input.workoutTimeMs = time;
+                const WorkoutGameWorldSnapshot result = physics.update(input);
+                flight.maximumAirMeters = std::max(
+                        flight.maximumAirMeters,
+                        result.rider.airHeightMeters());
+                if (result.rider.airborne && takeoffMs < 0) takeoffMs = time;
+                if (takeoffMs >= 0 && !result.rider.airborne) {
+                    flight.landed = true;
+                    flight.durationMs = time - takeoffMs;
+                    break;
+                }
+            }
+            return flight;
+        };
+
+        const Flight bunny = measure(WorkoutGameTerrainKind::BunnyHop);
+        const Flight log = measure(WorkoutGameTerrainKind::LogOver);
+        QVERIFY(bunny.landed);
+        QVERIFY(log.landed);
+        QVERIFY(bunny.maximumAirMeters >= 0.25);
+        QVERIFY(bunny.maximumAirMeters <= 0.65);
+        QVERIFY(bunny.durationMs <= 1200);
+        QVERIFY(bunny.maximumAirMeters < log.maximumAirMeters);
+        QVERIFY(bunny.durationMs < log.durationMs);
+    }
+
     void anchoredFeatureActionJumpsImmediatelyAndOnlyOnce()
     {
         WorkoutGamePhysics physics;

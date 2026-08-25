@@ -115,6 +115,33 @@ private slots:
         QVERIFY(std::abs(asset.yMeters - road.center.elevationMeters) < 1e-12);
         QVERIFY(std::abs(asset.zMeters - road.center.zMeters) < 1e-12);
     }
+
+    void placesBunnyHopTileWithoutDistortingItsSocketLength()
+    {
+        const WorkoutGameRoadCourse course = courseWith(
+                WorkoutGameTerrainKind::BunnyHop, 0.65);
+        const WorkoutGameRoadPiece &piece = challengePiece(course);
+        const WorkoutGame3DFeatureAssetSnapshot asset =
+                WorkoutGame3DFeatureAsset::place(course, piece);
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    piece.terrain, piece.difficulty);
+        QVERIFY(asset.ready);
+        QCOMPARE(asset.terrain, WorkoutGameTerrainKind::BunnyHop);
+        QVERIFY(std::abs(asset.scaleY - profile.heightMeters / 0.20) < 1e-12);
+        QCOMPARE(asset.scaleZ, 1.0);
+
+        const double expectedStart =
+                piece.challenge.obstacleDistanceMeters
+                + profile.startMeters - 1.68;
+        const WorkoutGameRoadSample road = WorkoutGameRoadCourseBuilder::sample(
+                course, expectedStart);
+        QVERIFY(road.ready);
+        QVERIFY(std::abs(asset.xMeters - road.center.xMeters) < 1e-12);
+        QVERIFY(std::abs(asset.yMeters
+                         - road.visualGroundElevationMeters()) < 1e-12);
+        QVERIFY(std::abs(asset.zMeters - road.center.zMeters) < 1e-12);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGame3DFeatureAsset)

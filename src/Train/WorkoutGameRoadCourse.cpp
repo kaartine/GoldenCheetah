@@ -433,10 +433,13 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 piece.challenge.profile = challenge;
                 const double measuredPreparationDistance = sectionStart
                         + sectionLength * challenge.measurementStartProgress;
+                const double maximumPreparationMeters = section.terrain
+                        == WorkoutGameTerrainKind::BunnyHop ? 3.0 : 6.0;
                 piece.challenge.prepareDistanceMeters = challenge.cue
                         == WorkoutGameChallengeCue::Jump
                     ? std::max(measuredPreparationDistance,
-                               challengeDistance - 6.0)
+                               challengeDistance
+                                    - maximumPreparationMeters)
                     : measuredPreparationDistance;
                 piece.challenge.decisionDistanceMeters = challengeDistance;
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;

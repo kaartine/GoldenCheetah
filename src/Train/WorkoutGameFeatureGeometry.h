@@ -18,6 +18,7 @@
 enum class WorkoutGameFeatureGeometryShape
 {
     Linear,
+    Hurdle,
     FacetedLog,
     CurvedTabletop
 };
@@ -39,6 +40,9 @@ struct WorkoutGameFeatureGeometryProfile
     {
         if (!ready || localDistanceMeters < startMeters
                 || localDistanceMeters > endMeters) {
+            return 0.0;
+        }
+        if (shape == WorkoutGameFeatureGeometryShape::Hurdle) {
             return 0.0;
         }
         if (shape == WorkoutGameFeatureGeometryShape::FacetedLog) {
@@ -135,7 +139,16 @@ public:
                 0.0, 1.0);
         WorkoutGameFeatureGeometryProfile result;
         switch (terrain) {
-        case WorkoutGameTerrainKind::BunnyHop:
+        case WorkoutGameTerrainKind::BunnyHop: {
+            constexpr double HalfRun = 0.07;
+            constexpr double HalfTop = 0.05;
+            result = {
+                true, -HalfRun, -HalfTop, HalfTop, HalfRun,
+                0.10 + 0.10 * difficulty,
+                WorkoutGameFeatureGeometryShape::Hurdle
+            };
+            break;
+        }
         case WorkoutGameTerrainKind::LogOver: {
             const double radius = 0.22 + 0.10 * difficulty;
             result = {

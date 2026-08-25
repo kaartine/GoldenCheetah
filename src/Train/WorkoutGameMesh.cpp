@@ -59,6 +59,49 @@ void addQuad(
     addTriangle(mesh, a, c, d, material);
 }
 
+void addBox(
+        WorkoutGameMesh &mesh,
+        double forward,
+        double right,
+        double up,
+        double halfForward,
+        double halfRight,
+        double halfUp,
+        WorkoutGameMeshMaterial side,
+        WorkoutGameMeshMaterial top)
+{
+    const std::uint32_t start = std::uint32_t(mesh.vertices.size());
+    for (int vertical = -1; vertical <= 1; vertical += 2) {
+        for (int lateral = -1; lateral <= 1; lateral += 2) {
+            for (int longitudinal = -1; longitudinal <= 1;
+                 longitudinal += 2) {
+                addVertex(mesh,
+                        forward + longitudinal * halfForward,
+                        right + lateral * halfRight,
+                        up + vertical * halfUp,
+                        longitudinal > 0 ? 1.0 : 0.0,
+                        lateral > 0 ? 1.0 : 0.0);
+            }
+        }
+    }
+    const auto vertex = [start](int vertical, int lateral, int longitudinal) {
+        return start + std::uint32_t(
+                vertical * 4 + lateral * 2 + longitudinal);
+    };
+    addQuad(mesh, vertex(1, 0, 0), vertex(1, 0, 1),
+            vertex(1, 1, 1), vertex(1, 1, 0), top);
+    addQuad(mesh, vertex(0, 1, 0), vertex(0, 1, 1),
+            vertex(0, 0, 1), vertex(0, 0, 0), side);
+    addQuad(mesh, vertex(0, 0, 0), vertex(0, 0, 1),
+            vertex(1, 0, 1), vertex(1, 0, 0), side);
+    addQuad(mesh, vertex(0, 1, 1), vertex(0, 1, 0),
+            vertex(1, 1, 0), vertex(1, 1, 1), side);
+    addQuad(mesh, vertex(0, 0, 1), vertex(0, 1, 1),
+            vertex(1, 1, 1), vertex(1, 0, 1), side);
+    addQuad(mesh, vertex(0, 1, 0), vertex(0, 0, 0),
+            vertex(1, 0, 0), vertex(1, 1, 0), side);
+}
+
 struct SculptedStripSample
 {
     double forward = 0.0;
@@ -286,6 +329,41 @@ WorkoutGameMesh logModel(double difficulty)
     mesh.lengthMeters = radius * 2.0;
     mesh.entry = {-radius, 0.95, 0.0};
     mesh.exit = {radius, 0.95, 0.0};
+    mesh.ready = true;
+    return mesh;
+}
+
+WorkoutGameMesh bunnyHopModel(double difficulty)
+{
+    WorkoutGameMesh mesh;
+    const WorkoutGameFeatureGeometryProfile profile =
+            WorkoutGameFeatureGeometry::profile(
+                WorkoutGameTerrainKind::BunnyHop, difficulty);
+    if (!profile.ready) return mesh;
+    const double beamHalfForward =
+            (profile.plateauEndMeters - profile.plateauStartMeters) * 0.5;
+    const double beamHalfHeight = 0.045;
+    addBox(mesh, 0.0, 0.0, profile.heightMeters - beamHalfHeight,
+           beamHalfForward, 1.02, beamHalfHeight,
+           WorkoutGameMeshMaterial::WoodSide,
+           WorkoutGameMeshMaterial::WoodHighlight);
+    for (double side : {-1.0, 1.0}) {
+        addBox(mesh, 0.0, side * 0.84, profile.heightMeters * 0.47,
+               0.045, 0.055, profile.heightMeters * 0.47,
+               WorkoutGameMeshMaterial::WoodSide,
+               WorkoutGameMeshMaterial::WoodHighlight);
+        addBox(mesh, 0.0, side * 0.84, 0.035,
+               0.28, 0.11, 0.035,
+               WorkoutGameMeshMaterial::WoodSide,
+               WorkoutGameMeshMaterial::WoodTop);
+    }
+    mesh.colliders.push_back({
+        0.0, 0.0, profile.heightMeters - beamHalfHeight,
+        beamHalfForward, 1.02, beamHalfHeight
+    });
+    mesh.lengthMeters = profile.endMeters - profile.startMeters;
+    mesh.entry = {profile.startMeters, 1.02, 0.0};
+    mesh.exit = {profile.endMeters, 1.02, 0.0};
     mesh.ready = true;
     return mesh;
 }
@@ -602,6 +680,7 @@ WorkoutGameMesh WorkoutGameMeshLibrary::feature(
     case WorkoutGameTerrainKind::Climb:
         return climbModel(difficulty);
     case WorkoutGameTerrainKind::BunnyHop:
+        return bunnyHopModel(difficulty);
     case WorkoutGameTerrainKind::LogOver:
         return logModel(difficulty);
     case WorkoutGameTerrainKind::Roots:

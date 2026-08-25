@@ -30,8 +30,20 @@ constexpr double WheelRadiusMeters = 0.36;
 constexpr std::int64_t PhysicsStepMicroseconds = 8333;
 constexpr std::int64_t MaximumCatchupMicroseconds = 1000000;
 constexpr std::int64_t WalkDecisionMicroseconds = 1500000;
+constexpr float BunnyHopLaunchSpeedMetersPerSecond = 3.0f;
 constexpr float TechnicalFeatureLaunchSpeedMetersPerSecond = 4.8f;
 constexpr float TabletopLaunchSpeedMetersPerSecond = 6.6f;
+
+float featureLaunchSpeed(WorkoutGameTerrainKind terrain)
+{
+    if (terrain == WorkoutGameTerrainKind::BunnyHop) {
+        return BunnyHopLaunchSpeedMetersPerSecond;
+    }
+    if (terrain == WorkoutGameTerrainKind::Tabletop) {
+        return TabletopLaunchSpeedMetersPerSecond;
+    }
+    return TechnicalFeatureLaunchSpeedMetersPerSecond;
+}
 
 double finiteOr(double value, double fallback)
 {
@@ -450,10 +462,7 @@ struct WorkoutGamePhysics::Impl
                 && grounded()) {
             if (input.featureActionId != 0
                     && input.featureActionId != lastFeatureActionId) {
-                const float launchSpeed = terrain
-                        == WorkoutGameTerrainKind::Tabletop
-                        ? TabletopLaunchSpeedMetersPerSecond
-                        : TechnicalFeatureLaunchSpeedMetersPerSecond;
+                const float launchSpeed = featureLaunchSpeed(terrain);
                 const float impulse = b2Body_GetMass(chassis) * launchSpeed;
                 b2Body_ApplyLinearImpulseToCenter(
                         chassis, {0.0f, impulse}, true);

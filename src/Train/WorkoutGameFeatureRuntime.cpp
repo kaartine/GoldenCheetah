@@ -55,7 +55,9 @@ WorkoutGameFeatureMotion motionFor(WorkoutGameTerrainKind terrain)
 
 double jumpHeight(WorkoutGameTerrainKind terrain)
 {
-    return terrain == WorkoutGameTerrainKind::Tabletop ? 1.35 : 0.72;
+    if (terrain == WorkoutGameTerrainKind::Tabletop) return 1.35;
+    if (terrain == WorkoutGameTerrainKind::BunnyHop) return 0.42;
+    return 0.72;
 }
 
 double jumpFlightDurationSeconds(
@@ -69,7 +71,15 @@ double jumpFlightDurationSeconds(
     if (terrain == WorkoutGameTerrainKind::Tabletop) {
         return 1.7 + 0.8 * challenge + 2.2 * speedBonus;
     }
+    if (terrain == WorkoutGameTerrainKind::BunnyHop) {
+        return 0.65 + 0.25 * challenge + 0.15 * speedBonus;
+    }
     return 0.9 + 0.5 * challenge + 0.4 * speedBonus;
+}
+
+double minimumJumpTravelMeters(WorkoutGameTerrainKind terrain)
+{
+    return terrain == WorkoutGameTerrainKind::BunnyHop ? 3.2 : 5.5;
 }
 
 }
@@ -209,7 +219,8 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         actionStart = result.physicalTakeoffDistanceMeters;
         actionEnd = std::min(
                 layout.endDistanceMeters,
-                std::max({actionStart + 5.5,
+                std::max({actionStart + minimumJumpTravelMeters(
+                                    piece->terrain),
                          result.obstacleDistanceMeters
                             + geometry.endMeters + 1.5,
                          actionStart + timelineMetersPerSecond

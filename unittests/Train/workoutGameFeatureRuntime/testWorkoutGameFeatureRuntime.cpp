@@ -325,6 +325,49 @@ private slots:
         QVERIFY(tabletop.verticalOffsetMeters > log.verticalOffsetMeters);
     }
 
+    void bunnyHopHasShorterLowerAirThanTheLog()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const auto completed = WorkoutGameFeatureOutcome::Completed;
+        const int bunnySection = sectionFor(
+                course, WorkoutGameTerrainKind::BunnyHop);
+        const int logSection = sectionFor(
+                course, WorkoutGameTerrainKind::LogOver);
+        const WorkoutGameRoadPiece *bunnyPiece =
+                challengePieceFor(road, bunnySection);
+        const WorkoutGameRoadPiece *logPiece =
+                challengePieceFor(road, logSection);
+        QVERIFY(bunnyPiece != nullptr);
+        QVERIFY(logPiece != nullptr);
+        const auto atApex = [&](int section,
+                                const WorkoutGameRoadPiece &piece) {
+            const double takeoff = jumpTakeoffDistance(piece);
+            const WorkoutGameFeatureRuntimeSnapshot layout = runtime.update(
+                    snapshot(section, progressAtDistance(
+                                road, section, takeoff + 0.01), completed));
+            const double distance = layout.actionStartDistanceMeters + 0.30
+                    * (layout.actionEndDistanceMeters
+                       - layout.actionStartDistanceMeters);
+            return runtime.update(snapshot(
+                    section, progressAtDistance(road, section, distance),
+                    completed));
+        };
+        const WorkoutGameFeatureRuntimeSnapshot bunny =
+                atApex(bunnySection, *bunnyPiece);
+        const WorkoutGameFeatureRuntimeSnapshot log =
+                atApex(logSection, *logPiece);
+
+        QVERIFY(bunny.triggerJump);
+        QVERIFY(log.triggerJump);
+        QVERIFY(bunny.verticalOffsetMeters < log.verticalOffsetMeters);
+        QVERIFY(bunny.flightDurationSeconds < log.flightDurationSeconds);
+        QVERIFY(bunny.flightDurationSeconds <= 1.1);
+    }
+
     void jumpArcHasVisibleTakeoffApexAndLanding()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);

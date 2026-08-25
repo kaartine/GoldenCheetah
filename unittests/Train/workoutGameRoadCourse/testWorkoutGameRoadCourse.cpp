@@ -189,6 +189,34 @@ private slots:
         QVERIFY(std::isfinite(obstacle.center.gradePercent));
     }
 
+    void bunnyHopUsesACompactPreloadWindowOnOrdinaryGround()
+    {
+        WorkoutGameCourse course = sampleCourse();
+        course.sections.back().terrain = WorkoutGameTerrainKind::BunnyHop;
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto bunny = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.challenge.enabled
+                            && piece.terrain
+                                == WorkoutGameTerrainKind::BunnyHop;
+                });
+        QVERIFY(bunny != road.pieces.end());
+        const double preloadMeters =
+                bunny->challenge.decisionDistanceMeters
+                - bunny->challenge.prepareDistanceMeters;
+        QVERIFY(preloadMeters > 0.0);
+        QVERIFY(preloadMeters <= 3.0 + 1e-9);
+        QVERIFY(bunny->challenge.obstacleDistanceMeters
+                - bunny->challenge.decisionDistanceMeters <= 4.0 + 1e-9);
+        const WorkoutGameRoadSample obstacle =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, bunny->challenge.obstacleDistanceMeters);
+        QVERIFY(obstacle.ready);
+        QCOMPARE(obstacle.surfaceOffsetMeters, 0.0);
+    }
+
     void generationAndSamplingAreDeterministic()
     {
         const WorkoutGameRoadCourse first =

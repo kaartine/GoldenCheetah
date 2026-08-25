@@ -136,6 +136,46 @@ private slots:
         }
     }
 
+    void bunnyHopUsesADistinctCompactHurdleInsteadOfTheLogMesh()
+    {
+        const WorkoutGameFeatureGeometryProfile bunny =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::BunnyHop, 0.65);
+        const WorkoutGameFeatureGeometryProfile log =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::LogOver, 0.65);
+        QVERIFY(bunny.ready && log.ready);
+        QVERIFY(bunny.startMeters > log.startMeters);
+        QVERIFY(bunny.endMeters < log.endMeters);
+        QVERIFY(bunny.heightMeters < log.heightMeters);
+
+        const WorkoutGameMesh bunnyMesh = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::BunnyHop, 0.65);
+        const WorkoutGameMesh logMesh = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::LogOver, 0.65);
+        QVERIFY(WorkoutGameMeshLibrary::valid(bunnyMesh));
+        QVERIFY(WorkoutGameMeshLibrary::valid(logMesh));
+        QVERIFY(bunnyMesh.lengthMeters < logMesh.lengthMeters);
+        QVERIFY(bunnyMesh.vertices.size() != logMesh.vertices.size()
+                || bunnyMesh.triangles.size() != logMesh.triangles.size());
+    }
+
+    void bunnyHopHurdleDoesNotRaiseTheAuthoritativeTrailSurface()
+    {
+        const WorkoutGameFeatureGeometryProfile easy =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::BunnyHop, 0.0);
+        const WorkoutGameFeatureGeometryProfile hard =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::BunnyHop, 1.0);
+        QVERIFY(easy.ready && hard.ready);
+        QCOMPARE(easy.shape, WorkoutGameFeatureGeometryShape::Hurdle);
+        QCOMPARE(easy.heightMeters, 0.10);
+        QCOMPARE(hard.heightMeters, 0.20);
+        QCOMPARE(easy.surfaceOffset(0.0), 0.0);
+        QCOMPARE(hard.surfaceOffset(0.0), 0.0);
+    }
+
     void trailTilesExposeMatchingPuzzlePieceConnectors()
     {
         const WorkoutGameMesh first = WorkoutGameMeshLibrary::trailTile(
@@ -676,30 +716,25 @@ private slots:
         }
     }
 
-    void facetedObstaclesJoinTheTrailWithoutVerticalTeleport()
+    void facetedLogJoinsTheTrailWithoutVerticalTeleport()
     {
-        const WorkoutGameTerrainKind terrains[] = {
-            WorkoutGameTerrainKind::LogOver,
-            WorkoutGameTerrainKind::BunnyHop
-        };
-        for (WorkoutGameTerrainKind terrain : terrains) {
-            const WorkoutGameFeatureGeometryProfile profile =
-                    WorkoutGameFeatureGeometry::profile(terrain, 0.6);
-            QVERIFY(profile.ready);
-            QCOMPARE(profile.surfaceOffset(profile.startMeters), 0.0);
-            QCOMPARE(profile.surfaceOffset(profile.endMeters), 0.0);
-            QCOMPARE(profile.surfaceOffset(0.0), profile.heightMeters);
-            const double epsilon = 1.0e-5;
-            const double entry = profile.surfaceOffset(
-                    profile.startMeters + epsilon);
-            const double exit = profile.surfaceOffset(
-                    profile.endMeters - epsilon);
-            QVERIFY(entry > 0.0);
-            QVERIFY(exit > 0.0);
-            QVERIFY(entry < 0.01);
-            QVERIFY(exit < 0.01);
-            QVERIFY(std::abs(entry - exit) < 1.0e-12);
-        }
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::LogOver, 0.6);
+        QVERIFY(profile.ready);
+        QCOMPARE(profile.surfaceOffset(profile.startMeters), 0.0);
+        QCOMPARE(profile.surfaceOffset(profile.endMeters), 0.0);
+        QCOMPARE(profile.surfaceOffset(0.0), profile.heightMeters);
+        const double epsilon = 1.0e-5;
+        const double entry = profile.surfaceOffset(
+                profile.startMeters + epsilon);
+        const double exit = profile.surfaceOffset(
+                profile.endMeters - epsilon);
+        QVERIFY(entry > 0.0);
+        QVERIFY(exit > 0.0);
+        QVERIFY(entry < 0.01);
+        QVERIFY(exit < 0.01);
+        QVERIFY(std::abs(entry - exit) < 1.0e-12);
     }
 
     void baseAnchoringDoesNotAddCanonicalObstacleHeightTwice()
