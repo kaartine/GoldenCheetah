@@ -127,8 +127,9 @@ sphere as a final visible rider, feature or hero-environment object.
   the standard cross-platform unit-test inventory.
 - [x] Two Qt Balsam 6.8.3 conversions produce byte-identical QML and `.mesh`
   files; the production qrc loads and renders them in a real X11/OpenGL test.
-- [ ] Verify the production resources from an extracted AppImage before this
-  evidence can complete the full release packaging gate.
+- [x] A clean Ubuntu 22.04/glibc 2.35 release build reproduced the AppImage
+  byte for byte, passed the packaged offscreen event-loop smoke, and exposed
+  both generated tabletop QML and mesh resource names in the extracted ELF.
 
 ## P0 Vertical Slice
 
