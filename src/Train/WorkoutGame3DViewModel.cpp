@@ -186,6 +186,7 @@ void WorkoutGame3DViewModel::setCourse(
     currentLandingImpact = 0.0;
     currentRiderStandingBlend = 0.0;
     currentRiderWalking = false;
+    currentRiderPoseState = QStringLiteral("pedal");
     riderPoseInitialized = false;
     rootCompressionInitialized = false;
     rockCompressionInitialized = false;
@@ -550,6 +551,29 @@ void WorkoutGame3DViewModel::setFrame(
             finiteOrZero(frame.feature.readiness), 0.0, 1.0) * 100.0));
     currentFeatureHud = WorkoutGameFeatureHud::build(
             frame.feature, frame.simulation, currentTargetWatts);
+    if (currentRiderWalking
+            || frame.feature.route == WorkoutGameRoute::SafeBypass) {
+        currentRiderPoseState = QStringLiteral("bypass");
+    } else if (currentRiderAirHeightMeters > 0.05) {
+        currentRiderPoseState = QStringLiteral("air");
+    } else if (currentLandingImpact > 0.20) {
+        currentRiderPoseState = QStringLiteral("land");
+    } else if (frame.feature.ready
+            && frame.feature.phase == WorkoutGameFeaturePhase::Action
+            && (frame.feature.motion == WorkoutGameFeatureMotion::Jump
+                || frame.feature.motion == WorkoutGameFeatureMotion::Drop)) {
+        currentRiderPoseState = QStringLiteral("preload");
+    } else if (frame.feature.ready
+            && frame.feature.phase == WorkoutGameFeaturePhase::Action
+            && frame.feature.motion == WorkoutGameFeatureMotion::Absorb) {
+        currentRiderPoseState = QStringLiteral("absorb");
+    } else if (std::abs(riderRollDegrees) > 2.0) {
+        currentRiderPoseState = QStringLiteral("lean");
+    } else if (currentCadenceRpm <= 5 && currentSpeedKph > 1.0) {
+        currentRiderPoseState = QStringLiteral("coast");
+    } else {
+        currentRiderPoseState = QStringLiteral("pedal");
+    }
     currentFeatureName = currentFeatureHud.visible
             ? terrainText(currentFeatureHud.terrain) : QString();
     currentFeatureActionText = featureActionText(currentFeatureHud);

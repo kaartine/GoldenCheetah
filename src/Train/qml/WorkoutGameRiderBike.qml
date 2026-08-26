@@ -11,6 +11,7 @@ Node {
     required property real pump
     required property real standingBlend
     required property bool walking
+    required property string poseState
     required property real riderPitch
     required property real riderYaw
     required property real riderRoll
@@ -18,20 +19,46 @@ Node {
     readonly property real wheelRadius: 0.3683
     readonly property real wheelAngle:
         -distanceMeters / (2 * Math.PI * wheelRadius) * 360
+    property real actionHeight: poseState === "preload" ? -0.09
+                                : poseState === "air" ? 0.06
+                                : poseState === "land" ? -0.11
+                                : poseState === "absorb" ? -0.06
+                                : poseState === "coast" ? -0.02 : 0
+    property real actionPitch: poseState === "preload" ? 7
+                               : poseState === "air" ? -8
+                               : poseState === "land" ? 10
+                               : poseState === "absorb" ? 5
+                               : poseState === "coast" ? -3
+                               : poseState === "bypass" ? -2 : 0
+    property real actionForward: poseState === "air" ? 0.05
+                                 : poseState === "bypass" ? -0.04 : 0
+    property real coastBlend: poseState === "coast" ? 1 : 0
+
+    Behavior on actionHeight { NumberAnimation { duration: 120 } }
+    Behavior on actionPitch { NumberAnimation { duration: 120 } }
+    Behavior on actionForward { NumberAnimation { duration: 120 } }
+    Behavior on coastBlend { NumberAnimation { duration: 120 } }
+
     readonly property real bodyY: 1.23 + pump + 0.14 * standingBlend
+                                  + actionHeight
                                   - (walking ? 0.10 : 0)
     readonly property real bodyZ: -0.03 + 0.12 * standingBlend
+                                  + actionForward
     readonly property real pelvisY: bodyY - 0.15
     readonly property real pelvisZ: bodyZ - 0.09
     readonly property real crankRadians: pedalAngle * Math.PI / 180
     readonly property vector3d leftPedal: Qt.vector3d(
         -0.13,
-        0.58 + 0.16 * Math.cos(crankRadians),
-        -0.08 + 0.16 * Math.sin(crankRadians))
+        (0.58 + 0.16 * Math.cos(crankRadians)) * (1 - coastBlend)
+            + 0.58 * coastBlend,
+        (-0.08 + 0.16 * Math.sin(crankRadians)) * (1 - coastBlend)
+            + 0.08 * coastBlend)
     readonly property vector3d rightPedal: Qt.vector3d(
         0.13,
-        0.58 - 0.16 * Math.cos(crankRadians),
-        -0.08 - 0.16 * Math.sin(crankRadians))
+        (0.58 - 0.16 * Math.cos(crankRadians)) * (1 - coastBlend)
+            + 0.58 * coastBlend,
+        (-0.08 - 0.16 * Math.sin(crankRadians)) * (1 - coastBlend)
+            - 0.24 * coastBlend)
     readonly property vector3d leftHip: Qt.vector3d(-0.12, pelvisY, pelvisZ)
     readonly property vector3d rightHip: Qt.vector3d(0.12, pelvisY, pelvisZ)
     readonly property vector3d leftKnee: Qt.vector3d(
@@ -204,7 +231,7 @@ Node {
             id: body
             objectName: "riderBodyNode"
             position: Qt.vector3d(0, root.bodyY, root.bodyZ)
-            eulerRotation.x: 13 + 8 * root.standingBlend
+            eulerRotation.x: 13 + 8 * root.standingBlend + root.actionPitch
                                - (root.walking ? 5 : 0)
             Model {
                 source: "assets/meshes/geo_Torso_LOD0_mesh.mesh"

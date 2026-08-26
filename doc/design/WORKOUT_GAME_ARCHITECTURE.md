@@ -422,6 +422,14 @@ the view double-buffers at most twelve slabs with the floor bucket. Per-frame
 work is limited to rider transform and a filtered suspension-derived torso
 response, with no synthetic airtime, camera vibration or geometry rebuild.
 
+The Quick 3D rider uses a separate presentation-only action-state boundary.
+`WorkoutGame3DViewModel` maps the newest immutable world and feature snapshot
+to pedal, coast, preload, air, land, absorb, lean or bypass. The rider QML may
+blend torso, crank and limb presentation for 120 ms, but its root position,
+heading, roll and air clearance remain bound to the ViewModel. There is no
+baked GLB timeline, independent animation clock or root motion, so a delayed
+render frame cannot advance gameplay, physics, trainer control or recording.
+
 #### Course-Space 2.5D Geometry
 
 `WorkoutGameMesh` is the presentation-neutral geometry contract for reusable

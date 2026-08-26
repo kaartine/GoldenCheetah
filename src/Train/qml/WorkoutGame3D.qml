@@ -352,6 +352,7 @@ Item {
             pump: workoutGame3D.riderPump
             standingBlend: workoutGame3D.riderStandingBlend
             walking: workoutGame3D.riderWalking
+            poseState: workoutGame3D.riderPoseState
             riderPitch: workoutGame3D.riderPitch
             riderYaw: workoutGame3D.riderYaw
             riderRoll: workoutGame3D.riderRoll

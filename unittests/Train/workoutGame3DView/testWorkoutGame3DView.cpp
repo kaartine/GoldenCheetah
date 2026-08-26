@@ -1171,6 +1171,112 @@ private slots:
         QVERIFY((secondLeg - firstLeg).length() > 0.5f);
     }
 
+    void riderActionStateFollowsAuthoritativeSnapshots()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::SmoothTrail);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        auto frame = frameAt(road, 8.0);
+        viewModel.setFrame(frame, 190.0, 190.0, 86, 148, 6);
+        QCOMPARE(viewModel.riderPoseState(), QStringLiteral("pedal"));
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        const QString catalogDirectory = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_RIDER_ACTION_CATALOG");
+        const bool renderCatalog = !catalogDirectory.isEmpty()
+                && hasInteractiveGraphicsPlatform();
+        if (renderCatalog) {
+            QVERIFY(QDir().mkpath(catalogDirectory));
+            window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        }
+        QObject *rider = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderNode"));
+        QVERIFY(rider);
+        QImage previousImage;
+        const auto verifyPose = [
+                &viewModel, &window, rider, renderCatalog,
+                &catalogDirectory, &previousImage](const QString &expected) {
+            QCOMPARE(viewModel.riderPoseState(), expected);
+            QCoreApplication::processEvents();
+            QCOMPARE(rider->property("poseState").toString(), expected);
+            QTest::qWait(140);
+            QVERIFY(rider->property("actionHeight").toDouble() >= -0.12);
+            QVERIFY(rider->property("actionHeight").toDouble() <= 0.07);
+            QVERIFY(rider->property("actionPitch").toDouble() >= -9.0);
+            QVERIFY(rider->property("actionPitch").toDouble() <= 11.0);
+            QVERIFY(rider->property("coastBlend").toDouble() >= 0.0);
+            QVERIFY(rider->property("coastBlend").toDouble() <= 1.0);
+            const QVector3D rootPosition =
+                    rider->property("position").value<QVector3D>();
+            const QVector3D physicsPosition(
+                    float(viewModel.riderX()),
+                    float(viewModel.riderY()),
+                    float(viewModel.riderZ()));
+            QVERIFY((rootPosition - physicsPosition).length() < 1.0e-4f);
+            if (renderCatalog) {
+                const QImage image = window.grabWindow();
+                QVERIFY(!image.isNull());
+                QVERIFY(sampledColorCount(image) > 45);
+                if (!previousImage.isNull()) {
+                    QVERIFY2(changedPixels(previousImage, image) > 3,
+                             qPrintable(expected));
+                }
+                if (!catalogDirectory.isEmpty()) {
+                    QVERIFY(image.save(QDir(catalogDirectory).filePath(
+                            expected + QStringLiteral(".png"))));
+                }
+                previousImage = image;
+            }
+        };
+        verifyPose(QStringLiteral("pedal"));
+
+        viewModel.setFrame(frame, 0.0, 190.0, 0, 148, 6);
+        verifyPose(QStringLiteral("coast"));
+
+        frame.feature.motion = WorkoutGameFeatureMotion::Jump;
+        frame.feature.phase = WorkoutGameFeaturePhase::Action;
+        frame.feature.ready = true;
+        viewModel.setFrame(frame, 230.0, 220.0, 90, 150, 7);
+        verifyPose(QStringLiteral("preload"));
+
+        frame.world.rider.airborne = true;
+        frame.world.rider.clearanceMeters = 1.42;
+        viewModel.setFrame(frame, 0.0, 220.0, 0, 150, 7);
+        verifyPose(QStringLiteral("air"));
+
+        frame.world.rider.airborne = false;
+        frame.world.landingImpact = 0.8;
+        viewModel.setFrame(frame, 0.0, 220.0, 0, 150, 7);
+        verifyPose(QStringLiteral("land"));
+
+        frame.world.landingImpact = 0.0;
+        frame.feature.motion = WorkoutGameFeatureMotion::Absorb;
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        verifyPose(QStringLiteral("absorb"));
+
+        frame.feature = {};
+        frame.world.rider.rollDegrees = 8.0;
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        verifyPose(QStringLiteral("lean"));
+
+        frame.world.rider.rollDegrees = 0.0;
+        frame.feature.route = WorkoutGameRoute::SafeBypass;
+        viewModel.setFrame(frame, 180.0, 220.0, 80, 150, 5);
+        verifyPose(QStringLiteral("bypass"));
+    }
+
     void rootsUseFilteredSuspensionMotionWithoutCameraVibration()
     {
         const WorkoutGameCourse course = catalogCourse(

@@ -235,7 +235,7 @@ the bypass rider remains grounded. The completed and bypassed 960 by 540,
 - [x] Select/adapt or author a low-poly 29-inch MTB and articulated rider.
 - [x] Correct forward orientation, wheelbase, axle, crank and steering pivots.
 - [x] Add high-contrast pixel-textured materials and a ground-fixed shadow.
-- [ ] Add pedal, coast, preload, air, land, absorb, lean and bypass clips.
+- [x] Add pedal, coast, preload, air, land, absorb, lean and bypass clips.
 
 **Tests:** node/pivot validation, cadence-to-crank synchronization, wheel
 contact, no root motion, animation bounds and catalog/video captures.
@@ -258,8 +258,13 @@ jersey, shorts and helmet use the shared low-contrast rider pixel tile while
 retaining their high-contrast palette; minification is mipmapped and the
 airborne shadow remains fixed to the terrain. Asset tests require
 `TEXCOORD_0` on every GLB primitive and runtime tests verify all four materials
-bind the packaged texture. The complete authored action-state set remains
-open.
+bind the packaged texture. The ViewModel selects pedal, coast, preload, air,
+land, absorb, lean or bypass directly from each authoritative world/feature
+snapshot. QML applies bounded 120 ms body and crank blends without changing
+the rider root. One test drives all eight states, verifies pose bounds and
+exact root/physics agreement, and renders a distinct 960 by 540 image for each
+state. The catalog contact sheet SHA-256 is
+`3f03a981a6a7d276ba89211ca74f2d441665329cc2a65fed14c987d9fe3479dc`.
 
 ### `VS-04` Validate the vertical slice end to end
 

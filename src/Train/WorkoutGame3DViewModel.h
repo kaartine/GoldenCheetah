@@ -58,6 +58,7 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(double riderStandingBlend READ riderStandingBlend
                NOTIFY sceneChanged)
     Q_PROPERTY(bool riderWalking READ riderWalking NOTIFY sceneChanged)
+    Q_PROPERTY(QString riderPoseState READ riderPoseState NOTIFY sceneChanged)
     Q_PROPERTY(double pedalAngle READ pedalAngle NOTIFY sceneChanged)
     Q_PROPERTY(double speedKph READ speedKph NOTIFY sceneChanged)
     Q_PROPERTY(double distanceMeters READ distanceMeters NOTIFY sceneChanged)
@@ -179,6 +180,7 @@ public:
     double landingImpact() const { return currentLandingImpact; }
     double riderStandingBlend() const { return currentRiderStandingBlend; }
     bool riderWalking() const { return currentRiderWalking; }
+    QString riderPoseState() const { return currentRiderPoseState; }
     double pedalAngle() const { return currentPedalAngle; }
     double speedKph() const { return currentSpeedKph; }
     double distanceMeters() const { return currentDistanceMeters; }
@@ -314,6 +316,7 @@ private:
     double currentLandingImpact = 0.0;
     double currentRiderStandingBlend = 0.0;
     bool currentRiderWalking = false;
+    QString currentRiderPoseState = QStringLiteral("pedal");
     bool rootCompressionInitialized = false;
     double previousRootCompression = 0.0;
     std::int64_t lastRiderPoseTimeMs = -1;

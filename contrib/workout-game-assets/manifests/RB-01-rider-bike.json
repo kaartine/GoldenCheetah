@@ -45,7 +45,7 @@
     {
       "path": "src/Train/qml/WorkoutGameRiderBike.qml",
       "purpose": "runtime",
-      "sha256": "e54613bb799db9b39cb9f6f8847902ecd2eae5053eab94362bf5581ee33371c8"
+      "sha256": "2773d66ed8b52121e499ff6a44e8b7f893c06760cee3c303c5233706b9d731f5"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh",
@@ -109,7 +109,8 @@
       "Validate with the repository GLB policy and reproduce the GLB byte for byte.",
       "Convert the reviewed GLB twice with Qt Balsam 6.8.3 and compare every output byte.",
       "Bind the converted meshes to the deterministic runtime pose properties in WorkoutGameRiderBike.qml.",
-      "Apply the shared project-authored rider pixel tile to the bike, jersey, shorts and helmet with mipmapped minification."
+      "Apply the shared project-authored rider pixel tile to the bike, jersey, shorts and helmet with mipmapped minification.",
+      "Blend pedal, coast, preload, air, land, absorb, lean and bypass poses from the authoritative runtime snapshot without root motion."
     ]
   },
   "technical": {
@@ -160,6 +161,6 @@
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
     "reviewedAt": "2026-08-26",
-    "notes": "Approved project-authored low-poly rider and 29er bicycle asset. Deterministic Blender and Balsam reproduction, UV and texture policy validation, integrated X11/OpenGL rendering, wheel/crank/leg transform tests and a 72-frame completed tabletop motion review passed. Additional action clips remain a separate integration task."
+    "notes": "Approved project-authored low-poly rider and 29er bicycle asset. Deterministic Blender and Balsam reproduction, UV and texture policy validation, integrated X11/OpenGL rendering, wheel/crank/leg transform tests, an eight-state action catalog and a 72-frame completed tabletop motion review passed. Runtime poses are snapshot-driven and intentionally use no baked GLB animation or root motion."
   }
 }
