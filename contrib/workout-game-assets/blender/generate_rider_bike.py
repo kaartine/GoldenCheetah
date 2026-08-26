@@ -132,6 +132,20 @@ def create_mesh(root, name, vertices, faces, material):
         raise RuntimeError(f"Blender repaired generated geometry in {name}")
     for polygon in mesh.polygons:
         polygon.use_smooth = False
+    spans = [
+        max(point[axis] for point in vertices)
+        - min(point[axis] for point in vertices)
+        for axis in range(3)
+    ]
+    axes = sorted(range(3), key=lambda axis: spans[axis], reverse=True)[:2]
+    minima = [min(point[axis] for point in vertices) for axis in axes]
+    uv_layer = mesh.uv_layers.new(name="UVMap")
+    for loop in mesh.loops:
+        point = vertices[loop.vertex_index]
+        uv_layer.data[loop.index].uv = (
+            (point[axes[0]] - minima[0]) / max(spans[axes[0]], EPSILON),
+            (point[axes[1]] - minima[1]) / max(spans[axes[1]], EPSILON),
+        )
     result = bpy.data.objects.new(name=name, object_data=mesh)
     bpy.context.collection.objects.link(result)
     result.parent = root
@@ -374,6 +388,12 @@ def self_check(root) -> tuple[int, int]:
         if any(polygon.loop_total != 3 or polygon.area <= EPSILON
                for polygon in obj.data.polygons):
             raise RuntimeError(f"{name} has invalid triangles")
+        if len(obj.data.uv_layers) != 1:
+            raise RuntimeError(f"{name} must have exactly one UV map")
+        if any(not all(math.isfinite(value) and -EPSILON <= value <= 1.0 + EPSILON
+                       for value in uv.uv)
+               for uv in obj.data.uv_layers[0].data):
+            raise RuntimeError(f"{name} has invalid UV coordinates")
         triangle_count += len(obj.data.polygons)
         vertex_count += len(obj.data.vertices)
     if triangle_count > 1400:

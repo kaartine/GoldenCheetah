@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/generate_surface_atlas.py",
     "retrievedAt": "2026-08-26",
     "originalFileName": "generate_surface_atlas.py",
-    "originalSha256": "7c9e0177207b37d4aa82f4b8788da92d38013d1588294451ba70c017c05607ff",
+    "originalSha256": "7aad9dc0ee23ff9bd8d96768edf66e171fe002335aa9ffb8d8978ccb90facbcf",
     "generator": "Python standard library",
     "generatorVersion": "3.12",
     "promptOrScript": "contrib/workout-game-assets/generate_surface_atlas.py"
@@ -31,12 +31,12 @@
     {
       "path": "contrib/workout-game-assets/generate_surface_atlas.py",
       "purpose": "source",
-      "sha256": "7c9e0177207b37d4aa82f4b8788da92d38013d1588294451ba70c017c05607ff"
+      "sha256": "7aad9dc0ee23ff9bd8d96768edf66e171fe002335aa9ffb8d8978ccb90facbcf"
     },
     {
       "path": "src/Resources/images/workout-game-surface-atlas.png",
       "purpose": "texture",
-      "sha256": "22e5896d0d32a2d90bfbc60c2fe53c95b6482c27d0c7c4e69758ca5f80ee7c68"
+      "sha256": "e7c9ac93e10b43b19b69dcf193272793ff8c0331f21a6b3b5fa0f071fe8fbfcd"
     },
     {
       "path": "src/Resources/images/workout-game-surface-forest.png",
@@ -57,17 +57,22 @@
       "path": "src/Resources/images/workout-game-surface-wood.png",
       "purpose": "texture",
       "sha256": "6b4d6c2ff12cc9c41c10d6c3b6801d779cceb3c9bf87e9fc0185014de828c27f"
+    },
+    {
+      "path": "src/Resources/images/workout-game-surface-rider.png",
+      "purpose": "texture",
+      "sha256": "6d7d4395be1ee3aa1b9c4f6c04fd362aede586b320280ee62abce72a9744d552"
     }
   ],
   "processing": {
     "tool": "Python standard library",
     "toolVersion": "3.12",
     "steps": [
-      "Generate four fixed RGBA palettes with deterministic irregular four-pixel blocks.",
-      "Assemble forest, dirt, stone and wood into one 64 by 64 master atlas.",
-      "Export four 32 by 32 runtime tiles from the same source pixels.",
+      "Generate five fixed RGBA palettes with deterministic irregular four-pixel blocks.",
+      "Assemble forest, dirt, stone, wood and rider detail into one 96 by 64 master atlas.",
+      "Export five 32 by 32 runtime tiles from the same source pixels.",
       "Encode all PNG scanlines with filter zero and zlib level nine.",
-      "Package every image in qrc and sample runtime tiles with nearest filtering and repeat tiling."
+      "Package every image in qrc and sample runtime tiles with repeat wrapping, nearest magnification, linear minification and mipmaps."
     ]
   },
   "technical": {
@@ -75,14 +80,14 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "materials": 4,
-    "textureBytes": 1263,
+    "materials": 5,
+    "textureBytes": 1561,
     "animations": [],
     "allowedExtensions": [],
     "budgets": {
       "maxGlbBytes": 1,
       "maxTrianglesLod0": 0,
-      "maxMaterials": 4,
+      "maxMaterials": 5,
       "maxTextureBytes": 16384
     }
   },

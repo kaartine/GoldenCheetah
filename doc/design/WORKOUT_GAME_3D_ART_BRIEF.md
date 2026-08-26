@@ -24,7 +24,7 @@ those elements.
 ## Texture Contract
 
 `contrib/workout-game-assets/generate_surface_atlas.py` is the authoritative,
-deterministic source for the shared 64 by 64 atlas and its four 32 by 32
+deterministic source for the shared 96 by 64 atlas and its five 32 by 32
 runtime tiles. The tiles contain four-pixel blocks and use no external image
 input. Runtime uses repeat wrapping, nearest magnification, linear minification
 and mipmaps. This keeps close pixels crisp while suppressing distant shimmer.

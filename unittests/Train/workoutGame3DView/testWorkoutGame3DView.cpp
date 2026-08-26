@@ -1127,10 +1127,24 @@ private slots:
                 QStringLiteral("crankPivot"));
         QObject *lowerLeg = window.rootObject()->findChild<QObject *>(
                 QStringLiteral("leftLowerLeg"));
+        QObject *riderTexture = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderPixelTexture"));
         QVERIFY(rearWheel);
         QVERIFY(frontWheel);
         QVERIFY(crank);
         QVERIFY(lowerLeg);
+        QVERIFY(riderTexture);
+        for (const QString &materialName : {
+                 QStringLiteral("riderBikeMaterial"),
+                 QStringLiteral("riderJerseyMaterial"),
+                 QStringLiteral("riderShortsMaterial"),
+                 QStringLiteral("riderHelmetMaterial")}) {
+            QObject *material = window.rootObject()->findChild<QObject *>(
+                    materialName);
+            QVERIFY2(material, qPrintable(materialName));
+            QCOMPARE(material->property("baseColorMap").value<QObject *>(),
+                     riderTexture);
+        }
         const QVector3D firstRear =
                 rearWheel->property("eulerRotation").value<QVector3D>();
         const QVector3D firstFront =

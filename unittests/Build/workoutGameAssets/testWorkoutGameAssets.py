@@ -80,6 +80,9 @@ SURFACE_ATLAS_PATH = (
     REPOSITORY
     / "src/Resources/images/workout-game-surface-atlas.png"
 )
+SURFACE_TILE_NAMES = (
+    "atlas", "forest", "dirt", "stone", "wood", "rider"
+)
 
 
 def sha256(path: Path) -> str:
@@ -318,12 +321,19 @@ class TestWorkoutGameAssets(unittest.TestCase):
             nodes["PIVOT_REAR_AXLE"]["translation"][1], 0.3683, places=4
         )
         self.assertLessEqual(manifest["technical"]["trianglesLod0"], 1400)
+        for mesh in document["meshes"]:
+            for primitive in mesh["primitives"]:
+                self.assertIn("TEXCOORD_0", primitive["attributes"])
 
         runtime_qml = (
             REPOSITORY / "src/Train/qml/WorkoutGameRiderBike.qml"
         ).read_text(encoding="utf-8")
         for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
             self.assertNotIn(primitive, runtime_qml)
+        self.assertIn("workout-game-surface-rider.png", runtime_qml)
+        self.assertGreaterEqual(
+            runtime_qml.count("baseColorMap: riderPixelTexture"), 4
+        )
 
     def test_conifer_set_has_varied_bounded_project_authored_silhouettes(self) -> None:
         document, size = assets.read_glb(CONIFER_GLB_PATH)
@@ -354,14 +364,14 @@ class TestWorkoutGameAssets(unittest.TestCase):
         manifest = assets.load_json_file(SURFACE_MANIFEST_PATH)
         atlas = SURFACE_ATLAS_PATH.read_bytes()
         self.assertEqual(atlas[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(struct.unpack(">II", atlas[16:24]), (64, 64))
+        self.assertEqual(struct.unpack(">II", atlas[16:24]), (96, 64))
         self.assertEqual(atlas[24:29], bytes((8, 6, 0, 0, 0)))
         runtime_texture_bytes = sum(
             (
                 REPOSITORY
                 / f"src/Resources/images/workout-game-surface-{name}.png"
             ).stat().st_size
-            for name in ("atlas", "forest", "dirt", "stone", "wood")
+            for name in SURFACE_TILE_NAMES
         )
         self.assertEqual(
             manifest["technical"]["textureBytes"], runtime_texture_bytes
@@ -382,7 +392,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 stdout=subprocess.DEVNULL,
             )
             generated = Path(temporary)
-            for name in ("atlas", "forest", "dirt", "stone", "wood"):
+            for name in SURFACE_TILE_NAMES:
                 expected = (
                     REPOSITORY
                     / f"src/Resources/images/workout-game-surface-{name}.png"
@@ -397,10 +407,10 @@ class TestWorkoutGameAssets(unittest.TestCase):
         qml = (
             REPOSITORY / "src/Train/qml/WorkoutGame3D.qml"
         ).read_text(encoding="utf-8")
-        for name in ("atlas", "forest", "dirt", "stone", "wood"):
+        for name in SURFACE_TILE_NAMES:
             filename = f"workout-game-surface-{name}.png"
             self.assertIn(filename, qrc)
-            if name != "atlas":
+            if name not in ("atlas", "rider"):
                 self.assertIn(filename, qml)
         self.assertEqual(qml.count("minFilter: Texture.Linear"), 4)
         self.assertEqual(qml.count("magFilter: Texture.Nearest"), 4)

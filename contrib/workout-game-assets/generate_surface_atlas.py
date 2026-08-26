@@ -17,6 +17,7 @@ PALETTES = {
     "dirt": ((244, 232, 210), (236, 218, 193), (249, 238, 218), (229, 207, 181)),
     "stone": ((235, 236, 232), (220, 224, 220), (243, 241, 231), (211, 216, 213)),
     "wood": ((238, 220, 194), (224, 199, 166), (245, 231, 207), (211, 183, 149)),
+    "rider": ((255, 255, 255), (246, 246, 242), (238, 239, 235), (250, 249, 245)),
 }
 
 
@@ -65,23 +66,26 @@ def tile_pixels(name: str) -> bytes:
     return bytes(result)
 
 
-def atlas_pixels(tiles: dict[str, bytes]) -> bytes:
-    order = (("forest", "dirt"), ("stone", "wood"))
-    size = TILE_SIZE * 2
-    result = bytearray(size * size * 4)
+def atlas_pixels(tiles: dict[str, bytes]) -> tuple[int, int, bytes]:
+    order = (("forest", "dirt", "stone"), ("wood", "rider", None))
+    width = TILE_SIZE * 3
+    height = TILE_SIZE * 2
+    result = bytearray(width * height * 4)
     for tile_y, row in enumerate(order):
         for tile_x, name in enumerate(row):
+            if name is None:
+                continue
             source = tiles[name]
             for y_value in range(TILE_SIZE):
                 source_start = y_value * TILE_SIZE * 4
                 target_start = (
-                    (tile_y * TILE_SIZE + y_value) * size
+                    (tile_y * TILE_SIZE + y_value) * width
                     + tile_x * TILE_SIZE
                 ) * 4
                 result[target_start:target_start + TILE_SIZE * 4] = (
                     source[source_start:source_start + TILE_SIZE * 4]
                 )
-    return bytes(result)
+    return width, height, bytes(result)
 
 
 def generate(output_directory: Path) -> None:
@@ -91,8 +95,8 @@ def generate(output_directory: Path) -> None:
         path = output_directory / f"workout-game-surface-{name}.png"
         path.write_bytes(encode_png(TILE_SIZE, TILE_SIZE, pixels))
     atlas = output_directory / "workout-game-surface-atlas.png"
-    atlas.write_bytes(encode_png(
-        TILE_SIZE * 2, TILE_SIZE * 2, atlas_pixels(tiles)))
+    atlas_width, atlas_height, pixels = atlas_pixels(tiles)
+    atlas.write_bytes(encode_png(atlas_width, atlas_height, pixels))
 
 
 def main() -> None:

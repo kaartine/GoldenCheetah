@@ -234,7 +234,7 @@ the bypass rider remains grounded. The completed and bypassed 960 by 540,
 
 - [x] Select/adapt or author a low-poly 29-inch MTB and articulated rider.
 - [x] Correct forward orientation, wheelbase, axle, crank and steering pivots.
-- [ ] Add high-contrast pixel-textured materials and a ground-fixed shadow.
+- [x] Add high-contrast pixel-textured materials and a ground-fixed shadow.
 - [ ] Add pedal, coast, preload, air, land, absorb, lean and bypass clips.
 
 **Tests:** node/pivot validation, cadence-to-crank synchronization, wheel
@@ -253,8 +253,13 @@ distance, while crank and articulated leg transforms follow pedal cycles;
 standing, walking, terrain pump, root pitch/roll and ground-fixed airborne
 shadow use the existing authoritative ViewModel values. The asset-policy suite
 rejects final rider QML containing built-in cube, cylinder, cone or sphere
-meshes. Flat high-contrast materials are present, but a coherent pixel-texture
-pass and the complete authored action-clip set remain open.
+meshes. Every authored rider mesh now exports one normalized UV channel. Bike,
+jersey, shorts and helmet use the shared low-contrast rider pixel tile while
+retaining their high-contrast palette; minification is mipmapped and the
+airborne shadow remains fixed to the terrain. Asset tests require
+`TEXCOORD_0` on every GLB primitive and runtime tests verify all four materials
+bind the packaged texture. The complete authored action-state set remains
+open.
 
 ### `VS-04` Validate the vertical slice end to end
 
@@ -781,7 +786,7 @@ unexpected airborne frames while sustaining about 71 FPS median.
 
 ## P1 Art, Environment And Feedback
 
-- [ ] `ART-01` Apply one coherent low-poly/pixel-textured palette and atlas.
+- [x] `ART-01` Apply one coherent low-poly/pixel-textured palette and atlas.
 - [ ] `ENV-01` Add varied forest silhouettes, uneven terrain and restrained fog.
 - [x] `ENV-02` Eliminate tree pop, floating bases and buried visible geometry.
 - [ ] `FX-01` Add bounded contact shadow, landing dust and success feedback.
@@ -802,19 +807,21 @@ contains no external content, reproduces byte for byte through Blender and
 Balsam, passes manifest and primitive-rejection tests, and remains inside the
 existing ten-tree/50-draw-call runtime budgets.
 
-**ART-01 partial evidence:** the approved
+**ART-01 evidence:** the approved
 `WORKOUT_GAME_3D_ART_BRIEF.md` fixes the visual hierarchy, palette, sampling,
 socket continuity and performance rules. Project-authored `TR-08` generates a
-64 by 64 master atlas and four 32 by 32 forest, dirt, stone and wood runtime
-tiles without external input. The 1,263-byte package reproduces byte for byte,
-passes 19 asset-policy tests and manifest validation, and loads through the
-production qrc. Runtime repeat wrapping, nearest magnification, linear
-minification and mipmaps retain close pixel blocks without distant shimmer.
+96 by 64 master atlas and five 32 by 32 forest, dirt, stone, wood and rider
+runtime tiles without external input. The 1,561-byte package reproduces byte
+for byte, passes 19 asset-policy tests and manifest validation, and loads
+through the production qrc. Runtime repeat wrapping, nearest magnification,
+linear minification and mipmaps retain close pixel blocks without distant
+shimmer.
 Real X11/OpenGL still and 72-frame completed/bypassed tabletop tests preserve
-path readability, opaque coverage and render budgets. The reviewed completed
-motion artifact is 960 by 540, 15 FPS and 4.8 seconds with SHA-256
-`e58ea3c2975bd412857d284658fd089772bbc552e4f03cf1ea6c5eee26eb2d3e`.
-`ART-01` remains open until rider/bike materials use the same art direction.
+path readability, opaque coverage and render budgets. The rider, bike, jersey,
+shorts and helmet use the rider tile through deterministic GLB UVs while
+retaining their high-contrast silhouettes. The reviewed completed motion
+artifact is 960 by 540, 15 FPS and 4.8 seconds with SHA-256
+`ead5742155c468cbaa9908a2aaa46338529d52164d7eb4b8be5e7afb160e9f21`.
 
 ## Diagnostics And Performance
 

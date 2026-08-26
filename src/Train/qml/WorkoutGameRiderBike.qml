@@ -41,6 +41,17 @@ Node {
         0.13, (rightHip.y + rightPedal.y) * 0.5 + 0.12,
         (rightHip.z + rightPedal.z) * 0.5 + 0.10)
 
+    Texture {
+        id: riderPixelTexture
+        objectName: "riderPixelTexture"
+        source: "qrc:/images/workout-game-surface-rider.png"
+        tilingModeHorizontal: Texture.Repeat
+        tilingModeVertical: Texture.Repeat
+        minFilter: Texture.Linear
+        magFilter: Texture.Nearest
+        generateMipmaps: true
+    }
+
     function segmentLength(from, to) {
         const dx = to.x - from.x
         const dy = to.y - from.y
@@ -61,7 +72,9 @@ Node {
 
     PrincipledMaterial {
         id: bikeMaterial
+        objectName: "riderBikeMaterial"
         baseColor: "#e6a51b"
+        baseColorMap: riderPixelTexture
         metalness: 0.15
         roughness: 0.62
     }
@@ -72,12 +85,16 @@ Node {
     }
     PrincipledMaterial {
         id: jerseyMaterial
+        objectName: "riderJerseyMaterial"
         baseColor: "#d7322d"
+        baseColorMap: riderPixelTexture
         roughness: 0.84
     }
     PrincipledMaterial {
         id: shortsMaterial
+        objectName: "riderShortsMaterial"
         baseColor: "#20272b"
+        baseColorMap: riderPixelTexture
         roughness: 0.90
     }
     PrincipledMaterial {
@@ -87,7 +104,9 @@ Node {
     }
     PrincipledMaterial {
         id: helmetMaterial
+        objectName: "riderHelmetMaterial"
         baseColor: "#ffc229"
+        baseColorMap: riderPixelTexture
         roughness: 0.72
     }
     PrincipledMaterial {
