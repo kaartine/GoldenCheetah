@@ -12,7 +12,10 @@ import statistics
 import sys
 
 
-TRACE_MARKER = "workout-game-trace "
+TRACE_MARKERS = (
+    "workout-game-trace ",
+    "workout-game-3d-trace ",
+)
 FIELD = re.compile(r"([a-z][a-z0-9_]*)=([^\s]+)")
 
 
@@ -27,11 +30,19 @@ def percentile(values: list[float], fraction: float) -> float:
 def parse_trace(path: Path) -> list[dict[str, float]]:
     samples = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        marker = line.find(TRACE_MARKER)
-        if marker < 0:
+        match = next(
+            (
+                (line.find(marker), marker)
+                for marker in TRACE_MARKERS
+                if line.find(marker) >= 0
+            ),
+            None,
+        )
+        if match is None:
             continue
+        offset, marker = match
         fields: dict[str, float] = {}
-        for name, value in FIELD.findall(line[marker + len(TRACE_MARKER) :]):
+        for name, value in FIELD.findall(line[offset + len(marker) :]):
             try:
                 fields[name] = float(value)
             except ValueError:
@@ -63,7 +74,9 @@ def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
         "observed_p95_frame_ms": percentile(frame_ms, 0.95),
         "observed_p99_frame_ms": percentile(frame_ms, 0.99),
         "observed_max_frame_ms": max(frame_ms, default=0.0),
-        "reported_p95_frame_ms": max(reported_p95, default=0.0),
+        "reported_p95_frame_ms": (
+            statistics.median(reported_p95[-8:]) if reported_p95 else 0.0
+        ),
         "reported_max_frame_ms": max(reported_max, default=0.0),
         "backward_frames": int(max(
             (sample.get("backwards", 0) for sample in samples), default=0

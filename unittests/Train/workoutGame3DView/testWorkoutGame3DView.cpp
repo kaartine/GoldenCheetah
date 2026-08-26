@@ -1004,6 +1004,7 @@ private slots:
         QVERIFY(trace.contains(QStringLiteral("p50_frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("p95_frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("p99_frame_ms=")));
+        QVERIFY(trace.contains(QStringLiteral("frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("geometry_queue=")));
         QVERIFY(trace.contains(QStringLiteral("presentation_work_ms=")));
         QVERIFY(trace.contains(QStringLiteral("feature_phase=measure")));
@@ -1013,6 +1014,14 @@ private slots:
         QVERIFY(trace.contains(QStringLiteral("action_id=17")));
         QVERIFY(trace.contains(QStringLiteral("rear_contact=1")));
         QVERIFY(trace.contains(QStringLiteral("front_contact=0")));
+        QVERIFY(trace.contains(QStringLiteral("lateral_m=")));
+        QVERIFY(trace.contains(QStringLiteral(
+                "unexpected_airborne_frames=0")));
+        QVERIFY(trace.contains(QStringLiteral("watts=225")));
+        QVERIFY(trace.contains(QStringLiteral("target_watts=220")));
+        QVERIFY(trace.contains(QStringLiteral("cadence=88")));
+        QVERIFY(trace.contains(QStringLiteral("hr=149")));
+        QVERIFY(trace.contains(QStringLiteral("gear=8")));
         QVERIFY(trace.contains(QStringLiteral("camera_pos=")));
         QVERIFY(trace.contains(QStringLiteral("camera_target=")));
         QVERIFY(trace.contains(QStringLiteral("rider_asset=RB-01")));

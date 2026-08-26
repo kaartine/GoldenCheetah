@@ -166,7 +166,9 @@ fi
 
 if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
     TRACE_LOG=$ARTIFACT_DIR/application.log
-    if [ -f "$ARTIFACT_DIR/goldencheetah.log" ]; then
+    if [ -f "$ARTIFACT_DIR/goldencheetah.log" ] && \
+        grep -Eq 'workout-game(-3d)?-trace ' \
+            "$ARTIFACT_DIR/goldencheetah.log"; then
         TRACE_LOG=$ARTIFACT_DIR/goldencheetah.log
     fi
     python3 "$SCRIPT_DIR/analyze_workout_game.py" \

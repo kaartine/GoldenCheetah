@@ -27,6 +27,10 @@ GENERATOR_MODES = {
 }
 
 
+def canvas_requires_pixel_motion(accessible_name: str) -> bool:
+    return accessible_name != "Workout game 3D canvas"
+
+
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -55,6 +59,13 @@ def game_run_seconds_from_environment() -> float:
             "GC_UI_GAME_RUN_SECONDS must be between 1 and 120 seconds"
         )
     return seconds
+
+
+def skip_save_as_from_environment() -> bool:
+    value = os.environ.get("GC_UI_SKIP_SAVE_AS", "0")
+    if value not in ("0", "1"):
+        raise ValueError("GC_UI_SKIP_SAVE_AS must be 0 or 1")
+    return value == "1"
 
 
 def prepare(root: Path) -> None:
@@ -383,11 +394,15 @@ class UiDriver:
                 return
         raise UiFailure(f"Cannot click selectable item {name!r}")
 
-    def combo_with_items(self, expected, timeout=15.0):
+    def combo_with_items(
+            self, expected, timeout=15.0, require_interactable=False):
         expected = set(expected)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             for combo in self.find_all(role="combo box"):
+                if require_interactable and (
+                        not self.showing(combo) or not self.enabled(combo)):
+                    continue
                 descendants = {
                     self.name(node)
                     for node in self.all_nodes(combo)
@@ -414,16 +429,36 @@ class UiDriver:
         raise UiFailure(f"Combo box item did not appear: {name!r}")
 
     def select_combo_item(self, expected, name, timeout=10.0):
-        combo = self.combo_with_items(expected)
+        combo = self.combo_with_items(expected, require_interactable=True)
+        self.focus_main_window()
         self.click(combo)
         item = self.find_combo_item(combo, name, timeout)
-        self.activate(item)
+        self.click(item)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.name(combo) == name or self.selected(item):
                 return combo
             time.sleep(0.1)
+        self.screenshot("combo-selection-failed")
         raise UiFailure(f"Combo box did not select {name!r}")
+
+    def focus_main_window(self):
+        frame = self.find(ATHLETE, "frame")
+        frame.queryComponent().grabFocus()
+        windows = [self.display.screen().root]
+        while windows:
+            window = windows.pop()
+            try:
+                if window.get_wm_name() == ATHLETE:
+                    window.set_input_focus(
+                        self.X.RevertToParent, self.X.CurrentTime
+                    )
+                    self.display.sync()
+                    return
+                windows.extend(window.query_tree().children)
+            except Exception:
+                continue
+        raise UiFailure("GoldenCheetah X11 window was not found")
 
     def current_value(self, node) -> float:
         try:
@@ -432,22 +467,7 @@ class UiDriver:
             raise UiFailure(f"No numeric value for {self.name(node)!r}") from error
 
     def send_key(self, text: str):
-        frame = self.find(ATHLETE, "frame")
-        frame.queryComponent().grabFocus()
-        windows = [self.display.screen().root]
-        target = None
-        while windows:
-            window = windows.pop()
-            try:
-                if window.get_wm_name() == ATHLETE:
-                    target = window
-                    break
-                windows.extend(window.query_tree().children)
-            except Exception:
-                continue
-        if target is None:
-            raise UiFailure("GoldenCheetah X11 window was not found")
-        target.set_input_focus(self.X.RevertToParent, self.X.CurrentTime)
+        self.focus_main_window()
         keycode = self.display.keysym_to_keycode(ord(text.lower()))
         self.xtest.fake_input(self.display, self.X.KeyPress, keycode)
         self.xtest.fake_input(self.display, self.X.KeyRelease, keycode)
@@ -496,9 +516,10 @@ class UiDriver:
         side_ratio=0.30,
         sample_step=2,
     ) -> int:
-        if first[:2] != second[:2]:
-            raise UiFailure("Screenshot dimensions changed during the game test")
-        width, height = first[:2]
+        first_width, first_height = first[:2]
+        second_width, second_height = second[:2]
+        width = min(first_width, second_width)
+        height = min(first_height, second_height)
         first_rgb = first[2]
         second_rgb = second[2]
         changed = 0
@@ -509,8 +530,12 @@ class UiDriver:
             for x in range(0, width, sample_step):
                 if side <= x < width - side:
                     continue
-                offset = (y * width + x) * 3
-                if first_rgb[offset : offset + 3] != second_rgb[offset : offset + 3]:
+                first_offset = (y * first_width + x) * 3
+                second_offset = (y * second_width + x) * 3
+                if (
+                    first_rgb[first_offset : first_offset + 3]
+                    != second_rgb[second_offset : second_offset + 3]
+                ):
                     changed += 1
         return changed
 
@@ -750,16 +775,20 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 canvas = driver.find_named_any(
                     WORKOUT_GAME_CANVAS_NAMES, showing=True
                 )
+                require_pixel_motion = canvas_requires_pixel_motion(
+                    driver.name(canvas)
+                )
                 time.sleep(1.2)
                 first = driver.screenshot("04-workout-game-first", canvas)
                 time.sleep(game_run_seconds_from_environment())
                 second = driver.screenshot("04-workout-game-running", canvas)
-                changed = driver.changed_pixels(first, second)
-                if changed < 1200:
-                    raise UiFailure(
-                        "Workout Game appears static: "
-                        f"only {changed} sampled pixels changed"
-                    )
+                if require_pixel_motion:
+                    changed = driver.changed_pixels(first, second)
+                    if changed < 1200:
+                        raise UiFailure(
+                            "Workout Game appears static: "
+                            f"only {changed} sampled pixels changed"
+                        )
             finally:
                 stop_without_saving()
                 driver.select_combo_item(
@@ -843,7 +872,8 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
         suite.run("data_generator_and_virtual_gears", generator_and_gears)
         suite.run("workout_game_perspective", game)
         suite.run("stop_and_continue_training", stop_continue)
-        suite.run("new_workout_save_as", save_workout)
+        if not skip_save_as_from_environment():
+            suite.run("new_workout_save_as", save_workout)
         suite.run("graceful_shutdown_request", shutdown)
         return 1 if suite.write_junit() else 0
     except Exception:

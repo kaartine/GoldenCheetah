@@ -22,6 +22,14 @@ UI_SPEC.loader.exec_module(UI)
 
 
 class AnalyzeWorkoutGameTest(unittest.TestCase):
+    def test_native_quick_3d_canvas_uses_trace_for_motion_gate(self):
+        self.assertFalse(
+            UI.canvas_requires_pixel_motion("Workout game 3D canvas")
+        )
+        self.assertTrue(
+            UI.canvas_requires_pixel_motion("Workout game canvas")
+        )
+
     def test_find_named_any_accepts_the_quick_3d_canvas(self):
         quick_3d_canvas = object()
         driver = object.__new__(UI.UiDriver)
@@ -57,10 +65,14 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         item = object()
         driver = object.__new__(UI.UiDriver)
         driver.combo_with_items = mock.Mock(return_value=combo)
+        driver.focus_main_window = mock.Mock()
         driver.click = mock.Mock()
-        driver.activate = mock.Mock()
         driver.find_combo_item = mock.Mock(return_value=item)
-        driver.name = mock.Mock(return_value="Workout Game")
+        driver.name = mock.Mock(
+            side_effect=lambda node: (
+                "Workout Editor" if node is item else "Workout Game"
+            )
+        )
         driver.selected = mock.Mock(return_value=True)
 
         selected = driver.select_combo_item(
@@ -70,16 +82,19 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
 
         self.assertIs(selected, combo)
-        driver.click.assert_called_once_with(combo)
-        driver.activate.assert_called_once_with(item)
+        self.assertEqual(
+            driver.click.call_args_list,
+            [mock.call(combo), mock.call(item)],
+        )
+        driver.focus_main_window.assert_called_once_with()
 
     def test_combo_selection_uses_its_own_item_instead_of_global_duplicate(self):
         combo = object()
         own_item = object()
         driver = object.__new__(UI.UiDriver)
         driver.combo_with_items = mock.Mock(return_value=combo)
+        driver.focus_main_window = mock.Mock()
         driver.click = mock.Mock()
-        driver.activate = mock.Mock()
         driver.find = mock.Mock(
             side_effect=AssertionError("global item lookup is ambiguous")
         )
@@ -104,9 +119,39 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
 
         self.assertIs(selected, combo)
-        driver.click.assert_called_once_with(combo)
-        driver.activate.assert_called_once_with(own_item)
+        self.assertEqual(
+            driver.click.call_args_list,
+            [mock.call(combo), mock.call(own_item)],
+        )
+        driver.focus_main_window.assert_called_once_with()
         driver.find.assert_not_called()
+
+    def test_combo_with_items_ignores_hidden_stale_selectors(self):
+        hidden_combo = object()
+        visible_combo = object()
+        game = object()
+        editor = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[hidden_combo, visible_combo])
+        driver.all_nodes = mock.Mock(return_value=[game, editor])
+        driver.role = mock.Mock(return_value="list item")
+        driver.name = mock.Mock(
+            side_effect=lambda node: (
+                "Workout Game" if node is game else "Workout Editor"
+            )
+        )
+        driver.showing = mock.Mock(
+            side_effect=lambda node: node is visible_combo
+        )
+        driver.enabled = mock.Mock(return_value=True)
+
+        selected = driver.combo_with_items(
+            ["Workout Game", "Workout Editor"],
+            timeout=0.01,
+            require_interactable=True,
+        )
+
+        self.assertIs(selected, visible_combo)
 
     def test_prepare_anchors_a_usable_workout_library(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -163,6 +208,15 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     UI.game_run_seconds_from_environment()
 
+    def test_save_as_gate_can_be_split_from_renderer_gate(self):
+        with mock.patch.dict(os.environ, {"GC_UI_SKIP_SAVE_AS": "1"}):
+            self.assertTrue(UI.skip_save_as_from_environment())
+        with mock.patch.dict(os.environ, {"GC_UI_SKIP_SAVE_AS": "0"}):
+            self.assertFalse(UI.skip_save_as_from_environment())
+        with mock.patch.dict(os.environ, {"GC_UI_SKIP_SAVE_AS": "yes"}):
+            with self.assertRaisesRegex(ValueError, "must be 0 or 1"):
+                UI.skip_save_as_from_environment()
+
     def test_frame_delta_ignores_header_and_counts_game_pixels(self):
         width = 4
         height = 4
@@ -182,9 +236,18 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             1,
         )
 
-    def test_frame_delta_rejects_dimension_change(self):
-        with self.assertRaises(UI.UiFailure):
-            UI.UiDriver.changed_pixels((1, 1, b"\0\0\0"), (2, 1, b"\0" * 6))
+    def test_frame_delta_compares_common_area_after_dimension_change(self):
+        self.assertEqual(
+            UI.UiDriver.changed_pixels(
+                (4, 1, b"\0" * 12),
+                (5, 1, b"\xff\xff\xff" + b"\0" * 12),
+                top_ratio=0.0,
+                bottom_ratio=1.0,
+                side_ratio=0.25,
+                sample_step=1,
+            ),
+            1,
+        )
 
     def test_frame_delta_ignores_center_rider_animation(self):
         width = 10
@@ -226,6 +289,25 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             ), []
         )
 
+    def test_reported_p95_uses_stable_tail_but_keeps_worst_stall(self):
+        samples = [
+            {
+                "frame_ms": 16,
+                "fps": 60,
+                "p95_frame_ms": p95,
+                "max_frame_ms": stall,
+                "render_road_m": index,
+            }
+            for index, (p95, stall) in enumerate(
+                [(70, 90), (65, 100)] + [(18, 24)] * 8
+            )
+        ]
+
+        summary = ANALYZER.analyze(samples)
+
+        self.assertEqual(summary["reported_p95_frame_ms"], 18)
+        self.assertEqual(summary["reported_max_frame_ms"], 100)
+
     def test_rejects_regression_and_pacing_failure(self):
         samples = [
             {
@@ -262,6 +344,23 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertEqual(samples[0]["fps"], 58.7)
             self.assertEqual(samples[0]["p95_frame_ms"], 19)
             self.assertEqual(samples[0]["max_frame_ms"], 31)
+
+    def test_parses_quick_3d_trace_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app.log"
+            path.write_text(
+                "[info] workout-game-3d-trace frame=12 frame_ms=16 "
+                "fps=61.2 render_road_m=18.5 target_watts=220 "
+                "lateral_m=0.2 unexpected_airborne_frames=0\n",
+                encoding="utf-8",
+            )
+
+            samples = ANALYZER.parse_trace(path)
+
+            self.assertEqual(len(samples), 1)
+            self.assertEqual(samples[0]["frame"], 12)
+            self.assertEqual(samples[0]["target_watts"], 220)
+            self.assertEqual(samples[0]["lateral_m"], 0.2)
 
     def test_accepts_fractional_target_near_test_ftp(self):
         summary = ANALYZER.analyze(

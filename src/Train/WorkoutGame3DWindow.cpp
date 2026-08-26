@@ -281,6 +281,7 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " source_road_m=" << input.sourceRoadDistanceMeters
            << " render_road_m=" << input.renderedRoadDistanceMeters
            << " delta_m=" << publishedDiagnostics.frameDistanceDeltaMeters
+           << " frame_ms=" << publishedDiagnostics.frameIntervalMs
            << " fps=" << input.framesPerSecond
            << " p50_frame_ms=" << input.p50FrameIntervalMs
            << " p95_frame_ms=" << input.p95FrameIntervalMs
@@ -313,6 +314,14 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " front_suspension="
                 << presentedFrame.world.rider.frontSuspension
            << " airborne=" << int(presentedFrame.world.rider.airborne)
+           << " lateral_m=" << input.lateralOffsetMeters
+           << " unexpected_airborne_frames="
+                << publishedDiagnostics.unexpectedAirborneFrameCount
+           << " watts=" << watts
+           << " target_watts=" << targetWatts
+           << " cadence=" << cadenceRpm
+           << " hr=" << heartRate
+           << " gear=" << virtualGear
            << " camera_pos="
                 << viewModel->cameraX() << ','
                 << viewModel->cameraY() << ','
