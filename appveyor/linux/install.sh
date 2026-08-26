@@ -46,6 +46,7 @@ sudo "$APT_GET" install -qq flex libpulse-dev
 sudo "$APT_GET" install -qq pkg-config libsecret-1-dev libgpg-error-dev
 sudo "$APT_GET" install -qq libcap2 libgnutls30
 sudo "$APT_GET" install -qq libglu1-mesa-dev libxcb-cursor-dev
+sudo "$APT_GET" install -qq xvfb xauth
 mapfile -t conflicting_unwind_packages < <(
     dpkg-query -W -f='${binary:Package}\n' 'libunwind-*-dev' 2>/dev/null |
         grep -E '^libunwind-[0-9]+-dev(:[[:alnum:]-]+)?$' || true

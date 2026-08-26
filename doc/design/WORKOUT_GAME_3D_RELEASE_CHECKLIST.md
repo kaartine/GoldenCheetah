@@ -988,13 +988,27 @@ infrastructure debt and is not an acceptance gate for this private-use release.
 The release evidence below must come from the controlled local and remote
 build/test environments even when that historical workflow remains red.
 
-- [ ] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
+- [x] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
 - [x] `REL-02` Verify stop/save/cancel/continue and accidental-stop recovery.
 - [x] `REL-03` Verify AppImage startup, QML/Quick 3D modules, assets, licenses,
   attribution, SBOM and isolated production-like athlete data.
 - [ ] `REL-04` Complete user A/B ride on the target laptop and real trainer.
 - [x] `REL-05` Publish a test AppImage to the stable local/remote release path.
 - [ ] `REL-06` Remove the legacy renderer only after all acceptance gates pass.
+
+**REL-01 evidence (2026-08-26):** the controlled remote Linux shadow build
+reconciled all 168 eligible projects from the required-test inventory. The
+release run completed 164 QtTest suites with 5,632 passing cases after
+test-first repairs to missing production link dependencies, stale feature-gate
+expectations and source/fixture paths that had incorrectly depended on an
+in-source build. The same binaries passed the full remaining inventory under
+Xvfb, `xcb` and software OpenGL, including the 20-case Scene Graph visual suite
+that produces a blank framebuffer under Qt's `offscreen` plugin. The inventory
+also covers Quick 3D, deterministic replay, workout adaptation, recording,
+durable save/removal, FTMS readiness, Bluetooth telemetry, ANT lifecycle and
+USBXpress safety. Together with the isolated AppImage UI matrices and recording
+recovery evidence below, this closes the automated release-test gate. Real
+trainer A/B acceptance remains separately open under `REL-04`.
 
 **REL-03/REL-05 evidence (`56faa71`):** two independent clean release builds
 produced byte-identical ELF binaries and AppImages. The promoted AppImage is

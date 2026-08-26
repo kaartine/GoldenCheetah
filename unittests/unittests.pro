@@ -134,6 +134,7 @@ exists(unittests.pri) {
 			   Train/virtualGearRuntime \
 			   Train/workoutGameCanvas \
 			   Train/workoutGameClock \
+			   Train/workoutGameCompetition \
 			   Train/workoutGameCourse \
 			   Train/workoutGameCourseConversion \
 			   Train/workoutGameCourseConversionDialog \
@@ -144,9 +145,13 @@ exists(unittests.pri) {
 			   Train/workoutGameDistancePlayback \
 			   Train/workoutGameEngine \
 			   Train/workoutGame3DChunkBuilder \
+			   Train/workoutGame3DFeatureAsset \
 			   Train/workoutGame3DGeometry \
+			   Train/workoutGame3DTerrainProfile \
 			   Train/workoutGame3DView \
+			   Train/workoutGameAudio \
 			   Train/workoutGameFeatureChallenge \
+			   Train/workoutGameFeatureHud \
 			   Train/workoutGameFeatureLab \
 			   Train/workoutGameFeatureRuntime \
 			   Train/workoutGameRendererPolicy \
@@ -157,6 +162,8 @@ exists(unittests.pri) {
 			   Train/workoutGameRoadPhysics \
 			   Train/workoutGameSimulation \
 			   Train/workoutGameTrailScene \
+			   Train/workoutGameMesh \
+			   Train/workoutGamePowerProfile \
 			   Train/workoutGameSessionState \
 			   Train/workoutGameWorld \
 			   Train/workoutGameWorkoutAdapter \

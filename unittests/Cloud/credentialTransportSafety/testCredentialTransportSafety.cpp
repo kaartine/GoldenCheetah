@@ -1,5 +1,6 @@
 #include <QtTest>
 
+#include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -12,10 +13,8 @@ namespace {
 
 QByteArray sourceContents(const char *relativePath)
 {
-    const QString path = QFINDTESTDATA(relativePath);
-    if (path.isEmpty()) {
-        return {};
-    }
+    const QString path = QDir(QStringLiteral(GC_TEST_SOURCE_ROOT)).filePath(
+        QString::fromLatin1(relativePath));
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -163,13 +162,13 @@ void TestCredentialTransportSafety::
 productionSourcesDoNotExposeCredentials()
 {
     const QByteArray azum = sourceContents(
-        "../../../src/Cloud/Azum.cpp");
+        "src/Cloud/Azum.cpp");
     const QByteArray oauth = sourceContents(
-        "../../../src/Cloud/OAuthDialog.cpp");
+        "src/Cloud/OAuthDialog.cpp");
     const QByteArray rideWithGps = sourceContents(
-        "../../../src/Cloud/RideWithGPS.cpp");
+        "src/Cloud/RideWithGPS.cpp");
     const QByteArray withings = sourceContents(
-        "../../../src/Cloud/WithingsDownload.cpp");
+        "src/Cloud/WithingsDownload.cpp");
 
     QVERIFY(!azum.isEmpty());
     QVERIFY(!oauth.isEmpty());

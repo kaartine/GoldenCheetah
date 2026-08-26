@@ -10,6 +10,8 @@ include(../../unittests.pri)
 CONFIG += console testcase c++17
 CONFIG -= app_bundle
 DEFINES += GC_CONTEXT_SESSION_INTEGRATION_TEST
+GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
+DEFINES += GC_TEST_SOURCE_ROOT=\\\"$${GC_TEST_SOURCE_ROOT}\\\"
 
 SOURCES = testSessionBoundaries.cpp \
           SessionBoundaryLinkStubs.cpp \

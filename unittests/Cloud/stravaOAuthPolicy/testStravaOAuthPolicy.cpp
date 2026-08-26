@@ -3,6 +3,7 @@
 #include "Cloud/OAuthDialogMessageGuard.h"
 
 #include <QDialog>
+#include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QJsonArray>
@@ -85,8 +86,8 @@ QByteArray authorizationPayload(const QJsonValue &scope)
 
 QByteArray sourceContents(const char *relativePath)
 {
-    const QString path = QFINDTESTDATA(relativePath);
-    if (path.isEmpty()) return {};
+    const QString path = QDir(QStringLiteral(GC_TEST_SOURCE_ROOT)).filePath(
+        QString::fromLatin1(relativePath));
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return {};
@@ -187,7 +188,7 @@ void TestStravaOAuthPolicy::
 serviceWriteFileDisconnectCompilesWithoutErrorParameter()
 {
     const QByteArray service = sourceContents(
-        "../../../src/Cloud/Strava.cpp");
+        "src/Cloud/Strava.cpp");
     const QByteArray writeFile = sourceSection(
         service,
         "Strava::writeFile(QByteArray &data",
@@ -316,7 +317,7 @@ void TestStravaOAuthPolicy::
 storageReconciliationIsCachedOnlyAfterAdoption()
 {
     const QByteArray source = sourceContents(
-        "../../../src/Cloud/Strava.cpp");
+        "src/Cloud/Strava.cpp");
     const QByteArray initialization = sourceSection(
         source,
         "Strava::initializeSharedAuthorizationStatus() const",
@@ -420,7 +421,7 @@ void TestStravaOAuthPolicy::reportsMachineReadableBuildStatus()
 void TestStravaOAuthPolicy::mainExposesCredentialFreeBuildStatus()
 {
     const QByteArray source = sourceContents(
-        "../../../src/Core/main.cpp");
+        "src/Core/main.cpp");
     QVERIFY(!source.isEmpty());
     QVERIFY(source.contains(
         "\"--goldencheetah-build-status\""));
@@ -1000,7 +1001,7 @@ void TestStravaOAuthPolicy::
 serviceOpenUsesCoordinatedDurableRefresh()
 {
     const QByteArray source = sourceContents(
-        "../../../src/Cloud/Strava.cpp");
+        "src/Cloud/Strava.cpp");
     QVERIFY(!source.isEmpty());
     QCOMPARE(
         source.count(
@@ -1081,11 +1082,11 @@ void TestStravaOAuthPolicy::
 oauthGrantSupersedesRefreshAndPublishesDurably()
 {
     const QByteArray source = sourceContents(
-        "../../../src/Cloud/OAuthDialog.cpp");
+        "src/Cloud/OAuthDialog.cpp");
     const QByteArray header = sourceContents(
-        "../../../src/Cloud/OAuthDialog.h");
+        "src/Cloud/OAuthDialog.h");
     const QByteArray settingsCommit = sourceContents(
-        "../../../src/Cloud/StravaSettingsCommit.cpp");
+        "src/Cloud/StravaSettingsCommit.cpp");
     QVERIFY(!source.isEmpty());
     QVERIFY(!header.isEmpty());
     QVERIFY(!settingsCommit.isEmpty());
@@ -1189,7 +1190,7 @@ void TestStravaOAuthPolicy::
 serviceDisconnectRevokesBeforeCredentialRemoval()
 {
     const QByteArray removal = sourceContents(
-        "../../../src/Cloud/StravaAccountRemoval.cpp");
+        "src/Cloud/StravaAccountRemoval.cpp");
     QVERIFY(!removal.isEmpty());
     QVERIFY(removal.contains(
         "removeAuthorizationTransaction("));
@@ -1222,7 +1223,7 @@ serviceDisconnectRevokesBeforeCredentialRemoval()
     QVERIFY(!removal.contains("Bearer "));
 
     const QByteArray revocation = sourceContents(
-        "../../../src/Cloud/StravaRevocationClient.cpp");
+        "src/Cloud/StravaRevocationClient.cpp");
     QVERIFY(!revocation.isEmpty());
     QVERIFY(revocation.contains(
         "StravaOAuthPolicy::revocationRequest("));
@@ -1230,7 +1231,7 @@ serviceDisconnectRevokesBeforeCredentialRemoval()
         "response.httpStatus != 200"));
 
     const QByteArray service = sourceContents(
-        "../../../src/Cloud/Strava.cpp");
+        "src/Cloud/Strava.cpp");
     QVERIFY(!service.isEmpty());
     const QByteArray disconnect = sourceSection(
         service,
@@ -1285,7 +1286,7 @@ serviceDisconnectRevokesBeforeCredentialRemoval()
     QVERIFY(!close.contains("removeAuthorization("));
 
     const QByteArray publisher = sourceContents(
-        "../../../src/Cloud/StravaCredentialPublisher.cpp");
+        "src/Cloud/StravaCredentialPublisher.cpp");
     QVERIFY(!publisher.isEmpty());
     QVERIFY(publisher.contains(
         "RemovalStatus::CleanupPending"));
@@ -1334,7 +1335,7 @@ void TestStravaOAuthPolicy::
 credentialsPageOffersExplicitStravaDisconnectModes()
 {
     const QByteArray source = sourceContents(
-        "../../../src/Gui/AthletePages.cpp");
+        "src/Gui/AthletePages.cpp");
     QVERIFY(!source.isEmpty());
     const QByteArray deletion = sourceSection(
         source,

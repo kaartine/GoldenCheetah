@@ -5,6 +5,9 @@ TARGET = tst_stravaClientCredentials
 
 include(../../unittests.pri)
 
+GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
+DEFINES += GC_TEST_SOURCE_ROOT=\\\"$${GC_TEST_SOURCE_ROOT}\\\"
+
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 DEFINES += STRAVA_DEBUG=1

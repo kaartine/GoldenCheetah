@@ -17,12 +17,18 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 
 #include <cstdio>
 #include <memory>
 #include <utility>
 
 namespace {
+
+QString sourceFilePath(const QString &relativePath)
+{
+    return QDir(QStringLiteral(GC_TEST_SOURCE_ROOT)).filePath(relativePath);
+}
 
 class RecordingAthleteApplicationService final
     : public AthleteApplicationService
@@ -332,9 +338,11 @@ void TestSessionBoundaries::hostedLoggerUsesPersistentFile()
 
 void TestSessionBoundaries::contextOwnershipBoundaryIsEnforced()
 {
-    const QString contextPath =
-        QFINDTESTDATA("../../../src/Core/Context.h");
-    QVERIFY2(!contextPath.isEmpty(), "Context.h test data was not found");
+    const QString contextPath = sourceFilePath(
+        QStringLiteral("src/Core/Context.h"));
+    QVERIFY2(QFileInfo::exists(contextPath), qPrintable(
+        QStringLiteral("Context.h test data was not found at %1")
+            .arg(contextPath)));
     QFile contextFile(contextPath);
     QVERIFY(contextFile.open(QIODevice::ReadOnly));
     const QByteArray context = contextFile.readAll();
@@ -354,16 +362,20 @@ void TestSessionBoundaries::contextOwnershipBoundaryIsEnforced()
 
 void TestSessionBoundaries::cacheFailurePathUsesInjectedPersistencePort()
 {
-    const QString cachePath =
-        QFINDTESTDATA("../../../src/FileIO/RideFileCache.cpp");
-    const QString rideItemPath =
-        QFINDTESTDATA("../../../src/Core/RideItem.cpp");
-    const QString manualActivityPath =
-        QFINDTESTDATA("../../../src/Gui/ManualActivityWizard.cpp");
-    QVERIFY2(!cachePath.isEmpty(), "RideFileCache.cpp test data was not found");
-    QVERIFY2(!rideItemPath.isEmpty(), "RideItem.cpp test data was not found");
+    const QString cachePath = sourceFilePath(
+        QStringLiteral("src/FileIO/RideFileCache.cpp"));
+    const QString rideItemPath = sourceFilePath(
+        QStringLiteral("src/Core/RideItem.cpp"));
+    const QString manualActivityPath = sourceFilePath(
+        QStringLiteral("src/Gui/ManualActivityWizard.cpp"));
     QVERIFY2(
-        !manualActivityPath.isEmpty(),
+        QFileInfo::exists(cachePath),
+        "RideFileCache.cpp test data was not found");
+    QVERIFY2(
+        QFileInfo::exists(rideItemPath),
+        "RideItem.cpp test data was not found");
+    QVERIFY2(
+        QFileInfo::exists(manualActivityPath),
         "ManualActivityWizard.cpp test data was not found");
 
     QFile cacheFile(cachePath);

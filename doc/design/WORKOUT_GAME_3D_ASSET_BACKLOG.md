@@ -207,10 +207,10 @@ tile, with no external asset or additional license obligation.
 
 ### Phase 5: Release
 
-- [ ] `REL-01` Add workout profile, grade and final action guidance to the HUD.
-- [ ] `REL-02` Run isolated-data UI, save/continue, recording and Bluetooth regressions.
+- [x] `REL-01` Add workout profile, grade and final action guidance to the HUD.
+- [x] `REL-02` Run isolated-data UI, save/continue, recording and Bluetooth regressions.
 - [ ] `REL-03` Measure frame-time p50/p95/p99 and simulation skipped ticks on the target laptop.
-- [ ] `REL-04` Verify AppImage assets, plugins, attributions, licenses and SBOM.
+- [x] `REL-04` Verify AppImage assets, plugins, attributions, licenses and SBOM.
 - [ ] `REL-05` Run user A/B testing before retiring the legacy renderer.
 
 ## Vertical Slice Acceptance

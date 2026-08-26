@@ -9,6 +9,7 @@
 
 #include <QtTest>
 
+#include <QDir>
 #include <QFile>
 #include <QRegularExpression>
 #include <QStringList>
@@ -64,7 +65,8 @@ public:
 
 QString sourceFixture(const char *relativePath)
 {
-    return QFINDTESTDATA(relativePath);
+    return QDir(QStringLiteral(GC_TEST_SOURCE_ROOT)).filePath(
+        QString::fromLatin1(relativePath));
 }
 
 QByteArray readSource(const QString &path)
@@ -385,7 +387,7 @@ void TestStravaClientCredentials::
 wizardRequiresExplicitCredentialRemoval()
 {
     const QString wizardPath = sourceFixture(
-        "../../../src/Cloud/AddCloudWizard.cpp");
+        "src/Cloud/AddCloudWizard.cpp");
     QVERIFY2(!wizardPath.isEmpty(),
              "Cannot locate AddCloudWizard.cpp test fixture");
     const QString wizard = withoutWhitespace(
@@ -404,15 +406,15 @@ wizardRequiresExplicitCredentialRemoval()
 void TestStravaClientCredentials::oauthCallSitesUseTheRuntimeResolver()
 {
     const QString dialogPath = sourceFixture(
-        "../../../src/Cloud/OAuthDialog.cpp");
+        "src/Cloud/OAuthDialog.cpp");
     const QString servicePath = sourceFixture(
-        "../../../src/Cloud/Strava.cpp");
+        "src/Cloud/Strava.cpp");
     const QString mainPath = sourceFixture(
-        "../../../src/Core/main.cpp");
+        "src/Core/main.cpp");
     const QString adapterPath = sourceFixture(
-        "../../../src/Cloud/StravaClientCredentialsSettings.cpp");
+        "src/Cloud/StravaClientCredentialsSettings.cpp");
     const QString revocationPath = sourceFixture(
-        "../../../src/Cloud/StravaRevocationClient.cpp");
+        "src/Cloud/StravaRevocationClient.cpp");
     QVERIFY2(!dialogPath.isEmpty(),
              "Cannot locate OAuthDialog.cpp test fixture");
     QVERIFY2(!servicePath.isEmpty(),

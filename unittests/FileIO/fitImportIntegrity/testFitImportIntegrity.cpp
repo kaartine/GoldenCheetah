@@ -160,16 +160,17 @@ void TestFitImportIntegrity::acceptsRepositoryFixtures_data()
     QTest::addColumn<QString>("path");
     QTest::addColumn<int>("segments");
 
-    const QString cycling = QFINDTESTDATA(
-        "../../../test/rides/20130717_143733.fit");
-    const QString swimming = QFINDTESTDATA(
-        "../../../test/swims/GarminHRMswim.FIT");
-    const QString recentGarmin = QFINDTESTDATA(
-        "../../../test/roundtrip/Fr955v19.28andStryd.fit");
+    const QDir repository(QStringLiteral(GC_TEST_SOURCE_ROOT));
+    const QString cycling = repository.filePath(
+        QStringLiteral("test/rides/20130717_143733.fit"));
+    const QString swimming = repository.filePath(
+        QStringLiteral("test/swims/GarminHRMswim.FIT"));
+    const QString recentGarmin = repository.filePath(
+        QStringLiteral("test/roundtrip/Fr955v19.28andStryd.fit"));
 
-    QVERIFY(!cycling.isEmpty());
-    QVERIFY(!swimming.isEmpty());
-    QVERIFY(!recentGarmin.isEmpty());
+    QVERIFY(QFile::exists(cycling));
+    QVERIFY(QFile::exists(swimming));
+    QVERIFY(QFile::exists(recentGarmin));
     QTest::newRow("cycling") << cycling << 1;
     QTest::newRow("swimming-chained") << swimming << 3;
     QTest::newRow("recent-garmin") << recentGarmin << 1;
@@ -193,8 +194,9 @@ void TestFitImportIntegrity::acceptsAllRepositoryFixtures_data()
 {
     QTest::addColumn<QString>("path");
 
-    const QString root = QFINDTESTDATA("../../../test");
-    QVERIFY(!root.isEmpty());
+    const QString root = QDir(QStringLiteral(GC_TEST_SOURCE_ROOT)).filePath(
+        QStringLiteral("test"));
+    QVERIFY(QDir(root).exists());
     QDirIterator files(
         root,
         {QStringLiteral("*.fit"), QStringLiteral("*.FIT")},

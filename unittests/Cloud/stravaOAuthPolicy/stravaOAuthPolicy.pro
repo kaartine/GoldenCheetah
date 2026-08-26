@@ -10,6 +10,9 @@ TARGET = testStravaOAuthPolicy
 
 include(../../unittests.pri)
 
+GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
+DEFINES += GC_TEST_SOURCE_ROOT=\\\"$${GC_TEST_SOURCE_ROOT}\\\"
+
 SOURCES = testStravaOAuthPolicy.cpp \
           OAuthDialogTestStubs.cpp \
           ../stravaAccountRemoval/StravaPublisherTestSettings.cpp \

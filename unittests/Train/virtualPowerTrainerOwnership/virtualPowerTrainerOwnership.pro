@@ -14,9 +14,11 @@ CONFIG -= debug
 
 SOURCES = testVirtualPowerTrainerOwnership.cpp \
           VirtualPowerTrainerTestStubs.cpp \
-          ../../../src/Train/RealtimeController.cpp
+          ../../../src/Train/RealtimeController.cpp \
+          ../../../src/Train/WorkoutRideTargetPlanner.cpp
 
-HEADERS = ../../../src/Train/RealtimeController.h
+HEADERS = ../../../src/Train/RealtimeController.h \
+          ../../../src/Train/WorkoutRideTargetPlanner.h
 
 INCLUDEPATH += ../../../src \
                ../../../src/Charts \

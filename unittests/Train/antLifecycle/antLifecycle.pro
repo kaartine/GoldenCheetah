@@ -20,14 +20,16 @@ SOURCES = testAntLifecycle.cpp \
           ../../../src/Metrics/BlinnSolver.cpp \
           ../../../src/Train/CalibrationData.cpp \
           ../../../src/Train/PolynomialRegression.cpp \
-          ../../../src/Train/RealtimeController.cpp
+          ../../../src/Train/RealtimeController.cpp \
+          ../../../src/Train/WorkoutRideTargetPlanner.cpp
 
 HEADERS = AntLifecycleLibUsb.h \
           ../../../src/ANT/ANT.h \
           ../../../src/ANT/ANTChannel.h \
           ../../../src/ANT/ANTlocalController.h \
           ../../../src/ANT/ANTLogger.h \
-          ../../../src/Train/RealtimeController.h
+          ../../../src/Train/RealtimeController.h \
+          ../../../src/Train/WorkoutRideTargetPlanner.h
 
 INCLUDEPATH += $$PWD \
                $$PWD/../../../src/ANT \

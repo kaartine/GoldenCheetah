@@ -10,7 +10,9 @@
 #include "Charts/MapPageSecurityPolicy.h"
 
 #include <QCryptographicHash>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
@@ -636,11 +638,12 @@ TestMapPageSecurityPolicy::leafletAssetsArePackagedAndPinned()
 void
 TestMapPageSecurityPolicy::mapPageIntegrationKeepsScriptsLocal()
 {
-    const QString sourcePath = QFINDTESTDATA(
-        "../../../src/Charts/RideMapWindow.cpp");
-    QVERIFY2(!sourcePath.isEmpty(),
+    const QString anchoredSourcePath = QDir(
+        QStringLiteral(GC_TEST_SOURCE_ROOT)).filePath(
+            QStringLiteral("src/Charts/RideMapWindow.cpp"));
+    QVERIFY2(QFileInfo::exists(anchoredSourcePath),
              "RideMapWindow.cpp test data was not found");
-    const QByteArray source = resourceContents(sourcePath);
+    const QByteArray source = resourceContents(anchoredSourcePath);
     QVERIFY(!source.isEmpty());
 
     QVERIFY(!source.contains("http://maps.googleapis.com"));

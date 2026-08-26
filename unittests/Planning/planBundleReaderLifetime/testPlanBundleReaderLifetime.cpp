@@ -9,7 +9,9 @@
 
 #include <QtTest>
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 
 #include <type_traits>
 
@@ -195,9 +197,10 @@ invalidWorkoutReferenceIsRejected()
 void TestPlanBundleReaderLifetime::
 importSourceUsesSinglePlanPublication()
 {
-    const QString sourcePath = QFINDTESTDATA(
-        "../../../src/Planning/PlanBundle.cpp");
-    QVERIFY2(!sourcePath.isEmpty(),
+    const QString sourcePath = QDir(
+        QStringLiteral(GC_TEST_SOURCE_ROOT)).filePath(
+            QStringLiteral("src/Planning/PlanBundle.cpp"));
+    QVERIFY2(QFileInfo::exists(sourcePath),
              "PlanBundle.cpp test data was not found");
     QFile source(sourcePath);
     QVERIFY(source.open(QIODevice::ReadOnly));
@@ -223,9 +226,10 @@ importSourceUsesSinglePlanPublication()
 void TestPlanBundleReaderLifetime::
 startupRecoveryCompletesBundleBeforePlanCleanup()
 {
-    const QString sourcePath = QFINDTESTDATA(
-        "../../../src/Core/RideCache.cpp");
-    QVERIFY2(!sourcePath.isEmpty(),
+    const QString sourcePath = QDir(
+        QStringLiteral(GC_TEST_SOURCE_ROOT)).filePath(
+            QStringLiteral("src/Core/RideCache.cpp"));
+    QVERIFY2(QFileInfo::exists(sourcePath),
              "RideCache.cpp test data was not found");
     QFile source(sourcePath);
     QVERIFY(source.open(QIODevice::ReadOnly));

@@ -33,3 +33,6 @@ sanitize:!msvc {
 }
 
 include(../../unittests.pri)
+
+GC_TEST_DATA_DIR = $$clean_path($$_PRO_FILE_PWD_)
+DEFINES += GC_TEST_DATA_DIR=\\\"$${GC_TEST_DATA_DIR}\\\"

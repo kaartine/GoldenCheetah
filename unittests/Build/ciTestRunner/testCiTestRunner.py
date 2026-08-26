@@ -118,6 +118,18 @@ def main() -> None:
         "jom -j4 sub-unittests",
         REPOSITORY / ".github" / "workflows" / "ci.yml",
     )
+    require_literal(
+        "QT_QPA_PLATFORM=xcb QT_OPENGL=software LIBGL_ALWAYS_SOFTWARE=1 \\",
+        REPOSITORY / ".github" / "workflows" / "ci.yml",
+    )
+    require_literal(
+        "xvfb-run --auto-servernum --server-args='-screen 0 1280x720x24'",
+        REPOSITORY / ".github" / "workflows" / "ci.yml",
+    )
+    require_literal(
+        "sudo \"$APT_GET\" install -qq xvfb xauth",
+        REPOSITORY / "appveyor" / "linux" / "install.sh",
+    )
 
     appveyor = REPOSITORY / "appveyor.yml"
     for wiring in (

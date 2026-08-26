@@ -11,6 +11,7 @@
 #include "FitRideFile.h"
 
 #include <QBuffer>
+#include <QDir>
 #include <QFile>
 #include <QTemporaryFile>
 #include <QTest>
@@ -158,12 +159,13 @@ void TestFitReaderIntegrity::importsRepositoryFixtures_data()
 {
     QTest::addColumn<QString>("path");
 
-    const QString cycling = QFINDTESTDATA(
-        "../../../test/rides/20130717_143733.fit");
-    const QString swimming = QFINDTESTDATA(
-        "../../../test/swims/GarminHRMswim.FIT");
-    QVERIFY(!cycling.isEmpty());
-    QVERIFY(!swimming.isEmpty());
+    const QDir repository(QStringLiteral(GC_TEST_SOURCE_ROOT));
+    const QString cycling = repository.filePath(
+        QStringLiteral("test/rides/20130717_143733.fit"));
+    const QString swimming = repository.filePath(
+        QStringLiteral("test/swims/GarminHRMswim.FIT"));
+    QVERIFY(QFile::exists(cycling));
+    QVERIFY(QFile::exists(swimming));
     QTest::newRow("cycling") << cycling;
     QTest::newRow("swimming-chained") << swimming;
 }

@@ -57,6 +57,20 @@ WorkoutGameCourse challengeCourse(WorkoutGameTerrainKind terrain)
     return course;
 }
 
+WorkoutGameFeatureChallengeProfile challengeProfileFor(
+        const WorkoutGameCourse &course,
+        double ftpWatts = 200.0)
+{
+    const WorkoutGameRoadCourse road =
+            WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
+    for (const WorkoutGameRoadPiece &piece : road.pieces) {
+        if (piece.challenge.enabled && piece.sourceSectionIndex == 0) {
+            return piece.challenge.profile;
+        }
+    }
+    return {};
+}
+
 WorkoutGameCourse climbWithRunoutCourse()
 {
     WorkoutGameCourse course = challengeCourse(
@@ -361,6 +375,16 @@ private slots:
     {
         const WorkoutGameCourse course = challengeCourse(
                 WorkoutGameTerrainKind::LogOver);
+        const WorkoutGameFeatureChallengeProfile challenge =
+                challengeProfileFor(course);
+        QVERIFY(challenge.enabled);
+        QVERIFY(challenge.measurementStartProgress
+                < challenge.decisionProgress);
+        const std::int64_t measurementStartMs = std::int64_t(std::ceil(
+                challenge.measurementStartProgress
+                    * double(course.durationMs)));
+        const std::int64_t decisionMs = std::int64_t(std::ceil(
+                challenge.decisionProgress * double(course.durationMs)));
         WorkoutGameSimulation earlyOnly;
         WorkoutGameSimulation timedBurst;
         QVERIFY(earlyOnly.configure(course, 200.0));
@@ -368,8 +392,9 @@ private slots:
 
         WorkoutGameSimulationSnapshot earlyResult;
         WorkoutGameSimulationSnapshot timedResult;
-        for (std::int64_t time = 0; time <= 7500; time += 250) {
-            const bool inApproach = time >= 6400;
+        for (std::int64_t time = 0;
+             time <= decisionMs + 250; time += 250) {
+            const bool inApproach = time >= measurementStartMs;
             WorkoutGameSimulationInput earlyInput = sample(
                     time, inApproach ? 100.0 : 200.0, 200.0,
                     inApproach ? 45.0 : 85.0);
@@ -391,13 +416,21 @@ private slots:
 
     void lateJumpBurstIsNotRejectedAsPoorAdherence()
     {
+        const WorkoutGameCourse course = challengeCourse(
+                WorkoutGameTerrainKind::LogOver);
+        const WorkoutGameFeatureChallengeProfile challenge =
+                challengeProfileFor(course);
+        QVERIFY(challenge.enabled);
+        const std::int64_t decisionMs = std::int64_t(std::ceil(
+                challenge.decisionProgress * double(course.durationMs)));
+        const std::int64_t pushStartMs = decisionMs - 700;
         WorkoutGameSimulation simulation;
-        QVERIFY(simulation.configure(
-                challengeCourse(WorkoutGameTerrainKind::LogOver), 200.0));
+        QVERIFY(simulation.configure(course, 200.0));
 
         WorkoutGameSimulationSnapshot result;
-        for (std::int64_t time = 0; time <= 7500; time += 100) {
-            const bool push = time >= 6800;
+        for (std::int64_t time = 0;
+             time <= decisionMs + 100; time += 100) {
+            const bool push = time >= pushStartMs;
             WorkoutGameSimulationInput input = sample(
                     time, push ? 300.0 : 100.0, 200.0,
                     push ? 90.0 : 50.0);

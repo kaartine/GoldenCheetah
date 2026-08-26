@@ -3,6 +3,7 @@
 #include "FileIO/AtomicFileWriter.h"
 
 #include <QTest>
+#include <QDir>
 #include <QFile>
 #include <QList>
 #include <QTemporaryDir>
@@ -77,6 +78,12 @@ bool writeFile(const QString &path, const QByteArray &data)
         && file.write(data) == data.size();
 }
 
+QString seasonsFixturePath()
+{
+    return QDir(QStringLiteral(GC_TEST_DATA_DIR)).filePath(
+        QStringLiteral("seasons.xml"));
+}
+
 QList<Season> oneSeason()
 {
     Season season;
@@ -103,8 +110,9 @@ private slots:
     void generatedLegacyEventIdSurvivesRoundTrip();
 
     void readSeasons() {
-        const QString seasonsPath = QFINDTESTDATA("seasons.xml");
-        QVERIFY2(!seasonsPath.isEmpty(), "Unable to locate seasons.xml test data");
+        const QString seasonsPath = seasonsFixturePath();
+        QVERIFY2(QFile::exists(seasonsPath),
+                 "Unable to locate seasons.xml test data");
 
         QFile file(seasonsPath);
         QList<Season> seasons = SeasonParser::readSeasons(&file);
@@ -289,8 +297,8 @@ void TestSeasonParser::successfulWritePublishesCompleteXml()
 
 void TestSeasonParser::generatedLegacyEventIdSurvivesRoundTrip()
 {
-    const QString sourcePath = QFINDTESTDATA("seasons.xml");
-    QVERIFY2(!sourcePath.isEmpty(),
+    const QString sourcePath = seasonsFixturePath();
+    QVERIFY2(QFile::exists(sourcePath),
              "Unable to locate seasons.xml test data");
     QFile source(sourcePath);
     QList<Season> seasons = SeasonParser::readSeasons(&source);

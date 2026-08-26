@@ -18,8 +18,10 @@ SOURCES = testBt40Lifecycle.cpp \
           FakeLowEnergyController.cpp \
           ../../../src/Train/RealtimeData.cpp \
           ../../../src/Train/RealtimeController.cpp \
+          ../../../src/Train/WorkoutRideTargetPlanner.cpp \
           ../../../src/Train/BT40Controller.cpp \
           ../../../src/Train/BT40Device.cpp \
+          ../../../src/Train/BluetoothTrainerCapabilities.cpp \
           ../../../src/Train/BluetoothTelemetryRouter.cpp \
           ../../../src/Train/CalibrationData.cpp \
           ../../../src/Train/Ftms.cpp \
@@ -27,8 +29,10 @@ SOURCES = testBt40Lifecycle.cpp \
           ../../../src/Train/KurtSmartControl.cpp
 
 HEADERS = ../../../src/Train/RealtimeController.h \
+          ../../../src/Train/WorkoutRideTargetPlanner.h \
           ../../../src/Train/BT40Controller.h \
           ../../../src/Train/BT40Device.h \
+          ../../../src/Train/BluetoothTrainerCapabilities.h \
           ../../../src/Train/VMProWidget.h \
           QBluetoothDeviceDiscoveryAgent \
           QBluetoothLocalDevice \

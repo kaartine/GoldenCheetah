@@ -55,16 +55,30 @@ private slots:
         simulation.challenge = WorkoutGameFeatureChallenge::profile(
                 course.sections.front());
         simulation.featureOutcome = WorkoutGameFeatureOutcome::Active;
+        const WorkoutGameSection &section = course.sections.front();
+        const double measurementStart =
+                simulation.challenge.measurementStartProgress;
+        const double decision = simulation.challenge.decisionProgress;
+        QVERIFY(measurementStart > 0.0);
+        QVERIFY(measurementStart < decision);
+        QVERIFY(decision < 1.0);
 
-        simulation.sectionProgress = 0.30;
-        simulation.workoutTimeMs = 3600;
+        simulation.sectionProgress = measurementStart * 0.5;
+        simulation.workoutTimeMs = section.startMs + std::int64_t(
+                simulation.sectionProgress * double(section.durationMs));
         const WorkoutGamePowerProfileSnapshot prepare =
                 WorkoutGamePowerProfile::build(course, simulation, 180.0);
         QCOMPARE(prepare.cue.state, WorkoutGamePowerCueState::Prepare);
-        QVERIFY(prepare.cue.secondsUntilWindow > 1.0);
+        const double expectedLeadSeconds =
+                (measurementStart - simulation.sectionProgress)
+                    * double(section.durationMs) / 1000.0;
+        QVERIFY(expectedLeadSeconds > 0.0);
+        QVERIFY(std::abs(prepare.cue.secondsUntilWindow
+                         - expectedLeadSeconds) < 1e-9);
 
-        simulation.sectionProgress = 0.68;
-        simulation.workoutTimeMs = 8160;
+        simulation.sectionProgress = (measurementStart + decision) * 0.5;
+        simulation.workoutTimeMs = section.startMs + std::int64_t(
+                simulation.sectionProgress * double(section.durationMs));
         simulation.speedKph = 18.0;
         const WorkoutGamePowerProfileSnapshot push =
                 WorkoutGamePowerProfile::build(
@@ -83,8 +97,9 @@ private slots:
         QVERIFY(push.cue.windowProgress > 0.0);
         QVERIFY(push.cue.windowProgress < 1.0);
 
-        simulation.sectionProgress = 0.76;
-        simulation.workoutTimeMs = 9120;
+        simulation.sectionProgress = (decision + 1.0) * 0.5;
+        simulation.workoutTimeMs = section.startMs + std::int64_t(
+                simulation.sectionProgress * double(section.durationMs));
         simulation.featureOutcome = WorkoutGameFeatureOutcome::Completed;
         simulation.challengeMeasurementActive = true;
         simulation.challengeMetrics.averageActualWatts = 220.0;

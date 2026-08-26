@@ -277,22 +277,32 @@ private slots:
         const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
         QVERIFY(piece != nullptr);
         const double takeoff = jumpTakeoffDistance(*piece);
+        const double sectionStart =
+                road.timeline[std::size_t(section)].startDistanceMeters;
+        const double prepare = piece->challenge.prepareDistanceMeters;
+        const double decision = piece->challenge.decisionDistanceMeters;
+        QVERIFY(sectionStart < prepare);
+        QVERIFY(prepare < decision);
+        QVERIFY(decision < takeoff);
         const WorkoutGameFeatureRuntimeSnapshot actionLayout = runtime.update(
                 snapshot(section, progressAtDistance(
                             road, section, takeoff + 0.1),
                          WorkoutGameFeatureOutcome::Completed));
 
         QCOMPARE(runtime.update(snapshot(
-                    section, 0.10, WorkoutGameFeatureOutcome::Active)).phase,
+                    section, progressAtDistance(
+                        road, section, (sectionStart + prepare) * 0.5),
+                    WorkoutGameFeatureOutcome::Active)).phase,
                  WorkoutGameFeaturePhase::Approach);
         QCOMPARE(runtime.update(snapshot(
-                    section, 0.68, WorkoutGameFeatureOutcome::Active)).phase,
+                    section, progressAtDistance(
+                        road, section, (prepare + decision) * 0.5),
+                    WorkoutGameFeatureOutcome::Active)).phase,
                  WorkoutGameFeaturePhase::Measure);
         QCOMPARE(runtime.update(snapshot(
                     section, progressAtDistance(
                         road, section,
-                        (piece->challenge.decisionDistanceMeters + takeoff)
-                            * 0.5),
+                        (decision + takeoff) * 0.5),
                     WorkoutGameFeatureOutcome::Completed)).phase,
                  WorkoutGameFeaturePhase::Committed);
         QCOMPARE(runtime.update(snapshot(

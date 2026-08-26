@@ -16,6 +16,14 @@ SOURCE_ROOT_DEPENDENCIES = {
 PORTABLE_QT_SHIM = REPOSITORY / "unittests/Train/usbXpressSafety/QtPlatformShim.h"
 PORTABLE_QT_PROJECT = REPOSITORY / "unittests/Train/usbXpressSafety/usbXpressSafety.pro"
 INCLUDE_PATTERN = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.MULTILINE)
+TEST_SOURCE_DEPENDENCIES = {
+    "../../../src/Train/RealtimeController.cpp": {
+        "../../../src/Train/WorkoutRideTargetPlanner.cpp",
+    },
+    "../../../src/Train/BT40Device.cpp": {
+        "../../../src/Train/BluetoothTrainerCapabilities.cpp",
+    },
+}
 
 
 def main() -> None:
@@ -64,6 +72,21 @@ def main() -> None:
             "usbXpressSafety must give the compiler-forced Qt shim a direct "
             "QtCore header path for framework and directory Qt layouts"
         )
+
+    for project_path in sorted((REPOSITORY / "unittests").rglob("*.pro")):
+        project_text = project_path.read_text(encoding="utf-8")
+        for linked_source, required_sources in TEST_SOURCE_DEPENDENCIES.items():
+            if linked_source not in project_text:
+                continue
+            missing_sources = {
+                source for source in required_sources if source not in project_text
+            }
+            if missing_sources:
+                relative_project = project_path.relative_to(REPOSITORY)
+                raise AssertionError(
+                    f"{relative_project} is missing linked production sources: "
+                    + ", ".join(sorted(missing_sources))
+                )
 
 
 if __name__ == "__main__":
