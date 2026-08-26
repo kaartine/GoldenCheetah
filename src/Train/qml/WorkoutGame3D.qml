@@ -14,6 +14,14 @@ Item {
             workoutGame3D.riderY - workoutGame3D.riderAirHeight,
             workoutGame3D.riderZ))
     }
+    readonly property real cameraFieldOfView:
+        workoutGame3D.riderPoseState === "preload" ? 46.35
+        : workoutGame3D.riderPoseState === "air"
+          ? 47 + Math.min(1.3,
+                          0.6 + workoutGame3D.riderAirHeight * 0.45)
+        : workoutGame3D.riderPoseState === "land"
+          ? 47 + workoutGame3D.landingImpact * 1.1
+        : 47
 
     function featureAccent(state) {
         if (state === 4) return "#ef7849"
@@ -106,7 +114,8 @@ Item {
 
         PerspectiveCamera {
             id: camera
-            fieldOfView: 47
+            objectName: "workoutGameCamera"
+            fieldOfView: root.cameraFieldOfView
             clipNear: 0.15
             clipFar: 650
             position: Qt.vector3d(
@@ -114,6 +123,12 @@ Item {
                 workoutGame3D.cameraY,
                 workoutGame3D.cameraZ)
             lookAtNode: cameraTarget
+            Behavior on fieldOfView {
+                NumberAnimation {
+                    duration: 120
+                    easing.type: Easing.OutCubic
+                }
+            }
         }
 
         Node {

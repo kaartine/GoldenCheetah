@@ -120,6 +120,14 @@ socket-blended camera motion. Skinny is enabled after deterministic tests
 established exact width/elevation sockets, a same-tile safe line, bounded
 one-to-two-degree balance roll and camera-stable grounded motion.
 
+The Quick 3D renderer adds presentation-only feature punctuation by changing
+the perspective field of view from its neutral 47 degrees. Preload narrows it
+to 46.35 degrees, physical air expands it by at most 1.3 degrees, and landing
+impact expands it by at most 1.1 degrees. A 120 ms cubic transition removes
+steps between snapshots. The authoritative camera position and look-at target
+never move for this effect, bypass remains neutral, and no presentation value
+feeds back into physics, trainer control or recording.
+
 The initial physics backend is vendored Box2D 3.1.1 (MIT license, pinned to
 commit `8c661469c9507d3ad6fbd2fea3f1aa71669c2fe3`). Box2D controls terrain
 contacts, suspension, vehicle pose and airborne motion. It never controls

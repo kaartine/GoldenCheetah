@@ -802,7 +802,7 @@ unexpected airborne frames while sustaining about 71 FPS median.
 - [x] `ENV-01` Add varied forest silhouettes, uneven terrain and restrained fog.
 - [x] `ENV-02` Eliminate tree pop, floating bases and buried visible geometry.
 - [x] `FX-01` Add bounded contact shadow, landing dust and success feedback.
-- [ ] `FX-02` Add restrained feature/camera punctuation after physics is stable.
+- [x] `FX-02` Add restrained feature/camera punctuation after physics is stable.
 - [ ] `AUDIO-01` Add optional low-cost feature and landing audio after visuals.
 
 **Acceptance:** art improves depth and arcade identity without hiding the path,
@@ -860,6 +860,19 @@ projection, 360 by 640 layout, pixel changes, duration and render budgets. The
 complete suite passes 60 tests with no failures, and nine focused tests pass
 under ASan/UBSan. The reviewed 16-frame combined landing/success artifact has
 SHA-256 `43ae5851316d33b1525768189321e35cfdb0c3dda061761626c11915c8a41578`.
+
+**FX-02 evidence:** Quick 3D now derives a bounded 46.35-to-48.3-degree field
+of view from the immutable preload, physical-air and landing snapshots. It
+animates only that presentation property over 120 ms; the authoritative camera
+root and target remain unchanged, normal riding stays at 47 degrees, and the
+safe bypass cannot trigger punctuation. A real X11/OpenGL test verifies every
+state, transition bound, neutral restoration and invariant camera position. Its
+opt-in catalog captures baseline, preload, air, landing and bypass at 960 by
+540; the reviewed contact sheet has SHA-256
+`5a446ed3fbfd716eb243f86a67242c15ae7d0564032b4ab0d5f34792a8b611b7`.
+The complete real-X11 suite passes 61 tests with no failures, three focused
+tests pass under ASan/UBSan, and the production target compiles in the release
+container.
 
 ## Diagnostics And Performance
 

@@ -1095,6 +1095,146 @@ private slots:
                          .arg(maximumYawAcceleration)));
     }
 
+    void cameraPunctuationIsBoundedAndDoesNotMoveTheCameraRoot()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.cbegin(), road.pieces.cend(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.cend());
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(
+                road, piece->challenge.obstacleDistanceMeters - 1.0);
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::Tabletop;
+        frame.feature.route = WorkoutGameRoute::MainLine;
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QObject *camera = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("workoutGameCamera"));
+        QVERIFY(camera);
+
+        const QString catalogDirectory = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_CAMERA_PUNCTUATION_DIR");
+        if (!catalogDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(catalogDirectory));
+            window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        }
+        bool catalogSaveFailed = false;
+        const auto capture = [&window, &catalogDirectory, &catalogSaveFailed](
+                const QString &name) {
+            if (catalogDirectory.isEmpty()) {
+                return QImage();
+            }
+            window.update();
+            QTest::qWait(180);
+            const QImage image = window.grabWindow();
+            const QString path = QDir(catalogDirectory).filePath(
+                    name + QStringLiteral(".png"));
+            if (image.isNull() || !image.save(path)) {
+                catalogSaveFailed = true;
+            }
+            return image;
+        };
+
+        const auto verifyRoot = [&viewModel, camera]() {
+            const QVector3D position =
+                    camera->property("position").value<QVector3D>();
+            const QVector3D expected(
+                    float(viewModel.cameraX()),
+                    float(viewModel.cameraY()),
+                    float(viewModel.cameraZ()));
+            QVERIFY((position - expected).length() < 1.0e-4f);
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(
+                std::abs(camera->property("fieldOfView").toDouble() - 47.0)
+                    < 0.05, 1000);
+        verifyRoot();
+        const QImage baseline = capture(QStringLiteral("baseline"));
+
+        frame.feature.phase = WorkoutGameFeaturePhase::Action;
+        frame.feature.motion = WorkoutGameFeatureMotion::Jump;
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+        QCOMPARE(viewModel.riderPoseState(), QStringLiteral("preload"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+                camera->property("fieldOfView").toDouble() < 46.5, 1000);
+        QVERIFY(camera->property("fieldOfView").toDouble() >= 46.2);
+        verifyRoot();
+        const QImage preload = capture(QStringLiteral("preload"));
+
+        frame.world.rider.airborne = true;
+        frame.world.rider.clearanceMeters = 2.4;
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+        QCOMPARE(viewModel.riderPoseState(), QStringLiteral("air"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+                camera->property("fieldOfView").toDouble() > 47.7, 1000);
+        QVERIFY(camera->property("fieldOfView").toDouble() <= 48.4);
+        verifyRoot();
+        const QImage air = capture(QStringLiteral("air"));
+
+        frame.world.rider.airborne = false;
+        frame.world.rider.clearanceMeters = 0.0;
+        frame.world.landingImpact = 1.0;
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+        QCOMPARE(viewModel.riderPoseState(), QStringLiteral("land"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+                camera->property("fieldOfView").toDouble() > 47.7
+                && camera->property("fieldOfView").toDouble() <= 48.2,
+                1000);
+        verifyRoot();
+        const QImage landing = capture(QStringLiteral("landing"));
+
+        frame.world.landingImpact = 0.0;
+        frame.feature.route = WorkoutGameRoute::SafeBypass;
+        viewModel.setFrame(frame, 180.0, 220.0, 78, 152, 7);
+        QCOMPARE(viewModel.riderPoseState(), QStringLiteral("bypass"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+                std::abs(camera->property("fieldOfView").toDouble() - 47.0)
+                    < 0.05, 1000);
+        verifyRoot();
+        const QImage bypass = capture(QStringLiteral("bypass"));
+        if (!catalogDirectory.isEmpty()) {
+            QVERIFY(!catalogSaveFailed);
+            const std::array<QImage, 5> images = {{
+                baseline, preload, air, landing, bypass
+            }};
+            const std::array<QString, 5> names = {{
+                QStringLiteral("baseline"),
+                QStringLiteral("preload"),
+                QStringLiteral("air"),
+                QStringLiteral("landing"),
+                QStringLiteral("bypass")
+            }};
+            for (std::size_t index = 0; index < images.size(); ++index) {
+                QVERIFY(!images[index].isNull());
+                QVERIFY(sampledColorCount(images[index]) > 35);
+                const QString path = QDir(catalogDirectory).filePath(
+                        names[index] + QStringLiteral(".png"));
+                QVERIFY2(QFile::exists(path), qPrintable(path));
+            }
+            QVERIFY(changedPixels(baseline, preload) > 100);
+            QVERIFY(changedPixels(baseline, air) > 100);
+            QVERIFY(changedPixels(baseline, landing) > 100);
+            QVERIFY(changedPixels(air, bypass) > 100);
+        }
+    }
+
     void rollerSuspensionDrivesTheRiderPumpPose()
     {
         const WorkoutGameCourse course = catalogCourse(
