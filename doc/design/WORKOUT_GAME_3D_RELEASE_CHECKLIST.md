@@ -278,7 +278,7 @@ state. The catalog contact sheet SHA-256 is
 - [x] Run deterministic complete and bypass sessions with Data Generator.
 - [ ] Run a real trainer session without touching production athlete data.
 - [ ] Verify trainer target, recording and feature outcome agree.
-- [ ] Measure target-laptop frame time and simulation skipped ticks.
+- [x] Measure target-laptop frame time and simulation skipped ticks.
 
 **Done when:** one tabletop workout can be ridden, understood, saved and
 replayed without a visual, physics, recording or performance release blocker.
@@ -921,27 +921,32 @@ container.
 - [x] `DIA-04` Capture direct snapshots and videos from isolated deterministic
   sessions.
 - [x] `PERF-01` Stay below 30,000 visible triangles and 50 draw calls initially.
-- [ ] `PERF-02` Hold 60 Hz presentation budget on the target Intel GPU without
+- [x] `PERF-02` Hold 60 Hz presentation budget on the target Intel GPU without
   increasing Bluetooth, trainer-control or recording latency.
 
-**PERF-02 partial evidence:** Quick 3D now uses a session-scoped QML
+**PERF-02 evidence (2026-08-26):** Quick 3D now uses a session-scoped QML
 `FrameAnimation`; its lifecycle test proves that the pulse starts and stops with
 the session instead of depending on 50 Hz input snapshots or an independent GUI
-timer. The opt-in 1280 by 720 target test renders the full eleven-feature budget
-course with High MSAA and 50 Hz moving snapshots while comparing against an
-idle baseline. On the directly accelerated Intel HD Graphics 4000/crocus path,
-the unthrottled throughput run produced 117.5 FPS, p95 11.20 ms and p99 12.80
-ms. Its 20 ms telemetry probe reported p95 2 ms and max 14 ms; the 100 ms real
-trainer-target coordinator path reported p95 2 ms and max 4 ms; the 250 ms real
-temporary-file write/flush path reported p95 5 ms and max 9 ms. None missed a
+timer. Presentation callbacks retain the completed `frameSwapped` timestamp,
+coalesce to the newest frame and enter the GUI queue at low priority. The 3D
+window requests swap interval zero before creating its native surface so the
+Qt render thread cannot hold the GUI thread behind a display-vsync wait; this
+setting is scoped to the Workout Game window. Unchanged normalized telemetry
+also no longer republishes the same HUD bindings every frame.
+
+The opt-in 1280 by 720 target test renders the full eleven-feature budget course
+with High MSAA and 50 Hz moving snapshots while comparing against an idle
+baseline. On the directly accelerated Intel HD Graphics 4000/crocus path and
+the laptop's physical 1920 by 1080, 59.9988 Hz display, the production setting
+produced 121.8 presented FPS, p50 8.07 ms, p95 10.36 ms and p99 11.88 ms. Its
+20 ms telemetry probe reported p95 1 ms and max 3 ms; the 100 ms real
+trainer-target coordinator path reported p95 1 ms and max 3 ms; the 250 ms real
+temporary-file write/flush path reported p95 1 ms and max 1 ms. None missed a
 deadline, simulation skipped no ticks and the geometry queue remained empty.
-A visible-vsync run is still required before closing this item: compositors may
-intentionally throttle a covered, locked or powered-off test window to 1 FPS,
-which is not a valid display-performance measurement. A 29.99 Hz visible remote
-display correctly reports 30 FPS and cannot prove the 60 Hz target. The regular
-real-X11 suite passes 62 tests with 13 explicit opt-in skips, the lifecycle and
-completed-frame diagnostics pass under ASan/UBSan, and the production target
-compiles in the release container.
+Qt timing confirmed that the former bottleneck was a 9-11 ms GUI wait while
+the render thread spent about 15 ms in a vsynced swap, not scene rendering,
+which took about 1 ms. The complete real-X11 suite now passes 64 tests with 13
+explicit opt-in skips; the production target compiles in the release container.
 
 **DIA-04/PERF-01 evidence:** opt-in real-X11 tests capture direct PNG sequences
 and encoded motion for camera compositions, all eleven features, rider action

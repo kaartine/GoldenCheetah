@@ -9,17 +9,26 @@
 
 #include "WorkoutGame3DWindow.h"
 
+#include <QCoreApplication>
+#include <QEvent>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQuickItem>
 #include <QDebug>
 #include <QStringList>
+#include <QSurfaceFormat>
 #include <QTextStream>
 #include <QUrl>
 
 #include <chrono>
 
 namespace {
+
+QEvent::Type presentationEventType()
+{
+    static const int type = QEvent::registerEventType();
+    return static_cast<QEvent::Type>(type);
+}
 
 const char *featurePhaseName(WorkoutGameFeaturePhase phase)
 {
@@ -47,6 +56,9 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
     QQuickView(parent),
     viewModel(new WorkoutGame3DViewModel(this))
 {
+    QSurfaceFormat surfaceFormat = format();
+    surfaceFormat.setSwapInterval(0);
+    setFormat(surfaceFormat);
     diagnosticsEnabled = qEnvironmentVariableIntValue(
             "GC_WORKOUT_GAME_DIAGNOSTICS") != 0;
     traceEnabled = qEnvironmentVariableIntValue(
@@ -62,12 +74,14 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now().time_since_epoch())
                 .count();
-        QMetaObject::invokeMethod(
-                this,
-                [this, presentationTimeNs]() {
-                    handlePresentedFrame(presentationTimeNs);
-                },
-                Qt::QueuedConnection);
+        pendingPresentationTimeNs.store(
+                presentationTimeNs, std::memory_order_release);
+        if (!presentationDispatchPending.exchange(
+                    true, std::memory_order_acq_rel)) {
+            QCoreApplication::postEvent(
+                    this, new QEvent(presentationEventType()),
+                    Qt::LowEventPriority);
+        }
     }, Qt::DirectConnection);
     connect(this, &QQuickWindow::sceneGraphError,
             this, &WorkoutGame3DWindow::handleSceneGraphError);
@@ -82,6 +96,21 @@ WorkoutGame3DWindow::~WorkoutGame3DWindow()
     disconnect(this, nullptr, nullptr, nullptr);
     setSource(QUrl());
     releaseResources();
+}
+
+bool WorkoutGame3DWindow::event(QEvent *event)
+{
+    if (event->type() == presentationEventType()) {
+        presentationDispatchPending.store(false, std::memory_order_release);
+        const std::int64_t presentationTimeNs =
+                pendingPresentationTimeNs.exchange(
+                    0, std::memory_order_acq_rel);
+        if (presentationTimeNs > 0) {
+            handlePresentedFrame(presentationTimeNs);
+        }
+        return true;
+    }
+    return QQuickView::event(event);
 }
 
 void WorkoutGame3DWindow::setCourse(

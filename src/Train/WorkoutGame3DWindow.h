@@ -18,6 +18,8 @@
 #include <QElapsedTimer>
 #include <QQuickView>
 
+#include <atomic>
+
 class WorkoutGame3DWindow : public QQuickView
 {
     Q_OBJECT
@@ -55,6 +57,9 @@ public:
 signals:
     void rendererFailed();
 
+protected:
+    bool event(QEvent *event) override;
+
 private slots:
     void presentFrame();
     void handleStatusChanged(QQuickView::Status status);
@@ -83,6 +88,8 @@ private:
     int cadenceRpm = 0;
     int heartRate = 0;
     int virtualGear = 1;
+    std::atomic<std::int64_t> pendingPresentationTimeNs{0};
+    std::atomic_bool presentationDispatchPending{false};
     std::uint64_t frameNumber = 0;
     std::int64_t lastTracePublishMs = -1;
     bool hasFrame = false;

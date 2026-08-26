@@ -772,11 +772,24 @@ void WorkoutGame3DViewModel::setTelemetry(
         int heartRate,
         int virtualGear)
 {
-    currentWatts = std::max(0.0, finiteOrZero(watts));
-    currentTargetWatts = std::max(0.0, finiteOrZero(targetWatts));
-    currentCadenceRpm = std::clamp(cadenceRpm, 0, 300);
-    currentHeartRate = std::clamp(heartRate, 0, 300);
-    currentVirtualGear = std::max(1, virtualGear);
+    const double nextWatts = std::max(0.0, finiteOrZero(watts));
+    const double nextTargetWatts = std::max(
+            0.0, finiteOrZero(targetWatts));
+    const int nextCadenceRpm = std::clamp(cadenceRpm, 0, 300);
+    const int nextHeartRate = std::clamp(heartRate, 0, 300);
+    const int nextVirtualGear = std::max(1, virtualGear);
+    if (currentWatts == nextWatts
+            && currentTargetWatts == nextTargetWatts
+            && currentCadenceRpm == nextCadenceRpm
+            && currentHeartRate == nextHeartRate
+            && currentVirtualGear == nextVirtualGear) {
+        return;
+    }
+    currentWatts = nextWatts;
+    currentTargetWatts = nextTargetWatts;
+    currentCadenceRpm = nextCadenceRpm;
+    currentHeartRate = nextHeartRate;
+    currentVirtualGear = nextVirtualGear;
     emit telemetryChanged();
 }
 

@@ -38,6 +38,7 @@
 #include <QQuickWindow>
 #include <QScreen>
 #include <QSet>
+#include <QSignalSpy>
 #include <QSGRendererInterface>
 #include <QTemporaryFile>
 #include <QTest>
@@ -495,6 +496,30 @@ class TestWorkoutGame3DView : public QObject
     Q_OBJECT
 
 private slots:
+    void rendererRequestsNonBlockingPresentation()
+    {
+        WorkoutGame3DWindow window(false);
+
+        QCOMPARE(window.format().swapInterval(), 0);
+    }
+
+    void unchangedTelemetryDoesNotRepublishHudBindings()
+    {
+        WorkoutGame3DViewModel viewModel;
+        QSignalSpy changed(
+                &viewModel, &WorkoutGame3DViewModel::telemetryChanged);
+
+        viewModel.setTelemetry(225.0, 230.0, 91, 155, 9);
+        QCOMPARE(changed.count(), 1);
+        for (int frame = 0; frame < 120; ++frame) {
+            viewModel.setTelemetry(225.0, 230.0, 91, 155, 9);
+        }
+        QCOMPARE(changed.count(), 1);
+
+        viewModel.setTelemetry(226.0, 230.0, 91, 155, 9);
+        QCOMPARE(changed.count(), 2);
+    }
+
     void climbUsesDedicatedGeometryAndBoundedEffortPoses()
     {
         const WorkoutGameCourse course = climbRenderCourse();
@@ -1171,8 +1196,8 @@ private slots:
                 << "screen_refresh="
                 << (window.screen() ? window.screen()->refreshRate() : 0.0)
                 << "mode="
-                << (qgetenv("vblank_mode") == QByteArrayLiteral("0")
-                    ? "unthrottled" : "vsync");
+                << (window.format().swapInterval() == 0
+                    ? "nonblocking-swap" : "vsync");
 
         QVERIFY(loaded.recordingOk);
         QVERIFY(loaded.trainerCalls >= 70);
