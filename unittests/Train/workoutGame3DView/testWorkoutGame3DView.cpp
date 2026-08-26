@@ -944,6 +944,50 @@ private slots:
                  "trees still appear to use the former flat floor elevation");
     }
 
+    void treesFadeAtTheResidentWindowEdges()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 60.0), 205.0, 205.0, 86, 148, 6);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QTest::qWait(500);
+
+        const QList<QObject *> trees = window.rootObject()->findChildren<QObject *>(
+                QStringLiteral("workoutGameTree"));
+        QVERIFY(trees.size() >= 4);
+        bool foundOpaqueNearTree = false;
+        bool foundFadedEdgeTree = false;
+        for (QObject *tree : trees) {
+            const double relative = tree->property(
+                    "relativeDistance").toDouble();
+            const double opacity = tree->property("opacity").toDouble();
+            QVERIFY(opacity >= 0.0);
+            QVERIFY(opacity <= 1.0);
+            if (relative >= -10.0 && relative <= 28.0
+                    && opacity > 0.95) {
+                foundOpaqueNearTree = true;
+            }
+            if ((relative < -12.0 || relative > 32.0)
+                    && opacity < 0.90) {
+                foundFadedEdgeTree = true;
+            }
+        }
+        QVERIFY(foundOpaqueNearTree);
+        QVERIFY(foundFadedEdgeTree);
+    }
+
     void cameraMotionIsContinuousAndBounded()
     {
         const WorkoutGameCourse course = cameraMotionCourse();

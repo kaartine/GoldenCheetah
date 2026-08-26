@@ -22,6 +22,12 @@ Item {
         return ""
     }
 
+    function treeEdgeOpacity(relativeMeters) {
+        const behind = Math.max(0, Math.min(1, (relativeMeters + 18) / 6))
+        const ahead = Math.max(0, Math.min(1, (42 - relativeMeters) / 10))
+        return Math.min(behind, ahead)
+    }
+
     View3D {
         id: gameView
         objectName: "workoutGame3DView"
@@ -199,8 +205,25 @@ Item {
             model: workoutGame3D.trees
             delegate: Node {
                 required property var modelData
+                objectName: "workoutGameTree"
+                readonly property real relativeDistance:
+                    modelData.distance - workoutGame3D.distanceMeters
+                readonly property real targetOpacity:
+                    root.treeEdgeOpacity(relativeDistance)
+                property real presentedOpacity: 0
                 position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
                 scale: Qt.vector3d(modelData.scale, modelData.scale, modelData.scale)
+                opacity: presentedOpacity
+
+                Component.onCompleted: presentedOpacity = targetOpacity
+                onTargetOpacityChanged: presentedOpacity = targetOpacity
+
+                Behavior on presentedOpacity {
+                    NumberAnimation {
+                        duration: 320
+                        easing.type: Easing.OutCubic
+                    }
+                }
 
                 Model {
                     source: "#Cylinder"
