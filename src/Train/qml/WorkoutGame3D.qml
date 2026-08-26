@@ -33,6 +33,43 @@ Item {
         objectName: "workoutGame3DView"
         anchors.fill: parent
 
+        Texture {
+            id: forestSurfaceTexture
+            source: "qrc:/images/workout-game-surface-forest.png"
+            tilingModeHorizontal: Texture.Repeat
+            tilingModeVertical: Texture.Repeat
+            minFilter: Texture.Linear
+            magFilter: Texture.Nearest
+            generateMipmaps: true
+        }
+        Texture {
+            id: dirtSurfaceTexture
+            source: "qrc:/images/workout-game-surface-dirt.png"
+            tilingModeHorizontal: Texture.Repeat
+            tilingModeVertical: Texture.Repeat
+            minFilter: Texture.Linear
+            magFilter: Texture.Nearest
+            generateMipmaps: true
+        }
+        Texture {
+            id: stoneSurfaceTexture
+            source: "qrc:/images/workout-game-surface-stone.png"
+            tilingModeHorizontal: Texture.Repeat
+            tilingModeVertical: Texture.Repeat
+            minFilter: Texture.Linear
+            magFilter: Texture.Nearest
+            generateMipmaps: true
+        }
+        Texture {
+            id: woodSurfaceTexture
+            source: "qrc:/images/workout-game-surface-wood.png"
+            tilingModeHorizontal: Texture.Repeat
+            tilingModeVertical: Texture.Repeat
+            minFilter: Texture.Linear
+            magFilter: Texture.Nearest
+            generateMipmaps: true
+        }
+
         Component.onCompleted: {
             renderStats.extendedDataCollectionEnabled =
                     workoutGame3D.extendedRenderStatsEnabled
@@ -78,6 +115,7 @@ Item {
             geometry: workoutGame3D.floorGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"
+                baseColorMap: forestSurfaceTexture
                 roughness: 1
                 vertexColorsEnabled: true
                 lighting: PrincipledMaterial.FragmentLighting
@@ -91,6 +129,7 @@ Item {
             geometry: workoutGame3D.trailGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"
+                baseColorMap: dirtSurfaceTexture
                 roughness: 0.95
                 vertexColorsEnabled: true
                 lighting: PrincipledMaterial.FragmentLighting
@@ -104,6 +143,7 @@ Item {
             geometry: workoutGame3D.climbGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"
+                baseColorMap: stoneSurfaceTexture
                 metalness: 0
                 roughness: 0.94
                 vertexColorsEnabled: true
@@ -119,6 +159,7 @@ Item {
             geometry: workoutGame3D.rootsGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"
+                baseColorMap: woodSurfaceTexture
                 roughness: 1
                 vertexColorsEnabled: true
                 lighting: PrincipledMaterial.FragmentLighting
@@ -133,6 +174,7 @@ Item {
             geometry: workoutGame3D.rockGardenGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"
+                baseColorMap: stoneSurfaceTexture
                 metalness: 0
                 roughness: 0.92
                 vertexColorsEnabled: true
@@ -148,6 +190,7 @@ Item {
             geometry: workoutGame3D.rockSlabGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"
+                baseColorMap: stoneSurfaceTexture
                 metalness: 0
                 roughness: 0.90
                 vertexColorsEnabled: true
@@ -163,6 +206,7 @@ Item {
             geometry: workoutGame3D.skinnyGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"
+                baseColorMap: woodSurfaceTexture
                 metalness: 0
                 roughness: 0.92
                 vertexColorsEnabled: true
@@ -178,6 +222,7 @@ Item {
             geometry: workoutGame3D.bermGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"
+                baseColorMap: dirtSurfaceTexture
                 roughness: 0.95
                 vertexColorsEnabled: true
                 lighting: PrincipledMaterial.FragmentLighting
@@ -192,6 +237,7 @@ Item {
             geometry: workoutGame3D.bypassGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"
+                baseColorMap: dirtSurfaceTexture
                 roughness: 0.95
                 vertexColorsEnabled: true
                 lighting: PrincipledMaterial.FragmentLighting

@@ -119,7 +119,8 @@ targets, feature decisions, or trainer resistance.
 - [x] `SRC-02` Rank reusable vegetation, terrain and natural prop packs.
 - [x] `SRC-03` Search each technical feature and identify custom-model gaps.
 - [x] `SRC-04` Record accepted runtime assets in machine-readable manifests.
-- [ ] `ART-01` Approve one shared low-poly/pixel-textured art brief.
+- [x] `ART-01` Approve one shared low-poly/pixel-textured art brief in
+  `WORKOUT_GAME_3D_ART_BRIEF.md`.
 
 ### Phase 2: Pipeline And Camera
 

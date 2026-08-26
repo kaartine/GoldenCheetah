@@ -1,0 +1,98 @@
+{
+  "assetId": "TR-08-surface-atlas",
+  "displayName": "Workout Game Pixel Surface Atlas",
+  "role": "texture",
+  "source": {
+    "kind": "project-authored",
+    "provider": "GoldenCheetah",
+    "author": "GoldenCheetah contributors",
+    "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/generate_surface_atlas.py",
+    "retrievedAt": "2026-08-26",
+    "originalFileName": "generate_surface_atlas.py",
+    "originalSha256": "7c9e0177207b37d4aa82f4b8788da92d38013d1588294451ba70c017c05607ff",
+    "generator": "Python standard library",
+    "generatorVersion": "3.12",
+    "promptOrScript": "contrib/workout-game-assets/generate_surface_atlas.py"
+  },
+  "license": {
+    "spdxId": "GPL-2.0-or-later",
+    "licenseUrl": "https://www.gnu.org/licenses/old-licenses/gpl-2.0.html",
+    "attribution": "GoldenCheetah contributors",
+    "modificationAllowed": true,
+    "redistributionAllowed": true,
+    "decision": "allow",
+    "policyVersion": "2026-08-25",
+    "archivedLicensePath": "COPYING",
+    "distributionScopes": ["source", "appimage", "screenshots-video"],
+    "conditions": [],
+    "reviewNotes": "Project-authored deterministic palette and pixel patterns with no external image input."
+  },
+  "files": [
+    {
+      "path": "contrib/workout-game-assets/generate_surface_atlas.py",
+      "purpose": "source",
+      "sha256": "7c9e0177207b37d4aa82f4b8788da92d38013d1588294451ba70c017c05607ff"
+    },
+    {
+      "path": "src/Resources/images/workout-game-surface-atlas.png",
+      "purpose": "texture",
+      "sha256": "22e5896d0d32a2d90bfbc60c2fe53c95b6482c27d0c7c4e69758ca5f80ee7c68"
+    },
+    {
+      "path": "src/Resources/images/workout-game-surface-forest.png",
+      "purpose": "texture",
+      "sha256": "2df8597036bdd40fd06239b3b2e3168e3f8f36da735d1e095e2d855edab2d798"
+    },
+    {
+      "path": "src/Resources/images/workout-game-surface-dirt.png",
+      "purpose": "texture",
+      "sha256": "df2954e6f45a76554ceda777522c3d5ca9571e9fef8fec1527a4cf5a12457d9e"
+    },
+    {
+      "path": "src/Resources/images/workout-game-surface-stone.png",
+      "purpose": "texture",
+      "sha256": "b7de6f9e61c6407b07259490569029fe6daa51eeebefee71511ce0fa41bf7d04"
+    },
+    {
+      "path": "src/Resources/images/workout-game-surface-wood.png",
+      "purpose": "texture",
+      "sha256": "6b4d6c2ff12cc9c41c10d6c3b6801d779cceb3c9bf87e9fc0185014de828c27f"
+    }
+  ],
+  "processing": {
+    "tool": "Python standard library",
+    "toolVersion": "3.12",
+    "steps": [
+      "Generate four fixed RGBA palettes with deterministic irregular four-pixel blocks.",
+      "Assemble forest, dirt, stone and wood into one 64 by 64 master atlas.",
+      "Export four 32 by 32 runtime tiles from the same source pixels.",
+      "Encode all PNG scanlines with filter zero and zlib level nine.",
+      "Package every image in qrc and sample runtime tiles with nearest filtering and repeat tiling."
+    ]
+  },
+  "technical": {
+    "format": "png",
+    "unitMeters": 1.0,
+    "upAxis": "+Y",
+    "forwardAxis": "+Z",
+    "materials": 4,
+    "textureBytes": 1263,
+    "animations": [],
+    "allowedExtensions": [],
+    "budgets": {
+      "maxGlbBytes": 1,
+      "maxTrianglesLod0": 0,
+      "maxMaterials": 4,
+      "maxTextureBytes": 16384
+    }
+  },
+  "review": {
+    "status": "approved",
+    "trademarkStatus": "not-applicable",
+    "personReleaseStatus": "not-applicable",
+    "propertyReleaseStatus": "not-applicable",
+    "reviewer": "GoldenCheetah engineering audit",
+    "reviewedAt": "2026-08-26",
+    "notes": "Approved after integrated X11/OpenGL still and 72-frame completed/bypassed motion review; mipmapped linear minification prevents distant shimmer while nearest magnification preserves close pixel blocks."
+  }
+}

@@ -802,6 +802,20 @@ contains no external content, reproduces byte for byte through Blender and
 Balsam, passes manifest and primitive-rejection tests, and remains inside the
 existing ten-tree/50-draw-call runtime budgets.
 
+**ART-01 partial evidence:** the approved
+`WORKOUT_GAME_3D_ART_BRIEF.md` fixes the visual hierarchy, palette, sampling,
+socket continuity and performance rules. Project-authored `TR-08` generates a
+64 by 64 master atlas and four 32 by 32 forest, dirt, stone and wood runtime
+tiles without external input. The 1,263-byte package reproduces byte for byte,
+passes 19 asset-policy tests and manifest validation, and loads through the
+production qrc. Runtime repeat wrapping, nearest magnification, linear
+minification and mipmaps retain close pixel blocks without distant shimmer.
+Real X11/OpenGL still and 72-frame completed/bypassed tabletop tests preserve
+path readability, opaque coverage and render budgets. The reviewed completed
+motion artifact is 960 by 540, 15 FPS and 4.8 seconds with SHA-256
+`e58ea3c2975bd412857d284658fd089772bbc552e4f03cf1ea6c5eee26eb2d3e`.
+`ART-01` remains open until rider/bike materials use the same art direction.
+
 ## Diagnostics And Performance
 
 - [ ] `DIA-01` Count actual presented frames and report p50/p95/p99 frame time.

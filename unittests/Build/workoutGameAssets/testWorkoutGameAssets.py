@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -66,6 +68,18 @@ CONIFER_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_ConiferSet.glb"
 )
+SURFACE_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/TR-08-surface-atlas.json"
+)
+SURFACE_GENERATOR_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generate_surface_atlas.py"
+)
+SURFACE_ATLAS_PATH = (
+    REPOSITORY
+    / "src/Resources/images/workout-game-surface-atlas.png"
+)
 
 
 def sha256(path: Path) -> str:
@@ -114,6 +128,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "FT-03-bunny-hop-greybox",
                 "FT-04-drop-greybox",
                 "RB-01-rider-bike",
+                "TR-08-surface-atlas",
             ],
         )
 
@@ -334,6 +349,62 @@ class TestWorkoutGameAssets(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
             self.assertNotIn(primitive, runtime_qml)
+
+    def test_surface_atlas_is_deterministic_bounded_and_packaged(self) -> None:
+        manifest = assets.load_json_file(SURFACE_MANIFEST_PATH)
+        atlas = SURFACE_ATLAS_PATH.read_bytes()
+        self.assertEqual(atlas[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(struct.unpack(">II", atlas[16:24]), (64, 64))
+        self.assertEqual(atlas[24:29], bytes((8, 6, 0, 0, 0)))
+        runtime_texture_bytes = sum(
+            (
+                REPOSITORY
+                / f"src/Resources/images/workout-game-surface-{name}.png"
+            ).stat().st_size
+            for name in ("atlas", "forest", "dirt", "stone", "wood")
+        )
+        self.assertEqual(
+            manifest["technical"]["textureBytes"], runtime_texture_bytes
+        )
+        self.assertLessEqual(runtime_texture_bytes, 16 * 1024)
+
+        with tempfile.TemporaryDirectory(
+            prefix="gc-surface-atlas-"
+        ) as temporary:
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SURFACE_GENERATOR_PATH),
+                    "--output-dir",
+                    temporary,
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            generated = Path(temporary)
+            for name in ("atlas", "forest", "dirt", "stone", "wood"):
+                expected = (
+                    REPOSITORY
+                    / f"src/Resources/images/workout-game-surface-{name}.png"
+                )
+                self.assertEqual(
+                    (generated / expected.name).read_bytes(), expected.read_bytes()
+                )
+
+        qrc = (
+            REPOSITORY / "src/Resources/workout-game-assets.qrc"
+        ).read_text(encoding="utf-8")
+        qml = (
+            REPOSITORY / "src/Train/qml/WorkoutGame3D.qml"
+        ).read_text(encoding="utf-8")
+        for name in ("atlas", "forest", "dirt", "stone", "wood"):
+            filename = f"workout-game-surface-{name}.png"
+            self.assertIn(filename, qrc)
+            if name != "atlas":
+                self.assertIn(filename, qml)
+        self.assertEqual(qml.count("minFilter: Texture.Linear"), 4)
+        self.assertEqual(qml.count("magFilter: Texture.Nearest"), 4)
+        self.assertEqual(qml.count("generateMipmaps: true"), 4)
 
     def test_malformed_glb_structure_fails_cleanly(self) -> None:
         document, size = assets.read_glb(GLB_PATH)
