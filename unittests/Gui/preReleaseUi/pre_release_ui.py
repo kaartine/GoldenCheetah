@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import signal
+import shutil
 import sys
 import time
 import traceback
@@ -66,6 +67,31 @@ def skip_save_as_from_environment() -> bool:
     if value not in ("0", "1"):
         raise ValueError("GC_UI_SKIP_SAVE_AS must be 0 or 1")
     return value == "1"
+
+
+def validate_trainer_acceptance_from_environment() -> bool:
+    value = os.environ.get("GC_UI_VALIDATE_TRAINER_ACCEPTANCE", "0")
+    if value not in ("0", "1"):
+        raise ValueError("GC_UI_VALIDATE_TRAINER_ACCEPTANCE must be 0 or 1")
+    return value == "1"
+
+
+def preserve_game_recording(source: Path, artifacts: Path) -> Path:
+    destination = artifacts / "game-training-recording.csv"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    return destination
+
+
+def x11_bgrx_to_rgb(data: bytes) -> bytes:
+    if len(data) % 4:
+        raise ValueError("X11 image data must contain whole BGRX pixels")
+    pixels = len(data) // 4
+    rgb = bytearray(pixels * 3)
+    rgb[0::3] = data[2::4]
+    rgb[1::3] = data[1::4]
+    rgb[2::3] = data[0::4]
+    return bytes(rgb)
 
 
 def prepare(root: Path) -> None:
@@ -493,12 +519,7 @@ class UiDriver:
             x, y, width, height, self.X.ZPixmap, 0xFFFFFFFF
         )
         data = image.data
-        rgb = bytearray(width * height * 3)
-        for source in range(0, len(data), 4):
-            target = source // 4 * 3
-            rgb[target : target + 3] = bytes(
-                (data[source + 2], data[source + 1], data[source])
-            )
+        rgb = x11_bgrx_to_rgb(data)
         output = self.artifacts / f"{name}.ppm"
         with output.open("wb") as handle:
             handle.write(f"P6\n{width} {height}\n255\n".encode("ascii"))
@@ -772,6 +793,11 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
 
         def game():
             enter_train()
+            validate_trainer_acceptance = (
+                validate_trainer_acceptance_from_environment()
+            )
+            records = root / "library" / ATHLETE / "records"
+            existing_records = set(records.glob("*.csv"))
             selected = False
             for workout_name in ("Pre-release UI test", "ui-test.erg", "ui-test"):
                 try:
@@ -806,24 +832,34 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                     "Start or pause training", "push button", showing=True
                 )
             )
+            recording = None
             try:
+                if validate_trainer_acceptance:
+                    recording = driver.wait_new_file(
+                        records, existing_records, "*.csv"
+                    )
                 canvas = driver.find_named_any(
                     WORKOUT_GAME_CANVAS_NAMES, showing=True
                 )
-                require_pixel_motion = canvas_requires_pixel_motion(
-                    driver.name(canvas)
-                )
-                time.sleep(1.2)
-                first = driver.screenshot("04-workout-game-first", canvas)
-                time.sleep(game_run_seconds_from_environment())
-                second = driver.screenshot("04-workout-game-running", canvas)
-                if require_pixel_motion:
-                    changed = driver.changed_pixels(first, second)
-                    if changed < 1200:
-                        raise UiFailure(
-                            "Workout Game appears static: "
-                            f"only {changed} sampled pixels changed"
-                        )
+                if validate_trainer_acceptance:
+                    time.sleep(game_run_seconds_from_environment())
+                else:
+                    require_pixel_motion = canvas_requires_pixel_motion(
+                        driver.name(canvas)
+                    )
+                    time.sleep(1.2)
+                    first = driver.screenshot("04-workout-game-first", canvas)
+                    time.sleep(game_run_seconds_from_environment())
+                    second = driver.screenshot("04-workout-game-running", canvas)
+                    if require_pixel_motion:
+                        changed = driver.changed_pixels(first, second)
+                        if changed < 1200:
+                            raise UiFailure(
+                                "Workout Game appears static: "
+                                f"only {changed} sampled pixels changed"
+                            )
+                if recording is not None:
+                    preserve_game_recording(recording, artifacts)
             finally:
                 stop_without_saving()
                 driver.select_combo_item(

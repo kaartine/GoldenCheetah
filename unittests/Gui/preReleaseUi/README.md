@@ -26,6 +26,12 @@ Generator scenario. Unknown values stop the run before GoldenCheetah starts.
 Set `GC_UI_GAME_RUN_SECONDS=70` with `GC_WORKOUT_GAME_FEATURE_LAB=1` to
 capture all eleven feature sections without crossing the 72-second automatic
 workout-completion boundary during the surrounding UI workflow.
+Set `GC_UI_VALIDATE_TRAINER_ACCEPTANCE=1` to preserve the isolated Workout Game
+recording as `game-training-recording.csv` and reconcile its telemetry, trainer
+targets and feature outcomes with the trace. This mode requires
+`GC_WORKOUT_GAME_TRACE=1`, selects the 3D renderer by default and never reads
+the normal athlete library. Trace validation replaces the two synchronous X11
+game screenshots in this mode so readback cannot distort workout timing.
 
 For an unpackaged development binary, set `GC_UI_APPDIR` to an extracted
 AppImage root whose `lib`, `plugins` and `qml` directories provide the matching

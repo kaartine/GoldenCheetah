@@ -1104,4 +1104,15 @@ frames. Local and remote stable paths resolve to this verified artifact and
 both release stores retain `aeef5e1` as the previous generation. The real
 trainer ride and explicit camera choice remain open acceptance gates.
 
+The exact promoted AppImage also passed the non-production Data Generator
+rehearsal of the real-trainer evidence chain. All 56 recording samples matched
+the Quick 3D trace, p95 power disagreement was 6 W, p95 dispatched-target
+disagreement was 0 W, both observed feature decisions agreed with readiness
+and route, and the course advanced 419.871 m without backward frames or skipped
+simulation ticks. The harness now scopes targets and recording rows to the game
+trace window, tolerates isolated asynchronous transition samples through p95
+while retaining maxima in the report, selects Quick 3D for acceptance, and
+avoids synchronous X11 readback in timing-sensitive runs. Its Python regression
+suite passes 36 cases. This rehearsal does not replace `REL-04`.
+
 The build is not a release candidate while any P0 task remains open.

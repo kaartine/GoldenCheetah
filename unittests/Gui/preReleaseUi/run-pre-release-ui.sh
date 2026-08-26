@@ -124,6 +124,9 @@ fi
 export QTWEBENGINE_DISABLE_SANDBOX=1
 export APPIMAGE_EXTRACT_AND_RUN=1
 export GC_WORKOUT_GAME_FORCE_PAINTER=${GC_WORKOUT_GAME_FORCE_PAINTER:-1}
+if [ "${GC_UI_VALIDATE_TRAINER_ACCEPTANCE:-0}" = 1 ]; then
+    export GC_WORKOUT_GAME_3D=${GC_WORKOUT_GAME_3D:-1}
+fi
 
 APP_ENV=()
 if [ -n "${GC_UI_APPDIR:-}" ]; then
@@ -171,9 +174,23 @@ if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
             "$ARTIFACT_DIR/goldencheetah.log"; then
         TRACE_LOG=$ARTIFACT_DIR/goldencheetah.log
     fi
-    python3 "$SCRIPT_DIR/analyze_workout_game.py" \
-        "$TRACE_LOG" \
-        --json "$ARTIFACT_DIR/workout-game-summary.json" || STATUS=$?
+    ANALYZER_ARGS=(
+        "$TRACE_LOG"
+        --json "$ARTIFACT_DIR/workout-game-summary.json"
+    )
+    if [ "${GC_UI_VALIDATE_TRAINER_ACCEPTANCE:-0}" = 1 ]; then
+        RECORDING=$ARTIFACT_DIR/game-training-recording.csv
+        if [ ! -s "$RECORDING" ]; then
+            echo "Workout Game training recording was not preserved" >&2
+            STATUS=1
+        else
+            ANALYZER_ARGS+=(--recording "$RECORDING")
+        fi
+    fi
+    if [ "$STATUS" -eq 0 ]; then
+        python3 "$SCRIPT_DIR/analyze_workout_game.py" \
+            "${ANALYZER_ARGS[@]}" || STATUS=$?
+    fi
 fi
 
 if [ "$STATUS" -eq 0 ]; then

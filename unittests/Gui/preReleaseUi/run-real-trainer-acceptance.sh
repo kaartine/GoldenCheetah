@@ -45,6 +45,7 @@ export XDG_CACHE_HOME=$HOME/.cache
 export APPIMAGE_EXTRACT_AND_RUN=${APPIMAGE_EXTRACT_AND_RUN:-1}
 export GC_WORKOUT_GAME_TRACE=1
 export GC_WORKOUT_GAME_DIAGNOSTICS=${GC_WORKOUT_GAME_DIAGNOSTICS:-1}
+export GC_WORKOUT_GAME_3D=${GC_WORKOUT_GAME_3D:-1}
 
 cat <<'EOF'
 An isolated GoldenCheetah profile will open. Add or select the real trainer,

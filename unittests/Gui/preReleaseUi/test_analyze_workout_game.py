@@ -240,6 +240,50 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must be 0 or 1"):
                 UI.skip_save_as_from_environment()
 
+    def test_trainer_acceptance_gate_is_explicit(self):
+        with mock.patch.dict(
+            os.environ, {"GC_UI_VALIDATE_TRAINER_ACCEPTANCE": "1"}
+        ):
+            self.assertTrue(UI.validate_trainer_acceptance_from_environment())
+        with mock.patch.dict(
+            os.environ, {"GC_UI_VALIDATE_TRAINER_ACCEPTANCE": "0"}
+        ):
+            self.assertFalse(UI.validate_trainer_acceptance_from_environment())
+        with mock.patch.dict(
+            os.environ, {"GC_UI_VALIDATE_TRAINER_ACCEPTANCE": "yes"}
+        ):
+            with self.assertRaisesRegex(ValueError, "must be 0 or 1"):
+                UI.validate_trainer_acceptance_from_environment()
+
+    def test_game_recording_is_preserved_in_artifact_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "isolated-records" / "training.csv"
+            artifacts = root / "artifacts"
+            source.parent.mkdir()
+            source.write_text("secs,watts\n0,190\n", encoding="utf-8")
+
+            destination = UI.preserve_game_recording(source, artifacts)
+
+            self.assertEqual(
+                destination, artifacts / "game-training-recording.csv"
+            )
+            self.assertEqual(
+                destination.read_text(encoding="utf-8"),
+                "secs,watts\n0,190\n",
+            )
+            self.assertTrue(source.exists())
+
+    def test_x11_bgrx_conversion_uses_all_pixels(self):
+        self.assertEqual(
+            UI.x11_bgrx_to_rgb(
+                bytes((0x33, 0x22, 0x11, 0x00, 0xCC, 0xBB, 0xAA, 0xFF))
+            ),
+            bytes((0x11, 0x22, 0x33, 0xAA, 0xBB, 0xCC)),
+        )
+        with self.assertRaisesRegex(ValueError, "whole BGRX pixels"):
+            UI.x11_bgrx_to_rgb(b"abc")
+
     def test_frame_delta_ignores_header_and_counts_game_pixels(self):
         width = 4
         height = 4
@@ -423,6 +467,28 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 "devices": 1.0,
             }])
 
+    def test_trainer_targets_can_be_scoped_to_game_trace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app.log"
+            path.write_text(
+                "workout-game-trainer-target mode=erg value=100 "
+                "workout_pos=0 devices=1\n"
+                "workout-game-3d-trace source_ms=0 watts=100\n"
+                "workout-game-trainer-target mode=erg value=210 "
+                "workout_pos=1000 devices=1\n"
+                "workout-game-3d-trace source_ms=1000 watts=205\n"
+                "workout-game-trainer-target mode=erg value=0 "
+                "workout_pos=0 devices=1\n",
+                encoding="utf-8",
+            )
+
+            targets = ANALYZER.parse_trainer_targets(
+                path, within_trace=True
+            )
+
+            self.assertEqual(len(targets), 1)
+            self.assertEqual(targets[0]["value"], 210.0)
+
     def test_reconciles_trace_trainer_target_and_recording(self):
         trace = [
             {
@@ -466,6 +532,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         summary = ANALYZER.reconcile_acceptance(trace, targets, recording)
 
         self.assertEqual(summary["matched_recording_samples"], 3)
+        self.assertEqual(summary["recording_samples_in_trace_window"], 3)
         self.assertEqual(summary["trainer_target_dispatches"], 3)
         self.assertEqual(summary["feature_decisions"], 1)
         self.assertEqual(
@@ -533,6 +600,65 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         self.assertTrue(any("trainer target" in failure for failure in failures))
         self.assertTrue(any("feature decision" in failure for failure in failures))
 
+    def test_acceptance_tolerates_one_asynchronous_transition_sample(self):
+        trace = [
+            {
+                "source_ms": float(index * 1000),
+                "watts": 200.0 if index != 10 else 350.0,
+                "cadence": 80.0,
+                "hr": 140.0,
+                "gear": 5.0,
+                "action_id": 1.0,
+                "feature_outcome": "completed",
+                "route": "main",
+                "readiness": 1.0,
+                "feature_terrain": "roots",
+            }
+            for index in range(20)
+        ]
+        recording = [
+            {
+                "secs": float(index),
+                "cad": 80.0,
+                "hr": 140.0,
+                "km": index * 0.01,
+                "watts": 200.0,
+                "slope": 0.0,
+                "target": 200.0,
+                "virtualgear": 5.0,
+            }
+            for index in range(20)
+        ]
+        targets = [
+            {
+                "mode": "erg",
+                "value": 350.0 if index == 10 else 200.0,
+                "workout_pos": float(index * 1000),
+                "devices": 1.0,
+            }
+            for index in range(20)
+        ]
+
+        summary = ANALYZER.reconcile_acceptance(trace, targets, recording)
+        failures = ANALYZER.validate_acceptance(
+            summary,
+            minimum_recording_matches=5,
+            minimum_recording_match_ratio=0.75,
+            maximum_power_delta_watts=20.0,
+            maximum_cadence_delta_rpm=10.0,
+            maximum_heart_rate_delta_bpm=10.0,
+            maximum_gear_mismatches=1,
+            maximum_trainer_target_delta=5.0,
+            minimum_trainer_target_dispatches=1,
+            minimum_feature_decisions=1,
+        )
+
+        self.assertEqual(summary["maximum_power_delta_watts"], 150.0)
+        self.assertEqual(summary["p95_power_delta_watts"], 0.0)
+        self.assertEqual(summary["maximum_trainer_target_delta"], 150.0)
+        self.assertEqual(summary["p95_trainer_target_delta"], 0.0)
+        self.assertEqual(failures, [])
+
     def test_erg_target_is_aligned_by_workout_time(self):
         recording = [{
             "secs": 2.0,
@@ -554,6 +680,34 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         summary = ANALYZER.reconcile_acceptance([], targets, recording)
 
         self.assertEqual(summary["maximum_trainer_target_delta"], 0.0)
+
+    def test_recording_match_ratio_ignores_rows_after_trace_window(self):
+        trace = [{
+            "source_ms": 1000.0,
+            "watts": 200.0,
+            "cadence": 80.0,
+            "hr": 140.0,
+            "gear": 5.0,
+        }]
+        recording = [
+            {
+                "secs": seconds,
+                "cad": 80.0,
+                "hr": 140.0,
+                "km": seconds * 0.01,
+                "watts": 200.0,
+                "slope": 0.0,
+                "target": 200.0,
+                "virtualgear": 5.0,
+            }
+            for seconds in (1.0, 2.0, 3.0)
+        ]
+
+        summary = ANALYZER.reconcile_acceptance(trace, [], recording)
+
+        self.assertEqual(summary["recording_samples"], 3)
+        self.assertEqual(summary["recording_samples_in_trace_window"], 1)
+        self.assertEqual(summary["recording_match_ratio"], 1.0)
 
     def test_missed_climb_keeps_main_route_without_inconsistency(self):
         trace = [{

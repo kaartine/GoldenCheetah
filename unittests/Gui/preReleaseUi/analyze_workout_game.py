@@ -66,9 +66,25 @@ def parse_trace(path: Path) -> list[TraceSample]:
     return samples
 
 
-def parse_trainer_targets(path: Path) -> list[TraceSample]:
+def parse_trainer_targets(
+    path: Path, within_trace: bool = False
+) -> list[TraceSample]:
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    first_trace = 0
+    last_trace = len(lines) - 1
+    if within_trace:
+        trace_lines = [
+            index for index, line in enumerate(lines)
+            if any(marker in line for marker in TRACE_MARKERS)
+        ]
+        if not trace_lines:
+            return []
+        first_trace = trace_lines[0]
+        last_trace = trace_lines[-1]
     targets = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for index, line in enumerate(lines):
+        if index < first_trace or index > last_trace:
+            continue
         offset = line.find(TRAINER_TARGET_MARKER)
         if offset < 0:
             continue
@@ -149,12 +165,21 @@ def reconcile_acceptance(
         key=lambda sample: numeric(sample, "source_ms") or 0.0,
     )
     trace_times = [numeric(sample, "source_ms") or 0.0 for sample in timed_trace]
+    if trace_times:
+        recording_in_trace_window = [
+            row for row in recording
+            if trace_times[0] - 750.0
+            <= row["secs"] * 1000.0
+            <= trace_times[-1] + 750.0
+        ]
+    else:
+        recording_in_trace_window = recording
     power_deltas = []
     cadence_deltas = []
     heart_rate_deltas = []
     gear_mismatches = 0
     matched_recordings = 0
-    for row in recording:
+    for row in recording_in_trace_window:
         sample = nearest_by(timed_trace, trace_times, row["secs"] * 1000.0)
         if sample is None:
             continue
@@ -219,17 +244,23 @@ def reconcile_acceptance(
 
     return {
         "recording_samples": len(recording),
+        "recording_samples_in_trace_window": len(recording_in_trace_window),
         "matched_recording_samples": matched_recordings,
         "recording_match_ratio": (
-            matched_recordings / len(recording) if recording else 0.0
+            matched_recordings / len(recording_in_trace_window)
+            if recording_in_trace_window else 0.0
         ),
         "maximum_power_delta_watts": max(power_deltas, default=0.0),
+        "p95_power_delta_watts": percentile(power_deltas, 0.95),
         "maximum_cadence_delta_rpm": max(cadence_deltas, default=0.0),
         "maximum_heart_rate_delta_bpm": max(heart_rate_deltas, default=0.0),
         "gear_mismatches": gear_mismatches,
         "trainer_target_dispatches": len(trainer_targets),
         "trainer_targets_with_devices": trainer_targets_with_devices,
         "maximum_trainer_target_delta": max(trainer_target_deltas, default=0.0),
+        "p95_trainer_target_delta": percentile(
+            trainer_target_deltas, 0.95
+        ),
         "feature_decisions": len(decisions),
         "inconsistent_feature_decisions": inconsistent_decisions,
     }
@@ -252,8 +283,10 @@ def validate_acceptance(
         failures.append("too few recording samples matched the game trace")
     if summary["recording_match_ratio"] < minimum_recording_match_ratio:
         failures.append("recording-to-trace match ratio is too low")
-    if summary["maximum_power_delta_watts"] > maximum_power_delta_watts:
-        failures.append("recorded power disagrees with game telemetry")
+    if summary["p95_power_delta_watts"] > maximum_power_delta_watts:
+        failures.append(
+            "recorded power persistently disagrees with game telemetry"
+        )
     if summary["maximum_cadence_delta_rpm"] > maximum_cadence_delta_rpm:
         failures.append("recorded cadence disagrees with game telemetry")
     if summary["maximum_heart_rate_delta_bpm"] > maximum_heart_rate_delta_bpm:
@@ -264,8 +297,10 @@ def validate_acceptance(
         failures.append("too few trainer target dispatches were traced")
     if summary["trainer_targets_with_devices"] < minimum_trainer_target_dispatches:
         failures.append("trainer targets were dispatched without active devices")
-    if summary["maximum_trainer_target_delta"] > maximum_trainer_target_delta:
-        failures.append("trainer target disagrees with the recording")
+    if summary["p95_trainer_target_delta"] > maximum_trainer_target_delta:
+        failures.append(
+            "trainer target persistently disagrees with the recording"
+        )
     if summary["feature_decisions"] < minimum_feature_decisions:
         failures.append("too few feature decisions were observed")
     if summary["inconsistent_feature_decisions"]:
@@ -432,7 +467,7 @@ def main() -> int:
     if args.recording:
         acceptance = reconcile_acceptance(
             trace,
-            parse_trainer_targets(args.log),
+            parse_trainer_targets(args.log, within_trace=True),
             parse_recording(args.recording),
         )
         summary.update(acceptance)
