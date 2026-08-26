@@ -6,6 +6,7 @@ TARGET = testWorkoutGame3DView
 INCLUDEPATH += ../../../src/Train
 
 SOURCES += testWorkoutGame3DView.cpp \
+           ../../../src/Train/WorkoutGame3DChunkBuilder.cpp \
            ../../../src/Train/WorkoutGame3DFeatureAsset.cpp \
            ../../../src/Train/WorkoutGame3DGeometry.cpp \
            ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
@@ -20,7 +21,8 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGameVisualSmoother.cpp \
            ../../../src/Train/WorkoutGameWorld.cpp
 
-HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
+HEADERS += ../../../src/Train/WorkoutGame3DChunkBuilder.h \
+           ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGameClimbGeometry.h \
            ../../../src/Train/WorkoutGameTabletopGeometry.h \
            ../../../src/Train/WorkoutGame3DFeatureAsset.h \

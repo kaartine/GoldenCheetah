@@ -79,10 +79,13 @@ not edit mesh vertices to hide mismatches.
    or the GUI thread. Application code does not access render resources from
    the simulation worker.
 
-Course mesh generation and GLB validation are cold-path work. Large future
-courses may build on a worker, but only a complete immutable result may be
-published. Trainer control, recording, input publication and simulation are
-never allowed to join that worker.
+Course mesh generation and GLB validation are cold-path work. Initial immutable
+course construction remains outside an active session frame loop. During a
+ride, `WorkoutGame3DChunkBuilder` calculates the six streamed terrain layers on
+one lower-priority worker. Its pending request and completed result are both
+capacity-one mailboxes, and only a complete generation-tagged result is
+installed into inactive Quick 3D geometry on the GUI thread. Trainer control,
+recording, input publication and simulation never join or wait for that worker.
 
 ## Resource Bounds
 
@@ -92,12 +95,14 @@ never allowed to join that worker.
   10-metre streaming window. Only 15 metres behind and 130 metres ahead are
   resident, preventing remote course loops from intersecting the foreground.
   Chunk replacement uses two geometry buffers so the render thread never sees
-  an in-use mesh cleared in place. Vertex colors separate trail seams,
+  an in-use mesh cleared in place. CPU mesh formation occurs on the chunk
+  worker; the GUI thread only installs completed buffers. Vertex colors separate trail seams,
   shoulders and forest without adding texture work to the frame loop.
 - The frame loop changes transforms and small telemetry values; it does not
   rebuild the course mesh.
 - Trees and feature props are bounded distance windows and update only when the
-  rider crosses a placement bucket.
+  rider crosses a placement bucket. At most ten two-part tree placeholders are
+  resident until authored instanced vegetation replaces them.
 - Root networks are project-authored procedural geometry with at most 512
   segments in the resident range. Their 40 vertices and 512 triangles per tile
   are rebuilt into one of two buffers only when the floor streaming bucket

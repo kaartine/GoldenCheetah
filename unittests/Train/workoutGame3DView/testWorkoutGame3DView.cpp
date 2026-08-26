@@ -179,6 +179,37 @@ WorkoutGameCourse cameraMotionCourse()
     return course;
 }
 
+WorkoutGameCourse renderBudgetCourse()
+{
+    WorkoutGameCourse course;
+    course.status = WorkoutGameCourseStatus::Ready;
+    course.seed = 0x51a7u;
+    std::int64_t startMs = 0;
+    const std::array<WorkoutGameTerrainKind, 11> terrains = {{
+        WorkoutGameTerrainKind::BunnyHop,
+        WorkoutGameTerrainKind::LogOver,
+        WorkoutGameTerrainKind::Drop,
+        WorkoutGameTerrainKind::Roots,
+        WorkoutGameTerrainKind::RockGarden,
+        WorkoutGameTerrainKind::Skinny,
+        WorkoutGameTerrainKind::Climb,
+        WorkoutGameTerrainKind::Berm,
+        WorkoutGameTerrainKind::Tabletop,
+        WorkoutGameTerrainKind::RockSlab,
+        WorkoutGameTerrainKind::Rollers
+    }};
+    for (WorkoutGameTerrainKind terrain : terrains) {
+        WorkoutGameSection section = catalogCourse(terrain).sections.front();
+        section.startMs = startMs;
+        section.durationMs = 30000;
+        section.lengthMeters = 42.0;
+        course.sections.push_back(section);
+        startMs += section.durationMs;
+    }
+    course.durationMs = startMs;
+    return course;
+}
+
 WorkoutGameVisualSnapshot frameAt(
         const WorkoutGameRoadCourse &road,
         double distanceMeters)
@@ -663,8 +694,14 @@ private slots:
         auto *geometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.skinnyGeometry());
         QVERIFY(geometry);
-        QVERIFY(geometry->ready());
+        QTRY_VERIFY_WITH_TIMEOUT(
+                qobject_cast<WorkoutGame3DGeometry *>(
+                    viewModel.skinnyGeometry())->ready(), 3000);
+        geometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.skinnyGeometry());
         QCOMPARE(geometry->sampleCount(), 1008);
+        QVERIFY(viewModel.visibleTriangles() > 0);
+        QVERIFY(viewModel.visibleTriangles() < 30000);
         QVERIFY(std::abs(viewModel.riderRoll()) > 0.2);
         QVERIFY(std::abs(viewModel.riderRoll()) <= 2.0);
         QCOMPARE(viewModel.riderRoll(),
@@ -709,6 +746,52 @@ private slots:
     void initTestCase()
     {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+    }
+
+    void renderWorkStaysWithinInitialBudgets()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const ScopedEnvironmentVariable restoreStats(
+                "GC_WORKOUT_GAME_RENDER_STATS");
+        qputenv("GC_WORKOUT_GAME_RENDER_STATS", "1");
+        const WorkoutGameCourse course = renderBudgetCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.setCourse(course, FtpWatts);
+        window.resize(1280, 720);
+        window.setSessionRunning(true);
+        window.setFrame(
+                frameAt(road, 70.0), 240.0, 220.0, 92, 152, 8);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+
+        auto *viewModel = qobject_cast<WorkoutGame3DViewModel *>(
+                window.rootContext()->contextProperty(
+                    QStringLiteral("workoutGame3D")).value<QObject *>());
+        QVERIFY(viewModel);
+        QTRY_VERIFY_WITH_TIMEOUT(viewModel->visibleTriangles() > 0, 3000);
+        QVERIFY(viewModel->visibleTriangles() < 30000);
+        QVERIFY(viewModel->trees().size() <= 10);
+        QVERIFY(viewModel->geometryQueueDepth() <= 1);
+
+        QObject *view = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("workoutGame3DView"));
+        QVERIFY(view);
+        QObject *stats = view->property("renderStats").value<QObject *>();
+        QVERIFY(stats);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                stats->property("drawCallCount").toULongLong() > 0, 5000);
+        QVERIFY2(stats->property("drawCallCount").toULongLong() <= 50,
+                 qPrintable(QStringLiteral("draw-call budget exceeded: %1")
+                         .arg(stats->property("drawCallCount")
+                              .toULongLong())));
+        window.setSessionRunning(false);
     }
 
     void cameraCompositionDefaultsToCentreAndSupportsAuditVariants()
@@ -803,6 +886,7 @@ private slots:
              distance <= road.totalLengthMeters; distance += 0.5) {
             viewModel.setFrame(
                     frameAt(road, distance), 220.0, 220.0, 88, 150, 7);
+            QVERIFY(viewModel.trees().size() <= 10);
             for (const QVariant &entry : viewModel.trees()) {
                 const QVariantMap tree = entry.toMap();
                 const double clearance = horizontalDistanceToSegment(
@@ -1005,8 +1089,14 @@ private slots:
         auto *rootsGeometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.rootsGeometry());
         QVERIFY(rootsGeometry);
-        QVERIFY(rootsGeometry->ready());
+        QTRY_VERIFY_WITH_TIMEOUT(
+                qobject_cast<WorkoutGame3DGeometry *>(
+                    viewModel.rootsGeometry())->ready(), 3000);
+        rootsGeometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.rootsGeometry());
         QVERIFY(rootsGeometry->sampleCount() >= 40);
+        QVERIFY(viewModel.visibleTriangles() > 0);
+        QVERIFY(viewModel.visibleTriangles() < 30000);
         QCOMPARE(viewModel.riderPump(), 0.0);
 
         const double cameraX = viewModel.cameraX();
@@ -1061,8 +1151,14 @@ private slots:
         auto *rocksGeometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.rockGardenGeometry());
         QVERIFY(rocksGeometry);
-        QVERIFY(rocksGeometry->ready());
+        QTRY_VERIFY_WITH_TIMEOUT(
+                qobject_cast<WorkoutGame3DGeometry *>(
+                    viewModel.rockGardenGeometry())->ready(), 3000);
+        rocksGeometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.rockGardenGeometry());
         QCOMPARE(rocksGeometry->sampleCount(), 12 * 15);
+        QVERIFY(viewModel.visibleTriangles() > 0);
+        QVERIFY(viewModel.visibleTriangles() < 30000);
         QCOMPARE(viewModel.riderPump(), 0.0);
 
         const double cameraX = viewModel.cameraX();
@@ -1117,8 +1213,14 @@ private slots:
         auto *slabGeometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.rockSlabGeometry());
         QVERIFY(slabGeometry);
-        QVERIFY(slabGeometry->ready());
+        QTRY_VERIFY_WITH_TIMEOUT(
+                qobject_cast<WorkoutGame3DGeometry *>(
+                    viewModel.rockSlabGeometry())->ready(), 3000);
+        slabGeometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.rockSlabGeometry());
         QCOMPARE(slabGeometry->sampleCount(), 147);
+        QVERIFY(viewModel.visibleTriangles() > 0);
+        QVERIFY(viewModel.visibleTriangles() < 30000);
         QCOMPARE(viewModel.riderPump(), 0.0);
 
         const double cameraX = viewModel.cameraX();
@@ -1491,6 +1593,8 @@ private slots:
         QVERIFY(!generatorBadge->isVisible());
 
         if (hasInteractiveGraphicsPlatform()) {
+            window.setFlag(Qt::BypassWindowManagerHint);
+            window.resize(size);
             window.show();
             QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
             QTest::qWait(120);
@@ -2071,7 +2175,7 @@ private slots:
         QVERIFY(rockSlabGeometry);
         QVERIFY(bypassGeometry->ready());
         QVERIFY(bypassGeometry->sampleCount() >= 20);
-        QVERIFY(viewModel.trees().size() <= 19);
+        QVERIFY(viewModel.trees().size() <= 10);
         QVERIFY(viewModel.features().size() <= 32);
         viewModel.setFrame(
                 frameAt(road, 12.0), 215.0, 220.0, 87, 148, 7);
@@ -2103,7 +2207,8 @@ private slots:
         viewModel.setFrame(
                 frameAt(road, tabletopApproachDistance(road)),
                 248.0, 242.0, 93, 154, 9);
-        QVERIFY(viewModel.floorGeometry() != firstFloorGeometry);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                viewModel.floorGeometry() != firstFloorGeometry, 3000);
         auto *floorGeometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.floorGeometry());
         QVERIFY(floorGeometry);

@@ -59,16 +59,36 @@ terrain or a late-streamed floor chunk.
 
 ### `RND-01` Keep rendering independent and bounded
 
-- [ ] Confirm immutable newest-frame publication remains capacity one.
-- [ ] Keep GLB/mesh generation, validation and loading out of the frame loop.
-- [ ] Bound resident terrain, visible props, particles, triangles and draw calls.
-- [ ] Preserve opaque depth-correct geometry and eliminate background holes.
+- [x] Confirm immutable newest-frame publication remains capacity one.
+- [x] Keep GLB/mesh generation, validation and loading out of the frame loop.
+- [x] Bound resident terrain, visible props, particles, triangles and draw calls.
+- [x] Preserve opaque depth-correct geometry and eliminate background holes.
 
 **Tests:** runner/thread tests, frame-work counters, scene bounds, pixel checks,
 memory plateau and target-laptop frame-time telemetry.
 
 **Done when:** rendering cannot delay trainer control or recording and cannot
 form an unbounded work queue.
+
+**Current evidence:** `WorkoutGameRunner` still publishes immutable simulation
+frames through its single latest-value slot. Runtime floor, roots, climb, rock
+garden, rock slab and skinny mesh calculations now run in one lower-priority
+`WorkoutGame3DChunkBuilder` thread. Both its pending-request and completed-result
+mailboxes have capacity one: newer distance buckets overwrite stale work and a
+course generation prevents retired results from being installed. The worker
+produces plain immutable byte buffers; only the GUI thread updates the inactive
+Quick 3D geometry and atomically exposes it through the existing double buffer.
+Its queued GUI wakeup is separately coalesced to one callback.
+
+Resident terrain remains limited to 15 m behind and 130 m ahead. Visible trees
+are capped at ten, particles remain absent, and the ViewModel publishes the
+actual custom-mesh triangle count. An opt-in Qt Quick 3D extended-statistics
+test renders the combined asset/technical-terrain budget on real X11/OpenGL and
+rejects more than 30,000 custom triangles or 50 actual draw calls. Capacity,
+replacement, cancellation and shutdown pass eight focused tests normally,
+under ASan/UBSan and under TSan. The unchanged geometry contract passes all 27
+tests normally and under ASan/UBSan. The complete Quick 3D suite retains the
+pixel-level clear-color hole checks.
 
 ## P0 Asset Pipeline
 

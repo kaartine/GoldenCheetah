@@ -143,6 +143,7 @@ exists(unittests.pri) {
 			   Train/workoutGameDistanceCourse \
 			   Train/workoutGameDistancePlayback \
 			   Train/workoutGameEngine \
+			   Train/workoutGame3DChunkBuilder \
 			   Train/workoutGame3DGeometry \
 			   Train/workoutGame3DView \
 			   Train/workoutGameFeatureChallenge \

@@ -10,6 +10,7 @@
 #ifndef _GC_WorkoutGame3DViewModel_h
 #define _GC_WorkoutGame3DViewModel_h
 
+#include "WorkoutGame3DChunkBuilder.h"
 #include "WorkoutGame3DGeometry.h"
 #include "WorkoutGameEngine.h"
 #include "WorkoutGameFeatureHud.h"
@@ -19,6 +20,8 @@
 #include <QVariantList>
 
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <limits>
 #include <vector>
@@ -68,6 +71,10 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(int heartRate READ heartRate NOTIFY telemetryChanged)
     Q_PROPERTY(int virtualGear READ virtualGear NOTIFY telemetryChanged)
     Q_PROPERTY(double fps READ fps NOTIFY fpsChanged)
+    Q_PROPERTY(int visibleTriangles READ visibleTriangles
+               NOTIFY renderWorkChanged)
+    Q_PROPERTY(int geometryQueueDepth READ geometryQueueDepth
+               NOTIFY renderWorkChanged)
     Q_PROPERTY(QString generatorState READ generatorState
                NOTIFY generatorStateChanged)
     Q_PROPERTY(QString terrainName READ terrainName NOTIFY sceneChanged)
@@ -97,6 +104,8 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(QVariantList features READ features NOTIFY courseChanged)
     Q_PROPERTY(QVariantList trees READ trees NOTIFY treesChanged)
     Q_PROPERTY(QString cameraComposition READ cameraComposition CONSTANT)
+    Q_PROPERTY(bool extendedRenderStatsEnabled
+               READ extendedRenderStatsEnabled CONSTANT)
     Q_PROPERTY(double cameraBackMeters READ cameraBackMeters CONSTANT)
     Q_PROPERTY(double cameraSideMeters READ cameraSideMeters CONSTANT)
     Q_PROPERTY(double cameraHeightMeters READ cameraHeightMeters CONSTANT)
@@ -182,6 +191,8 @@ public:
     int heartRate() const { return currentHeartRate; }
     int virtualGear() const { return currentVirtualGear; }
     double fps() const { return currentFps; }
+    int visibleTriangles() const { return currentVisibleTriangles; }
+    int geometryQueueDepth() const;
     QString generatorState() const { return currentGeneratorState; }
     QString terrainName() const { return currentTerrainName; }
     QString featureStatus() const { return currentFeatureStatus; }
@@ -224,6 +235,11 @@ public:
     QVariantList features() const { return courseFeatures; }
     QVariantList trees() const { return visibleTrees; }
     QString cameraComposition() const { return currentCameraComposition; }
+    bool extendedRenderStatsEnabled() const
+    {
+        return qEnvironmentVariableIntValue(
+                "GC_WORKOUT_GAME_RENDER_STATS") != 0;
+    }
     double cameraBackMeters() const { return cameraBackDistanceMeters; }
     double cameraSideMeters() const { return cameraSideDistanceMeters; }
     double cameraHeightMeters() const { return cameraHeightDistanceMeters; }
@@ -240,6 +256,7 @@ signals:
     void sceneChanged();
     void telemetryChanged();
     void fpsChanged();
+    void renderWorkChanged();
     void generatorStateChanged();
     void courseChanged();
     void treesChanged();
@@ -252,7 +269,10 @@ private:
     static QString featureActionText(
             const WorkoutGameFeatureHudSnapshot &hud);
     void rebuildFeatures(double distanceMeters);
-    void rebuildFloor(double distanceMeters);
+    void rebuildFloor(double distanceMeters, bool immediate = false);
+    void installReadyFloorChunk();
+    void scheduleReadyFloorChunk();
+    void updateVisibleTriangleCount();
     void rebuildTrees(double distanceMeters);
     void rebuildPowerProfile(const WorkoutGameCourse &course);
     void updateCameraPose(double distanceMeters, double lateralMeters);
@@ -268,6 +288,7 @@ private:
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> skinnyBuffers;
     int activeFloorBuffer = 0;
     WorkoutGameRoadCourse roadCourse;
+    std::shared_ptr<const WorkoutGameRoadCourse> roadCourseSnapshot;
     std::vector<std::size_t> rollerChallengePieceIndices;
     std::vector<std::size_t> climbChallengePieceIndices;
     std::int64_t courseDurationMs = 0;
@@ -277,6 +298,7 @@ private:
     QVariantList visibleTrees;
     bool sceneReady = false;
     int floorBucket = std::numeric_limits<int>::min();
+    int requestedFloorBucket = std::numeric_limits<int>::min();
     int featureBucket = std::numeric_limits<int>::min();
     int treeBucket = std::numeric_limits<int>::min();
     double riderPositionX = 0.0;
@@ -311,6 +333,7 @@ private:
     int currentHeartRate = 0;
     int currentVirtualGear = 1;
     double currentFps = 0.0;
+    int currentVisibleTriangles = 0;
     QString currentGeneratorState;
     QString currentTerrainName;
     QString currentFeatureStatus;
@@ -330,6 +353,9 @@ private:
     double cameraTargetPositionX = 0.0;
     double cameraTargetPositionY = 0.85;
     double cameraTargetPositionZ = 12.0;
+    std::uint64_t courseGeneration = 0;
+    WorkoutGame3DChunkBuilder chunkBuilder;
+    std::atomic<bool> floorInstallQueued{false};
 };
 
 #endif

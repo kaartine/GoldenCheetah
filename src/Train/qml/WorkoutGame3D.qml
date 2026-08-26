@@ -23,7 +23,14 @@ Item {
     }
 
     View3D {
+        id: gameView
+        objectName: "workoutGame3DView"
         anchors.fill: parent
+
+        Component.onCompleted: {
+            renderStats.extendedDataCollectionEnabled =
+                    workoutGame3D.extendedRenderStatsEnabled
+        }
 
         environment: SceneEnvironment {
             backgroundMode: SceneEnvironment.Color

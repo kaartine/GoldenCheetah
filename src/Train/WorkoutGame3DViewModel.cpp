@@ -23,6 +23,7 @@
 #include "WorkoutGameTrailBranch.h"
 
 #include <QByteArray>
+#include <QMetaObject>
 #include <QVariantMap>
 
 #include <algorithm>
@@ -41,6 +42,7 @@ constexpr double FeatureBehindMeters = 15.0;
 constexpr double FeatureAheadMeters = 180.0;
 constexpr int MaximumVisibleFeatures = 32;
 constexpr double TreeSpacingMeters = 6.0;
+constexpr int MaximumVisibleTrees = 10;
 constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double CameraCorridorClearanceMeters = 0.85;
 
@@ -133,15 +135,24 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     } else {
         currentCameraComposition = QStringLiteral("medium-centre");
     }
+    chunkBuilder.setCompletionCallback(
+            [this]() { scheduleReadyFloorChunk(); });
 }
 
-WorkoutGame3DViewModel::~WorkoutGame3DViewModel() = default;
+WorkoutGame3DViewModel::~WorkoutGame3DViewModel()
+{
+    chunkBuilder.setCompletionCallback({});
+    chunkBuilder.shutdown();
+}
 
 void WorkoutGame3DViewModel::setCourse(
         const WorkoutGameCourse &course,
         double ftpWatts)
 {
+    ++courseGeneration;
     roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
+    roadCourseSnapshot =
+            std::make_shared<const WorkoutGameRoadCourse>(roadCourse);
     rollerChallengePieceIndices.clear();
     climbChallengePieceIndices.clear();
     for (std::size_t index = 0; index < roadCourse.pieces.size(); ++index) {
@@ -159,6 +170,7 @@ void WorkoutGame3DViewModel::setCourse(
     berm->setCourse(roadCourse);
     bypass->setCourse(roadCourse);
     floorBucket = std::numeric_limits<int>::min();
+    requestedFloorBucket = std::numeric_limits<int>::min();
     featureBucket = std::numeric_limits<int>::min();
     treeBucket = std::numeric_limits<int>::min();
     visibleTrees.clear();
@@ -179,7 +191,7 @@ void WorkoutGame3DViewModel::setCourse(
     rockCompressionInitialized = false;
     slabCompressionInitialized = false;
     lastRiderPoseTimeMs = -1;
-    rebuildFloor(0.0);
+    rebuildFloor(0.0, true);
     sceneReady = roadCourse.ready && trail->ready()
             && floorBuffers[std::size_t(activeFloorBuffer)]->ready();
     rebuildFeatures(0.0);
@@ -195,6 +207,7 @@ void WorkoutGame3DViewModel::setFrame(
         int heartRate,
         int virtualGear)
 {
+    installReadyFloorChunk();
     setTelemetry(
             watts, targetWatts, cadenceRpm, heartRate, virtualGear);
     if (!sceneReady || !frame.world.ready) return;
@@ -730,6 +743,11 @@ void WorkoutGame3DViewModel::setFps(double value)
     emit fpsChanged();
 }
 
+int WorkoutGame3DViewModel::geometryQueueDepth() const
+{
+    return int(chunkBuilder.pendingDepth());
+}
+
 void WorkoutGame3DViewModel::setGeneratorState(const QString &state)
 {
     if (currentGeneratorState == state) return;
@@ -860,7 +878,9 @@ void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
     emit courseChanged();
 }
 
-void WorkoutGame3DViewModel::rebuildFloor(double distanceMeters)
+void WorkoutGame3DViewModel::rebuildFloor(
+        double distanceMeters,
+        bool immediate)
 {
     if (!roadCourse.ready) {
         floorBuffers[0]->setCourse(roadCourse);
@@ -876,33 +896,118 @@ void WorkoutGame3DViewModel::rebuildFloor(double distanceMeters)
         skinnyBuffers[0]->setCourse(roadCourse);
         skinnyBuffers[1]->setCourse(roadCourse);
         activeFloorBuffer = 0;
+        floorBucket = std::numeric_limits<int>::min();
+        requestedFloorBucket = std::numeric_limits<int>::min();
+        updateVisibleTriangleCount();
         emit floorGeometryChanged();
         return;
     }
     const int bucket = int(std::floor(distanceMeters / FloorBucketMeters));
-    if (bucket == floorBucket) return;
-    floorBucket = bucket;
+    if (bucket == requestedFloorBucket) return;
+    requestedFloorBucket = bucket;
     const double start = std::max(
             0.0, distanceMeters - FloorBehindMeters);
     const double end = std::min(
             roadCourse.totalLengthMeters,
             distanceMeters + FloorAheadMeters);
+    if (!immediate) {
+        chunkBuilder.request(
+                roadCourseSnapshot, start, end, bucket, courseGeneration);
+        emit renderWorkChanged();
+        return;
+    }
+
     const int nextBuffer = 1 - activeFloorBuffer;
-    floorBuffers[std::size_t(nextBuffer)]->setCourseRange(
-            roadCourse, start, end);
-    if (!floorBuffers[std::size_t(nextBuffer)]->ready()) return;
-    rootBuffers[std::size_t(nextBuffer)]->setCourseRange(
-            roadCourse, start, end);
-    climbBuffers[std::size_t(nextBuffer)]->setCourseRange(
-            roadCourse, start, end);
-    rockGardenBuffers[std::size_t(nextBuffer)]->setCourseRange(
-            roadCourse, start, end);
-    rockSlabBuffers[std::size_t(nextBuffer)]->setCourseRange(
-            roadCourse, start, end);
-    skinnyBuffers[std::size_t(nextBuffer)]->setCourseRange(
-            roadCourse, start, end);
+    const std::array<WorkoutGame3DGeometry::Layer,
+                     WorkoutGame3DChunk::LayerCount> layers = {{
+        WorkoutGame3DGeometry::Layer::ForestFloor,
+        WorkoutGame3DGeometry::Layer::Roots,
+        WorkoutGame3DGeometry::Layer::Climb,
+        WorkoutGame3DGeometry::Layer::RockGarden,
+        WorkoutGame3DGeometry::Layer::RockSlab,
+        WorkoutGame3DGeometry::Layer::Skinny
+    }};
+    std::array<WorkoutGame3DGeometry *, WorkoutGame3DChunk::LayerCount>
+            targets = {{
+        floorBuffers[std::size_t(nextBuffer)].get(),
+        rootBuffers[std::size_t(nextBuffer)].get(),
+        climbBuffers[std::size_t(nextBuffer)].get(),
+        rockGardenBuffers[std::size_t(nextBuffer)].get(),
+        rockSlabBuffers[std::size_t(nextBuffer)].get(),
+        skinnyBuffers[std::size_t(nextBuffer)].get()
+    }};
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+        targets[index]->setMeshData(WorkoutGame3DGeometry::buildMeshData(
+                layers[index], roadCourse, start, end));
+    }
+    if (!targets[0]->ready()) return;
     activeFloorBuffer = nextBuffer;
+    floorBucket = bucket;
+    updateVisibleTriangleCount();
     emit floorGeometryChanged();
+}
+
+void WorkoutGame3DViewModel::installReadyFloorChunk()
+{
+    WorkoutGame3DChunk chunk;
+    if (!chunkBuilder.takeLatest(chunk)) return;
+    emit renderWorkChanged();
+    if (chunk.courseGeneration != courseGeneration
+            || chunk.bucket != requestedFloorBucket
+            || !chunk.floorReady()) {
+        return;
+    }
+    const int nextBuffer = 1 - activeFloorBuffer;
+    std::array<WorkoutGame3DGeometry *, WorkoutGame3DChunk::LayerCount>
+            targets = {{
+        floorBuffers[std::size_t(nextBuffer)].get(),
+        rootBuffers[std::size_t(nextBuffer)].get(),
+        climbBuffers[std::size_t(nextBuffer)].get(),
+        rockGardenBuffers[std::size_t(nextBuffer)].get(),
+        rockSlabBuffers[std::size_t(nextBuffer)].get(),
+        skinnyBuffers[std::size_t(nextBuffer)].get()
+    }};
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+        targets[index]->setMeshData(chunk.layers[index]);
+    }
+    activeFloorBuffer = nextBuffer;
+    floorBucket = chunk.bucket;
+    updateVisibleTriangleCount();
+    emit floorGeometryChanged();
+}
+
+void WorkoutGame3DViewModel::scheduleReadyFloorChunk()
+{
+    if (floorInstallQueued.exchange(true, std::memory_order_acq_rel)) return;
+    const bool queued = QMetaObject::invokeMethod(
+            this,
+            [this]() {
+                installReadyFloorChunk();
+                floorInstallQueued.store(false, std::memory_order_release);
+                if (chunkBuilder.resultDepth() > 0) {
+                    scheduleReadyFloorChunk();
+                }
+            },
+            Qt::QueuedConnection);
+    if (!queued) {
+        floorInstallQueued.store(false, std::memory_order_release);
+    }
+}
+
+void WorkoutGame3DViewModel::updateVisibleTriangleCount()
+{
+    int triangles = trail->triangleCount()
+            + berm->triangleCount() + bypass->triangleCount();
+    const std::size_t active = std::size_t(activeFloorBuffer);
+    triangles += floorBuffers[active]->triangleCount();
+    triangles += rootBuffers[active]->triangleCount();
+    triangles += climbBuffers[active]->triangleCount();
+    triangles += rockGardenBuffers[active]->triangleCount();
+    triangles += rockSlabBuffers[active]->triangleCount();
+    triangles += skinnyBuffers[active]->triangleCount();
+    if (triangles == currentVisibleTriangles) return;
+    currentVisibleTriangles = triangles;
+    emit renderWorkChanged();
 }
 
 void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
@@ -957,6 +1062,7 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
         tree.insert(QStringLiteral("crownRadius"), crownRadius);
         tree.insert(QStringLiteral("variant"), int((random >> 24) & 3u));
         visibleTrees.push_back(tree);
+        if (visibleTrees.size() >= MaximumVisibleTrees) break;
     }
     emit treesChanged();
 }

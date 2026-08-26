@@ -188,12 +188,13 @@ per second, and HUD texture rebuilding is limited to 10 Hz.
 
 This section describes the implementation as of August 2026.
 
-GoldenCheetah gives Workout Game three execution contexts:
+GoldenCheetah gives Workout Game four execution contexts when Quick 3D is active:
 
 | Context | Current work |
 | --- | --- |
 | Qt GUI thread | `TrainSidebar` timers, telemetry aggregation, workout position, `WorkoutGameWindow`, bounded input/output copies, fallback rendering, HUD image construction, debug capture, and ghost persistence |
 | Workout Game runner | Fixed clock, game rules, feature decisions, Box2D stepping, camera updates, and complete immutable frame publication |
+| Quick 3D chunk builder | Lower-priority, cancelable CPU formation of the newest requested resident terrain chunk into immutable byte buffers |
 | Qt scene graph | `updatePaintNode`, two-snapshot visual interpolation, road timeline sampling, pseudo-3D projection, feature presentation, dynamic vertex generation, GPU node updates, and render diagnostics |
 
 The scene graph context is a separate render thread when Qt selects its
@@ -204,8 +205,9 @@ the GUI side to be consumed by `updatePaintNode` without a second application
 lock. Code in `updatePaintNode` must still use only scene graph APIs that are
 valid in that phase.
 
-`WorkoutGameRunner` owns one `std::thread`; there is intentionally no worker
-pool. Device controllers keep their existing ownership. The game sees only
+`WorkoutGameRunner` owns one simulation `std::thread`. An active Quick 3D
+ViewModel owns one lower-priority terrain-chunk `std::thread`; there is no
+general worker pool and neither worker waits for the other. Device controllers keep their existing ownership. The game sees only
 bounded input copies from `Context`, never accesses a controller, and never
 waits in telemetry, recording, or trainer-command callbacks.
 
@@ -244,6 +246,18 @@ TrainSidebar::loadUpdate (nominally 1000 ms)
                +--> road projection and feature geometry
                +--> QSG geometry/texture node updates
                +--> 16 ms presentation request while session is active
+
+authoritative rider distance                                [GUI]
+       +--> overwrite newest terrain-bucket request
+                              |
+                              v
+       build six immutable resident mesh payloads           [chunk worker]
+       +--> discard if a newer bucket/course supersedes work
+       +--> overwrite capacity-one completed-result slot
+                              |
+                              v
+       coalesced callback installs inactive Quick 3D buffers [GUI]
+       +--> expose complete buffer set through NOTIFY
 ```
 
 The runner uses absolute monotonic deadlines so wakeup error does not accumulate
@@ -291,6 +305,7 @@ Mutable state has the following owners:
 | Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`, assembled into connector-compatible `WorkoutGameTrailTile` values; feature meshes are anchored to the base surface and projected by the scene graph so the course feature height is not applied twice |
 | Distant terrain silhouette | Pure deterministic `WorkoutGameHorizon` samples generated from course seed and distance; presentation-only and never consumed by physics or trainer control |
 | Near forest dressing | Deterministic, bounded scene-graph triangles generated from the course seed and projected road slices; presentation-only and rebuilt with the visible terrain window |
+| Quick 3D resident terrain meshes | Plain immutable payloads formed by `WorkoutGame3DChunkBuilder`; generation-tagged results are installed into inactive GUI-owned geometry before one double-buffer swap |
 | Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
 | Runner input and latest output slot | Separate small mutexes in `WorkoutGameRunner`; heavy simulation occurs outside both critical sections |
 | HUD source image and telemetry labels | `WorkoutGameSceneGraphItem` on the GUI thread, rebuilt at most 10 Hz; copied to a scene graph texture during synchronization |
@@ -480,11 +495,11 @@ nodes or textures whose lifetime belongs to the render thread.
 5. **P2: direct render handoff remains Qt synchronized.** A future direct
    cross-thread buffer needs an explicit ownership and memory-order protocol; a
    plain shared struct plus index would be a data race.
-6. **P2: render work scales poorly with richer courses.** Projection sampling,
-   temporary vectors, and complete dynamic geometry updates occur every frame.
-   The current bounded scene has measured headroom, so optimize only after
-   counters show pressure: reuse buffers, retain unchanged chunks, and batch by
-   material before adding workers.
+6. **P2: the legacy comparison renderer still scales poorly with richer
+   courses.** Its projection sampling and temporary vectors remain per-frame.
+   Quick 3D now retains unchanged chunks and forms changed resident geometry on
+   a capacity-one worker, but future authored props still need material
+   batching and instancing where measured draw-call telemetry shows pressure.
 7. **P2: HUD changes recreate a texture.** Telemetry and realized FPS values
    rebuild a `QImage` at most 10 Hz, then replace its scene graph texture. Use a
    persistent dynamic texture only if production profiling still shows pressure.

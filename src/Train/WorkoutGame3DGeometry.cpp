@@ -80,6 +80,30 @@ void appendBytes(QByteArray &data, const void *source, std::size_t size)
     data.append(static_cast<const char *>(source), qsizetype(size));
 }
 
+WorkoutGame3DMeshData meshData(
+        const std::vector<Vertex> &vertices,
+        const std::vector<std::uint32_t> &indices,
+        const QVector3D &boundsMin,
+        const QVector3D &boundsMax,
+        int sampleCount)
+{
+    if (vertices.empty() || indices.empty() || sampleCount <= 0) return {};
+    WorkoutGame3DMeshData result;
+    result.vertexData.reserve(
+            qsizetype(vertices.size() * sizeof(Vertex)));
+    appendBytes(result.vertexData, vertices.data(),
+                vertices.size() * sizeof(Vertex));
+    result.indexData.reserve(
+            qsizetype(indices.size() * sizeof(std::uint32_t)));
+    appendBytes(result.indexData, indices.data(),
+                indices.size() * sizeof(std::uint32_t));
+    result.boundsMin = boundsMin;
+    result.boundsMax = boundsMax;
+    result.sampleCount = sampleCount;
+    result.ready = true;
+    return result;
+}
+
 void appendFeatureSamples(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
@@ -212,7 +236,8 @@ WorkoutGame3DGeometry::WorkoutGame3DGeometry(
 
 void WorkoutGame3DGeometry::setCourse(const WorkoutGameRoadCourse &course)
 {
-    build(course, 0.0, course.totalLengthMeters);
+    setMeshData(buildMeshData(
+            layer, course, 0.0, course.totalLengthMeters));
 }
 
 void WorkoutGame3DGeometry::setCourseRange(
@@ -220,19 +245,46 @@ void WorkoutGame3DGeometry::setCourseRange(
         double startDistanceMeters,
         double endDistanceMeters)
 {
-    build(course, startDistanceMeters, endDistanceMeters);
+    setMeshData(buildMeshData(
+            layer, course, startDistanceMeters, endDistanceMeters));
 }
 
-void WorkoutGame3DGeometry::build(
+void WorkoutGame3DGeometry::setMeshData(
+        const WorkoutGame3DMeshData &data)
+{
+    clear();
+    geometryReady = false;
+    generatedSampleCount = 0;
+    if (!data.ready) {
+        update();
+        return;
+    }
+    setStride(sizeof(Vertex));
+    setVertexData(data.vertexData);
+    setIndexData(data.indexData);
+    setPrimitiveType(PrimitiveType::Triangles);
+    addAttribute(Attribute::PositionSemantic,
+                 offsetof(Vertex, x), Attribute::F32Type);
+    addAttribute(Attribute::NormalSemantic,
+                 offsetof(Vertex, nx), Attribute::F32Type);
+    addAttribute(Attribute::ColorSemantic,
+                 offsetof(Vertex, r), Attribute::F32Type);
+    addAttribute(Attribute::TexCoordSemantic,
+                 offsetof(Vertex, u), Attribute::F32Type);
+    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
+    setBounds(data.boundsMin, data.boundsMax);
+    geometryReady = true;
+    generatedSampleCount = data.sampleCount;
+    update();
+}
+
+WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
+        Layer layer,
         const WorkoutGameRoadCourse &course,
         double requestedStartDistanceMeters,
         double requestedEndDistanceMeters)
 {
-    clear();
-    update();
-    geometryReady = false;
-    generatedSampleCount = 0;
-    if (!course.ready || course.totalLengthMeters <= 0.0) return;
+    if (!course.ready || course.totalLengthMeters <= 0.0) return {};
 
     const double startDistanceMeters = std::clamp(
             requestedStartDistanceMeters, 0.0, course.totalLengthMeters);
@@ -241,35 +293,29 @@ void WorkoutGame3DGeometry::build(
     if (!std::isfinite(startDistanceMeters)
             || !std::isfinite(endDistanceMeters)
             || endDistanceMeters <= startDistanceMeters) {
-        return;
+        return {};
     }
     if (layer == Layer::Bypass) {
-        buildBypasses(course, startDistanceMeters, endDistanceMeters);
-        return;
+        return buildBypasses(course, startDistanceMeters, endDistanceMeters);
     }
     if (layer == Layer::Berm) {
-        buildBerms(course, startDistanceMeters, endDistanceMeters);
-        return;
+        return buildBerms(course, startDistanceMeters, endDistanceMeters);
     }
     if (layer == Layer::Climb) {
-        buildClimbs(course, startDistanceMeters, endDistanceMeters);
-        return;
+        return buildClimbs(course, startDistanceMeters, endDistanceMeters);
     }
     if (layer == Layer::Roots) {
-        buildRoots(course, startDistanceMeters, endDistanceMeters);
-        return;
+        return buildRoots(course, startDistanceMeters, endDistanceMeters);
     }
     if (layer == Layer::RockGarden) {
-        buildRockGardens(course, startDistanceMeters, endDistanceMeters);
-        return;
+        return buildRockGardens(
+                course, startDistanceMeters, endDistanceMeters);
     }
     if (layer == Layer::RockSlab) {
-        buildRockSlabs(course, startDistanceMeters, endDistanceMeters);
-        return;
+        return buildRockSlabs(course, startDistanceMeters, endDistanceMeters);
     }
     if (layer == Layer::Skinny) {
-        buildSkinnies(course, startDistanceMeters, endDistanceMeters);
-        return;
+        return buildSkinnies(course, startDistanceMeters, endDistanceMeters);
     }
     const double rangeMeters = endDistanceMeters - startDistanceMeters;
 
@@ -333,8 +379,7 @@ void WorkoutGame3DGeometry::build(
         const WorkoutGameRoadSample sample =
                 WorkoutGameRoadCourseBuilder::sample(course, distance);
         if (!sample.ready) {
-            clear();
-            return;
+            return {};
         }
         rideableSamples.push_back(sample.rideableSurface);
         renderableTrailSamples.push_back(sample.renderableTrailSurface);
@@ -349,8 +394,7 @@ void WorkoutGame3DGeometry::build(
                     sample, distance, course.seed)
                 : WorkoutGame3DTerrainProfileSnapshot();
         if (layer == Layer::ForestFloor && !terrain.ready) {
-            clear();
-            return;
+            return {};
         }
         for (int vertex = 0; vertex < verticesPerSample; ++vertex) {
             const bool trailVertex = layer == Layer::Trail;
@@ -454,33 +498,10 @@ void WorkoutGame3DGeometry::build(
         }
     }
 
-    QByteArray vertexData;
-    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
-    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
-    QByteArray indexData;
-    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
-    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
-
-    setStride(sizeof(Vertex));
-    setVertexData(vertexData);
-    setIndexData(indexData);
-    setPrimitiveType(PrimitiveType::Triangles);
-    addAttribute(Attribute::PositionSemantic,
-                 offsetof(Vertex, x), Attribute::F32Type);
-    addAttribute(Attribute::NormalSemantic,
-                 offsetof(Vertex, nx), Attribute::F32Type);
-    addAttribute(Attribute::ColorSemantic,
-                 offsetof(Vertex, r), Attribute::F32Type);
-    addAttribute(Attribute::TexCoordSemantic,
-                 offsetof(Vertex, u), Attribute::F32Type);
-    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
-    setBounds(boundsMin, boundsMax);
-    geometryReady = true;
-    generatedSampleCount = count;
-    update();
+    return meshData(vertices, indices, boundsMin, boundsMax, count);
 }
 
-void WorkoutGame3DGeometry::buildClimbs(
+WorkoutGame3DMeshData WorkoutGame3DGeometry::buildClimbs(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
         double endDistanceMeters)
@@ -691,33 +712,12 @@ void WorkoutGame3DGeometry::buildClimbs(
         }
     }
 
-    if (vertices.empty() || indices.empty()) return;
-    QByteArray vertexBytes;
-    vertexBytes.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
-    appendBytes(vertexBytes, vertices.data(), vertices.size() * sizeof(Vertex));
-    QByteArray indexBytes;
-    indexBytes.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
-    appendBytes(indexBytes, indices.data(), indices.size() * sizeof(std::uint32_t));
-    setStride(sizeof(Vertex));
-    setVertexData(vertexBytes);
-    setIndexData(indexBytes);
-    setPrimitiveType(PrimitiveType::Triangles);
-    addAttribute(Attribute::PositionSemantic,
-                 offsetof(Vertex, x), Attribute::F32Type);
-    addAttribute(Attribute::NormalSemantic,
-                 offsetof(Vertex, nx), Attribute::F32Type);
-    addAttribute(Attribute::ColorSemantic,
-                 offsetof(Vertex, r), Attribute::F32Type);
-    addAttribute(Attribute::TexCoordSemantic,
-                 offsetof(Vertex, u), Attribute::F32Type);
-    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
-    setBounds(boundsMin, boundsMax);
-    geometryReady = true;
-    generatedSampleCount = int(vertices.size());
-    update();
+    if (vertices.empty() || indices.empty()) return {};
+    return meshData(
+            vertices, indices, boundsMin, boundsMax, int(vertices.size()));
 }
 
-void WorkoutGame3DGeometry::buildRockGardens(
+WorkoutGame3DMeshData WorkoutGame3DGeometry::buildRockGardens(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
         double endDistanceMeters)
@@ -839,8 +839,7 @@ void WorkoutGame3DGeometry::buildRockGardens(
                             WorkoutGameRoadCourseBuilder::sample(
                                 course, distance);
                     if (!sample.ready) {
-                        clear();
-                        return;
+                        return {};
                     }
                     const double up = ring == 0
                             ? baseUp
@@ -857,8 +856,7 @@ void WorkoutGame3DGeometry::buildRockGardens(
                             float((profileStoneIndex + side) % 4) / 3.0f,
                             float(side) / float(Sides),
                             float(ring))) {
-                        clear();
-                        return;
+                        return {};
                     }
                 }
             }
@@ -881,8 +879,7 @@ void WorkoutGame3DGeometry::buildRockGardens(
                         0.0, 0.0, 1.0,
                         float(profileStoneIndex % 4) / 3.0f,
                         0.5f, 1.0f)) {
-                clear();
-                return;
+                return {};
             }
 
             for (int side = 0; side < Sides; ++side) {
@@ -904,34 +901,13 @@ void WorkoutGame3DGeometry::buildRockGardens(
         }
         if (stoneCount >= MaximumStones) break;
     }
-    if (vertices.empty() || indices.empty()) return;
+    if (vertices.empty() || indices.empty()) return {};
 
-    QByteArray vertexData;
-    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
-    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
-    QByteArray indexData;
-    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
-    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
-    setStride(sizeof(Vertex));
-    setVertexData(vertexData);
-    setIndexData(indexData);
-    setPrimitiveType(PrimitiveType::Triangles);
-    addAttribute(Attribute::PositionSemantic,
-                 offsetof(Vertex, x), Attribute::F32Type);
-    addAttribute(Attribute::NormalSemantic,
-                 offsetof(Vertex, nx), Attribute::F32Type);
-    addAttribute(Attribute::ColorSemantic,
-                 offsetof(Vertex, r), Attribute::F32Type);
-    addAttribute(Attribute::TexCoordSemantic,
-                 offsetof(Vertex, u), Attribute::F32Type);
-    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
-    setBounds(boundsMin, boundsMax);
-    geometryReady = true;
-    generatedSampleCount = stoneCount * VerticesPerStone;
-    update();
+    return meshData(vertices, indices, boundsMin, boundsMax,
+                    stoneCount * VerticesPerStone);
 }
 
-void WorkoutGame3DGeometry::buildRockSlabs(
+WorkoutGame3DMeshData WorkoutGame3DGeometry::buildRockSlabs(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
         double endDistanceMeters)
@@ -1036,8 +1012,7 @@ void WorkoutGame3DGeometry::buildRockSlabs(
             const WorkoutGameRoadSample sample =
                     WorkoutGameRoadCourseBuilder::sample(course, distance);
             if (!sample.ready) {
-                clear();
-                return;
+                return {};
             }
             for (int column = 0; column < Columns; ++column) {
                 const double across = -1.0
@@ -1053,8 +1028,7 @@ void WorkoutGame3DGeometry::buildRockSlabs(
                         0.28f + 0.07f * shade,
                         float(column) / float(Columns - 1),
                         float(progress))) {
-                    clear();
-                    return;
+                    return {};
                 }
             }
         }
@@ -1118,8 +1092,7 @@ void WorkoutGame3DGeometry::buildRockSlabs(
                         0.0, side == 0 ? -1.0 : 1.0, 0.12,
                         0.20f, 0.21f, 0.19f,
                         float(progress), 0.0f)) {
-                    clear();
-                    return;
+                    return {};
                 }
             }
             for (int station = 0; station < Stations - 1; ++station) {
@@ -1155,8 +1128,7 @@ void WorkoutGame3DGeometry::buildRockSlabs(
                         end == 0 ? -1.0 : 1.0, 0.0, 0.12,
                         0.18f, 0.19f, 0.17f,
                         float(column) / float(Columns - 1), 0.0f)) {
-                    clear();
-                    return;
+                    return {};
                 }
             }
             for (int column = 0; column < Columns - 1; ++column) {
@@ -1200,8 +1172,7 @@ void WorkoutGame3DGeometry::buildRockSlabs(
                         0.08f, 0.09f, 0.08f,
                         endCorner ? 1.0f : 0.0f,
                         rightCorner ? 1.0f : 0.0f)) {
-                    clear();
-                    return;
+                    return {};
                 }
             }
             indices.insert(indices.end(), {
@@ -1211,34 +1182,13 @@ void WorkoutGame3DGeometry::buildRockSlabs(
         }
         ++slabCount;
     }
-    if (vertices.empty() || indices.empty()) return;
+    if (vertices.empty() || indices.empty()) return {};
 
-    QByteArray vertexData;
-    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
-    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
-    QByteArray indexData;
-    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
-    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
-    setStride(sizeof(Vertex));
-    setVertexData(vertexData);
-    setIndexData(indexData);
-    setPrimitiveType(PrimitiveType::Triangles);
-    addAttribute(Attribute::PositionSemantic,
-                 offsetof(Vertex, x), Attribute::F32Type);
-    addAttribute(Attribute::NormalSemantic,
-                 offsetof(Vertex, nx), Attribute::F32Type);
-    addAttribute(Attribute::ColorSemantic,
-                 offsetof(Vertex, r), Attribute::F32Type);
-    addAttribute(Attribute::TexCoordSemantic,
-                 offsetof(Vertex, u), Attribute::F32Type);
-    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
-    setBounds(boundsMin, boundsMax);
-    geometryReady = true;
-    generatedSampleCount = int(vertices.size());
-    update();
+    return meshData(
+            vertices, indices, boundsMin, boundsMax, int(vertices.size()));
 }
 
-void WorkoutGame3DGeometry::buildSkinnies(
+WorkoutGame3DMeshData WorkoutGame3DGeometry::buildSkinnies(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
         double endDistanceMeters)
@@ -1409,8 +1359,7 @@ void WorkoutGame3DGeometry::buildSkinnies(
                     profile.deckHalfWidthMeters,
                     topFrom, topTo, profile.deckThicknessMeters,
                     topColor, {0.28f, 0.16f, 0.07f})) {
-                clear();
-                return;
+                return {};
             }
         }
         const double beamPitch = (profile.deckEndMeters
@@ -1427,8 +1376,7 @@ void WorkoutGame3DGeometry::buildSkinnies(
                         top, top, top - 0.11, top - 0.11,
                         {0.25f, 0.14f, 0.06f},
                         {0.20f, 0.10f, 0.04f})) {
-                    clear();
-                    return;
+                    return {};
                 }
             }
         }
@@ -1441,8 +1389,7 @@ void WorkoutGame3DGeometry::buildSkinnies(
                         top, top, 0.0, 0.0,
                         {0.24f, 0.13f, 0.05f},
                         {0.18f, 0.09f, 0.035f})) {
-                    clear();
-                    return;
+                    return {};
                 }
             }
         }
@@ -1476,8 +1423,7 @@ void WorkoutGame3DGeometry::buildSkinnies(
                                    -0.018, ground[2])
                     || !worldPoint(center + fromLocal,
                                    fromGroundHalfWidth, -0.018, ground[3])) {
-                clear();
-                return;
+                return {};
             }
             appendFace(ground[0], ground[1], ground[2], ground[3],
                        {0.25f, 0.32f, 0.17f});
@@ -1494,42 +1440,20 @@ void WorkoutGame3DGeometry::buildSkinnies(
                     || !worldPoint(center + fromLocal,
                                    fromLateral + SafeLineHalfWidth,
                                    profile.safeLineSurfaceLiftMeters, point[3])) {
-                clear();
-                return;
+                return {};
             }
             appendFace(point[0], point[1], point[2], point[3],
                        {0.48f, 0.31f, 0.15f});
         }
         ++skinnyCount;
     }
-    if (vertices.empty() || indices.empty()) return;
+    if (vertices.empty() || indices.empty()) return {};
 
-    QByteArray vertexData;
-    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
-    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
-    QByteArray indexData;
-    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
-    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
-    setStride(sizeof(Vertex));
-    setVertexData(vertexData);
-    setIndexData(indexData);
-    setPrimitiveType(PrimitiveType::Triangles);
-    addAttribute(Attribute::PositionSemantic,
-                 offsetof(Vertex, x), Attribute::F32Type);
-    addAttribute(Attribute::NormalSemantic,
-                 offsetof(Vertex, nx), Attribute::F32Type);
-    addAttribute(Attribute::ColorSemantic,
-                 offsetof(Vertex, r), Attribute::F32Type);
-    addAttribute(Attribute::TexCoordSemantic,
-                 offsetof(Vertex, u), Attribute::F32Type);
-    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
-    setBounds(boundsMin, boundsMax);
-    geometryReady = true;
-    generatedSampleCount = int(vertices.size());
-    update();
+    return meshData(
+            vertices, indices, boundsMin, boundsMax, int(vertices.size()));
 }
 
-void WorkoutGame3DGeometry::buildRoots(
+WorkoutGame3DMeshData WorkoutGame3DGeometry::buildRoots(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
         double endDistanceMeters)
@@ -1586,8 +1510,7 @@ void WorkoutGame3DGeometry::buildRoots(
                 const WorkoutGameRoadSample sample =
                         WorkoutGameRoadCourseBuilder::sample(course, distance);
                 if (!sample.ready) {
-                    clear();
-                    return;
+                    return {};
                 }
                 const double rightX = std::cos(sample.center.headingRadians);
                 const double rightZ = -std::sin(sample.center.headingRadians);
@@ -1599,8 +1522,7 @@ void WorkoutGame3DGeometry::buildRoots(
                         + localLateralDelta * rightZ;
                 const double axisLength = std::hypot(axisX, axisZ);
                 if (axisLength <= 1e-9) {
-                    clear();
-                    return;
+                    return {};
                 }
                 axisX /= axisLength;
                 axisZ /= axisLength;
@@ -1610,8 +1532,7 @@ void WorkoutGame3DGeometry::buildRoots(
                         WorkoutGame3DTerrainProfile::build(
                             sample, distance, course.seed);
                 if (!terrain.ready) {
-                    clear();
-                    return;
+                    return {};
                 }
                 const double datum =
                         WorkoutGame3DTerrainProfile::elevationAtLateral(
@@ -1675,34 +1596,13 @@ void WorkoutGame3DGeometry::buildRoots(
         }
         if (rootCount >= MaximumRootSegments) break;
     }
-    if (vertices.empty() || indices.empty()) return;
+    if (vertices.empty() || indices.empty()) return {};
 
-    QByteArray vertexData;
-    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
-    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
-    QByteArray indexData;
-    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
-    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
-    setStride(sizeof(Vertex));
-    setVertexData(vertexData);
-    setIndexData(indexData);
-    setPrimitiveType(PrimitiveType::Triangles);
-    addAttribute(Attribute::PositionSemantic,
-                 offsetof(Vertex, x), Attribute::F32Type);
-    addAttribute(Attribute::NormalSemantic,
-                 offsetof(Vertex, nx), Attribute::F32Type);
-    addAttribute(Attribute::ColorSemantic,
-                 offsetof(Vertex, r), Attribute::F32Type);
-    addAttribute(Attribute::TexCoordSemantic,
-                 offsetof(Vertex, u), Attribute::F32Type);
-    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
-    setBounds(boundsMin, boundsMax);
-    geometryReady = true;
-    generatedSampleCount = rootCount * RingsPerRoot;
-    update();
+    return meshData(vertices, indices, boundsMin, boundsMax,
+                    rootCount * RingsPerRoot);
 }
 
-void WorkoutGame3DGeometry::buildBerms(
+WorkoutGame3DMeshData WorkoutGame3DGeometry::buildBerms(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
         double endDistanceMeters)
@@ -1751,8 +1651,7 @@ void WorkoutGame3DGeometry::buildBerms(
             const WorkoutGameRoadSample road =
                     WorkoutGameRoadCourseBuilder::sample(course, distance);
             if (!road.ready) {
-                clear();
-                return;
+                return {};
             }
             const double local = distance - center;
             const double halfWidth = profile.halfWidthMeters(local);
@@ -1831,33 +1730,12 @@ void WorkoutGame3DGeometry::buildBerms(
         totalSamples += count;
     }
 
-    if (vertices.empty() || indices.empty()) return;
-    QByteArray vertexData;
-    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
-    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
-    QByteArray indexData;
-    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
-    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
-    setStride(sizeof(Vertex));
-    setVertexData(vertexData);
-    setIndexData(indexData);
-    setPrimitiveType(PrimitiveType::Triangles);
-    addAttribute(Attribute::PositionSemantic,
-                 offsetof(Vertex, x), Attribute::F32Type);
-    addAttribute(Attribute::NormalSemantic,
-                 offsetof(Vertex, nx), Attribute::F32Type);
-    addAttribute(Attribute::ColorSemantic,
-                 offsetof(Vertex, r), Attribute::F32Type);
-    addAttribute(Attribute::TexCoordSemantic,
-                 offsetof(Vertex, u), Attribute::F32Type);
-    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
-    setBounds(boundsMin, boundsMax);
-    geometryReady = true;
-    generatedSampleCount = totalSamples;
-    update();
+    if (vertices.empty() || indices.empty()) return {};
+    return meshData(
+            vertices, indices, boundsMin, boundsMax, totalSamples);
 }
 
-void WorkoutGame3DGeometry::buildBypasses(
+WorkoutGame3DMeshData WorkoutGame3DGeometry::buildBypasses(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
         double endDistanceMeters)
@@ -1907,8 +1785,7 @@ void WorkoutGame3DGeometry::buildBypasses(
                     WorkoutGame3DTerrainProfile::build(
                         sample, distance, course.seed);
             if (!sample.ready || !terrain.ready) {
-                clear();
-                return;
+                return {};
             }
             const double pulse = WorkoutGameTrailBranch::blend(
                     (distance - branchStart) / (branchEnd - branchStart));
@@ -1998,28 +1875,7 @@ void WorkoutGame3DGeometry::buildBypasses(
         totalSamples += count;
     }
 
-    if (vertices.empty() || indices.empty()) return;
-    QByteArray vertexData;
-    vertexData.reserve(qsizetype(vertices.size() * sizeof(Vertex)));
-    appendBytes(vertexData, vertices.data(), vertices.size() * sizeof(Vertex));
-    QByteArray indexData;
-    indexData.reserve(qsizetype(indices.size() * sizeof(std::uint32_t)));
-    appendBytes(indexData, indices.data(), indices.size() * sizeof(std::uint32_t));
-    setStride(sizeof(Vertex));
-    setVertexData(vertexData);
-    setIndexData(indexData);
-    setPrimitiveType(PrimitiveType::Triangles);
-    addAttribute(Attribute::PositionSemantic,
-                 offsetof(Vertex, x), Attribute::F32Type);
-    addAttribute(Attribute::NormalSemantic,
-                 offsetof(Vertex, nx), Attribute::F32Type);
-    addAttribute(Attribute::ColorSemantic,
-                 offsetof(Vertex, r), Attribute::F32Type);
-    addAttribute(Attribute::TexCoordSemantic,
-                 offsetof(Vertex, u), Attribute::F32Type);
-    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
-    setBounds(boundsMin, boundsMax);
-    geometryReady = true;
-    generatedSampleCount = totalSamples;
-    update();
+    if (vertices.empty() || indices.empty()) return {};
+    return meshData(
+            vertices, indices, boundsMin, boundsMax, totalSamples);
 }
