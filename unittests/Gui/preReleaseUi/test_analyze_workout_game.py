@@ -22,6 +22,36 @@ UI_SPEC.loader.exec_module(UI)
 
 
 class AnalyzeWorkoutGameTest(unittest.TestCase):
+    def test_find_named_any_accepts_the_quick_3d_canvas(self):
+        quick_3d_canvas = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(
+            side_effect=lambda name, role, showing: (
+                [quick_3d_canvas]
+                if name == "Workout game 3D canvas" else []
+            )
+        )
+
+        found = driver.find_named_any(
+            UI.WORKOUT_GAME_CANVAS_NAMES, showing=True, timeout=0.01
+        )
+
+        self.assertIs(found, quick_3d_canvas)
+
+    def test_find_named_any_reports_all_missing_names(self):
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[])
+
+        with self.assertRaisesRegex(
+            UI.UiFailure,
+            "Workout game canvas.*Workout game 3D canvas",
+        ):
+            driver.find_named_any(
+                UI.WORKOUT_GAME_CANVAS_NAMES,
+                showing=True,
+                timeout=0.01,
+            )
+
     def test_prepare_anchors_a_usable_workout_library(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

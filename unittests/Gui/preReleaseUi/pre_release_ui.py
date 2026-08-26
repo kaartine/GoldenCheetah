@@ -13,6 +13,10 @@ import xml.etree.ElementTree as ET
 
 
 ATHLETE = "UiTestAthlete"
+WORKOUT_GAME_CANVAS_NAMES = (
+    "Workout game canvas",
+    "Workout game 3D canvas",
+)
 GENERATOR_MODES = {
     "follow-target",
     "on-target",
@@ -251,6 +255,18 @@ class UiDriver:
         raise UiFailure(
             f"Accessible object not found: name={name!r}, role={role!r}, "
             f"showing={showing!r}"
+        )
+
+    def find_named_any(self, names, role=None, showing=None, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for name in names:
+                matches = self.find_all(name, role, showing)
+                if matches:
+                    return matches[-1] if showing else matches[0]
+            time.sleep(0.15)
+        raise UiFailure(
+            "Accessible object not found with any name: " + ", ".join(names)
         )
 
     def require_names(self, names, role=None, timeout=10.0):
@@ -708,14 +724,16 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
             driver.select_combo_item(
                 ["Workout Game", "Workout Editor"], "Workout Game"
             )
-            driver.find("Workout game canvas", showing=True)
+            driver.find_named_any(WORKOUT_GAME_CANVAS_NAMES, showing=True)
             driver.activate(
                 driver.find(
                     "Start or pause training", "push button", showing=True
                 )
             )
             try:
-                canvas = driver.find("Workout game canvas", showing=True)
+                canvas = driver.find_named_any(
+                    WORKOUT_GAME_CANVAS_NAMES, showing=True
+                )
                 time.sleep(1.2)
                 first = driver.screenshot("04-workout-game-first", canvas)
                 time.sleep(game_run_seconds_from_environment())
