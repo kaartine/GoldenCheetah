@@ -225,23 +225,8 @@ Item {
                     }
                 }
 
-                Model {
-                    source: "#Cylinder"
-                    y: 1.45
-                    scale: Qt.vector3d(0.0035, 0.029, 0.0035)
-                    materials: PrincipledMaterial {
-                        baseColor: "#5b3a22"
-                        roughness: 1
-                    }
-                }
-                Model {
-                    source: "#Cone"
-                    y: 3.25
-                    scale: Qt.vector3d(0.022, 0.045, 0.022)
-                    materials: PrincipledMaterial {
-                        baseColor: modelData.variant % 2 ? "#245b35" : "#2f6b3d"
-                        roughness: 1
-                    }
+                WorkoutGameConifer {
+                    variant: modelData.variant
                 }
             }
         }

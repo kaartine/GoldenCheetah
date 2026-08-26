@@ -58,6 +58,14 @@ RIDER_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_RiderBike.glb"
 )
+CONIFER_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/EN-01-conifer-set.json"
+)
+CONIFER_GLB_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generated/WG_ConiferSet.glb"
+)
 
 
 def sha256(path: Path) -> str:
@@ -100,6 +108,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertEqual(
             assets.validate_repository(REPOSITORY),
             [
+                "EN-01-conifer-set",
                 "FT-01-tabletop-greybox",
                 "FT-02-log-over-greybox",
                 "FT-03-bunny-hop-greybox",
@@ -297,6 +306,31 @@ class TestWorkoutGameAssets(unittest.TestCase):
 
         runtime_qml = (
             REPOSITORY / "src/Train/qml/WorkoutGameRiderBike.qml"
+        ).read_text(encoding="utf-8")
+        for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
+            self.assertNotIn(primitive, runtime_qml)
+
+    def test_conifer_set_has_varied_bounded_project_authored_silhouettes(self) -> None:
+        document, size = assets.read_glb(CONIFER_GLB_PATH)
+        manifest = assets.load_json_file(CONIFER_MANIFEST_PATH)
+        assets.validate_glb_document(document, size, manifest)
+
+        mesh_nodes = {
+            node["name"] for node in document["nodes"] if "mesh" in node
+        }
+        self.assertEqual(
+            mesh_nodes,
+            {
+                "GEO_ConiferTrunk_LOD0",
+                "GEO_ConiferNarrow_LOD0",
+                "GEO_ConiferLayered_LOD0",
+                "GEO_ConiferBrokenTop_LOD0",
+            },
+        )
+        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 320)
+        self.assertGreaterEqual(manifest["technical"]["boundsMeters"]["maximum"][1], 4.5)
+        runtime_qml = (
+            REPOSITORY / "src/Train/qml/WorkoutGameConifer.qml"
         ).read_text(encoding="utf-8")
         for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
             self.assertNotIn(primitive, runtime_qml)

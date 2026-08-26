@@ -6,7 +6,19 @@ low-poly tabletop socket tile, `generate_log_over.py` creates a socketed,
 partly buried log-over tile, `generate_bunny_hop.py` creates a compact
 practice hurdle, `generate_drop.py` creates a faceted drop face, and
 `generate_rider_bike.py` creates the articulated low-poly rider and 29er MTB
-mesh set. None of the generators downloads or embeds external assets.
+mesh set, and `generate_conifer_set.py` creates three low-poly forest
+silhouettes. None of the generators downloads or embeds external assets.
+
+## Conifer contract
+
+- One tapered trunk and three crown meshes provide narrow, layered and
+  broken-top silhouettes. Runtime selects one crown per tree instance.
+- Every source mesh starts at or above `Y = 0`, and `PIVOT_BASE` is exactly at
+  the origin. Runtime terrain sampling remains the sole base-height authority.
+- The complete set uses 192 triangles and three opaque source materials. It
+  contains no external texture, model or built-in Quick 3D primitive.
+- Blender checks the node inventory, finite triangle topology, applied
+  transforms and 320-triangle budget before export.
 
 ## Rider-bike contract
 

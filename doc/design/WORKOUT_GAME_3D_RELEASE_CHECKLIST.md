@@ -783,13 +783,24 @@ unexpected airborne frames while sustaining about 71 FPS median.
 
 - [ ] `ART-01` Apply one coherent low-poly/pixel-textured palette and atlas.
 - [ ] `ENV-01` Add varied forest silhouettes, uneven terrain and restrained fog.
-- [ ] `ENV-02` Eliminate tree pop, floating bases and buried visible geometry.
+- [x] `ENV-02` Eliminate tree pop, floating bases and buried visible geometry.
 - [ ] `FX-01` Add bounded contact shadow, landing dust and success feedback.
 - [ ] `FX-02` Add restrained feature/camera punctuation after physics is stable.
 - [ ] `AUDIO-01` Add optional low-cost feature and landing audio after visuals.
 
 **Acceptance:** art improves depth and arcade identity without hiding the path,
 exceeding budgets or changing physics.
+
+**ENV-02 evidence:** the project-authored `EN-01` set replaces the former
+built-in cone and cylinder trees with narrow, layered and broken-top conifer
+silhouettes. All source vertices are at or above a named zero-height base;
+runtime placement still interpolates the authoritative terrain profile and the
+camera-to-cue corridor still rejects occluding crowns. Trees fade over the
+resident window's six-metre rear and ten-metre forward edge bands with a
+bounded 320 ms presentation transition. The complete set is 192 triangles,
+contains no external content, reproduces byte for byte through Blender and
+Balsam, passes manifest and primitive-rejection tests, and remains inside the
+existing ten-tree/50-draw-call runtime budgets.
 
 ## Diagnostics And Performance
 

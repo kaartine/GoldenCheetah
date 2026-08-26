@@ -9,6 +9,11 @@
         <file alias="qml/assets/Wg_Drop_Greybox.qml">../Train/qml/assets/Wg_Drop_Greybox.qml</file>
         <file alias="qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh</file>
         <file alias="qml/WorkoutGameRiderBike.qml">../Train/qml/WorkoutGameRiderBike.qml</file>
+        <file alias="qml/WorkoutGameConifer.qml">../Train/qml/WorkoutGameConifer.qml</file>
+        <file alias="qml/assets/meshes/geo_ConiferBrokenTop_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferBrokenTop_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_Crank_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_Frame_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Frame_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh</file>
