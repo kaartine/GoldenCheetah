@@ -58,7 +58,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         driver = object.__new__(UI.UiDriver)
         driver.combo_with_items = mock.Mock(return_value=combo)
         driver.click = mock.Mock()
-        driver.find = mock.Mock(return_value=item)
+        driver.find_combo_item = mock.Mock(return_value=item)
         driver.name = mock.Mock(return_value="Workout Game")
         driver.selected = mock.Mock(return_value=True)
 
@@ -70,6 +70,42 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
 
         self.assertIs(selected, combo)
         self.assertEqual(driver.click.call_args_list, [mock.call(combo), mock.call(item)])
+
+    def test_combo_selection_uses_its_own_item_instead_of_global_duplicate(self):
+        combo = object()
+        own_item = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.combo_with_items = mock.Mock(return_value=combo)
+        driver.click = mock.Mock()
+        driver.find = mock.Mock(
+            side_effect=AssertionError("global item lookup is ambiguous")
+        )
+        driver.all_nodes = mock.Mock(return_value=[combo, own_item])
+        driver.role = mock.Mock(
+            side_effect=lambda node: "list item" if node is own_item else "combo box"
+        )
+        driver.name = mock.Mock(
+            side_effect=lambda node: (
+                "Workout Editor" if node is own_item else "Workout Game"
+            )
+        )
+        driver.showing = mock.Mock(return_value=True)
+        driver.selected = mock.Mock(
+            side_effect=lambda node: node is own_item
+        )
+
+        selected = driver.select_combo_item(
+            ["Workout Game", "Workout Editor"],
+            "Workout Editor",
+            timeout=0.01,
+        )
+
+        self.assertIs(selected, combo)
+        self.assertEqual(
+            driver.click.call_args_list,
+            [mock.call(combo), mock.call(own_item)],
+        )
+        driver.find.assert_not_called()
 
     def test_prepare_anchors_a_usable_workout_library(self):
         with tempfile.TemporaryDirectory() as directory:

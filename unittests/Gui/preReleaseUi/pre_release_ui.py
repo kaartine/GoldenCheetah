@@ -398,15 +398,25 @@ class UiDriver:
             time.sleep(0.15)
         raise UiFailure(f"Perspective selector lacks: {sorted(expected)!r}")
 
+    def find_combo_item(self, combo, name, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            matches = [
+                node
+                for node in self.all_nodes(combo)
+                if self.role(node) == "list item"
+                and self.name(node) == name
+                and self.showing(node)
+            ]
+            if matches:
+                return matches[-1]
+            time.sleep(0.1)
+        raise UiFailure(f"Combo box item did not appear: {name!r}")
+
     def select_combo_item(self, expected, name, timeout=10.0):
         combo = self.combo_with_items(expected)
         self.click(combo)
-        item = self.find(
-            name=name,
-            role="list item",
-            showing=True,
-            timeout=timeout,
-        )
+        item = self.find_combo_item(combo, name, timeout)
         self.click(item)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
