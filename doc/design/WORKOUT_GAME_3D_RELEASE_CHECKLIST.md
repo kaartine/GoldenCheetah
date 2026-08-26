@@ -377,6 +377,13 @@ to 26 km/h in gear one. Existing runtime tests cover Data Generator target
 scaling, Up/W and Down/S command routing, the always-available Train gear
 selector and recorded virtual-gear telemetry. Real-trainer torque/road-feel
 response remains open and must be validated before the second item is checked.
+The isolated packaged-runtime UI acceptance now shifts up and back down during
+the active Quick 3D session and requires both transitions in the trace. Its
+first deterministic Data Generator run observed two changes with a maximum
+`0.021 km/h` speed step, matched all 146 recording samples, and retained zero
+gear mismatches, backward frames and skipped simulation ticks. The same gate
+is required by the interactive real-trainer runner; only physical road feel
+remains unverified.
 
 ## P0 Feature Production
 

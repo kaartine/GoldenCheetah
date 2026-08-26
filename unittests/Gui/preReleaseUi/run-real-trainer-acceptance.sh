@@ -50,7 +50,8 @@ export GC_WORKOUT_GAME_3D=${GC_WORKOUT_GAME_3D:-1}
 cat <<'EOF'
 An isolated GoldenCheetah profile will open. Add or select the real trainer,
 select the prepared workout and Workout Game, then ride through at least one
-feature. Stop with Save or Cancel and close GoldenCheetah when finished.
+feature. Shift up and back down while moving. Stop with Save or Cancel and
+close GoldenCheetah when finished.
 No file under the normal athlete library is opened or modified.
 EOF
 

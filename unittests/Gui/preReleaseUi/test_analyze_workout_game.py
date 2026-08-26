@@ -171,7 +171,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertIn("FTP = 190\n", workout)
             self.assertIn("0.10 100\n0.10 220\n", workout)
             self.assertIn("1.00 100\n", workout)
-            self.assertIn("2.00 100\n", workout)
+            self.assertIn("3.00 100\n", workout)
 
     def test_prepare_selects_a_validated_generator_mode(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -230,6 +230,25 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             ):
                 with self.assertRaises(ValueError):
                     UI.game_run_seconds_from_environment()
+
+    def test_trainer_acceptance_duration_leaves_time_for_two_shifts(self):
+        self.assertEqual(
+            UI.trainer_acceptance_shift_delays(20.0), (5.0, 5.0, 10.0)
+        )
+        with self.assertRaisesRegex(ValueError, "at least 8 seconds"):
+            UI.trainer_acceptance_shift_delays(7.9)
+
+    def test_existing_display_acceptance_uses_trace_instead_of_root_capture(self):
+        with mock.patch.dict(os.environ, {
+            "GC_UI_VALIDATE_TRAINER_ACCEPTANCE": "1",
+            "GC_UI_EXISTING_DISPLAY": ":1",
+        }):
+            self.assertFalse(UI.ui_screenshots_enabled_from_environment())
+        with mock.patch.dict(os.environ, {
+            "GC_UI_VALIDATE_TRAINER_ACCEPTANCE": "1",
+            "GC_UI_EXISTING_DISPLAY": "",
+        }):
+            self.assertTrue(UI.ui_screenshots_enabled_from_environment())
 
     def test_save_as_gate_can_be_split_from_renderer_gate(self):
         with mock.patch.dict(os.environ, {"GC_UI_SKIP_SAVE_AS": "1"}):
@@ -550,6 +569,62 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             ),
             [],
         )
+
+    def test_acceptance_measures_progressive_speed_across_gear_changes(self):
+        trace = [
+            {"source_ms": 0.0, "gear": 5.0, "speed_kph": 20.0},
+            {"source_ms": 250.0, "gear": 6.0, "speed_kph": 20.8},
+            {"source_ms": 500.0, "gear": 6.0, "speed_kph": 21.5},
+            {"source_ms": 750.0, "gear": 5.0, "speed_kph": 20.9},
+        ]
+
+        summary = ANALYZER.reconcile_acceptance(trace, [], [])
+
+        self.assertEqual(summary["gear_changes"], 2)
+        self.assertAlmostEqual(
+            summary["maximum_gear_change_speed_step_kph"], 0.8
+        )
+        self.assertEqual(
+            ANALYZER.validate_acceptance(
+                summary,
+                minimum_recording_matches=0,
+                minimum_recording_match_ratio=0.0,
+                maximum_power_delta_watts=1.0,
+                maximum_cadence_delta_rpm=1.0,
+                maximum_heart_rate_delta_bpm=1.0,
+                maximum_gear_mismatches=0,
+                maximum_trainer_target_delta=1.0,
+                minimum_trainer_target_dispatches=0,
+                minimum_feature_decisions=0,
+                minimum_gear_changes=2,
+                maximum_gear_change_speed_step_kph=2.0,
+            ),
+            [],
+        )
+
+    def test_acceptance_rejects_speed_teleport_or_missing_shift(self):
+        teleport = ANALYZER.reconcile_acceptance([
+            {"source_ms": 0.0, "gear": 5.0, "speed_kph": 12.0},
+            {"source_ms": 250.0, "gear": 10.0, "speed_kph": 30.0},
+        ], [], [])
+
+        failures = ANALYZER.validate_acceptance(
+            teleport,
+            minimum_recording_matches=0,
+            minimum_recording_match_ratio=0.0,
+            maximum_power_delta_watts=1.0,
+            maximum_cadence_delta_rpm=1.0,
+            maximum_heart_rate_delta_bpm=1.0,
+            maximum_gear_mismatches=0,
+            maximum_trainer_target_delta=1.0,
+            minimum_trainer_target_dispatches=0,
+            minimum_feature_decisions=0,
+            minimum_gear_changes=2,
+            maximum_gear_change_speed_step_kph=2.0,
+        )
+
+        self.assertTrue(any("gear changes" in failure for failure in failures))
+        self.assertTrue(any("speed step" in failure for failure in failures))
 
     def test_rejects_recording_and_feature_outcome_disagreement(self):
         trace = [{

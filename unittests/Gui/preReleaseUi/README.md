@@ -54,6 +54,13 @@ On a test session where direct rendering is available, add
 `GC_UI_USE_HARDWARE_GL=1`. Every mode still uses the temporary athlete library
 created by the runner.
 
+To exercise the target desktop GPU instead of Xvfb, set
+`GC_UI_EXISTING_DISPLAY` to an accessible display such as `:1`, set the matching
+`XAUTHORITY`, and enable `GC_UI_USE_HARDWARE_GL=1`. The application remains on
+the isolated athlete library, but its test window is visible on that desktop.
+Trainer-acceptance runs on an existing display use trace validation instead of
+root-window screenshots because compositors may deny root pixel readback.
+
 ## Workout Game diagnostics
 
 The packaged application can expose world and frame state without a debugger:
@@ -113,5 +120,7 @@ keeps an evidence copy of the raw recording even if the session is discarded.
 After GoldenCheetah closes, it verifies that rendered power, cadence, heart
 rate and virtual gear agree with the recording, that the dispatched ERG/slope
 target agrees with the corresponding recording field, and that feature
-outcome, readiness and route agree. The report is written to
+outcome, readiness and route agree. Shift up and back down during the ride; the
+report also requires both transitions and rejects an immediate speed step. The
+report is written to
 `workout-game-trainer-summary.json`; logs contain no device names or addresses.

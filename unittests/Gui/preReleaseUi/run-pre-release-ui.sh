@@ -15,7 +15,11 @@ ARTIFACT_DIR=${2:-$PWD/ui-test-artifacts}
     exit 2
 }
 
-for command in Xvfb dbus-run-session gdbus python3; do
+REQUIRED_COMMANDS=(dbus-run-session gdbus python3)
+if [ -z "${GC_UI_EXISTING_DISPLAY:-}" ]; then
+    REQUIRED_COMMANDS+=(Xvfb)
+fi
+for command in "${REQUIRED_COMMANDS[@]}"; do
     command -v "$command" >/dev/null || {
         echo "Missing UI test dependency: $command" >&2
         exit 2
@@ -52,38 +56,47 @@ cleanup()
 }
 trap cleanup EXIT HUP INT TERM
 
-for candidate in $(seq 91 119); do
-    if [ ! -e "/tmp/.X11-unix/X$candidate" ]; then
-        DISPLAY_NUMBER=$candidate
-        break
-    fi
-done
-[ -n "$DISPLAY_NUMBER" ] || {
-    echo "No free X display for UI tests" >&2
-    exit 2
-}
-
 python3 "$SCRIPT_DIR/pre_release_ui.py" prepare "$TEST_ROOT"
 
-Xvfb ":$DISPLAY_NUMBER" -screen 0 1440x900x24 -nolisten tcp \
-    >"$ARTIFACT_DIR/xvfb.log" 2>&1 &
-XVFB_PID=$!
-export DISPLAY=:$DISPLAY_NUMBER
-
-for unused in $(seq 1 50); do
-    if [ -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ] && \
-        python3 -c 'from Xlib import display; connection = display.Display(); connection.sync(); connection.close()' \
-            >/dev/null 2>&1; then
-        break
-    fi
-    sleep 0.1
-done
-[ -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ] && \
-    python3 -c 'from Xlib import display; connection = display.Display(); connection.close()' \
+if [ -n "${GC_UI_EXISTING_DISPLAY:-}" ]; then
+    export DISPLAY=$GC_UI_EXISTING_DISPLAY
+    python3 -c 'from Xlib import display; connection = display.Display(); connection.sync(); connection.close()' \
         >/dev/null 2>&1 || {
-    echo "Xvfb did not become ready" >&2
-    exit 1
-}
+        echo "Existing X display is not accessible: $DISPLAY" >&2
+        exit 1
+    }
+else
+    for candidate in $(seq 91 119); do
+        if [ ! -e "/tmp/.X11-unix/X$candidate" ]; then
+            DISPLAY_NUMBER=$candidate
+            break
+        fi
+    done
+    [ -n "$DISPLAY_NUMBER" ] || {
+        echo "No free X display for UI tests" >&2
+        exit 2
+    }
+
+    Xvfb ":$DISPLAY_NUMBER" -screen 0 1440x900x24 -nolisten tcp \
+        >"$ARTIFACT_DIR/xvfb.log" 2>&1 &
+    XVFB_PID=$!
+    export DISPLAY=:$DISPLAY_NUMBER
+
+    for unused in $(seq 1 50); do
+        if [ -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ] && \
+            python3 -c 'from Xlib import display; connection = display.Display(); connection.sync(); connection.close()' \
+                >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.1
+    done
+    [ -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ] && \
+        python3 -c 'from Xlib import display; connection = display.Display(); connection.close()' \
+            >/dev/null 2>&1 || {
+        echo "Xvfb did not become ready" >&2
+        exit 1
+    }
+fi
 
 AT_SPI_REPLY=$(gdbus call --session --dest org.a11y.Bus \
     --object-path /org/a11y/bus --method org.a11y.Bus.GetAddress)

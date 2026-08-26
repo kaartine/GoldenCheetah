@@ -218,6 +218,20 @@ def reconcile_acceptance(
             expected = row["target"] if mode == "erg" else row["slope"]
             trainer_target_deltas.append(abs(value - expected))
 
+    gear_changes = 0
+    gear_change_speed_steps = []
+    for previous, current in zip(trace, trace[1:]):
+        previous_gear = numeric(previous, "gear")
+        current_gear = numeric(current, "gear")
+        previous_speed = numeric(previous, "speed_kph")
+        current_speed = numeric(current, "speed_kph")
+        if (previous_gear is None or current_gear is None
+                or round(previous_gear) == round(current_gear)):
+            continue
+        gear_changes += 1
+        if previous_speed is not None and current_speed is not None:
+            gear_change_speed_steps.append(abs(current_speed - previous_speed))
+
     decisions: dict[int, TraceSample] = {}
     for sample in trace:
         outcome = sample.get("feature_outcome")
@@ -261,6 +275,10 @@ def reconcile_acceptance(
         "p95_trainer_target_delta": percentile(
             trainer_target_deltas, 0.95
         ),
+        "gear_changes": gear_changes,
+        "maximum_gear_change_speed_step_kph": max(
+            gear_change_speed_steps, default=0.0
+        ),
         "feature_decisions": len(decisions),
         "inconsistent_feature_decisions": inconsistent_decisions,
     }
@@ -277,6 +295,8 @@ def validate_acceptance(
     maximum_trainer_target_delta: float,
     minimum_trainer_target_dispatches: int,
     minimum_feature_decisions: int,
+    minimum_gear_changes: int = 0,
+    maximum_gear_change_speed_step_kph: float = math.inf,
 ) -> list[str]:
     failures = []
     if summary["matched_recording_samples"] < minimum_recording_matches:
@@ -305,6 +325,11 @@ def validate_acceptance(
         failures.append("too few feature decisions were observed")
     if summary["inconsistent_feature_decisions"]:
         failures.append("feature decision disagrees with readiness or route")
+    if summary["gear_changes"] < minimum_gear_changes:
+        failures.append("too few virtual gear changes were observed")
+    if (summary["maximum_gear_change_speed_step_kph"]
+            > maximum_gear_change_speed_step_kph):
+        failures.append("virtual gear change caused an immediate speed step")
     return failures
 
 
@@ -448,6 +473,10 @@ def main() -> int:
         "--minimum-trainer-target-dispatches", type=int, default=1
     )
     parser.add_argument("--minimum-feature-decisions", type=int, default=1)
+    parser.add_argument("--minimum-gear-changes", type=int, default=2)
+    parser.add_argument(
+        "--maximum-gear-change-speed-step-kph", type=float, default=2.0
+    )
     args = parser.parse_args()
 
     trace = parse_trace(args.log)
@@ -482,6 +511,8 @@ def main() -> int:
             args.maximum_trainer_target_delta,
             args.minimum_trainer_target_dispatches,
             args.minimum_feature_decisions,
+            args.minimum_gear_changes,
+            args.maximum_gear_change_speed_step_kph,
         ))
     summary["passed"] = not failures
     summary["failures"] = failures

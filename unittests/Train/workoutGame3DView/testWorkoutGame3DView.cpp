@@ -1051,6 +1051,7 @@ private slots:
         QVERIFY(trace.contains(QStringLiteral("cadence=88")));
         QVERIFY(trace.contains(QStringLiteral("hr=149")));
         QVERIFY(trace.contains(QStringLiteral("gear=8")));
+        QVERIFY(trace.contains(QStringLiteral("speed_kph=22.5")));
         QVERIFY(trace.contains(QStringLiteral("camera_pos=")));
         QVERIFY(trace.contains(QStringLiteral("camera_target=")));
         QVERIFY(trace.contains(QStringLiteral("rider_asset=RB-01")));

@@ -62,6 +62,23 @@ def game_run_seconds_from_environment() -> float:
     return seconds
 
 
+def trainer_acceptance_shift_delays(seconds: float) -> tuple[float, float, float]:
+    if seconds < 8.0:
+        raise ValueError(
+            "trainer acceptance game duration must be at least 8 seconds"
+        )
+    first = seconds / 4.0
+    second = seconds / 4.0
+    return first, second, seconds - first - second
+
+
+def ui_screenshots_enabled_from_environment() -> bool:
+    return not (
+        validate_trainer_acceptance_from_environment()
+        and bool(os.environ.get("GC_UI_EXISTING_DISPLAY"))
+    )
+
+
 def skip_save_as_from_environment() -> bool:
     value = os.environ.get("GC_UI_SKIP_SAVE_AS", "0")
     if value not in ("0", "1"):
@@ -193,7 +210,7 @@ MINUTES WATTS
 0.18 220
 0.18 100
 1.00 100
-2.00 100
+3.00 100
 [END COURSE DATA]
 """,
     )
@@ -659,6 +676,7 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
     try:
         driver = UiDriver(root, artifacts)
         suite = Suite(driver, artifacts)
+        capture_screenshots = ui_screenshots_enabled_from_environment()
 
         def enter_train():
             driver.activate_named("Train", "menu item")
@@ -696,14 +714,16 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 ["Athlete", "Activity", "Share", "Tools", "View", "Help"],
                 "menu item",
             )
-            driver.screenshot("01-startup")
+            if capture_screenshots:
+                driver.screenshot("01-startup")
 
         def views():
             for view in ("Plan", "Trends", "Activities", "Train"):
                 driver.activate_named(view, "menu item")
                 driver.find(view, "label", showing=True, timeout=30.0)
                 time.sleep(0.5)
-            driver.screenshot("02-train")
+            if capture_screenshots:
+                driver.screenshot("02-train")
 
         def train_controls():
             enter_train()
@@ -787,7 +807,8 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 driver.wait_value(gear, initial + 1)
                 driver.send_key("s")
                 driver.wait_value(gear, initial)
-                driver.screenshot("03-generator-connected")
+                if capture_screenshots:
+                    driver.screenshot("03-generator-connected")
             finally:
                 stop_without_saving()
 
@@ -842,7 +863,17 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                     WORKOUT_GAME_CANVAS_NAMES, showing=True
                 )
                 if validate_trainer_acceptance:
-                    time.sleep(game_run_seconds_from_environment())
+                    delays = trainer_acceptance_shift_delays(
+                        game_run_seconds_from_environment()
+                    )
+                    initial_gear = driver.current_value(gear)
+                    time.sleep(delays[0])
+                    driver.send_key("w")
+                    driver.wait_value(gear, initial_gear + 1)
+                    time.sleep(delays[1])
+                    driver.send_key("s")
+                    driver.wait_value(gear, initial_gear)
+                    time.sleep(delays[2])
                 else:
                     require_pixel_motion = canvas_requires_pixel_motion(
                         driver.name(canvas)
@@ -888,7 +919,8 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
             paused_size = recording.stat().st_size
             driver.activate(continue_button)
             driver.wait_file_growth(recording, paused_size)
-            driver.screenshot("05-continued-training")
+            if capture_screenshots:
+                driver.screenshot("05-continued-training")
             driver.activate(
                 driver.find("Stop training", "push button", showing=True)
             )
@@ -923,7 +955,8 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
             driver.activate(
                 driver.find("Finish", "push button", showing=True, timeout=8.0)
             )
-            driver.screenshot("06-training-saved")
+            if capture_screenshots:
+                driver.screenshot("06-training-saved")
 
         def save_workout():
             enter_train()
@@ -949,7 +982,8 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
             editable.queryEditableText().setTextContents(str(destination))
             driver.click(driver.find("Save", "push button", showing=True))
             driver.wait_file(destination)
-            driver.screenshot("06-workout-saved")
+            if capture_screenshots:
+                driver.screenshot("06-workout-saved")
 
         def shutdown():
             try:

@@ -385,6 +385,7 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " cadence=" << cadenceRpm
            << " hr=" << heartRate
            << " gear=" << virtualGear
+           << " speed_kph=" << presentedFrame.simulation.speedKph
            << " camera_pos="
                 << viewModel->cameraX() << ','
                 << viewModel->cameraY() << ','
