@@ -180,9 +180,10 @@ Train telemetry, control, and recording continue unchanged.
 - Simulation runner: fixed 20 ms deadlines on one worker. Game rules retain
   semi-fixed 50 ms steps and vehicle physics retains fixed 8.33 ms steps. All
   layers cap catch-up work after stalls.
-- Rendering: display-vsync rate on the scene graph, target 60 FPS with the
-  OpenGL fallback, and 30 FPS with QPainter. A 29.99 Hz display therefore
-  correctly reports a stable 30 FPS.
+- Rendering: a session-scoped QML `FrameAnimation` drives Quick 3D at the
+  display-vsync rate; the primary scene graph renderer uses its completed-swap
+  request loop. The OpenGL fallback targets 60 FPS and QPainter targets 30 FPS.
+  A 29.99 Hz display therefore correctly reports a stable 30 FPS.
 - The current scene has bounded road, feature, and deterministic forest
   geometry, no per-frame asset upload, and no unbounded particle list. Automatic
   frame-budget quality scaling remains a future enhancement.
@@ -282,12 +283,15 @@ publication do not take this barrier; they still copy into the bounded input
 slot immediately. A lifecycle action can wait only for the currently executing
 bounded tick, never for rendering, the GUI drain, or an event queue.
 
-The primary scene graph renderer requests the next presentation from Qt's
-completed `frameSwapped` callback and is normally bounded by display vsync.
-The same completed swap timestamps realized FPS and frame-interval metrics.
-Requests continue while its visible session is active and for a bounded 250 ms
-tail after stopping; isolated frame updates retain a bounded 1.7 second
-interpolation window. The renderer
+Quick 3D uses Qt's scene-graph `FrameAnimation` as its continuous presentation
+pulse while a visible session is active. It stops synchronously with session
+state; it does not use an independent fixed-interval GUI timer or queue a new
+request one vsync after a completed frame. A queued GUI callback from the direct
+`frameSwapped` timestamp samples interpolation and publishes realized FPS and
+frame-interval diagnostics. The primary scene graph renderer instead requests
+the next presentation from its completed-swap callback and retains a bounded
+250 ms tail after stopping; isolated frame updates retain a bounded 1.7 second
+interpolation window. That renderer
 rebuilds bounded road and feature vertex arrays every frame. The OpenGL fallback
 is a `QOpenGLWidget`: Qt renders it into an offscreen framebuffer and composites
 it into the top-level widget rather than giving it an independently swappable
@@ -577,11 +581,12 @@ nodes or textures whose lifetime belongs to the render thread.
    60 Hz primary step with substeps as a common starting point. Compare 60/4,
    120/2, and the current 120/4 against contact quality and CPU time before
    treating the current rate as a requirement.
-10. **P2: presentation cadence needs production telemetry.** The render request
-    loop follows completed swaps while the runner drain has a 16 ms cap. Record
-    graphics API, Qt render loop, swap interval, requested frames, presented
-    frames, and sensor-to-display latency before adding adaptive quality or a
-    display-rate-specific scheduler.
+10. **P2: visible-vsync and sensor-to-display evidence is incomplete.** The
+    target-GPU gate records graphics API, display rate, completed frames,
+    frame percentiles and event-loop service latency. Raw accelerated rendering
+    is inside budget, but the final test still needs an uncovered, unlocked
+    target display and telemetry sample identity before end-to-end
+    sensor-to-display latency is known.
 
 ### Clock And Thread Model
 

@@ -6,6 +6,13 @@ Item {
     id: root
     width: 1280
     height: 720
+    property bool sessionRunning: false
+
+    FrameAnimation {
+        objectName: "presentationFrameAnimation"
+        running: root.sessionRunning && root.visible
+    }
+
     readonly property vector3d riderGroundScreen: {
         if (gameView.width <= 0 || gameView.height <= 0)
             return Qt.vector3d(0, 0, 0)

@@ -11,6 +11,7 @@
 
 #include <QQmlContext>
 #include <QQmlError>
+#include <QQuickItem>
 #include <QDebug>
 #include <QStringList>
 #include <QTextStream>
@@ -152,6 +153,9 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
         lastTracePublishMs = -1;
     }
     sessionRunning = running;
+    if (rootObject()) {
+        rootObject()->setProperty("sessionRunning", sessionRunning);
+    }
     if (running) {
         frameRateCounter.reset();
         presentFrame();
@@ -329,6 +333,9 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
 
 void WorkoutGame3DWindow::handleStatusChanged(QQuickView::Status status)
 {
+    if (status == QQuickView::Ready && rootObject()) {
+        rootObject()->setProperty("sessionRunning", sessionRunning);
+    }
     if (status != QQuickView::Error || failureReported) return;
     const QList<QQmlError> loadErrors = errors();
     QStringList messages;

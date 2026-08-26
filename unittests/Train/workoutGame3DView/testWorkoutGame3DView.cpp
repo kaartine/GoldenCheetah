@@ -18,10 +18,14 @@
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameSkinnyGeometry.h"
 #include "WorkoutGameTrailBranch.h"
+#include "Train/TrainerTargetCoordinator.h"
+#include "Train/TrainingRecordingIo.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
 #include "Train/WorkoutGameWorld.h"
 
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QGuiApplication>
 #include <QImage>
@@ -32,18 +36,88 @@
 #include <QQuickView>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QScreen>
 #include <QSet>
 #include <QSGRendererInterface>
+#include <QTemporaryFile>
 #include <QTest>
+#include <QTimer>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <memory>
+#include <vector>
 
 namespace {
 
 constexpr double FtpWatts = 200.0;
+
+class PerformanceTargetDevice final : public TrainerTargetDevice
+{
+public:
+    void setLoad(double) override { ++loadCalls; }
+    void setGradient(double) override { ++gradientCalls; }
+    void setWindResistance(double) override { ++windCalls; }
+
+    int callCount() const { return loadCalls + gradientCalls + windCalls; }
+
+private:
+    int loadCalls = 0;
+    int gradientCalls = 0;
+    int windCalls = 0;
+};
+
+struct PeriodicDeadlineProbe
+{
+    explicit PeriodicDeadlineProbe(qint64 interval) :
+        intervalMs(interval),
+        nextDeadlineMs(interval)
+    {
+    }
+
+    void record(qint64 elapsedMs)
+    {
+        const qint64 lateness = std::max<qint64>(
+                0, elapsedMs - nextDeadlineMs);
+        samples.push_back(double(lateness));
+        const qint64 skipped = lateness / intervalMs;
+        missedDeadlines += int(skipped);
+        nextDeadlineMs += (skipped + 1) * intervalMs;
+    }
+
+    double percentile(double fraction) const
+    {
+        if (samples.empty()) return 0.0;
+        QVector<double> sorted = samples;
+        std::sort(sorted.begin(), sorted.end());
+        const qsizetype rank = std::clamp<qsizetype>(
+                qsizetype(std::ceil(fraction * double(sorted.size()))) - 1,
+                0, sorted.size() - 1);
+        return sorted[rank];
+    }
+
+    double maximum() const
+    {
+        return samples.empty()
+                ? 0.0 : *std::max_element(samples.begin(), samples.end());
+    }
+
+    qint64 intervalMs = 0;
+    qint64 nextDeadlineMs = 0;
+    QVector<double> samples;
+    int missedDeadlines = 0;
+};
+
+struct ServiceLatencyPhase
+{
+    PeriodicDeadlineProbe telemetry{20};
+    PeriodicDeadlineProbe trainer{100};
+    PeriodicDeadlineProbe recording{250};
+    bool recordingOk = true;
+    int trainerCalls = 0;
+};
 
 class ScopedEnvironmentVariable
 {
@@ -228,6 +302,82 @@ WorkoutGameVisualSnapshot frameAt(
     frame.simulation.speedKph = 22.5;
     frame.riderPedalCycles = distanceMeters * 0.35;
     return frame;
+}
+
+ServiceLatencyPhase measureServiceLatency(
+        int durationMs,
+        const std::function<void(qint64)> &framePump = {})
+{
+    ServiceLatencyPhase phase;
+    PerformanceTargetDevice targetDevice;
+    TrainerTargetCoordinator targetCoordinator;
+    QTemporaryFile recording;
+    phase.recordingOk = recording.open();
+    if (!phase.recordingOk) return phase;
+
+    QElapsedTimer clock;
+    QTimer telemetryTimer;
+    QTimer trainerTimer;
+    QTimer recordingTimer;
+    QTimer frameTimer;
+    QTimer phaseTimer;
+    QEventLoop phaseLoop;
+    telemetryTimer.setTimerType(Qt::PreciseTimer);
+    trainerTimer.setTimerType(Qt::PreciseTimer);
+    recordingTimer.setTimerType(Qt::PreciseTimer);
+    frameTimer.setTimerType(Qt::PreciseTimer);
+    phaseTimer.setTimerType(Qt::PreciseTimer);
+    phaseTimer.setSingleShot(true);
+    telemetryTimer.setInterval(int(phase.telemetry.intervalMs));
+    trainerTimer.setInterval(int(phase.trainer.intervalMs));
+    recordingTimer.setInterval(int(phase.recording.intervalMs));
+    frameTimer.setInterval(20);
+    QObject::connect(&telemetryTimer, &QTimer::timeout, &telemetryTimer, [&]() {
+        phase.telemetry.record(clock.elapsed());
+    });
+    QObject::connect(&trainerTimer, &QTimer::timeout, &trainerTimer, [&]() {
+        const qint64 elapsedMs = clock.elapsed();
+        phase.trainer.record(elapsedMs);
+        const TrainerTarget target = TrainerTarget::erg(220.0, elapsedMs);
+        phase.recordingOk = phase.recordingOk
+                && targetCoordinator.apply(
+                    target,
+                    std::vector<TrainerTargetDevice *>{&targetDevice})
+                    == TrainerTargetResult::Applied;
+    });
+    QObject::connect(
+            &recordingTimer, &QTimer::timeout, &recordingTimer, [&]() {
+        const qint64 elapsedMs = clock.elapsed();
+        phase.recording.record(elapsedMs);
+        const QByteArray row = QByteArray::number(elapsedMs)
+                + QByteArrayLiteral(",88,150,220\n");
+        phase.recordingOk = phase.recordingOk
+                && TrainingRecordingIo::writeAndFlush(
+                    recording, row, [&recording]() {
+                        return recording.flush();
+                    }).ok();
+    });
+    if (framePump) {
+        QObject::connect(&frameTimer, &QTimer::timeout, &frameTimer, [&]() {
+            framePump(clock.elapsed());
+        });
+    }
+    QObject::connect(
+            &phaseTimer, &QTimer::timeout, &phaseLoop, &QEventLoop::quit);
+
+    clock.start();
+    telemetryTimer.start();
+    trainerTimer.start();
+    recordingTimer.start();
+    if (framePump) frameTimer.start();
+    phaseTimer.start(durationMs);
+    phaseLoop.exec();
+    frameTimer.stop();
+    recordingTimer.stop();
+    trainerTimer.stop();
+    telemetryTimer.stop();
+    phase.trainerCalls = targetDevice.callCount();
+    return phase;
 }
 
 int sampledColorCount(const QImage &image)
@@ -824,6 +974,10 @@ private slots:
         window.setSessionRunning(true);
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QObject *frameAnimation = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("presentationFrameAnimation"));
+        QVERIFY(frameAnimation);
+        QVERIFY(frameAnimation->property("running").toBool());
         QTRY_VERIFY_WITH_TIMEOUT(
                 window.diagnosticsSnapshot().ready
                 && window.diagnosticsSnapshot().input.frameNumber > 2
@@ -914,7 +1068,138 @@ private slots:
                     > first.input.renderedRoadDistanceMeters,
                 3000);
         window.setSessionRunning(false);
+        QVERIFY(!frameAnimation->property("running").toBool());
         QTRY_VERIFY_WITH_TIMEOUT(!window.diagnosticsSnapshot().ready, 1000);
+    }
+
+    void targetGpuProtectsPresentationAndTrainingServiceBudgets()
+    {
+        if (qEnvironmentVariableIntValue(
+                    "GC_WORKOUT_GAME_PERF_TEST") == 0) {
+            QSKIP("Set GC_WORKOUT_GAME_PERF_TEST=1 on the target GPU");
+        }
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const ScopedEnvironmentVariable restoreDiagnostics(
+                "GC_WORKOUT_GAME_DIAGNOSTICS");
+        qputenv("GC_WORKOUT_GAME_DIAGNOSTICS", "1");
+        const WorkoutGameCourse course = renderBudgetCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.setCourse(course, FtpWatts);
+        window.resize(1280, 720);
+        const ServiceLatencyPhase baseline = measureServiceLatency(3000);
+        QVERIFY(baseline.recordingOk);
+        QVERIFY(baseline.trainerCalls >= 25);
+
+        WorkoutGameVisualSnapshot initial = frameAt(road, 12.0);
+        initial.presentationTimeMs = 1;
+        initial.world.generation = 1;
+        window.setFrame(initial, 220.0, 220.0, 88, 150, 7);
+        window.setSessionRunning(true);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QObject *frameAnimation = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("presentationFrameAnimation"));
+        QVERIFY(frameAnimation);
+        QVERIFY(frameAnimation->property("running").toBool());
+
+        const ServiceLatencyPhase loaded = measureServiceLatency(
+                8000, [&window, &road](qint64 elapsedMs) {
+            const double residentSpan = std::max(
+                    1.0, road.totalLengthMeters - 24.0);
+            const double distance = 12.0 + std::fmod(
+                    double(elapsedMs) * 0.006, residentSpan);
+            WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+            frame.presentationTimeMs = elapsedMs + 2;
+            frame.simulation.workoutTimeMs = elapsedMs;
+            frame.world.generation = 1;
+            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        });
+        const WorkoutGameDiagnosticsSnapshot diagnostics =
+                window.diagnosticsSnapshot();
+        window.setSessionRunning(false);
+        QVERIFY(!frameAnimation->property("running").toBool());
+
+        qInfo().noquote()
+                << QStringLiteral(
+                    "Workout Game target GPU performance: api=%1 "
+                    "backend=%2 fps=%3 p50=%4 p95=%5 p99=%6 "
+                    "trainer_baseline_p95=%7 trainer_loaded_p95=%8 "
+                    "trainer_loaded_max=%9 trainer_missed=%10 "
+                    "recording_baseline_p95=%11 recording_loaded_p95=%12 "
+                    "recording_loaded_max=%13 recording_missed=%14 "
+                    "skipped_ticks=%15 geometry_queue=%16")
+                   .arg(int(window.rendererInterface()->graphicsApi()))
+                   .arg(QQuickWindow::sceneGraphBackend())
+                   .arg(diagnostics.input.framesPerSecond, 0, 'f', 1)
+                   .arg(diagnostics.input.p50FrameIntervalMs, 0, 'f', 2)
+                   .arg(diagnostics.input.p95FrameIntervalMs, 0, 'f', 2)
+                   .arg(diagnostics.input.p99FrameIntervalMs, 0, 'f', 2)
+                   .arg(baseline.trainer.percentile(0.95), 0, 'f', 1)
+                   .arg(loaded.trainer.percentile(0.95), 0, 'f', 1)
+                   .arg(loaded.trainer.maximum(), 0, 'f', 1)
+                   .arg(loaded.trainer.missedDeadlines)
+                   .arg(baseline.recording.percentile(0.95), 0, 'f', 1)
+                   .arg(loaded.recording.percentile(0.95), 0, 'f', 1)
+                   .arg(loaded.recording.maximum(), 0, 'f', 1)
+                   .arg(loaded.recording.missedDeadlines)
+                   .arg(diagnostics.input.skippedSimulationTicks)
+                   .arg(diagnostics.input.rendererQueueDepth);
+        qInfo().noquote()
+                << "Workout Game target GPU service samples: trainer="
+                << loaded.trainerCalls
+                << "recording=" << loaded.recording.samples.size()
+                << "telemetry=" << loaded.telemetry.samples.size()
+                << "telemetry_p95=" << loaded.telemetry.percentile(0.95)
+                << "telemetry_max=" << loaded.telemetry.maximum()
+                << "telemetry_missed=" << loaded.telemetry.missedDeadlines
+                << "screen_refresh="
+                << (window.screen() ? window.screen()->refreshRate() : 0.0)
+                << "mode="
+                << (qgetenv("vblank_mode") == QByteArrayLiteral("0")
+                    ? "unthrottled" : "vsync");
+
+        QVERIFY(loaded.recordingOk);
+        QVERIFY(loaded.trainerCalls >= 70);
+        QVERIFY(diagnostics.ready);
+        QVERIFY2(diagnostics.input.framesPerSecond >= 55.0,
+                 "target GPU did not sustain 55 presented frames per second");
+        QVERIFY2(diagnostics.input.p95FrameIntervalMs <= 20.5,
+                 "target GPU exceeded the 60 Hz p95 presentation budget");
+        QVERIFY2(diagnostics.input.p99FrameIntervalMs <= 25.0,
+                 "target GPU exceeded the bounded p99 presentation budget");
+        QCOMPARE(diagnostics.input.skippedSimulationTicks, std::size_t(0));
+        QVERIFY(diagnostics.input.rendererQueueDepth <= 1);
+        QCOMPARE(loaded.trainer.missedDeadlines, 0);
+        QCOMPARE(loaded.recording.missedDeadlines, 0);
+        QCOMPARE(loaded.telemetry.missedDeadlines, 0);
+        QVERIFY2(
+                loaded.telemetry.percentile(0.95)
+                    <= std::max(8.0,
+                                baseline.telemetry.percentile(0.95) + 5.0),
+                "rendering increased telemetry-event p95 scheduling latency");
+        QVERIFY2(loaded.telemetry.maximum() <= 50.0,
+                 "rendering blocked a telemetry-event deadline");
+        QVERIFY2(
+                loaded.trainer.percentile(0.95)
+                    <= std::max(8.0,
+                                baseline.trainer.percentile(0.95) + 5.0),
+                "rendering increased trainer-target p95 scheduling latency");
+        QVERIFY2(loaded.trainer.maximum() <= 50.0,
+                 "rendering blocked a trainer-target deadline");
+        QVERIFY2(
+                loaded.recording.percentile(0.95)
+                    <= std::max(12.0,
+                                baseline.recording.percentile(0.95) + 8.0),
+                "rendering increased recording p95 scheduling latency");
+        QVERIFY2(loaded.recording.maximum() <= 75.0,
+                 "rendering blocked a recording deadline");
     }
 
     void cameraCompositionDefaultsToCentreAndSupportsAuditVariants()

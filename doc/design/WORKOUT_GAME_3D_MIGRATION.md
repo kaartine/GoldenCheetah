@@ -71,9 +71,10 @@ not edit mesh vertices to hide mismatches.
 3. The GUI thread drains only the newest frame and passes it to the selected
    renderer. Stale presentation work cannot form an unbounded queue.
 4. `WorkoutGame3DWindow` keeps the existing two-snapshot visual interpolator.
-   Actual `frameSwapped` delivery schedules the next GUI-thread sample, so the
-   display presentation loop provides pacing without an independent timer
-   competing with vsync. QML changes never block for a GPU frame.
+   A session-scoped QML `FrameAnimation` supplies the display-vsync pulse;
+   actual `frameSwapped` delivery timestamps the completed frame and schedules
+   the next GUI-thread interpolation sample. There is no independent fixed-rate
+   timer competing with vsync. QML changes never block for a GPU frame.
 5. Qt Quick 3D owns scene graph synchronization and GPU submission. Depending
    on the platform and Qt render-loop choice, this runs on Qt's render thread
    or the GUI thread. Application code does not access render resources from

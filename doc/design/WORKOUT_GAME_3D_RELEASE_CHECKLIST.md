@@ -887,6 +887,25 @@ container.
 - [ ] `PERF-02` Hold 60 Hz presentation budget on the target Intel GPU without
   increasing Bluetooth, trainer-control or recording latency.
 
+**PERF-02 partial evidence:** Quick 3D now uses a session-scoped QML
+`FrameAnimation`; its lifecycle test proves that the pulse starts and stops with
+the session instead of depending on 50 Hz input snapshots or an independent GUI
+timer. The opt-in 1280 by 720 target test renders the full eleven-feature budget
+course with High MSAA and 50 Hz moving snapshots while comparing against an
+idle baseline. On the directly accelerated Intel HD Graphics 4000/crocus path,
+the unthrottled throughput run produced 117.5 FPS, p95 11.20 ms and p99 12.80
+ms. Its 20 ms telemetry probe reported p95 2 ms and max 14 ms; the 100 ms real
+trainer-target coordinator path reported p95 2 ms and max 4 ms; the 250 ms real
+temporary-file write/flush path reported p95 5 ms and max 9 ms. None missed a
+deadline, simulation skipped no ticks and the geometry queue remained empty.
+A visible-vsync run is still required before closing this item: compositors may
+intentionally throttle a covered, locked or powered-off test window to 1 FPS,
+which is not a valid display-performance measurement. A 29.99 Hz visible remote
+display correctly reports 30 FPS and cannot prove the 60 Hz target. The regular
+real-X11 suite passes 62 tests with 13 explicit opt-in skips, the lifecycle and
+completed-frame diagnostics pass under ASan/UBSan, and the production target
+compiles in the release container.
+
 **DIA-04/PERF-01 evidence:** opt-in real-X11 tests capture direct PNG sequences
 and encoded motion for camera compositions, all eleven features, rider action
 states, environment motion and landing/success feedback from deterministic
