@@ -990,10 +990,41 @@ build/test environments even when that historical workflow remains red.
 
 - [ ] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
 - [ ] `REL-02` Verify stop/save/cancel/continue and accidental-stop recovery.
-- [ ] `REL-03` Verify AppImage startup, QML/Quick 3D modules, assets, licenses,
+- [x] `REL-03` Verify AppImage startup, QML/Quick 3D modules, assets, licenses,
   attribution, SBOM and isolated production-like athlete data.
 - [ ] `REL-04` Complete user A/B ride on the target laptop and real trainer.
-- [ ] `REL-05` Publish a test AppImage to the stable local/remote release path.
+- [x] `REL-05` Publish a test AppImage to the stable local/remote release path.
 - [ ] `REL-06` Remove the legacy renderer only after all acceptance gates pass.
+
+**REL-03/REL-05 evidence (`56faa71`):** two independent clean release builds
+produced byte-identical ELF binaries and AppImages. The promoted AppImage is
+267,504,120 bytes with SHA-256
+`1e1a33ba95995961f6c3ebd1eed458bbc65de7dbccc5c1aa9f5f64391ae15d4a`.
+Its sidecar manifest has SHA-256
+`7b9dc00d137ea651190ea589dd303c0c85c42ed97845cb2bd373f279b6a82480`,
+its CycloneDX SBOM has SHA-256
+`22ed401a39f7f055a2c26fa970ad6e83dcccf84c7d3eb17cd0dae5e5c65e867b`,
+and the verified manifest records the exact source revision, Qt 6.8.3 and a
+configured private Strava OAuth fallback without exposing either credential.
+The package passed its embedded manifest, dependency provenance, attribution,
+QML module, Quick 3D asset, keychain, OAuth and isolated GUI smoke gates.
+
+The promoted package then passed 9/9 QPainter and 9/9 Scene Graph pre-release
+UI cases covering startup, navigation, isolated workout import, Train controls,
+Data Generator, virtual gears, Workout Game, stop/continue, Save As and clean
+shutdown. The Scene Graph trace advanced 140.43 m at 113.77 median FPS with a
+10.35 ms reported p95, zero backward frames, zero skipped simulation ticks and
+zero unexpected airborne frames. Quick 3D passed its eight renderer-dependent
+UI cases under desktop OpenGL. Its 466-sample trace advanced 716.71 m at 56.22
+median FPS, reached a 347 W target, reported a 10.79 ms stable p95 and 103 ms
+maximum frame, and recorded no backward frames, simulation skips or unexpected
+airborne frames. The forced-software Xvfb comparison exposed one 166 ms stall;
+the desktop-OpenGL acceptance run did not reproduce it. Focused Quick 3D tests
+also passed 62 executed cases with 13 platform skips, and the pre-release
+analyzer/harness passed 21 Python regression tests.
+
+Promotion used the verified release store. `GoldenCheetah-latest.AppImage`
+points atomically to the new release, while the prior working image remains at
+`GoldenCheetah-previous.AppImage`.
 
 The build is not a release candidate while any P0 task remains open.
