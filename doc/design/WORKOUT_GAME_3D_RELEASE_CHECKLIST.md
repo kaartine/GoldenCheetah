@@ -1072,4 +1072,36 @@ stable paths resolve to the same verified artifact; the former direct local
 image is retained as `GoldenCheetah-before-aeef5e1.AppImage` and the remote
 release store retains `56faa71` as its previous verified generation.
 
+**REL-05 refresh (`556f27a`, 2026-08-27):** the isolated real-trainer
+acceptance path adds an anonymous trainer-target trace, stable feature outcome
+and terrain fields, CSV reconciliation and a temporary-athlete interactive
+runner. The analyzer passed 30 Python cases and the trainer coordinator passed
+10 QtTest cases. Quick 3D passed 64 cases with 13 explicit export/performance
+skips under desktop OpenGL and 46 cases with 31 GPU-dependent skips under
+ASan/UBSan offscreen. The target-GPU service test measured 153.6 FPS, 7.41 ms
+p95 and 8.02 ms p99 frame intervals, with zero trainer, recording or telemetry
+deadline misses and zero skipped simulation ticks.
+
+Two independent clean Ubuntu Jammy/glibc 2.35 release passes produced
+byte-identical ELF and AppImage output. The 267,504,120-byte AppImage has
+SHA-256
+`ba603a20248cb21cad9972b9e23a52d821420659633c3ad78bf2cdcb4a55c6f5`;
+its manifest has SHA-256
+`9ee9fdf507a992044e73df815ec33eba84665db21b581ed32f85479139f8590d`,
+its CycloneDX SBOM has SHA-256
+`ae7cfa0017ed0c8c25ec8712bfc09c72e9a2946e4a437d1661519d6baaaf01fa`
+and its build manifest has SHA-256
+`c3a06d7e054421a81db9c34f22a861963304310b4f0a57ad65c1bbe69e87d34c`.
+The package passed configured Strava OAuth, bundled Linux keychain and Qt
+offscreen smoke gates on the build host and again from the exact promoted
+local artifact.
+
+The promoted AppImage passed 10/10 QPainter and 10/10 Quick 3D isolated UI
+workflows. Its 81-sample Quick 3D trace advanced 126.794 m at 114.508 median
+FPS with a 9.124 ms reported p95 and 12 ms maximum frame interval, zero
+backward frames, zero skipped simulation ticks and zero unexpected airborne
+frames. Local and remote stable paths resolve to this verified artifact and
+both release stores retain `aeef5e1` as the previous generation. The real
+trainer ride and explicit camera choice remain open acceptance gates.
+
 The build is not a release candidate while any P0 task remains open.
