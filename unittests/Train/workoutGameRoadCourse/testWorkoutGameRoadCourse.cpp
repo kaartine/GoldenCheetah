@@ -1248,7 +1248,7 @@ private slots:
         QVERIFY(preloadMeters > 0.0);
         QVERIFY(preloadMeters <= 3.0 + 1e-9);
         QVERIFY(bunny->challenge.obstacleDistanceMeters
-                - bunny->challenge.decisionDistanceMeters <= 4.0 + 1e-9);
+                - bunny->challenge.decisionDistanceMeters <= 7.0 + 1e-9);
         const WorkoutGameRoadSample obstacle =
                 WorkoutGameRoadCourseBuilder::sample(
                     road, bunny->challenge.obstacleDistanceMeters);
@@ -1478,9 +1478,9 @@ private slots:
                     });
             QVERIFY(jump != road.pieces.end());
             QVERIFY(jump->challenge.obstacleDistanceMeters
-                    - jump->challenge.prepareDistanceMeters <= 10.0);
+                    - jump->challenge.prepareDistanceMeters <= 10.0 + 1e-9);
             QVERIFY(jump->challenge.obstacleDistanceMeters
-                    - jump->challenge.decisionDistanceMeters <= 4.0 + 1e-9);
+                    - jump->challenge.decisionDistanceMeters <= 7.0 + 1e-9);
         }
     }
 

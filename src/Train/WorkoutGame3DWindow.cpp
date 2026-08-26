@@ -108,6 +108,11 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
     }
 }
 
+void WorkoutGame3DWindow::setGeneratorState(const QString &state)
+{
+    viewModel->setGeneratorState(state);
+}
+
 void WorkoutGame3DWindow::presentFrame()
 {
     if (!hasFrame) return;

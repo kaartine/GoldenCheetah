@@ -14,12 +14,14 @@ SOURCES = testWorkoutGameEngine.cpp \
           ../../../src/Train/WorkoutGameRiderVisual.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp \
+          ../../../src/Train/TrainingDataGenerator.cpp \
           ../../../src/Train/WorkoutGameTerrainTransition.cpp \
           ../../../src/Train/WorkoutGameVisualSmoother.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
 
 HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
           ../../../src/Train/WorkoutGameEngine.h \
+          ../../../src/Train/TrainingDataGenerator.h \
           ../../../src/Train/WorkoutGameRiderVisual.h
 
 BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)

@@ -710,16 +710,40 @@ passes 25 tests; the complete headless suite passes under ASan and UBSan.
 
 ### `GEN-01` Give Data Generator the active target authority
 
-- [ ] Generator follows the selected game/workout target by default.
-- [ ] Add deterministic over-target, on-target, under-target and cadence modes.
-- [ ] Add completed and bypassed scripts for all eleven features.
-- [ ] Expose generator state clearly without affecting normal devices.
+- [x] Generator follows the selected game/workout target by default.
+- [x] Add deterministic over-target, on-target, under-target and cadence modes.
+- [x] Add completed and bypassed scripts for all eleven features.
+- [x] Expose generator state clearly without affecting normal devices.
 
 **Tests:** target equality, outcome matrix, reproducible telemetry trace and
 isolation from real device configuration.
 
 **Done when:** automated UI videos can reliably demonstrate both lines of every
 feature without a trainer.
+
+**Current evidence:** the device wizard stores one of `follow-target`,
+`on-target`, `over-target`, `under-target`, `cadence-low` or `cadence-high`
+only in a Data Generator device profile. Feature Lab publishes its canonical
+target through `Context`; `TrainSidebar` routes that command exclusively to
+active `DEV_NULL` controllers, and the selected generator power source copies
+its authoritative load and bounded source label into aggregate telemetry.
+Engine no longer replaces a received target. The 16-test generator suite covers
+profile parsing, exact mode contracts, target normalization, real-device
+isolation, aggregate telemetry publication, reproducibility, bounded source
+names and fractional-target survival through integer `RealtimeData`. The
+17-test Engine suite drives integer-quantized `OnTarget` and `UnderTarget`
+generator samples at FTP 190 through all eleven Feature Lab sections and
+observes 11 `Completed` plus 11 `Bypassed` outcomes. It also enforces expected
+air time, a zero main-line lateral offset and a sub-one-metre safe-line step at
+the 250-ms trace cadence. The generator state is visible as a HUD badge only
+for generator telemetry; the 3D View suite verifies shown/hidden state and
+bounded layouts at 360 by 640, 1024 by 600 and 1920 by 1080. All 54 enabled 3D
+View tests pass on real X11/OpenGL; 12 exporter-only tests remain explicit
+opt-in skips. Isolated 70-second X11 Scene Graph UI recordings cover every
+Feature Lab section in both modes. `OnTarget` produced zero lateral movement
+and `UnderTarget` bounded the largest 250-ms lateral step to 0.929 m; both runs
+reported zero backwards frames, skipped ticks, trace regressions and
+unexpected airborne frames while sustaining about 71 FPS median.
 
 ## P1 Art, Environment And Feedback
 

@@ -11,6 +11,17 @@
 #define _GC_TrainingDataGenerator_h
 
 #include <cstdint>
+#include <string_view>
+
+enum class TrainingDataGeneratorMode
+{
+    FollowTarget,
+    OnTarget,
+    OverTarget,
+    UnderTarget,
+    CadenceLow,
+    CadenceHigh
+};
 
 struct TrainingDataGeneratorSample
 {
@@ -31,8 +42,12 @@ public:
     TrainingDataGenerator();
 
     static constexpr bool acceptsTargetPowerCommands() { return true; }
+    static TrainingDataGeneratorMode modeFromProfile(std::string_view profile);
     void reset();
+    void setMode(TrainingDataGeneratorMode mode);
     void setTargetWatts(double watts);
+    TrainingDataGeneratorMode mode() const { return generatorMode; }
+    const char *modeLabel() const;
     double targetWatts() const { return target; }
     TrainingDataGeneratorSample nextSample();
 
@@ -41,6 +56,8 @@ private:
     double currentWatts = 100.0;
     double currentHeartRate = 105.0;
     std::uint64_t sampleNumber = 0;
+    TrainingDataGeneratorMode generatorMode =
+            TrainingDataGeneratorMode::FollowTarget;
 };
 
 #endif // _GC_TrainingDataGenerator_h

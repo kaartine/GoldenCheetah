@@ -316,7 +316,11 @@ while the generated
 gate clamps the visible preparation segment to at most six metres before the
 decision line. Jump profiles do not use target-adherence as a requirement,
 because an intentional over-target burst must not count against the rider.
-Jump obstacles are placed no more than five metres beyond the decision line;
+The generic log and bunny-hop gate is tighter: preparation is at most three
+metres before an earlier decision, and the obstacle is at most seven metres
+beyond it. This gives a bypass enough longitudinal distance to move laterally
+without turning the effort prompt into a long interval.
+Jump obstacles are placed no more than seven metres beyond the decision line;
 long workout intervals cannot turn one short MTB burst into a prolonged prompt.
 The workout-time-to-road timeline owns longitudinal progress. Each engine tick
 passes that distance to Box2D and publishes it with the resulting vehicle pose,
@@ -338,7 +342,11 @@ single lateral curve used by both the rendered branch and runtime rider offset.
 Projection follows that route while the rider remains camera-centered, and
 safe-line physics is pinned to the sampled ground. The route returns
 continuously to the main line after the obstacle instead of moving the rider
-sprite sideways in one frame. A challenge branch retains at least 18 metres of
+sprite sideways in one frame. Its shared branch curve uses a 40 percent smooth
+entry, a centered clearance plateau and a 40 percent smooth return. Main-line
+jump and drop approaches use a separate `followCourseSurface` physics input;
+it prevents distance synchronization from manufacturing air time without
+selecting the bypass surface. A challenge branch retains at least 18 metres of
 visible trail when its source section permits it, including ten metres of exit
 runout after the physical feature.
 
@@ -1061,8 +1069,17 @@ or recorded physiological data.
    switching without modifying production athlete data.
 7. Hardware-free UI testing uses the `Data Generator` training device. It
    follows ERG targets and emits deterministic power, heart rate, cadence, and
-   speed telemetry without advertising trainer-control capabilities or sending
-   commands to physical hardware.
+   speed telemetry without sending scripted commands to physical hardware.
+   Its device profile selects natural target following or deterministic
+   on-target, over-target, under-target, low-cadence and high-cadence modes.
+   Feature Lab publishes its canonical target through `Context`; the sidebar
+   applies that target only to active `DEV_NULL` controllers. When the generator
+   is also the selected power source, its load and bounded mode label become the
+   authoritative aggregate telemetry consumed by Engine and the HUD. Engine
+   never substitutes another target after telemetry has crossed this boundary.
+   `OnTarget` rounds fractional targets upward before the integer
+   `RealtimeData` boundary, so an FTP-derived target such as 199.5 W cannot be
+   misclassified as an under-target effort.
 
 ## Delivery Stages
 

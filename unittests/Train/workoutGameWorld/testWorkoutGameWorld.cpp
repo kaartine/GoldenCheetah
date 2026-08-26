@@ -1443,6 +1443,54 @@ private slots:
         QVERIFY(maximumImpact < 0.01);
     }
 
+    void dropLeadInCanFollowTheMainSurfaceWithoutSelectingTheBypass()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 805u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::RecoveryDescent;
+        section.terrain = WorkoutGameTerrainKind::Drop;
+        section.durationMs = source.durationMs;
+        section.targetWatts = 150.0;
+        section.gradePercent = -4.0;
+        section.difficulty = 0.65;
+        section.challengeCount = 1;
+        source.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+        WorkoutGamePhysicsInput input;
+        input.terrain = WorkoutGameTerrainKind::Drop;
+        input.desiredSpeedMetersPerSecond = 5.0;
+        input.effortRatio = 1.0;
+        input.followCourseSurface = true;
+        const double lip = piece->challenge.obstacleDistanceMeters;
+        const double start = lip - 8.0;
+        for (int tick = 0; tick <= 75; ++tick) {
+            input.workoutTimeMs = tick * 20;
+            input.courseDistanceMeters = start + tick * 0.10;
+            const WorkoutGameRoadSample roadSample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, input.courseDistanceMeters);
+            const WorkoutGameWorldSnapshot result = physics.update(input);
+            QVERIFY(result.ready && roadSample.ready);
+            QVERIFY(!result.rider.airborne);
+            QVERIFY2(std::abs(result.surfaceElevationMeters
+                              - roadSample.surfaceElevationMeters()) < 0.03,
+                     "main-line surface following selected bypass terrain");
+        }
+    }
+
     void roadCourseRollersStayGroundedAndExerciseSuspension()
     {
         WorkoutGameCourse source;

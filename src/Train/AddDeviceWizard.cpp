@@ -1632,7 +1632,18 @@ AddFinal::AddFinal(AddDeviceWizard *parent) : QWizardPage(parent), wizard(parent
     QFormLayout *formlayout = new QFormLayout;
     formlayout->addRow(new QLabel(tr("Name*"), this), (name=new QLineEdit(this)));
     formlayout->addRow(new QLabel(tr("Port"), this), (port=new QLineEdit(this)));
-    formlayout->addRow(new QLabel(tr("Profile"), this), (profile=new QLineEdit(this)));
+    profileLabel = new QLabel(tr("Profile"), this);
+    profile = new QLineEdit(this);
+    formlayout->addRow(profileLabel, profile);
+    generatorModeLabel = new QLabel(tr("Generator mode"), this);
+    generatorMode = new QComboBox(this);
+    generatorMode->addItem(tr("Follow target"), QStringLiteral("follow-target"));
+    generatorMode->addItem(tr("On target"), QStringLiteral("on-target"));
+    generatorMode->addItem(tr("Over target"), QStringLiteral("over-target"));
+    generatorMode->addItem(tr("Under target"), QStringLiteral("under-target"));
+    generatorMode->addItem(tr("Low cadence"), QStringLiteral("cadence-low"));
+    generatorMode->addItem(tr("High cadence"), QStringLiteral("cadence-high"));
+    formlayout->addRow(generatorModeLabel, generatorMode);
     formlayout->addRow(new QLabel(tr("Virtual Power"), this), (virtualPowerName=new QLineEdit(this)));
     port->setEnabled(false); // no edit
     virtualPowerName->setEnabled(false); // no edit
@@ -1646,14 +1657,27 @@ AddFinal::initializePage()
 {
     port->setText(wizard->portSpec);
     profile->setText(wizard->profile);
+    const bool isGenerator = wizard->type == DEV_NULL;
+    profileLabel->setVisible(!isGenerator);
+    profile->setVisible(!isGenerator);
+    generatorModeLabel->setVisible(isGenerator);
+    generatorMode->setVisible(isGenerator);
+    if (isGenerator) {
+        const TrainingDataGeneratorMode mode =
+                TrainingDataGenerator::modeFromProfile(
+                    wizard->profile.toStdString());
+        generatorMode->setCurrentIndex(static_cast<int>(mode));
+    }
     virtualPowerName->setText(wizard->virtualPowerName);
 }
 
 bool
 AddFinal::validatePage()
 {
+    const QString selectedProfile = wizard->type == DEV_NULL
+            ? generatorMode->currentData().toString() : profile->text();
     if (!name->text().trimmed().isEmpty() &&
-        AddDeviceWizard::isDeviceProfileValid(wizard->type, profile->text())) {
+        AddDeviceWizard::isDeviceProfileValid(wizard->type, selectedProfile)) {
 
         DeviceConfigurations all;
         DeviceConfiguration add;
@@ -1662,7 +1686,7 @@ AddFinal::validatePage()
         add.type = wizard->type;
         add.name = name->text();
         add.portSpec = port->text();
-        add.deviceProfile = profile->text();
+        add.deviceProfile = selectedProfile;
         add.postProcess = wizard->virtualPowerIndex;
         add.wheelSize = wizard->wheelSize;
         add.inertialMomentKGM2 = wizard->inertialMomentKGM2;

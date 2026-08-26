@@ -229,6 +229,8 @@ class Context : public QObject
         void notifyStop() { GlobalContext::context()->notifyStop(); emit stop(); }
         void notifySeek(long x) { emit seek(x); }
         void notifyIntensityChanged(int intensity) { emit intensityChanged(intensity); };
+        void notifyWorkoutGameGeneratorTarget(double watts)
+            { emit workoutGameGeneratorTargetChanged(watts); }
 
         void notifySetNotification(const QString &msg, int timeout) { emit setNotification(msg, timeout); };
         void notifyClearNotification() { emit clearNotification(); };
@@ -372,6 +374,7 @@ class Context : public QObject
         void pause();
         void stop();
         void intensityChanged(int intensity);
+        void workoutGameGeneratorTargetChanged(double watts);
 
         void setNotification(const QString &msg, int timeout);
         void clearNotification();

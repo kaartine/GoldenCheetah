@@ -13,11 +13,44 @@ import xml.etree.ElementTree as ET
 
 
 ATHLETE = "UiTestAthlete"
+GENERATOR_MODES = {
+    "follow-target",
+    "on-target",
+    "over-target",
+    "under-target",
+    "cadence-low",
+    "cadence-high",
+}
 
 
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def generator_mode_from_environment() -> str:
+    mode = os.environ.get("GC_UI_GENERATOR_MODE", "follow-target")
+    if mode not in GENERATOR_MODES:
+        supported = ", ".join(sorted(GENERATOR_MODES))
+        raise ValueError(
+            f"Unsupported GC_UI_GENERATOR_MODE {mode!r}; expected one of {supported}"
+        )
+    return mode
+
+
+def game_run_seconds_from_environment() -> float:
+    value = os.environ.get("GC_UI_GAME_RUN_SECONDS", "11.8")
+    try:
+        seconds = float(value)
+    except ValueError as error:
+        raise ValueError(
+            f"Invalid GC_UI_GAME_RUN_SECONDS {value!r}"
+        ) from error
+    if not 1.0 <= seconds <= 120.0:
+        raise ValueError(
+            "GC_UI_GAME_RUN_SECONDS must be between 1 and 120 seconds"
+        )
+    return seconds
 
 
 def prepare(root: Path) -> None:
@@ -57,14 +90,15 @@ def prepare(root: Path) -> None:
         "[migration]\n"
         "legacy_qsettings_v1\\global_state=complete\n",
     )
+    generator_mode = generator_mode_from_environment()
     write_text(
         library / "configglobal-trainmode.ini",
-        """[General]
+        f"""[General]
 devices=1
 devicename1=Data Generator
 devicetype1=64
 devicespec1=
-deviceprof1=
+deviceprof1={generator_mode}
 devicewheel1=2100
 devicestride1=0
 devicepostProcess1=0
@@ -118,6 +152,7 @@ MINUTES WATTS
 0.18 220
 0.18 100
 1.00 100
+2.00 100
 [END COURSE DATA]
 """,
     )
@@ -683,7 +718,7 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 canvas = driver.find("Workout game canvas", showing=True)
                 time.sleep(1.2)
                 first = driver.screenshot("04-workout-game-first", canvas)
-                time.sleep(11.8)
+                time.sleep(game_run_seconds_from_environment())
                 second = driver.screenshot("04-workout-game-running", canvas)
                 changed = driver.changed_pixels(first, second)
                 if changed < 1200:

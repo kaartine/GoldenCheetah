@@ -45,6 +45,7 @@
 
 #include <QWizard>
 #include <QFormLayout>
+#include <QComboBox>
 #include <QHeaderView>
 #include <QProgressBar>
 #include <QFileDialog>
@@ -324,6 +325,9 @@ class AddFinal : public QWizardPage
         QLineEdit *name;
         QLineEdit *port;
         QLineEdit *profile;
+        QLabel *profileLabel;
+        QComboBox *generatorMode;
+        QLabel *generatorModeLabel;
         QLineEdit *virtualPowerName;
 };
 

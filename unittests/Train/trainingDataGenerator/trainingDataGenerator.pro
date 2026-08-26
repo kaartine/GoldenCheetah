@@ -1,10 +1,16 @@
-QT += core testlib bluetooth
+QT += core gui widgets testlib bluetooth core5compat
 CONFIG += c++17
 
 TARGET = testTrainingDataGenerator
 
+INCLUDEPATH += ../../../src/Charts ../../../src/Core ../../../src/FileIO \
+               ../../../src/Gui ../../../src/Metrics ../../../src/Planning \
+               ../../../src/Train ../../../qwt/src
+
 SOURCES = testTrainingDataGenerator.cpp \
           ../../../src/Train/TrainingDataGenerator.cpp \
+          ../../../src/Train/TrainingDataGeneratorTargetRouting.cpp \
+          ../../../src/Train/RealtimeData.cpp \
           ../../../src/Train/DeviceTypes.cpp
 
 HEADERS = ../../../src/Train/TrainingDataGenerator.h \

@@ -253,6 +253,7 @@ class TrainSidebar : public GcWindow
         void vo2Data(double rf, double rmv, double vo2, double vco2, double tv, double feo2);
 
     private slots:
+        void applyWorkoutGameGeneratorTarget(double watts);
         void saveAndStopTraining();
         void discardAndStopTraining();
         void continueTraining();

@@ -29,6 +29,11 @@ NullController::NullController(TrainSidebar *parent,
   : RealtimeController(parent, dc), parent(parent), beats(0), count(0),
     bicycle(NULL)
 {
+    const std::string profile = dc
+            ? dc->deviceProfile.toStdString() : std::string();
+    generator.setMode(TrainingDataGenerator::modeFromProfile(profile));
+    generatorName = QStringLiteral("Data Generator [%1]")
+            .arg(QString::fromLatin1(generator.modeLabel())).toLatin1();
 }
 
 int NullController::start() {
@@ -69,7 +74,7 @@ void NullController::setLoad(double watts) {
 
 void NullController::getRealtimeData(RealtimeData &rtData) {
     const TrainingDataGeneratorSample sample = generator.nextSample();
-    rtData.setName((char *)"Data Generator");
+    rtData.setName(generatorName.data());
     rtData.setWatts(sample.watts);
     rtData.setLoad(generator.targetWatts());
     rtData.setLRBalance(sample.leftRightBalance);

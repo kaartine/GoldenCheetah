@@ -139,6 +139,30 @@ Item {
             font.bold: true
         }
 
+        Rectangle {
+            objectName: "generatorStateBadge"
+            visible: root.viewModel.generatorState.length > 0
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 4
+            width: Math.min(parent.width * 0.48,
+                            generatorStateText.implicitWidth + 12)
+            height: 14
+            color: "#d1273331"
+            border.color: "#778ed7c4"
+
+            Text {
+                id: generatorStateText
+                anchors.centerIn: parent
+                text: qsTr("GEN: %1").arg(
+                          root.viewModel.generatorState.toUpperCase())
+                color: "#d8f1e9"
+                font.pixelSize: 9
+                font.bold: true
+                elide: Text.ElideRight
+            }
+        }
+
         Item {
             id: profileGraph
             anchors.left: parent.left

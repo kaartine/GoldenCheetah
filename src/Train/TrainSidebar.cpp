@@ -25,6 +25,7 @@
 #include "Units.h"
 #include "DeviceTypes.h"
 #include "DeviceConfiguration.h"
+#include "TrainingDataGeneratorTargetRouting.h"
 #include "TrainingControllerLifecycle.h"
 #include "TrainingCommandRouter.h"
 #include "TrainingDeviceSelection.h"
@@ -259,6 +260,8 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
 
     connect(context, SIGNAL(newLap()), this, SLOT(resetLapTimer()));
     connect(context, SIGNAL(viewChanged(int)), this, SLOT(viewChanged(int)));
+    connect(context, &Context::workoutGameGeneratorTargetChanged,
+            this, &TrainSidebar::applyWorkoutGameGeneratorTarget);
 
     // workout filters
     connect(context, SIGNAL(workoutFiltersChanged(QList<ModelFilter*>&)), this, SLOT(workoutFiltersChanged(QList<ModelFilter*>&)));
@@ -458,6 +461,21 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     //toolbarButtons->hide();
 #endif
 
+}
+
+void TrainSidebar::applyWorkoutGameGeneratorTarget(double watts)
+{
+    double normalizedWatts = 0.0;
+    if (!TrainingDataGeneratorTargetRouting::normalizeTarget(
+                watts, normalizedWatts)) {
+        return;
+    }
+    foreach (int dev, activeDevices) {
+        if (TrainingDataGeneratorTargetRouting::acceptsDeviceType(
+                    Devices[dev].type)) {
+            Devices[dev].controller->setLoad(normalizedWatts);
+        }
+    }
 }
 
 
@@ -2378,6 +2396,8 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
                     rtData.setLppe(local.getLppe());
                     rtData.setLpppb(local.getLpppb());
                     rtData.setLpppe(local.getLpppe());
+                    TrainingDataGeneratorTargetRouting::publishPowerSourceState(
+                            Devices[dev].type, local, rtData);
                 }
                 if (local.getTrainerStatusAvailable())
                 {

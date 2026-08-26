@@ -68,6 +68,8 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(int heartRate READ heartRate NOTIFY telemetryChanged)
     Q_PROPERTY(int virtualGear READ virtualGear NOTIFY telemetryChanged)
     Q_PROPERTY(double fps READ fps NOTIFY fpsChanged)
+    Q_PROPERTY(QString generatorState READ generatorState
+               NOTIFY generatorStateChanged)
     Q_PROPERTY(QString terrainName READ terrainName NOTIFY sceneChanged)
     Q_PROPERTY(QString featureStatus READ featureStatus NOTIFY sceneChanged)
     Q_PROPERTY(int readinessPercent READ readinessPercent NOTIFY sceneChanged)
@@ -126,6 +128,7 @@ public:
             int heartRate,
             int virtualGear);
     void setFps(double value);
+    void setGeneratorState(const QString &state);
 
     QObject *trailGeometry() const { return trail.get(); }
     QObject *bermGeometry() const { return berm.get(); }
@@ -179,6 +182,7 @@ public:
     int heartRate() const { return currentHeartRate; }
     int virtualGear() const { return currentVirtualGear; }
     double fps() const { return currentFps; }
+    QString generatorState() const { return currentGeneratorState; }
     QString terrainName() const { return currentTerrainName; }
     QString featureStatus() const { return currentFeatureStatus; }
     int readinessPercent() const { return currentReadinessPercent; }
@@ -236,6 +240,7 @@ signals:
     void sceneChanged();
     void telemetryChanged();
     void fpsChanged();
+    void generatorStateChanged();
     void courseChanged();
     void treesChanged();
     void floorGeometryChanged();
@@ -306,6 +311,7 @@ private:
     int currentHeartRate = 0;
     int currentVirtualGear = 1;
     double currentFps = 0.0;
+    QString currentGeneratorState;
     QString currentTerrainName;
     QString currentFeatureStatus;
     int currentReadinessPercent = 0;

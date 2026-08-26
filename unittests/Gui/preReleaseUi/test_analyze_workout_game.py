@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("analyze_workout_game.py")
@@ -38,6 +40,42 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertIn("FTP = 190\n", workout)
             self.assertIn("0.10 100\n0.10 220\n", workout)
             self.assertIn("1.00 100\n", workout)
+            self.assertIn("2.00 100\n", workout)
+
+    def test_prepare_selects_a_validated_generator_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.dict(
+                os.environ, {"GC_UI_GENERATOR_MODE": "under-target"}
+            ):
+                UI.prepare(root)
+
+            settings = (
+                root / "library" / "configglobal-trainmode.ini"
+            ).read_text(encoding="utf-8")
+            self.assertIn("deviceprof1=under-target\n", settings)
+
+    def test_prepare_rejects_an_unknown_generator_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.dict(
+                os.environ, {"GC_UI_GENERATOR_MODE": "unreliable"}
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "Unsupported GC_UI_GENERATOR_MODE"
+                ):
+                    UI.prepare(Path(directory))
+
+    def test_game_duration_is_bounded_and_configurable(self):
+        with mock.patch.dict(
+            os.environ, {"GC_UI_GAME_RUN_SECONDS": "72.5"}
+        ):
+            self.assertEqual(UI.game_run_seconds_from_environment(), 72.5)
+        for value in ("invalid", "0.5", "121"):
+            with self.subTest(value=value), mock.patch.dict(
+                os.environ, {"GC_UI_GAME_RUN_SECONDS": value}
+            ):
+                with self.assertRaises(ValueError):
+                    UI.game_run_seconds_from_environment()
 
     def test_frame_delta_ignores_header_and_counts_game_pixels(self):
         width = 4

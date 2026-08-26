@@ -11,6 +11,7 @@
 #include "Train/WorkoutGameFeatureLab.h"
 #include "Train/WorkoutGameRiderVisual.h"
 #include "Train/WorkoutGameTabletopGeometry.h"
+#include "Train/TrainingDataGenerator.h"
 
 #include <QTest>
 
@@ -179,6 +180,127 @@ private slots:
         }
         QVERIFY(replayDigest(course, WorkoutGameFeatureLabScenario::Bypass)
                 != expected);
+    }
+
+    void dataGeneratorDeterministicallyCompletesAndBypassesEveryFeature()
+    {
+        constexpr double FtpWatts = 190.0;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(FtpWatts);
+
+        const auto runScenario = [&](TrainingDataGeneratorMode mode,
+                                     WorkoutGameFeatureOutcome expected) {
+            TrainingDataGenerator generator;
+            generator.setMode(mode);
+            WorkoutGameEngine engine;
+            QVERIFY(engine.configure(course, FtpWatts, true));
+            std::vector<bool> observed(course.sections.size(), false);
+            double maximumMainLineLateralMeters = 0.0;
+            double maximumTraceLateralStepMeters = 0.0;
+            double priorTraceLateralMeters = 0.0;
+            bool hasPriorTraceLateral = false;
+            std::int64_t nextTraceTimeMs = 0;
+
+            for (std::int64_t timeMs = 0; timeMs < course.durationMs;
+                 timeMs += 20) {
+                WorkoutGameEngineInput input;
+                const WorkoutGameFeatureLabScenario labScenario =
+                        expected == WorkoutGameFeatureOutcome::Completed
+                        ? WorkoutGameFeatureLabScenario::Pass
+                        : WorkoutGameFeatureLabScenario::Bypass;
+                input.simulation = WorkoutGameFeatureLab::input(
+                        course, timeMs, labScenario);
+                generator.setTargetWatts(input.simulation.targetWatts);
+                const TrainingDataGeneratorSample sample =
+                        generator.nextSample();
+                // RealtimeData stores watts as an integer in the live path.
+                input.simulation.actualWatts = std::floor(sample.watts);
+                input.simulation.cadenceRpm = sample.cadence;
+                input.simulation.authoritativeSpeedKph = -1.0;
+                input.heartRate = int(std::lround(sample.heartRate));
+
+                const WorkoutGameEngineFrame frame = engine.update(
+                        input, 100000 + timeMs);
+                const int section = frame.visual.simulation.activeSection;
+                if (section >= 0
+                        && section < int(course.sections.size())
+                        && course.sections[std::size_t(section)].challengeCount > 0
+                        && frame.visual.simulation.featureOutcome == expected) {
+                    observed[std::size_t(section)] = true;
+                }
+                if (expected == WorkoutGameFeatureOutcome::Completed) {
+                    maximumMainLineLateralMeters = std::max(
+                            maximumMainLineLateralMeters,
+                            std::abs(frame.visual.feature
+                                .lateralOffsetMeters));
+                    const WorkoutGameRiderVisualPose pose =
+                            WorkoutGameRiderVisual::pose(
+                                frame.visual.world,
+                                frame.visual.feature,
+                                frame.watts);
+                    if (pose.airborne && pose.airHeightMeters >= 0.08) {
+                        QVERIFY2(
+                            WorkoutGameFeatureRuntime::airborneExpected(
+                                frame.visual.feature),
+                            qPrintable(QStringLiteral(
+                                "unexpected air at %1 ms in section %2")
+                                .arg(timeMs).arg(section)));
+                    }
+                }
+                if (timeMs >= nextTraceTimeMs) {
+                    const double lateral =
+                            frame.visual.feature.lateralOffsetMeters;
+                    if (hasPriorTraceLateral) {
+                        maximumTraceLateralStepMeters = std::max(
+                                maximumTraceLateralStepMeters,
+                                std::abs(lateral
+                                    - priorTraceLateralMeters));
+                    }
+                    priorTraceLateralMeters = lateral;
+                    hasPriorTraceLateral = true;
+                    nextTraceTimeMs += 250;
+                }
+            }
+
+            int observedFeatures = 0;
+            for (std::size_t section = 0; section < course.sections.size();
+                 ++section) {
+                if (course.sections[section].challengeCount <= 0) continue;
+                QVERIFY2(observed[section], qPrintable(QStringLiteral(
+                    "generator mode %1 did not produce outcome %2 for section %3")
+                    .arg(int(mode)).arg(int(expected)).arg(section)));
+                ++observedFeatures;
+            }
+            QCOMPARE(observedFeatures, 11);
+            if (expected == WorkoutGameFeatureOutcome::Completed) {
+                QVERIFY(maximumMainLineLateralMeters < 0.01);
+            } else {
+                QVERIFY2(maximumTraceLateralStepMeters < 1.0,
+                         qPrintable(QStringLiteral(
+                             "safe line moved %1 m in one trace interval")
+                             .arg(maximumTraceLateralStepMeters)));
+            }
+        };
+
+        runScenario(TrainingDataGeneratorMode::OnTarget,
+                    WorkoutGameFeatureOutcome::Completed);
+        runScenario(TrainingDataGeneratorMode::UnderTarget,
+                    WorkoutGameFeatureOutcome::Bypassed);
+    }
+
+    void enginePreservesTheAuthoritativeInputTargetInFeatureLab()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        WorkoutGameEngine engine;
+        QVERIFY(engine.configure(course, 200.0, true));
+
+        WorkoutGameEngineInput input;
+        input.simulation = WorkoutGameFeatureLab::input(
+                course, 0, WorkoutGameFeatureLabScenario::Pass);
+        input.simulation.actualWatts = 137.0;
+        input.simulation.targetWatts = 137.0;
+        const WorkoutGameEngineFrame frame = engine.update(input, 100000);
+
+        QCOMPARE(frame.targetWatts, 137.0);
     }
 
     void skippedTimeResynchronizesWithoutCatchupSimulation()

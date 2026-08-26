@@ -730,6 +730,13 @@ void WorkoutGame3DViewModel::setFps(double value)
     emit fpsChanged();
 }
 
+void WorkoutGame3DViewModel::setGeneratorState(const QString &state)
+{
+    if (currentGeneratorState == state) return;
+    currentGeneratorState = state;
+    emit generatorStateChanged();
+}
+
 QString WorkoutGame3DViewModel::terrainText(WorkoutGameTerrainKind terrain)
 {
     switch (terrain) {

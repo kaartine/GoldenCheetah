@@ -22,6 +22,9 @@
 
 #include <QtDebug>
 
+#include <algorithm>
+#include <cstring>
+
 #ifdef Q_CC_MSVC
 // 'strcpy': This function or variable may be unsafe.
 #pragma warning(disable:4996)
@@ -55,9 +58,16 @@ RealtimeData::RealtimeData()
     temp = 0.0;
 }
 
-void RealtimeData::setName(char *name)
+void RealtimeData::setName(const char *source)
 {
-    strcpy(this->name, name);
+    if (!source) {
+        name[0] = '\0';
+        return;
+    }
+    const std::size_t length = std::min(
+            std::strlen(source), sizeof(name) - 1);
+    std::memcpy(name, source, length);
+    name[length] = '\0';
 }
 void RealtimeData::setAltWatts(double watts)
 {

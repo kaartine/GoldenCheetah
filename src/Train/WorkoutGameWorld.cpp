@@ -203,6 +203,7 @@ struct WorkoutGamePhysics::Impl
     double landingImpact = 0.0;
     bool wasGrounded = true;
     bool safeBypassActive = false;
+    bool followCourseSurfaceActive = false;
     int lastJumpTile = -1;
     std::uint64_t lastFeatureActionId = 0;
     WorkoutGameWorldSnapshot latest;
@@ -535,7 +536,10 @@ struct WorkoutGamePhysics::Impl
         b2Body_ApplyTorque(chassis, torque, true);
     }
 
-    void synchronizeDistance(double distanceMeters, bool forceGroundFollowing)
+    void synchronizeDistance(
+            double distanceMeters,
+            bool forceGroundFollowing,
+            bool followCourseSurface)
     {
         if (!std::isfinite(distanceMeters) || distanceMeters < 0.0
                 || B2_IS_NULL(world)) {
@@ -555,11 +559,16 @@ struct WorkoutGamePhysics::Impl
 
         const b2Vec2 chassisPosition = b2Body_GetPosition(chassis);
         const double delta = targetLocalX - chassisPosition.x;
-        if (std::abs(delta) <= 1e-6) return;
+        if (std::abs(delta) <= 1e-6 && !followCourseSurface) return;
         double verticalDelta = 0.0;
         // Distance playback translates the vehicle horizontally. Follow the
         // same ground delta so synchronization cannot manufacture air time.
-        if (forceGroundFollowing || retainsOrdinaryGroundContact(terrain)) {
+        if (followCourseSurface) {
+            constexpr double GroundedChassisClearanceMeters = 0.82;
+            verticalDelta = surfaceHeight(targetLocalX)
+                    + GroundedChassisClearanceMeters - chassisPosition.y;
+        } else if (forceGroundFollowing
+                   || retainsOrdinaryGroundContact(terrain)) {
             verticalDelta = surfaceHeight(targetLocalX)
                     - surfaceHeight(chassisPosition.x);
         }
@@ -629,7 +638,8 @@ struct WorkoutGamePhysics::Impl
                     ground, safeBypassActive, roadCourse)
                 : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
-        result.rider.airborne = !safeBypassActive && !grounded()
+        result.rider.airborne = !safeBypassActive
+                && !followCourseSurfaceActive && !grounded()
                 && !retainsOrdinaryGroundContact(terrain);
         result.rider.walking = weakClimbMicroseconds
                 >= WalkDecisionMicroseconds;
@@ -786,6 +796,7 @@ void WorkoutGamePhysics::reset()
     impl->elevationBase = 0.0;
     impl->landingImpact = 0.0;
     impl->safeBypassActive = false;
+    impl->followCourseSurfaceActive = false;
     impl->lastJumpTile = -1;
     impl->lastFeatureActionId = 0;
     impl->latest = WorkoutGameWorldSnapshot();
@@ -897,6 +908,7 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
 
     const bool requestedSafeBypass = input.forceGroundFollowing
             && impl->roadCourse.ready;
+    impl->followCourseSurfaceActive = input.followCourseSurface;
     const bool terrainChanged = !impl->initialized
             || input.terrain != impl->terrain
             || requestedSafeBypass != impl->safeBypassActive
@@ -928,7 +940,9 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
     }
 
     impl->synchronizeDistance(
-            input.courseDistanceMeters, input.forceGroundFollowing);
+            input.courseDistanceMeters,
+            input.forceGroundFollowing,
+            input.followCourseSurface);
 
     const std::int64_t elapsedMs = input.workoutTimeMs - impl->lastWorkoutTimeMs;
     impl->lastWorkoutTimeMs = input.workoutTimeMs;
@@ -952,6 +966,10 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
     while (available >= PhysicsStepMicroseconds) {
         impl->step(input);
         available -= PhysicsStepMicroseconds;
+    }
+    if (input.followCourseSurface) {
+        impl->synchronizeDistance(
+                input.courseDistanceMeters, false, true);
     }
     impl->remainderMicroseconds = available;
     impl->latest = impl->captureSnapshot();

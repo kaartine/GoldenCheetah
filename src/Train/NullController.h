@@ -23,6 +23,7 @@
 #include "GoldenCheetah.h"
 
 #include <QString>
+#include <QByteArray>
 #include <QDebug>
 
 #include "RealtimeController.h"
@@ -74,6 +75,7 @@ class NullController : public RealtimeController
 
         int beats,count; // emit R-R data periodically
         TrainingDataGenerator generator;
+        QByteArray generatorName;
         Bicycle bicycle;
 };
 

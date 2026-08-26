@@ -340,6 +340,14 @@ void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
 {
     latestTelemetry = telemetry;
     hasTelemetry = true;
+    const QString sourceName = QString::fromLatin1(telemetry.getName());
+    const QString generatorPrefix = QStringLiteral("Data Generator [");
+    const QString generatorState = sourceName.startsWith(generatorPrefix)
+            && sourceName.endsWith(QLatin1Char(']'))
+            ? sourceName.mid(generatorPrefix.size(),
+                             sourceName.size() - generatorPrefix.size() - 1)
+            : QString();
+    threeDWindow->setGeneratorState(generatorState);
     lastTelemetryMonotonicTimeMs =
             WorkoutGameRunner::monotonicMilliseconds();
     updateRunnerTelemetry();
@@ -460,6 +468,11 @@ void WorkoutGameWindow::updateAtWorkoutPosition(
     const std::int64_t nowMs = WorkoutGameRunner::monotonicMilliseconds();
     currentAnchorRate = anchorRate(currentWorkoutTimeMs, nowMs);
     runner.setAnchor(currentWorkoutTimeMs, currentAnchorRate);
+    if (featureLabEnabled) {
+        context->notifyWorkoutGameGeneratorTarget(
+                WorkoutGameFeatureLab::targetWattsAt(
+                    currentCourse, currentWorkoutTimeMs));
+    }
     updateRunnerTelemetry();
 }
 

@@ -1409,6 +1409,9 @@ private slots:
         QCOMPARE(viewModel.speedKph(), 22.5);
         QCOMPARE(viewModel.virtualGear(), 8);
         QCOMPARE(viewModel.workoutTimeSeconds(), 25);
+        QCOMPARE(viewModel.generatorState(), QString());
+        viewModel.setGeneratorState(QStringLiteral("On target"));
+        QCOMPARE(viewModel.generatorState(), QStringLiteral("On target"));
 
         frame.simulation.workoutTimeMs = course.durationMs * 2;
         viewModel.setFrame(frame, 213.0, 219.0, 87, 151, 8);
@@ -1471,11 +1474,21 @@ private slots:
                 rootItem, QStringLiteral("heartRateValue"));
         auto *grade = findVisualItem(rootItem, QStringLiteral("gradeValue"));
         auto *fps = findVisualItem(rootItem, QStringLiteral("fpsValue"));
-        QVERIFY(cadence && heartRate && grade && fps);
+        auto *generatorBadge = rootItem->findChild<QQuickItem *>(
+                QStringLiteral("generatorStateBadge"));
+        QVERIFY(cadence && heartRate && grade && fps && generatorBadge);
+        QVERIFY(!generatorBadge->isVisible());
         QCOMPARE(cadence->property("text").toString(), QStringLiteral("-- RPM"));
         QCOMPARE(heartRate->property("text").toString(), QStringLiteral("-- BPM"));
         QCOMPARE(grade->property("text").toString(), QStringLiteral("6.3%"));
         QCOMPARE(fps->property("text").toString(), QStringLiteral("58.8 FPS"));
+
+        viewModel.setGeneratorState(QStringLiteral("Under target"));
+        QCoreApplication::processEvents();
+        QVERIFY(generatorBadge->isVisible());
+        viewModel.setGeneratorState(QString());
+        QCoreApplication::processEvents();
+        QVERIFY(!generatorBadge->isVisible());
 
         if (hasInteractiveGraphicsPlatform()) {
             window.show();

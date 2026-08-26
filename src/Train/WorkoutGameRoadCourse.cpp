@@ -544,7 +544,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
         case WorkoutGameTerrainKind::Drop:
             obstacleDistance = std::min(
                     sectionStart + sectionLength * 0.80,
-                    challengeDistance + 4.0);
+                    challengeDistance + 7.0);
             break;
         case WorkoutGameTerrainKind::RockSlab:
             obstacleDistance = std::min(
@@ -749,8 +749,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 piece.challenge.profile = challenge;
                 const double measuredPreparationDistance = sectionStart
                         + sectionLength * challenge.measurementStartProgress;
-                const double maximumPreparationMeters = section.terrain
-                        == WorkoutGameTerrainKind::BunnyHop ? 3.0 : 6.0;
+                const double maximumPreparationMeters = challenge.cue
+                        == WorkoutGameChallengeCue::Jump ? 3.0 : 6.0;
                 piece.challenge.prepareDistanceMeters =
                         section.terrain == WorkoutGameTerrainKind::Tabletop
                     ? std::max(

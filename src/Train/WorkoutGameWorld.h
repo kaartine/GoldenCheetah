@@ -82,6 +82,7 @@ struct WorkoutGamePhysicsInput
     bool paused = false;
     bool jumpRequested = false;
     bool forceGroundFollowing = false;
+    bool followCourseSurface = false;
     std::uint64_t featureActionId = 0;
 };
 

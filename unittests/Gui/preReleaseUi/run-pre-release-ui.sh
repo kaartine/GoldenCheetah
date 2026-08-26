@@ -125,6 +125,22 @@ export QTWEBENGINE_DISABLE_SANDBOX=1
 export APPIMAGE_EXTRACT_AND_RUN=1
 export GC_WORKOUT_GAME_FORCE_PAINTER=${GC_WORKOUT_GAME_FORCE_PAINTER:-1}
 
+APP_ENV=()
+if [ -n "${GC_UI_APPDIR:-}" ]; then
+    APPDIR=$(cd -- "$GC_UI_APPDIR" && pwd -P)
+    [ -d "$APPDIR/lib" ] && [ -d "$APPDIR/plugins" ] || {
+        echo "GC_UI_APPDIR is not an extracted AppImage runtime: $APPDIR" >&2
+        exit 2
+    }
+    APP_ENV=(
+        env
+        "APPDIR=$APPDIR"
+        "LD_LIBRARY_PATH=$APPDIR/lib:$APPDIR/usr/lib"
+        "QT_PLUGIN_PATH=$APPDIR/plugins"
+        "QML2_IMPORT_PATH=$APPDIR/qml"
+    )
+fi
+
 if [ "${GC_UI_RECORD_VIDEO:-0}" = 1 ] && command -v ffmpeg >/dev/null; then
     ffmpeg -nostdin -loglevel warning -y -f x11grab -framerate 12 \
         -video_size 1440x900 -i "$DISPLAY" -c:v libx264 -preset ultrafast \
@@ -133,7 +149,7 @@ if [ "${GC_UI_RECORD_VIDEO:-0}" = 1 ] && command -v ffmpeg >/dev/null; then
     VIDEO_PID=$!
 fi
 
-"$IMAGE" "$TEST_ROOT/library" UiTestAthlete --debug \
+"${APP_ENV[@]}" "$IMAGE" "$TEST_ROOT/library" UiTestAthlete --debug \
     >"$ARTIFACT_DIR/application.log" 2>&1 &
 APP_PID=$!
 

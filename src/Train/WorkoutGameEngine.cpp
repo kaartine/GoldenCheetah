@@ -9,7 +9,6 @@
 
 #include "WorkoutGameEngine.h"
 
-#include "WorkoutGameFeatureLab.h"
 #include "WorkoutGameRoadCourse.h"
 
 #include <algorithm>
@@ -87,10 +86,6 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
             input.authoritativeSpeedKph, MaximumSpeedKph);
     input.drivetrainSpeedLimitKph = finiteOptionalNonNegative(
             input.drivetrainSpeedLimitKph, MaximumSpeedKph);
-    if (featureLabEnabled) {
-        input.targetWatts = WorkoutGameFeatureLab::targetWattsAt(
-                course, input.workoutTimeMs);
-    }
     const WorkoutGameSimulationSnapshot snapshot = simulation.update(input);
     const WorkoutGameFeatureRuntimeSnapshot feature =
             featureRuntime.update(snapshot);
@@ -137,6 +132,10 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
         physicsInput.jumpRequested = feature.triggerJump;
         physicsInput.forceGroundFollowing = feature.route
                 == WorkoutGameRoute::SafeBypass;
+        physicsInput.followCourseSurface =
+                (feature.motion == WorkoutGameFeatureMotion::Jump
+                 || feature.motion == WorkoutGameFeatureMotion::Drop)
+                && !WorkoutGameFeatureRuntime::airborneExpected(feature);
         physicsInput.featureActionId = feature.actionId;
         world = physics.update(physicsInput);
 

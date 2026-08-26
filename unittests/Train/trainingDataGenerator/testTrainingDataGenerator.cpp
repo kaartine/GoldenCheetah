@@ -9,11 +9,14 @@
 
 #include "Train/TrainingDataGenerator.h"
 #include "Train/TrainingDeviceWizardRouting.h"
+#include "Train/TrainingDataGeneratorTargetRouting.h"
 #include "Train/DeviceTypes.h"
+#include "Train/RealtimeData.h"
 
 #include <QTest>
 
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 class TestTrainingDataGenerator : public QObject
@@ -67,6 +70,136 @@ private slots:
             QCOMPARE(a.smO2, b.smO2);
             QCOMPARE(a.totalHb, b.totalHb);
         }
+    }
+
+    void parsesOnlyDocumentedGeneratorProfiles()
+    {
+        using Mode = TrainingDataGeneratorMode;
+
+        QCOMPARE(TrainingDataGenerator::modeFromProfile(""),
+                 Mode::FollowTarget);
+        QCOMPARE(TrainingDataGenerator::modeFromProfile("follow-target"),
+                 Mode::FollowTarget);
+        QCOMPARE(TrainingDataGenerator::modeFromProfile("ON-TARGET"),
+                 Mode::OnTarget);
+        QCOMPARE(TrainingDataGenerator::modeFromProfile(" over_target "),
+                 Mode::OverTarget);
+        QCOMPARE(TrainingDataGenerator::modeFromProfile("under target"),
+                 Mode::UnderTarget);
+        QCOMPARE(TrainingDataGenerator::modeFromProfile("cadence-low"),
+                 Mode::CadenceLow);
+        QCOMPARE(TrainingDataGenerator::modeFromProfile("cadence_high"),
+                 Mode::CadenceHigh);
+        QCOMPARE(TrainingDataGenerator::modeFromProfile("real-trainer"),
+                 Mode::FollowTarget);
+    }
+
+    void deterministicModesHaveExplicitPowerAndCadenceContracts()
+    {
+        struct Expectation {
+            TrainingDataGeneratorMode mode;
+            double watts;
+            double cadence;
+        };
+        const Expectation expectations[] = {
+            {TrainingDataGeneratorMode::OnTarget, 200.0, 88.0},
+            {TrainingDataGeneratorMode::OverTarget, 240.0, 92.0},
+            {TrainingDataGeneratorMode::UnderTarget, 84.0, 45.0},
+            {TrainingDataGeneratorMode::CadenceLow, 200.0, 55.0},
+            {TrainingDataGeneratorMode::CadenceHigh, 200.0, 105.0}
+        };
+
+        for (const Expectation &expectation : expectations) {
+            TrainingDataGenerator generator;
+            generator.setMode(expectation.mode);
+            generator.setTargetWatts(200.0);
+
+            for (int i = 0; i < 16; ++i) {
+                const TrainingDataGeneratorSample sample =
+                        generator.nextSample();
+                QCOMPARE(sample.watts, expectation.watts);
+                QCOMPARE(sample.cadence, expectation.cadence);
+            }
+            QCOMPARE(generator.mode(), expectation.mode);
+            QVERIFY(QString::fromLatin1(generator.modeLabel()).size() > 0);
+        }
+    }
+
+    void onTargetSurvivesIntegerRealtimeTelemetry()
+    {
+        TrainingDataGenerator generator;
+        generator.setMode(TrainingDataGeneratorMode::OnTarget);
+        generator.setTargetWatts(199.5);
+
+        const TrainingDataGeneratorSample sample = generator.nextSample();
+        QVERIFY(sample.watts >= 199.5);
+        QVERIFY(std::floor(sample.watts) >= 199.5);
+        QCOMPARE(sample.cadence, 88.0);
+    }
+
+    void changingModeDoesNotLeakIntoAnotherGenerator()
+    {
+        TrainingDataGenerator scripted;
+        TrainingDataGenerator ordinary;
+        scripted.setMode(TrainingDataGeneratorMode::UnderTarget);
+        scripted.setTargetWatts(300.0);
+        ordinary.setTargetWatts(300.0);
+
+        QCOMPARE(scripted.nextSample().watts, 126.0);
+        QCOMPARE(ordinary.mode(), TrainingDataGeneratorMode::FollowTarget);
+        QVERIFY(ordinary.nextSample().watts > 126.0);
+    }
+
+    void workoutGameTargetsAreRoutedOnlyToDataGenerators()
+    {
+        const DeviceTypes deviceTypes;
+        for (const DeviceType &device : deviceTypes.Supported) {
+            QCOMPARE(TrainingDataGeneratorTargetRouting::acceptsDeviceType(
+                         device.type), device.type == DEV_NULL);
+        }
+
+        double normalized = -1.0;
+        QVERIFY(TrainingDataGeneratorTargetRouting::normalizeTarget(
+                    275.0, normalized));
+        QCOMPARE(normalized, 275.0);
+        QVERIFY(TrainingDataGeneratorTargetRouting::normalizeTarget(
+                    9000.0, normalized));
+        QCOMPARE(normalized, 2500.0);
+        QVERIFY(!TrainingDataGeneratorTargetRouting::normalizeTarget(
+                    std::numeric_limits<double>::quiet_NaN(), normalized));
+    }
+
+    void selectedGeneratorPublishesItsAuthoritativeTargetAndState()
+    {
+        RealtimeData generator;
+        generator.setLoad(237.0);
+        generator.setName("Data Generator [On target]");
+        RealtimeData aggregate;
+        aggregate.setLoad(100.0);
+        aggregate.setName("ordinary source");
+
+        QVERIFY(TrainingDataGeneratorTargetRouting::publishPowerSourceState(
+                    DEV_NULL, generator, aggregate));
+        QCOMPARE(aggregate.getLoad(), 237.0);
+        QCOMPARE(QString::fromLatin1(aggregate.getName()),
+                 QStringLiteral("Data Generator [On target]"));
+
+        RealtimeData realTrainer;
+        realTrainer.setLoad(900.0);
+        realTrainer.setName("real trainer");
+        QVERIFY(!TrainingDataGeneratorTargetRouting::publishPowerSourceState(
+                    DEV_BT40, realTrainer, aggregate));
+        QCOMPARE(aggregate.getLoad(), 237.0);
+        QCOMPARE(QString::fromLatin1(aggregate.getName()),
+                 QStringLiteral("Data Generator [On target]"));
+    }
+
+    void realtimeSourceNamesAreAlwaysBoundedAndTerminated()
+    {
+        const QByteArray oversized(200, 'x');
+        RealtimeData data;
+        data.setName(oversized.constData());
+        QCOMPARE(std::strlen(data.getName()), std::size_t(63));
     }
 
     void followsWorkoutTargetAboveAndBelow()

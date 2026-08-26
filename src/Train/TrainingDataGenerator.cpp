@@ -11,7 +11,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
+#include <string>
 
 namespace {
 
@@ -30,6 +32,22 @@ double bounded(double value, double minimum, double maximum)
     return std::max(minimum, std::min(value, maximum));
 }
 
+std::string normalizedProfile(std::string_view profile)
+{
+    std::string result;
+    bool pendingSeparator = false;
+    for (const unsigned char character : profile) {
+        if (std::isspace(character) || character == '_' || character == '-') {
+            pendingSeparator = !result.empty();
+            continue;
+        }
+        if (pendingSeparator) result.push_back('-');
+        pendingSeparator = false;
+        result.push_back(static_cast<char>(std::tolower(character)));
+    }
+    return result;
+}
+
 }
 
 TrainingDataGenerator::TrainingDataGenerator()
@@ -37,11 +55,50 @@ TrainingDataGenerator::TrainingDataGenerator()
     reset();
 }
 
+TrainingDataGeneratorMode TrainingDataGenerator::modeFromProfile(
+        std::string_view profile)
+{
+    const std::string normalized = normalizedProfile(profile);
+    if (normalized == "on-target") return TrainingDataGeneratorMode::OnTarget;
+    if (normalized == "over-target") {
+        return TrainingDataGeneratorMode::OverTarget;
+    }
+    if (normalized == "under-target") {
+        return TrainingDataGeneratorMode::UnderTarget;
+    }
+    if (normalized == "cadence-low") {
+        return TrainingDataGeneratorMode::CadenceLow;
+    }
+    if (normalized == "cadence-high") {
+        return TrainingDataGeneratorMode::CadenceHigh;
+    }
+    return TrainingDataGeneratorMode::FollowTarget;
+}
+
 void TrainingDataGenerator::reset()
 {
     sampleNumber = 0;
     currentWatts = target;
     currentHeartRate = bounded(90.0 + target * 0.28, 90.0, 185.0);
+}
+
+void TrainingDataGenerator::setMode(TrainingDataGeneratorMode mode)
+{
+    generatorMode = mode;
+    reset();
+}
+
+const char *TrainingDataGenerator::modeLabel() const
+{
+    switch (generatorMode) {
+    case TrainingDataGeneratorMode::OnTarget: return "On target";
+    case TrainingDataGeneratorMode::OverTarget: return "Over target";
+    case TrainingDataGeneratorMode::UnderTarget: return "Under target";
+    case TrainingDataGeneratorMode::CadenceLow: return "Low cadence";
+    case TrainingDataGeneratorMode::CadenceHigh: return "High cadence";
+    case TrainingDataGeneratorMode::FollowTarget: return "Follow target";
+    }
+    return "Follow target";
 }
 
 void TrainingDataGenerator::setTargetWatts(double watts)
@@ -53,13 +110,34 @@ TrainingDataGeneratorSample TrainingDataGenerator::nextSample()
 {
     const std::size_t phase = static_cast<std::size_t>(
             sampleNumber % WattOffsets.size());
-    currentWatts += bounded(target - currentWatts, -40.0, 40.0);
-    const double riderPhase = static_cast<double>(sampleNumber % 150U)
-            * (2.0 * std::acos(-1.0) / 150.0);
-    const double simulatedEffort = currentWatts
-            * (1.0 + 0.10 * std::sin(riderPhase));
-    const double actualWatts = bounded(
-            simulatedEffort + WattOffsets[phase], 0.0, 2500.0);
+    double actualWatts = target;
+    double cadence = 88.0;
+    if (generatorMode == TrainingDataGeneratorMode::FollowTarget) {
+        currentWatts += bounded(target - currentWatts, -40.0, 40.0);
+        const double riderPhase = static_cast<double>(sampleNumber % 150U)
+                * (2.0 * std::acos(-1.0) / 150.0);
+        const double simulatedEffort = currentWatts
+                * (1.0 + 0.10 * std::sin(riderPhase));
+        actualWatts = simulatedEffort + WattOffsets[phase];
+        cadence = 78.0 + actualWatts / 20.0 + CadenceOffsets[phase];
+    } else if (generatorMode == TrainingDataGeneratorMode::OnTarget) {
+        // RealtimeData stores power as an integer. Round upward so a
+        // fractional target cannot turn the deterministic pass scenario into
+        // an under-target sample after that conversion.
+        actualWatts = std::ceil(target);
+    } else if (generatorMode == TrainingDataGeneratorMode::OverTarget) {
+        actualWatts = target * 1.2;
+        cadence = 92.0;
+    } else if (generatorMode == TrainingDataGeneratorMode::UnderTarget) {
+        actualWatts = target * 0.42;
+        cadence = 45.0;
+    } else if (generatorMode == TrainingDataGeneratorMode::CadenceLow) {
+        cadence = 55.0;
+    } else if (generatorMode == TrainingDataGeneratorMode::CadenceHigh) {
+        cadence = 105.0;
+    }
+    actualWatts = bounded(actualWatts, 0.0, 2500.0);
+    cadence = bounded(cadence, 0.0, 300.0);
 
     const double desiredHeartRate = bounded(
             90.0 + actualWatts * 0.28, 90.0, 185.0);
@@ -69,8 +147,7 @@ TrainingDataGeneratorSample TrainingDataGenerator::nextSample()
 
     TrainingDataGeneratorSample sample;
     sample.watts = actualWatts;
-    sample.cadence = bounded(
-            78.0 + actualWatts / 20.0 + CadenceOffsets[phase], 70.0, 105.0);
+    sample.cadence = cadence;
     sample.heartRate = currentHeartRate;
     sample.leftRightBalance = 50.0 + BalanceOffsets[phase];
     sample.smO2 = 52.0 - bounded(actualWatts / 100.0, 0.0, 12.0)

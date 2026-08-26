@@ -75,7 +75,7 @@ public:
     RealtimeData();
     void reset(); // set all values to zero
 
-    void setName(char *name);
+    void setName(const char *name);
     void setWatts(double watts);
     void setAltWatts(double watts);
     void setAltDistance(double distance);

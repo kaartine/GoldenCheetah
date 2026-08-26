@@ -41,6 +41,7 @@ public:
             int heartRate,
             int virtualGear);
     void setSessionRunning(bool running);
+    void setGeneratorState(const QString &state);
     bool rendererAvailable() const { return status() != QQuickView::Error; }
     QString rendererLabel() const { return QStringLiteral("Qt Quick 3D"); }
 

@@ -26,9 +26,9 @@ public:
             const double clamped = std::clamp(value, 0.0, 1.0);
             return clamped * clamped * (3.0 - 2.0 * clamped);
         };
-        if (progress < 0.28) return smoothStep(progress / 0.28);
-        if (progress > 0.72) {
-            return smoothStep((1.0 - progress) / 0.28);
+        if (progress < 0.4) return smoothStep(progress / 0.4);
+        if (progress > 0.6) {
+            return smoothStep((1.0 - progress) / 0.4);
         }
         return 1.0;
     }

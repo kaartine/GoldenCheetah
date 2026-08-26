@@ -14,6 +14,18 @@ unittests/Gui/preReleaseUi/run-pre-release-ui-matrix.sh \
 The output directory contains `junit.xml`, `goldencheetah.log`, screenshots and,
 when `GC_UI_RECORD_VIDEO=1` and `ffmpeg` are available, `session.mp4`.
 
+Set `GC_UI_GENERATOR_MODE` to `on-target`, `over-target`, `under-target`,
+`cadence-low`, `cadence-high` or `follow-target` to select the isolated Data
+Generator scenario. Unknown values stop the run before GoldenCheetah starts.
+Set `GC_UI_GAME_RUN_SECONDS=70` with `GC_WORKOUT_GAME_FEATURE_LAB=1` to
+capture all eleven feature sections without crossing the 72-second automatic
+workout-completion boundary during the surrounding UI workflow.
+
+For an unpackaged development binary, set `GC_UI_APPDIR` to an extracted
+AppImage root whose `lib`, `plugins` and `qml` directories provide the matching
+runtime. Those paths are applied only to GoldenCheetah, so the host AT-SPI
+Python process keeps using its normal system libraries.
+
 The matrix runs twice against separate temporary athletes. The first run forces
 the QPainter fallback. The second run exercises the packaged Scene Graph path
 with trace validation. To run only the Scene Graph leg:
