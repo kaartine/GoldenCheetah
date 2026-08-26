@@ -18,6 +18,28 @@
 
 #include <chrono>
 
+namespace {
+
+const char *featurePhaseName(WorkoutGameFeaturePhase phase)
+{
+    switch (phase) {
+    case WorkoutGameFeaturePhase::Approach: return "approach";
+    case WorkoutGameFeaturePhase::Measure: return "measure";
+    case WorkoutGameFeaturePhase::Committed: return "committed";
+    case WorkoutGameFeaturePhase::Action: return "action";
+    case WorkoutGameFeaturePhase::Recovery: return "recovery";
+    case WorkoutGameFeaturePhase::None: return "none";
+    }
+    return "none";
+}
+
+const char *routeName(WorkoutGameRoute route)
+{
+    return route == WorkoutGameRoute::SafeBypass ? "bypass" : "main";
+}
+
+}
+
 WorkoutGame3DWindow::WorkoutGame3DWindow(
         bool rendererEnabled,
         QWindow *parent) :
@@ -243,6 +265,8 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
 {
     if (!publishedDiagnostics.ready) return QString();
     const WorkoutGameDiagnosticsInput &input = publishedDiagnostics.input;
+    QString featureGeometry = viewModel->terrainName().toLower();
+    featureGeometry.replace(QLatin1Char(' '), QLatin1Char('-'));
     QString result;
     QTextStream stream(&result);
     stream << "workout-game-3d-trace"
@@ -268,7 +292,38 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " max_presentation_work_ms="
                 << publishedDiagnostics.largestPresentationWorkMs
            << " long_presentation_work="
-                << publishedDiagnostics.longPresentationWorkCount;
+                << publishedDiagnostics.longPresentationWorkCount
+           << " feature_phase="
+                << featurePhaseName(presentedFrame.feature.phase)
+           << " route=" << routeName(presentedFrame.feature.route)
+           << " readiness=" << presentedFrame.feature.readiness
+           << " action_distance_m="
+                << presentedFrame.feature.distanceToObstacleMeters
+           << " action_id=" << presentedFrame.feature.actionId
+           << " rear_contact="
+                << int(presentedFrame.world.rider.rearWheelGrounded)
+           << " front_contact="
+                << int(presentedFrame.world.rider.frontWheelGrounded)
+           << " rear_suspension="
+                << presentedFrame.world.rider.rearSuspension
+           << " front_suspension="
+                << presentedFrame.world.rider.frontSuspension
+           << " airborne=" << int(presentedFrame.world.rider.airborne)
+           << " camera_pos="
+                << viewModel->cameraX() << ','
+                << viewModel->cameraY() << ','
+                << viewModel->cameraZ()
+           << " camera_target="
+                << viewModel->cameraTargetX() << ','
+                << viewModel->cameraTargetY() << ','
+                << viewModel->cameraTargetZ()
+           << " rider_asset=RB-01"
+           << " surface_asset=TR-08"
+           << " near_environment=EN-01"
+           << " distant_environment=EN-03"
+           << " feature_geometry=" << featureGeometry
+           << " lod=resident"
+           << " visible_triangles=" << viewModel->visibleTriangles();
     return result;
 }
 

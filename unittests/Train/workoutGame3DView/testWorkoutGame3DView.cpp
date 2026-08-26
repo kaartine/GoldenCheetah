@@ -811,8 +811,16 @@ private slots:
         QVERIFY(window.rendererAvailable());
         window.setCourse(course, FtpWatts);
         window.resize(960, 540);
-        window.setFrame(
-                frameAt(road, 18.0), 225.0, 220.0, 88, 149, 8);
+        WorkoutGameVisualSnapshot initial = frameAt(road, 18.0);
+        initial.feature.ready = true;
+        initial.feature.phase = WorkoutGameFeaturePhase::Measure;
+        initial.feature.route = WorkoutGameRoute::MainLine;
+        initial.feature.readiness = 0.73;
+        initial.feature.distanceToObstacleMeters = 4.5;
+        initial.feature.actionId = 17;
+        initial.world.rider.rearWheelGrounded = true;
+        initial.world.rider.frontWheelGrounded = false;
+        window.setFrame(initial, 225.0, 220.0, 88, 149, 8);
         window.setSessionRunning(true);
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
@@ -844,6 +852,20 @@ private slots:
         QVERIFY(trace.contains(QStringLiteral("p99_frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("geometry_queue=")));
         QVERIFY(trace.contains(QStringLiteral("presentation_work_ms=")));
+        QVERIFY(trace.contains(QStringLiteral("feature_phase=measure")));
+        QVERIFY(trace.contains(QStringLiteral("route=main")));
+        QVERIFY(trace.contains(QStringLiteral("readiness=0.73")));
+        QVERIFY(trace.contains(QStringLiteral("action_distance_m=4.5")));
+        QVERIFY(trace.contains(QStringLiteral("action_id=17")));
+        QVERIFY(trace.contains(QStringLiteral("rear_contact=1")));
+        QVERIFY(trace.contains(QStringLiteral("front_contact=0")));
+        QVERIFY(trace.contains(QStringLiteral("camera_pos=")));
+        QVERIFY(trace.contains(QStringLiteral("camera_target=")));
+        QVERIFY(trace.contains(QStringLiteral("rider_asset=RB-01")));
+        QVERIFY(trace.contains(QStringLiteral("surface_asset=TR-08")));
+        QVERIFY(trace.contains(QStringLiteral("near_environment=EN-01")));
+        QVERIFY(trace.contains(QStringLiteral("distant_environment=EN-03")));
+        QVERIFY(trace.contains(QStringLiteral("lod=resident")));
         QObject *diagnosticHud = window.rootObject()->findChild<QObject *>(
                 QStringLiteral("diagnosticHud"));
         QObject *diagnosticText = window.rootObject()->findChild<QObject *>(

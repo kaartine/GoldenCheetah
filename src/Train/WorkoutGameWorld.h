@@ -44,6 +44,8 @@ struct WorkoutGameVehiclePose
     double rearWheelRadians = 0.0;
     double frontWheelRadians = 0.0;
     double clearanceMeters = 0.0;
+    bool rearWheelGrounded = false;
+    bool frontWheelGrounded = false;
     bool airborne = false;
     bool walking = false;
 

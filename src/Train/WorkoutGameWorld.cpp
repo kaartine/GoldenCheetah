@@ -619,6 +619,8 @@ struct WorkoutGamePhysics::Impl
                 b2Body_GetRotation(rearWheel));
         result.rider.frontWheelRadians = b2Rot_GetAngle(
                 b2Body_GetRotation(frontWheel));
+        result.rider.rearWheelGrounded = shapeGrounded(rearWheelShape);
+        result.rider.frontWheelGrounded = shapeGrounded(frontWheelShape);
         const double groundDistance = authoritativeDistanceMeters >= 0.0
                 ? authoritativeDistanceMeters
                 : distanceBase + double(position.x) - RiderStartMeters;
@@ -639,7 +641,9 @@ struct WorkoutGamePhysics::Impl
                 : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
         result.rider.airborne = !safeBypassActive
-                && !followCourseSurfaceActive && !grounded()
+                && !followCourseSurfaceActive
+                && !result.rider.rearWheelGrounded
+                && !result.rider.frontWheelGrounded
                 && !retainsOrdinaryGroundContact(terrain);
         result.rider.walking = weakClimbMicroseconds
                 >= WalkDecisionMicroseconds;

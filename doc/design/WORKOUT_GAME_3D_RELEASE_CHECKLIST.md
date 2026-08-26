@@ -879,7 +879,7 @@ container.
 - [x] `DIA-01` Count actual presented frames and report p50/p95/p99 frame time.
 - [x] `DIA-02` Count backward distance, unexplained stationary frames, skipped
   simulation ticks, renderer queue depth and long frame work.
-- [ ] `DIA-03` Trace feature phase, route, readiness, action distance, rider
+- [x] `DIA-03` Trace feature phase, route, readiness, action distance, rider
   contacts, camera transform and active asset/LOD identities.
 - [x] `DIA-04` Capture direct snapshots and videos from isolated deterministic
   sessions.
@@ -910,6 +910,20 @@ reviewed 960 by 540 Quick 3D HUD capture has SHA-256
 The complete Quick 3D suite passes 62 tests and the complete Scene Graph suite
 passes 20 tests without failures. Focused tests pass under ASan/UBSan for both
 renderers, and the production target compiles in the release container.
+
+**DIA-03 evidence:** the opt-in Quick 3D trace now identifies the presented
+feature phase, selected route, readiness, action distance and action id. It
+also publishes authoritative Box2D rear/front wheel contacts, suspension and
+airborne state, camera position and target, rider/surface/near/distant asset
+manifest ids, feature geometry, the current single resident LOD and visible
+triangle count. Wheel contacts participate in deterministic replay hashing,
+and production tabletop tests prove grounded-to-airborne-to-grounded contact
+transitions without inferring them from animation. The trace retains no frame
+history and remains limited to four records per second. The complete world,
+replay and real-X11 Quick 3D suites pass 43, 6 and 62 tests respectively;
+focused world, replay and Quick 3D tests also pass under ASan/UBSan. A direct
+trace-emission run produced one complete record without an unbounded log
+stream, and the production target compiles in the release container.
 
 ## Release And Legacy Retirement
 

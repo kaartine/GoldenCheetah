@@ -461,6 +461,9 @@ private slots:
             double landingImpact = 0.0;
             double landingDistanceMeters = 0.0;
             double requestedSpeedMetersPerSecond = 0.0;
+            bool sawBothWheelContact = false;
+            bool sawNoWheelContact = false;
+            bool contactStateConsistent = true;
         };
         const auto measure = [&road, lip](
                 double courseSpeed, double desiredSpeed,
@@ -486,6 +489,17 @@ private slots:
                         && input.courseDistanceMeters >= lip;
                 input.featureActionId = 881u;
                 const WorkoutGameWorldSnapshot frame = physics.update(input);
+                flight.sawBothWheelContact = flight.sawBothWheelContact
+                        || (frame.rider.rearWheelGrounded
+                            && frame.rider.frontWheelGrounded);
+                flight.sawNoWheelContact = flight.sawNoWheelContact
+                        || (!frame.rider.rearWheelGrounded
+                            && !frame.rider.frontWheelGrounded);
+                flight.contactStateConsistent =
+                        flight.contactStateConsistent
+                        && (frame.rider.airborne
+                            == (!frame.rider.rearWheelGrounded
+                                && !frame.rider.frontWheelGrounded));
                 if (frame.rider.airborne && takeoffMs < 0) {
                     takeoffMs = int(input.workoutTimeMs);
                 }
@@ -514,6 +528,9 @@ private slots:
                  slow, medium, fast, mismatchedDrive}) {
             QVERIFY(flight.durationMs >= 400);
             QVERIFY(flight.durationMs <= 2000);
+            QVERIFY(flight.sawBothWheelContact);
+            QVERIFY(flight.sawNoWheelContact);
+            QVERIFY(flight.contactStateConsistent);
             QVERIFY(flight.maximumAirMeters >= 0.20);
             QVERIFY2(flight.maximumAirMeters <= 1.80,
                      qPrintable(QStringLiteral(
@@ -730,6 +747,10 @@ private slots:
             QCOMPARE(a.rider.pitchDegrees, b.rider.pitchDegrees);
             QCOMPARE(a.rider.rearSuspension, b.rider.rearSuspension);
             QCOMPARE(a.rider.frontSuspension, b.rider.frontSuspension);
+            QCOMPARE(a.rider.rearWheelGrounded,
+                     b.rider.rearWheelGrounded);
+            QCOMPARE(a.rider.frontWheelGrounded,
+                     b.rider.frontWheelGrounded);
             QCOMPARE(a.rider.airborne, b.rider.airborne);
         }
     }

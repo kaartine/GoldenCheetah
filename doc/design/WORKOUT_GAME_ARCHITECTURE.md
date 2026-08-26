@@ -406,6 +406,19 @@ shows the same bounded values in a compact bar, while
 presentation counters neither acquire runner locks nor feed back into physics,
 trainer control or recording.
 
+The same trace record describes the rendered decision rather than reconstructing
+it afterward: feature phase, route, readiness, action distance and action id
+come from the presented immutable snapshot; camera position and target come
+from the active view model. Rear/front contact flags are Box2D shape-contact
+results stored in `WorkoutGameVehiclePose`, included in deterministic replay
+hashes and used to derive tabletop airborne state. Asset identity uses the
+reviewed manifest ids for rider, trail surface and near/distant environment,
+plus the active feature geometry name. The renderer currently keeps one
+resident detail level, reported as `lod=resident`; this is an explicit identity,
+not a claim that distance-switched LOD streaming already exists. Trace
+formatting occurs only in the opt-in, four-record-per-second diagnostics path
+and retains no additional history.
+
 The Qt Quick 3D near terrain has one additional pure boundary:
 `WorkoutGame3DTerrainProfile` maps an authoritative road sample, global course
 distance and course seed to an ordered eight-vertex lateral cross-section. Its

@@ -135,6 +135,8 @@ void addWorld(StateHasher &hash, const WorkoutGameWorldSnapshot &world)
     hash.addDouble(world.rider.rearWheelRadians);
     hash.addDouble(world.rider.frontWheelRadians);
     hash.addDouble(world.rider.clearanceMeters);
+    hash.addBool(world.rider.rearWheelGrounded);
+    hash.addBool(world.rider.frontWheelGrounded);
     hash.addBool(world.rider.airborne);
     hash.addBool(world.rider.walking);
     hash.addDouble(world.speedMetersPerSecond);
