@@ -1049,4 +1049,19 @@ Promotion used the verified release store. `GoldenCheetah-latest.AppImage`
 points atomically to the new release, while the prior working image remains at
 `GoldenCheetah-previous.AppImage`.
 
+**REL-05 refresh (`aeef5e1`, 2026-08-26):** the performance-priority change
+was rebuilt twice from independent clean worktrees in the Ubuntu Jammy,
+glibc 2.35, Qt 6.8.3 Quick 3D release container. Both ELF and AppImage passes
+were byte-identical. The promoted 267,504,120-byte AppImage has SHA-256
+`d1fdc9ffd3d8fcf8c38d9da88db0b4bd64845efb54eb6d12c5fad478fb642299`;
+its manifest has SHA-256
+`4967752f51f080803cd2bc60fc0c08a921af466c23d9faa73be6c7b967dd8cfe`
+and its CycloneDX SBOM has SHA-256
+`dd6a553c42ad3b5d96028e344976b88f43a3eff836315232317e759e698da951`.
+Packaging and the exact promoted local image passed configured Strava OAuth,
+Linux keychain and isolated offscreen event-loop smoke gates. Local and remote
+stable paths resolve to the same verified artifact; the former direct local
+image is retained as `GoldenCheetah-before-aeef5e1.AppImage` and the remote
+release store retains `56faa71` as its previous verified generation.
+
 The build is not a release candidate while any P0 task remains open.
