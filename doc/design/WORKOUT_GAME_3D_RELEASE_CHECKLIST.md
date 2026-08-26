@@ -275,13 +275,28 @@ state. The catalog contact sheet SHA-256 is
 
 ### `VS-04` Validate the vertical slice end to end
 
-- [ ] Run deterministic complete and bypass sessions with Data Generator.
+- [x] Run deterministic complete and bypass sessions with Data Generator.
 - [ ] Run a real trainer session without touching production athlete data.
 - [ ] Verify trainer target, recording and feature outcome agree.
 - [ ] Measure target-laptop frame time and simulation skipped ticks.
 
 **Done when:** one tabletop workout can be ridden, understood, saved and
 replayed without a visual, physics, recording or performance release blocker.
+
+**Data Generator evidence:** two isolated 70-second pre-release UI sessions use
+temporary athlete libraries and exercise the complete Feature Lab with
+`OnTarget` and `UnderTarget` telemetry. Both runs pass all nine accessibility
+workflows, including Data Generator connection, virtual gears, Workout Game,
+stop/continue, workout Save As and graceful shutdown. Each advances 452 m with
+zero backward frames, skipped simulation ticks, trace regressions and
+unexpected airborne frames. The completed route remains on the main line; the
+bypass route's largest 250-ms lateral step is 0.928186 m. Median presentation
+rates are 71.8784 and 71.1764 FPS. The archived videos have SHA-256
+`5d6de153984af823d9c79c23e86fb9155bc66aca7bb533dbfc840a6c5354d2ba`
+and `82563dd5a2ce892a5506aa26d6cdc291f2ca68d9c2dacb5c3abb5fea42b7a78f`;
+their machine-readable summaries have SHA-256
+`2dab455552f941955e10e359f017d6ef2fea46daa06be3b116a85b729c2306e0`
+and `e327a44f0a672110d5180e96b8b42136adc5b0118f82465321a13cb62cce54fa`.
 
 ## P0 Physics And Motion
 
