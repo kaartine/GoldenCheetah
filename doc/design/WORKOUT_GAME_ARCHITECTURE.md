@@ -440,6 +440,18 @@ heading, roll and air clearance remain bound to the ViewModel. There is no
 baked GLB timeline, independent animation clock or root motion, so a delayed
 render frame cannot advance gameplay, physics, trainer control or recording.
 
+Landing and success feedback use the same presentation-only boundary. The
+ViewModel turns an authoritative landing-impact rising edge and a unique
+completed-recovery `actionId` into monotonic event IDs; repeated snapshots and
+bypasses cannot retrigger them. Payload values are published before their event
+ID, and QML captures the payload after the shared notify cycle. A fixed set of
+three Qt Quick pixel puffs maps the rider's authoritative ground point through
+the explicitly assigned `View3D` camera. The projection binding also depends on
+viewport dimensions, so a resize cannot retain desktop coordinates. The puffs,
+ground-fixed contact shadow and bounded success pulse own no simulation clock,
+allocate no growing collection and cannot affect trainer control, recording,
+course progress, score or feature outcome.
+
 #### Course-Space 2.5D Geometry
 
 `WorkoutGameMesh` is the presentation-neutral geometry contract for reusable

@@ -1322,6 +1322,249 @@ private slots:
         verifyPose(QStringLiteral("bypass"));
     }
 
+    void landingAndSuccessEffectsUseBoundedAuthoritativeEvents()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.cbegin(), road.pieces.cend(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.cend());
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(
+                road, piece->challenge.obstacleDistanceMeters + 1.0);
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::Tabletop;
+        frame.feature.phase = WorkoutGameFeaturePhase::Action;
+        frame.feature.outcome = WorkoutGameFeatureOutcome::None;
+        frame.feature.actionId = 41;
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+
+        QObject *dust = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("landingDustBurst"));
+        QObject *success = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("successFeedback"));
+        QObject *successText = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("successFeedbackText"));
+        QObject *dustAnimation = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("landingDustAnimation"));
+        QObject *successAnimation = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("successFeedbackAnimation"));
+        auto *successItem = qobject_cast<QQuickItem *>(success);
+        auto *dustItem = qobject_cast<QQuickItem *>(dust);
+        auto *trainingHud = window.rootObject()->findChild<QQuickItem *>(
+                QStringLiteral("trainingHud"));
+        QVERIFY(dust);
+        QVERIFY(success);
+        QVERIFY(successText);
+        QVERIFY(dustAnimation);
+        QVERIFY(successAnimation);
+        QVERIFY(successItem);
+        QVERIFY(dustItem);
+        QVERIFY(trainingHud);
+        QVERIFY(successItem->y() >= trainingHud->y()
+                + trainingHud->height() + 4.0);
+        QVERIFY(window.rootObject()->findChild<QObject *>(
+                QStringLiteral("landingDustLeft")));
+        QVERIFY(window.rootObject()->findChild<QObject *>(
+                QStringLiteral("landingDustCentre")));
+        QVERIFY(window.rootObject()->findChild<QObject *>(
+                QStringLiteral("landingDustRight")));
+        const QString outputDirectory = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_FX_CATALOG_DIR");
+        QImage baseline;
+        QImage landing;
+        QImage settled;
+        QImage completed;
+        if (!outputDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(outputDirectory));
+            baseline = window.grabWindow();
+            QVERIFY(!baseline.isNull());
+        }
+
+        const qulonglong initialLanding =
+                viewModel.property("landingEffectId").toULongLong();
+        frame.world.landingImpact = 0.72;
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+        QCOMPARE(viewModel.property("landingEffectId").toULongLong(),
+                 initialLanding + 1);
+        QCOMPARE(viewModel.property("landingEffectStrength").toDouble(), 0.72);
+        QCOMPARE(dust->property("triggerId").toULongLong(),
+                 initialLanding + 1);
+        QTRY_VERIFY_WITH_TIMEOUT(dust->property("opacity").toDouble() > 0.05,
+                                 500);
+        QCOMPARE(dust->property("capturedStrength").toDouble(), 0.72);
+        const double dustCentreX = dustItem->x() + dustItem->width() / 2.0;
+        const double dustCentreY = dustItem->y() + dustItem->height() / 2.0;
+        QVERIFY(dustCentreX > window.width() * 0.20);
+        QVERIFY(dustCentreX < window.width() * 0.80);
+        QVERIFY(dustCentreY > trainingHud->y() + trainingHud->height());
+        QVERIFY(dustCentreY < window.height() * 0.80);
+        if (!outputDirectory.isEmpty()) {
+            QVERIFY(dustAnimation->setProperty("running", false));
+            QVERIFY(dust->setProperty("progress", 0.25));
+            QVERIFY(dust->property("opacity").toDouble() > 0.70);
+            window.update();
+            QTest::qWait(50);
+            window.grabWindow();
+            window.update();
+            QTest::qWait(50);
+            landing = window.grabWindow();
+            QVERIFY(!landing.isNull());
+            QVERIFY(changedPixels(baseline, landing) > 8);
+            QVERIFY(dust->setProperty("progress", 1.0));
+        }
+
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+        QCOMPARE(viewModel.property("landingEffectId").toULongLong(),
+                 initialLanding + 1);
+        frame.world.landingImpact = 0.0;
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+        QTRY_VERIFY_WITH_TIMEOUT(dust->property("opacity").toDouble() < 0.01,
+                                 1000);
+        if (!outputDirectory.isEmpty()) {
+            window.update();
+            QTest::qWait(50);
+            window.grabWindow();
+            window.update();
+            QTest::qWait(50);
+            settled = window.grabWindow();
+            QVERIFY(!settled.isNull());
+        }
+
+        const qulonglong initialSuccess =
+                viewModel.property("successEffectId").toULongLong();
+        frame.world.landingImpact = 0.0;
+        frame.feature.phase = WorkoutGameFeaturePhase::Recovery;
+        frame.feature.outcome = WorkoutGameFeatureOutcome::Completed;
+        frame.feature.actionId = 101;
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+        QCOMPARE(viewModel.property("successEffectId").toULongLong(),
+                 initialSuccess + 1);
+        QCOMPARE(success->property("triggerId").toULongLong(),
+                 initialSuccess + 1);
+        QTRY_VERIFY_WITH_TIMEOUT(success->property("opacity").toDouble() > 0.05,
+                                 500);
+        QTRY_COMPARE_WITH_TIMEOUT(successText->property("text").toString(),
+                                  QStringLiteral("TABLETOP CLEAN"), 500);
+        if (!outputDirectory.isEmpty()) {
+            QVERIFY(successAnimation->setProperty("running", false));
+            QVERIFY(success->setProperty("progress", 0.22));
+            window.update();
+            QTest::qWait(50);
+            window.grabWindow();
+            window.update();
+            QTest::qWait(50);
+            completed = window.grabWindow();
+            QVERIFY(!completed.isNull());
+            QVERIFY(changedPixels(settled, completed) > 20);
+            QVERIFY(success->setProperty("progress", 1.0));
+        }
+
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+        QCOMPARE(viewModel.property("successEffectId").toULongLong(),
+                 initialSuccess + 1);
+        frame.feature.outcome = WorkoutGameFeatureOutcome::Bypassed;
+        frame.feature.actionId = 102;
+        viewModel.setFrame(frame, 180.0, 220.0, 78, 152, 7);
+        QCOMPARE(viewModel.property("successEffectId").toULongLong(),
+                 initialSuccess + 1);
+        QCoreApplication::processEvents();
+        QVERIFY(successAnimation->setProperty("running", false));
+        QVERIFY(success->setProperty("progress", 1.0));
+        QCoreApplication::processEvents();
+
+        frame.feature.phase = WorkoutGameFeaturePhase::Recovery;
+        frame.feature.outcome = WorkoutGameFeatureOutcome::Completed;
+        frame.feature.actionId = 103;
+        frame.world.landingImpact = 0.40;
+        viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
+        QCOMPARE(viewModel.property("landingEffectId").toULongLong(),
+                 initialLanding + 2);
+        QCOMPARE(viewModel.property("successEffectId").toULongLong(),
+                 initialSuccess + 2);
+        QTRY_VERIFY_WITH_TIMEOUT(dust->property("opacity").toDouble() > 0.05,
+                                 500);
+        QTRY_VERIFY_WITH_TIMEOUT(success->property("opacity").toDouble() > 0.05,
+                                 500);
+        if (!outputDirectory.isEmpty()) {
+            const QString motionDirectory = QDir(outputDirectory).filePath(
+                    QStringLiteral("landing-success-motion"));
+            QVERIFY(QDir().mkpath(motionDirectory));
+            for (int index = 0; index < 16; ++index) {
+                window.update();
+                QTest::qWait(30);
+                const QImage image = window.grabWindow();
+                QVERIFY(!image.isNull());
+                const QString path = QDir(motionDirectory).filePath(
+                        QStringLiteral("frame-%1.png")
+                            .arg(index, 3, 10, QLatin1Char('0')));
+                QVERIFY2(image.save(path), qPrintable(path));
+            }
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(dust->property("opacity").toDouble() < 0.01,
+                                 1000);
+
+        if (!outputDirectory.isEmpty()) {
+            QVERIFY(baseline.save(QDir(outputDirectory).filePath(
+                    QStringLiteral("baseline.png"))));
+            QVERIFY(landing.save(QDir(outputDirectory).filePath(
+                    QStringLiteral("landing-dust.png"))));
+            QVERIFY(completed.save(QDir(outputDirectory).filePath(
+                    QStringLiteral("success-feedback.png"))));
+        }
+
+        window.resize(360, 640);
+        QTRY_COMPARE_WITH_TIMEOUT(window.rootObject()->width(), 360.0, 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(window.rootObject()->height(), 640.0, 1000);
+        QVERIFY(successItem->x() >= 0.0);
+        QVERIFY(successItem->x() + successItem->width() <= 360.0);
+        QVERIFY(successItem->y() >= trainingHud->y()
+                + trainingHud->height() + 4.0);
+        auto *featureHud = window.rootObject()->findChild<QQuickItem *>(
+                QStringLiteral("featureHud"));
+        QVERIFY(featureHud);
+        QVERIFY(successItem->y() + successItem->height()
+                < featureHud->y() - 4.0);
+        QTRY_VERIFY_WITH_TIMEOUT(dustItem->x() >= 0.0, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                dustItem->x() + dustItem->width() <= 360.0, 1000);
+
+        QQuickView reloaded;
+        reloaded.setResizeMode(QQuickView::SizeRootObjectToView);
+        reloaded.resize(960, 540);
+        reloaded.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        reloaded.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(reloaded.status(), QQuickView::Ready);
+        QCoreApplication::processEvents();
+        QObject *reloadedDust = reloaded.rootObject()->findChild<QObject *>(
+                QStringLiteral("landingDustBurst"));
+        QObject *reloadedSuccess = reloaded.rootObject()->findChild<QObject *>(
+                QStringLiteral("successFeedback"));
+        QVERIFY(reloadedDust);
+        QVERIFY(reloadedSuccess);
+        QCOMPARE(reloadedDust->property("opacity").toDouble(), 0.0);
+        QCOMPARE(reloadedSuccess->property("opacity").toDouble(), 0.0);
+    }
+
     void rootsUseFilteredSuspensionMotionWithoutCameraVibration()
     {
         const WorkoutGameCourse course = catalogCourse(

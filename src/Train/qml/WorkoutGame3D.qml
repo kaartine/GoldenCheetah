@@ -6,6 +6,14 @@ Item {
     id: root
     width: 1280
     height: 720
+    readonly property vector3d riderGroundScreen: {
+        if (gameView.width <= 0 || gameView.height <= 0)
+            return Qt.vector3d(0, 0, 0)
+        return gameView.mapFrom3DScene(Qt.vector3d(
+            workoutGame3D.riderX,
+            workoutGame3D.riderY - workoutGame3D.riderAirHeight,
+            workoutGame3D.riderZ))
+    }
 
     function featureAccent(state) {
         if (state === 4) return "#ef7849"
@@ -32,6 +40,7 @@ Item {
         id: gameView
         objectName: "workoutGame3DView"
         anchors.fill: parent
+        camera: camera
 
         Texture {
             id: forestSurfaceTexture
@@ -377,6 +386,23 @@ Item {
             riderYaw: workoutGame3D.riderYaw
             riderRoll: workoutGame3D.riderRoll
         }
+    }
+
+    WorkoutGameLandingDust {
+        x: Number.isFinite(root.riderGroundScreen.x)
+           ? root.riderGroundScreen.x - width / 2 : -width
+        y: Number.isFinite(root.riderGroundScreen.y)
+           ? root.riderGroundScreen.y - height * 0.58 : -height
+        triggerId: workoutGame3D.landingEffectId
+        strength: workoutGame3D.landingEffectStrength
+    }
+
+    WorkoutGameSuccessFeedback {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: trainingHud.y + trainingHud.height + 8
+        triggerId: workoutGame3D.successEffectId
+        effectText: workoutGame3D.successEffectText
     }
 
     WorkoutGameTrainingHud {

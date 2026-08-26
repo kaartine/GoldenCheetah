@@ -184,6 +184,10 @@ void WorkoutGame3DViewModel::setCourse(
     riderPumpMeters = 0.0;
     currentRiderAirHeightMeters = 0.0;
     currentLandingImpact = 0.0;
+    previousLandingImpact = 0.0;
+    currentLandingEffectStrength = 0.0;
+    lastSuccessActionId = 0;
+    currentSuccessEffectText.clear();
     currentRiderStandingBlend = 0.0;
     currentRiderWalking = false;
     currentRiderPoseState = QStringLiteral("pedal");
@@ -350,6 +354,23 @@ void WorkoutGame3DViewModel::setFrame(
     currentRiderAirHeightMeters = authoritativeAir;
     currentLandingImpact = std::clamp(
             finiteOrZero(frame.world.landingImpact), 0.0, 1.0);
+    constexpr double LandingEffectThreshold = 0.08;
+    if (currentLandingImpact > LandingEffectThreshold
+            && previousLandingImpact <= LandingEffectThreshold) {
+        currentLandingEffectStrength = currentLandingImpact;
+        ++currentLandingEffectId;
+    }
+    previousLandingImpact = currentLandingImpact;
+    if (frame.feature.ready
+            && frame.feature.phase == WorkoutGameFeaturePhase::Recovery
+            && frame.feature.outcome == WorkoutGameFeatureOutcome::Completed
+            && frame.feature.actionId != 0
+            && frame.feature.actionId != lastSuccessActionId) {
+        lastSuccessActionId = frame.feature.actionId;
+        currentSuccessEffectText = tr("%1 clean").arg(
+                terrainText(frame.feature.terrain));
+        ++currentSuccessEffectId;
+    }
     currentRiderWalking = frame.world.rider.walking;
     double targetStandingBlend = 0.0;
     if (frame.world.terrain == WorkoutGameTerrainKind::Climb) {

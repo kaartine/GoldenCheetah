@@ -55,6 +55,14 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(double riderPump READ riderPump NOTIFY sceneChanged)
     Q_PROPERTY(double riderAirHeight READ riderAirHeight NOTIFY sceneChanged)
     Q_PROPERTY(double landingImpact READ landingImpact NOTIFY sceneChanged)
+    Q_PROPERTY(qulonglong landingEffectId READ landingEffectId
+               NOTIFY sceneChanged)
+    Q_PROPERTY(double landingEffectStrength READ landingEffectStrength
+               NOTIFY sceneChanged)
+    Q_PROPERTY(qulonglong successEffectId READ successEffectId
+               NOTIFY sceneChanged)
+    Q_PROPERTY(QString successEffectText READ successEffectText
+               NOTIFY sceneChanged)
     Q_PROPERTY(double riderStandingBlend READ riderStandingBlend
                NOTIFY sceneChanged)
     Q_PROPERTY(bool riderWalking READ riderWalking NOTIFY sceneChanged)
@@ -178,6 +186,19 @@ public:
     double riderPump() const { return riderPumpMeters; }
     double riderAirHeight() const { return currentRiderAirHeightMeters; }
     double landingImpact() const { return currentLandingImpact; }
+    qulonglong landingEffectId() const
+    {
+        return qulonglong(currentLandingEffectId);
+    }
+    double landingEffectStrength() const
+    {
+        return currentLandingEffectStrength;
+    }
+    qulonglong successEffectId() const
+    {
+        return qulonglong(currentSuccessEffectId);
+    }
+    QString successEffectText() const { return currentSuccessEffectText; }
     double riderStandingBlend() const { return currentRiderStandingBlend; }
     bool riderWalking() const { return currentRiderWalking; }
     QString riderPoseState() const { return currentRiderPoseState; }
@@ -314,6 +335,12 @@ private:
     double riderPumpMeters = 0.0;
     double currentRiderAirHeightMeters = 0.0;
     double currentLandingImpact = 0.0;
+    double previousLandingImpact = 0.0;
+    double currentLandingEffectStrength = 0.0;
+    std::uint64_t currentLandingEffectId = 0;
+    std::uint64_t currentSuccessEffectId = 0;
+    std::uint64_t lastSuccessActionId = 0;
+    QString currentSuccessEffectText;
     double currentRiderStandingBlend = 0.0;
     bool currentRiderWalking = false;
     QString currentRiderPoseState = QStringLiteral("pedal");

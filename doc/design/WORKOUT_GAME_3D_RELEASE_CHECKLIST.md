@@ -801,7 +801,7 @@ unexpected airborne frames while sustaining about 71 FPS median.
 - [x] `ART-01` Apply one coherent low-poly/pixel-textured palette and atlas.
 - [x] `ENV-01` Add varied forest silhouettes, uneven terrain and restrained fog.
 - [x] `ENV-02` Eliminate tree pop, floating bases and buried visible geometry.
-- [ ] `FX-01` Add bounded contact shadow, landing dust and success feedback.
+- [x] `FX-01` Add bounded contact shadow, landing dust and success feedback.
 - [ ] `FX-02` Add restrained feature/camera punctuation after physics is stable.
 - [ ] `AUDIO-01` Add optional low-cost feature and landing audio after visuals.
 
@@ -847,6 +847,20 @@ retaining their high-contrast silhouettes. The reviewed completed motion
 artifact is 960 by 540, 15 FPS and 4.8 seconds with SHA-256
 `ead5742155c468cbaa9908a2aaa46338529d52164d7eb4b8be5e7afb160e9f21`.
 
+**FX-01 evidence:** the rider retains its ground-fixed authored contact shadow.
+The ViewModel now emits monotonic presentation event IDs only on a world
+landing-impact rising edge above 0.08 and on a new nonzero completed-recovery
+`actionId`; repeated frames and bypass outcomes cannot retrigger feedback. Three
+preallocated pixel-puff items project the authoritative rider ground point
+through the explicitly assigned Quick 3D camera, spread and fade over 460 ms,
+and create no runtime list or 3D draw call. A 900 ms unframed `FEATURE CLEAN`
+pulse stays between the responsive training and feature HUDs. Real X11/OpenGL
+tests verify payload ordering, deduplication, bounded opacity, viewport
+projection, 360 by 640 layout, pixel changes, duration and render budgets. The
+complete suite passes 60 tests with no failures, and nine focused tests pass
+under ASan/UBSan. The reviewed 16-frame combined landing/success artifact has
+SHA-256 `43ae5851316d33b1525768189321e35cfdb0c3dda061761626c11915c8a41578`.
+
 ## Diagnostics And Performance
 
 - [ ] `DIA-01` Count actual presented frames and report p50/p95/p99 frame time.
@@ -854,11 +868,19 @@ artifact is 960 by 540, 15 FPS and 4.8 seconds with SHA-256
   simulation ticks, renderer queue depth and long frame work.
 - [ ] `DIA-03` Trace feature phase, route, readiness, action distance, rider
   contacts, camera transform and active asset/LOD identities.
-- [ ] `DIA-04` Capture direct snapshots and videos from isolated deterministic
+- [x] `DIA-04` Capture direct snapshots and videos from isolated deterministic
   sessions.
-- [ ] `PERF-01` Stay below 30,000 visible triangles and 50 draw calls initially.
+- [x] `PERF-01` Stay below 30,000 visible triangles and 50 draw calls initially.
 - [ ] `PERF-02` Hold 60 Hz presentation budget on the target Intel GPU without
   increasing Bluetooth, trainer-control or recording latency.
+
+**DIA-04/PERF-01 evidence:** opt-in real-X11 tests capture direct PNG sequences
+and encoded motion for camera compositions, all eleven features, rider action
+states, environment motion and landing/success feedback from deterministic
+snapshots. Production rendering exposes custom-mesh triangle counts and Qt
+Quick 3D extended draw-call statistics; the all-feature budget course rejects
+more than 30,000 visible custom triangles or 50 actual draw calls and passes
+normally and under ASan/UBSan.
 
 ## Release And Legacy Retirement
 

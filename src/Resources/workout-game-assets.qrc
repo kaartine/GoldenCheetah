@@ -17,6 +17,8 @@
         <file alias="qml/WorkoutGameRiderBike.qml">../Train/qml/WorkoutGameRiderBike.qml</file>
         <file alias="qml/WorkoutGameConifer.qml">../Train/qml/WorkoutGameConifer.qml</file>
         <file alias="qml/WorkoutGameDistantTerrain.qml">../Train/qml/WorkoutGameDistantTerrain.qml</file>
+        <file alias="qml/WorkoutGameLandingDust.qml">../Train/qml/WorkoutGameLandingDust.qml</file>
+        <file alias="qml/WorkoutGameSuccessFeedback.qml">../Train/qml/WorkoutGameSuccessFeedback.qml</file>
         <file alias="qml/assets/meshes/geo_ConiferBrokenTop_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferBrokenTop_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_DistantRidges_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_DistantRidges_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh</file>
