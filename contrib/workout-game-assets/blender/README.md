@@ -7,7 +7,23 @@ partly buried log-over tile, `generate_bunny_hop.py` creates a compact
 practice hurdle, `generate_drop.py` creates a faceted drop face, and
 `generate_rider_bike.py` creates the articulated low-poly rider and 29er MTB
 mesh set, and `generate_conifer_set.py` creates three low-poly forest
-silhouettes. None of the generators downloads or embeds external assets.
+silhouettes. `generate_distant_ridges.py` creates the bounded distant-terrain
+ring. None of the generators downloads or embeds external assets.
+
+## Distant-ridge contract
+
+- Five closed radial bands cover 42 to 240 metres around the rider with a
+  deterministic, uneven forest horizon and no camera-direction dead zone.
+- The runtime keeps the ring centred on the rider and 1.2 metres below the
+  sampled ground. It is presentation-only and cannot affect course distance,
+  road elevation, Box2D contacts, trainer control or recording.
+- One UV-mapped mesh, one shared forest material, 256 triangles and one draw
+  call provide distant relief. The asset contains no external model or texture.
+- Restrained depth fog begins at 68 metres and reaches the scene colour at 260
+  metres. Near trail and feature cues therefore remain outside the fog band.
+- Blender validates the exact node inventory, finite triangular topology,
+  applied transforms, UV map, 240-metre radius and 300-triangle budget before
+  export.
 
 ## Conifer contract
 

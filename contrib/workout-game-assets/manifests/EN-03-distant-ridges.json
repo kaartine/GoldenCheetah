@@ -1,0 +1,101 @@
+{
+  "assetId": "EN-03-distant-ridges",
+  "displayName": "Workout Game Distant Ridge Ring",
+  "role": "terrain",
+  "source": {
+    "kind": "project-authored",
+    "provider": "GoldenCheetah",
+    "author": "GoldenCheetah contributors",
+    "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_distant_ridges.py",
+    "retrievedAt": "2026-08-26",
+    "originalFileName": "generate_distant_ridges.py",
+    "originalSha256": "a2ed42f79677bef6842f46064cee0b83db0ce2d7f9fd6edf56386157afa14237",
+    "generator": "Blender",
+    "generatorVersion": "4.0.2",
+    "promptOrScript": "contrib/workout-game-assets/blender/generate_distant_ridges.py"
+  },
+  "license": {
+    "spdxId": "GPL-2.0-or-later",
+    "licenseUrl": "https://www.gnu.org/licenses/old-licenses/gpl-2.0.html",
+    "attribution": "GoldenCheetah contributors",
+    "modificationAllowed": true,
+    "redistributionAllowed": true,
+    "decision": "allow",
+    "policyVersion": "2026-08-25",
+    "archivedLicensePath": "COPYING",
+    "distributionScopes": ["source", "appimage", "screenshots-video"],
+    "conditions": [],
+    "reviewNotes": "Project-authored deterministic geometry with no external model, image or texture."
+  },
+  "files": [
+    {
+      "path": "contrib/workout-game-assets/blender/generate_distant_ridges.py",
+      "purpose": "source",
+      "sha256": "a2ed42f79677bef6842f46064cee0b83db0ce2d7f9fd6edf56386157afa14237"
+    },
+    {
+      "path": "contrib/workout-game-assets/generated/WG_DistantRidges.glb",
+      "purpose": "intermediate",
+      "sha256": "cf7477b0139b9086380af0b9a1a8384d93f92d8faa41e09b317c02f3e5f5c3af"
+    },
+    {
+      "path": "src/Train/qml/WorkoutGameDistantTerrain.qml",
+      "purpose": "runtime",
+      "sha256": "82aa1623f674b4d9f5356bc7bfb6378a0c2fe1aad1f3ceff450cb0b433fb1734"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_DistantRidges_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "aef67837b2b305f4d92878c8baeb788814ec8532aac0773e957b269e47f54bc1"
+    }
+  ],
+  "processing": {
+    "tool": "Blender and Qt Balsam",
+    "toolVersion": "Blender 4.0.2; Qt Balsam 6.8.3",
+    "steps": [
+      "Start Blender with --background --factory-startup.",
+      "Generate five closed radial bands with deterministic harmonic ridge heights and one repeating UV map.",
+      "Validate transforms, finite triangular topology, radius and triangle budget.",
+      "Export glTF 2.0 GLB without cameras, lights, textures, animations or physics authority.",
+      "Reproduce the GLB byte for byte and validate it with the repository asset policy.",
+      "Convert twice with Qt Balsam 6.8.3 and compare every output byte.",
+      "Bind the runtime mesh to the shared forest tile and rider-relative ground transform."
+    ]
+  },
+  "technical": {
+    "format": "glb",
+    "unitMeters": 1.0,
+    "upAxis": "+Y",
+    "forwardAxis": "+Z",
+    "glbBytes": 27600,
+    "trianglesLod0": 256,
+    "materials": 1,
+    "textureBytes": 0,
+    "nodes": [
+      "GEO_DistantRidges_LOD0",
+      "PIVOT_CENTER",
+      "ROOT_DistantRidges"
+    ],
+    "animations": [],
+    "allowedExtensions": [],
+    "boundsMeters": {
+      "minimum": [-240.0, -1.7999999523162842, -240.0],
+      "maximum": [240.0, 20.884323120117188, 240.0]
+    },
+    "budgets": {
+      "maxGlbBytes": 32768,
+      "maxTrianglesLod0": 300,
+      "maxMaterials": 1,
+      "maxTextureBytes": 0
+    }
+  },
+  "review": {
+    "status": "approved",
+    "trademarkStatus": "not-applicable",
+    "personReleaseStatus": "not-applicable",
+    "propertyReleaseStatus": "not-applicable",
+    "reviewer": "GoldenCheetah engineering audit",
+    "reviewedAt": "2026-08-26",
+    "notes": "Approved after real X11/OpenGL still and 72-frame motion review verified an uneven continuous horizon, readable trail, bounded fog and no rider-relative seam."
+  }
+}

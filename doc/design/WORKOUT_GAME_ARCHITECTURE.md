@@ -306,6 +306,7 @@ Mutable state has the following owners:
 | Distant terrain silhouette | Pure deterministic `WorkoutGameHorizon` samples generated from course seed and distance; presentation-only and never consumed by physics or trainer control |
 | Near forest dressing | Deterministic, bounded scene-graph triangles generated from the course seed and projected road slices; presentation-only and rebuilt with the visible terrain window |
 | Quick 3D resident terrain meshes | Plain immutable payloads formed by `WorkoutGame3DChunkBuilder`; generation-tagged results are installed into inactive GUI-owned geometry before one double-buffer swap |
+| Quick 3D distant ridge and fog | One immutable project-authored radial mesh follows the rider at the sampled ground offset; the scene environment applies bounded depth fog. Both are presentation-only and never enter road, Box2D, trainer or recording state |
 | Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
 | Runner input and latest output slot | Separate small mutexes in `WorkoutGameRunner`; heavy simulation occurs outside both critical sections |
 | HUD source image and telemetry labels | `WorkoutGameSceneGraphItem` on the GUI thread, rebuilt at most 10 Hz; copied to a scene graph texture during synchronization |
@@ -393,6 +394,15 @@ prop placement consume this snapshot. Chunk rebuilds therefore have identical
 shared edge values, and trees cannot independently estimate a flat base height.
 Profile construction occurs only during bounded floor or prop-bucket rebuilds,
 never on the simulation thread or trainer-control path.
+
+The Quick 3D distant environment is deliberately independent of streamed near
+terrain. `WorkoutGameDistantTerrain` loads one 256-triangle authored radial
+mesh and follows the rider's horizontal position plus a fixed ground-relative
+vertical offset. Its closed 42-to-240-metre bands prevent an exposed horizon
+when camera yaw changes without rebuilding geometry. A fragment-shader depth
+fog starts beyond the readable near trail at 68 metres and reaches the scene
+colour at 260 metres. Neither component samples future simulation state,
+changes authoritative elevation or adds work to trainer and recording paths.
 
 Roots have one additional canonical course-space authority:
 `WorkoutGameRootGeometry` owns their socket, active envelope, width, safe line,

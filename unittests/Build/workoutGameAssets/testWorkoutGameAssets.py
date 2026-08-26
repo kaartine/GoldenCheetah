@@ -68,6 +68,14 @@ CONIFER_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_ConiferSet.glb"
 )
+DISTANT_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/EN-03-distant-ridges.json"
+)
+DISTANT_GLB_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generated/WG_DistantRidges.glb"
+)
 SURFACE_MANIFEST_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/manifests/TR-08-surface-atlas.json"
@@ -126,6 +134,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
             assets.validate_repository(REPOSITORY),
             [
                 "EN-01-conifer-set",
+                "EN-03-distant-ridges",
                 "FT-01-tabletop-greybox",
                 "FT-02-log-over-greybox",
                 "FT-03-bunny-hop-greybox",
@@ -359,6 +368,34 @@ class TestWorkoutGameAssets(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
             self.assertNotIn(primitive, runtime_qml)
+
+    def test_distant_ridges_are_bounded_socket_free_scenery(self) -> None:
+        document, size = assets.read_glb(DISTANT_GLB_PATH)
+        manifest = assets.load_json_file(DISTANT_MANIFEST_PATH)
+        assets.validate_glb_document(document, size, manifest)
+
+        nodes = {node["name"]: node for node in document["nodes"]}
+        self.assertIn("ROOT_DistantRidges", nodes)
+        self.assertIn("PIVOT_CENTER", nodes)
+        self.assertEqual(
+            [node["name"] for node in document["nodes"] if "mesh" in node],
+            ["GEO_DistantRidges_LOD0"],
+        )
+        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 300)
+        bounds = manifest["technical"]["boundsMeters"]
+        self.assertGreaterEqual(bounds["maximum"][0], 230.0)
+        self.assertLessEqual(bounds["minimum"][0], -230.0)
+
+        runtime_qml = (
+            REPOSITORY / "src/Train/qml/WorkoutGameDistantTerrain.qml"
+        ).read_text(encoding="utf-8")
+        for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
+            self.assertNotIn(primitive, runtime_qml)
+        qrc = (
+            REPOSITORY / "src/Resources/workout-game-assets.qrc"
+        ).read_text(encoding="utf-8")
+        self.assertIn("WorkoutGameDistantTerrain.qml", qrc)
+        self.assertIn("geo_DistantRidges_LOD0_mesh.mesh", qrc)
 
     def test_surface_atlas_is_deterministic_bounded_and_packaged(self) -> None:
         manifest = assets.load_json_file(SURFACE_MANIFEST_PATH)

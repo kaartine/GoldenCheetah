@@ -78,6 +78,18 @@ Item {
         environment: SceneEnvironment {
             backgroundMode: SceneEnvironment.Color
             clearColor: "#78a9bf"
+            fog: Fog {
+                objectName: "workoutGameDepthFog"
+                enabled: true
+                color: "#78a9bf"
+                density: 0.55
+                depthEnabled: true
+                depthNear: 68
+                depthFar: 260
+                depthCurve: 1.3
+                heightEnabled: false
+                transmitEnabled: false
+            }
             antialiasingMode: SceneEnvironment.MSAA
             antialiasingQuality: SceneEnvironment.High
             temporalAAEnabled: false
@@ -109,6 +121,14 @@ Item {
             brightness: 1.15
             ambientColor: "#809080"
             castsShadow: false
+        }
+
+        WorkoutGameDistantTerrain {
+            position: Qt.vector3d(
+                workoutGame3D.riderX,
+                workoutGame3D.groundY - 1.2,
+                workoutGame3D.riderZ)
+            surfaceTexture: forestSurfaceTexture
         }
 
         Model {

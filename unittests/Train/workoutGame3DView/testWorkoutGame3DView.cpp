@@ -988,6 +988,51 @@ private slots:
         QVERIFY(foundFadedEdgeTree);
     }
 
+    void distantTerrainAndFogFollowTheBoundedSceneContract()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::SmoothTrail);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 8.0), 190.0, 190.0, 86, 148, 6);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QObject *terrain = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("distantTerrainNode"));
+        QObject *fog = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("workoutGameDepthFog"));
+        QVERIFY(terrain);
+        QVERIFY(fog);
+        QCOMPARE(fog->property("enabled").toBool(), true);
+        QCOMPARE(fog->property("depthEnabled").toBool(), true);
+        QCOMPARE(fog->property("heightEnabled").toBool(), false);
+        QCOMPARE(fog->property("depthNear").toDouble(), 68.0);
+        QCOMPARE(fog->property("depthFar").toDouble(), 260.0);
+
+        const auto verifyTerrainPosition = [&viewModel, terrain]() {
+            QCoreApplication::processEvents();
+            const QVector3D position =
+                    terrain->property("position").value<QVector3D>();
+            const QVector3D expected(
+                    float(viewModel.riderX()),
+                    float(viewModel.groundY() - 1.2),
+                    float(viewModel.riderZ()));
+            QVERIFY((position - expected).length() < 1.0e-4f);
+        };
+        verifyTerrainPosition();
+        viewModel.setFrame(frameAt(road, 24.0), 195.0, 190.0, 87, 149, 6);
+        verifyTerrainPosition();
+    }
+
     void cameraMotionIsContinuousAndBounded()
     {
         const WorkoutGameCourse course = cameraMotionCourse();

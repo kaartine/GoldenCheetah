@@ -175,10 +175,10 @@ sphere as a final visible rider, feature or hero-environment object.
 
 ### `VS-01` Build canonical ordinary trail and terrain
 
-- [ ] Author normal trail, shoulders, forest-floor tile and distant terrain.
+- [x] Author normal trail, shoulders, forest-floor tile and distant terrain.
 - [x] Preserve the 1.36 m full trail width and exact socket dead zones.
 - [x] Add material separation without photorealistic PBR noise.
-- [ ] Keep the uneven forest horizon and stronger visible terrain relief.
+- [x] Keep the uneven forest horizon and stronger visible terrain relief.
 
 **Tests:** seam vertices, normals, material coverage, camera sweep, background
 hole check and trail-width invariant.
@@ -192,10 +192,17 @@ Its exact 0.68 m trail-edge sockets, shoulder and forest material bands, seven
 indexed strips, unit cross-slope normals and chunk-edge continuity are covered
 by 21 focused tests. Trees interpolate their base height from the same profile
 instead of the former flat base elevation. The complete X11/OpenGL suite passes
-26 tests with one opt-in video export skipped, and the geometry plus headless
-view suites pass with confirmed ASan/UBSan linkage. A 1280 by 720 capture shows
-the ordinary trail embedded in raised near terrain without background holes.
-Distant terrain art and final relief acceptance remain open.
+59 tests with 12 explicit opt-in artifact exporters skipped, and selected
+geometry, scene-contract, render-budget and production-window tests pass with
+confirmed ASan/UBSan linkage. A 1280 by 720 capture shows the ordinary trail
+embedded in raised near terrain without background holes.
+Project-authored `EN-03` adds one rider-centred 42-to-240-metre radial mesh with
+five deterministic relief bands, 256 triangles and one material/draw call.
+Restrained depth fog starts beyond the near trail at 68 metres and reaches the
+scene colour at 260 metres. Real X11/OpenGL still and 72-frame motion review
+show an uneven continuous horizon, preserved path readability and no exposed
+rider-relative seam. The completed motion artifact SHA-256 is
+`eaa6b900edcd0aa9818aa862596e86728e09846ab57b6b4bbe08cb9df971e9da`.
 
 ### `VS-02` Build complete tabletop and bypass
 
@@ -467,7 +474,7 @@ view suites pass `26 + 30 + 17 + 33 + 26 + 15 + 42` tests both normally and
 under ASan/UBSan; the five normal suite skips are explicitly opt-in exports and
 the roller export passes separately. Review artifacts are `rollers-completed.mp4`,
 `rollers-contact-sheet.png`, `rollers-crest.png` and the full catalog under
-`/home/jkaartinen/Documents/personal/gc-ui-ftr04` on the build host.
+the build host's `gc-ui-ftr04` artifact directory.
 
 **FTR-05 evidence:** Berm is one project-owned procedural trail tile driven by
 `WorkoutGameBermGeometry`. Its `7.74 m` canonical profile has `1.25 m` level
@@ -792,7 +799,7 @@ unexpected airborne frames while sustaining about 71 FPS median.
 ## P1 Art, Environment And Feedback
 
 - [x] `ART-01` Apply one coherent low-poly/pixel-textured palette and atlas.
-- [ ] `ENV-01` Add varied forest silhouettes, uneven terrain and restrained fog.
+- [x] `ENV-01` Add varied forest silhouettes, uneven terrain and restrained fog.
 - [x] `ENV-02` Eliminate tree pop, floating bases and buried visible geometry.
 - [ ] `FX-01` Add bounded contact shadow, landing dust and success feedback.
 - [ ] `FX-02` Add restrained feature/camera punctuation after physics is stable.
@@ -812,12 +819,24 @@ contains no external content, reproduces byte for byte through Blender and
 Balsam, passes manifest and primitive-rejection tests, and remains inside the
 existing ten-tree/50-draw-call runtime budgets.
 
+**ENV-01 evidence:** `EN-01` supplies three deterministic conifer silhouettes,
+the resident near-terrain profile supplies bounded cross-slope and forest-floor
+relief, and approved project-authored `EN-03` closes the horizon with five
+uneven radial bands. The distant mesh is 27,600 bytes, 256 triangles and one
+material/draw call; two Blender 4.0.2 and two Balsam 6.8.3 runs are
+byte-identical. Fog is depth-only from 68 to 260 metres, so it adds depth
+without obscuring the near trail or cues. Asset-policy, manifest, real
+X11/OpenGL contract, render-budget and 72-frame completed/bypassed motion tests
+cover the packaged result. The complete real-X11 suite passes 59 tests with no
+failures, selected tests pass under ASan/UBSan, and the production target
+compiles in the release container.
+
 **ART-01 evidence:** the approved
 `WORKOUT_GAME_3D_ART_BRIEF.md` fixes the visual hierarchy, palette, sampling,
 socket continuity and performance rules. Project-authored `TR-08` generates a
 96 by 64 master atlas and five 32 by 32 forest, dirt, stone, wood and rider
 runtime tiles without external input. The 1,561-byte package reproduces byte
-for byte, passes 19 asset-policy tests and manifest validation, and loads
+for byte, passes 20 asset-policy tests and manifest validation, and loads
 through the production qrc. Runtime repeat wrapping, nearest magnification,
 linear minification and mipmaps retain close pixel blocks without distant
 shimmer.
