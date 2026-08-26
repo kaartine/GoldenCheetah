@@ -943,6 +943,8 @@ class PlatformGateTests(unittest.TestCase):
         support = SUPPORT.read_text(encoding="utf-8")
         self.assertIn("smoke_athlete/config/athlete-general.ini", support)
         self.assertIn('"$smoke_library" SmokeAthlete', support)
+        self.assertIn("local smoke_duration=${2:-30s}", support)
+        self.assertIn("local smoke_duration=${3:-30s}", support)
 
         package = PACKAGE_APPIMAGE.read_text(encoding="utf-8")
         self.assertIn(

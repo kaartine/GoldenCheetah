@@ -1122,4 +1122,27 @@ while retaining maxima in the report, selects Quick 3D for acceptance, and
 avoids synchronous X11 readback in timing-sensitive runs. Its Python regression
 suite passes 36 cases. This rehearsal does not replace `REL-04`.
 
+**REL-05 refresh (`127af78`, 2026-08-27):** the Quick 3D trace and isolated
+acceptance runner now measure progressive speed across an automated upshift and
+downshift. The Python harness passes 40 cases, the simulation suite passes 33,
+and the desktop-OpenGL Quick 3D suite passes 64 with 13 explicit export/perf
+skips. Two independent clean Jammy/glibc 2.35 release passes produced identical
+ELF and AppImage output. The 267,504,120-byte AppImage has SHA-256
+`47d222d34b4f5ad29caa8fa817e71778c4d26f0d0f4109cf64fe6e98c9e5c1a0`;
+its manifest, CycloneDX SBOM and build manifest have SHA-256
+`da9378145663bd4053d05ca2e920f1c2f60d1301ab8b325b7f58139d58567367`,
+`20ff416806c66eb98633d2281719d91add3a62da6310bdfc41822557ba97ccb3`
+and `d1f4aa52849e02fa28404abcdd5b8578e109b653f4862b71dacfba0a048b6d6f`.
+Manifest, SBOM, configured OAuth, bundled keychain and a 30-second offscreen
+event-loop smoke passed. The former 10-second helper default was insufficient
+for extract-and-run on the current disk and is now locked to 30 seconds.
+
+The exact AppImage then passed the isolated trainer-evidence UI chain: 89/89
+recording samples matched, p95 power and dispatched-target differences were
+5 W and 0 W, two feature decisions were consistent, and both requested gear
+changes were observed with a maximum `0.089 km/h` speed step. It advanced
+791.356 m with no gear mismatch, backward frame, skipped simulation tick or
+unexpected airtime. Local and remote stable pointers now resolve to this image;
+both previous pointers retain the verified `556f27a` image.
+
 The build is not a release candidate while any P0 task remains open.

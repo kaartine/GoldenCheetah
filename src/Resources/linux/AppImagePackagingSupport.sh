@@ -409,7 +409,7 @@ install_qt_offscreen_plugin()
 require_qt_offscreen_appimage()
 (
     local image=$1
-    local smoke_duration=${2:-10s}
+    local smoke_duration=${2:-30s}
     local ready_marker=goldencheetah_gui_smoke=main-window-ready
     local smoke_home= smoke_log= smoke_library= smoke_athlete=
 
@@ -501,7 +501,7 @@ require_qt_offscreen_appimage_on_glibc()
 {
     local expected_glibc=$1
     local image=$2
-    local smoke_duration=${3:-10s}
+    local smoke_duration=${3:-30s}
     local host_glibc status
 
     host_glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null) || {
