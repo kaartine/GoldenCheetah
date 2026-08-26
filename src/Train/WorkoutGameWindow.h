@@ -13,6 +13,7 @@
 #include "GoldenCheetah.h"
 #include "RealtimeData.h"
 #include "WorkoutGameCompetition.h"
+#include "WorkoutGameAudio.h"
 #include "WorkoutGameCourseRuntime.h"
 #include "WorkoutGamePositionRate.h"
 #include "WorkoutGameRunner.h"
@@ -52,6 +53,7 @@ private slots:
     void useSceneGraphFallback();
     void useOpenGLFallback();
     void usePainterFallback();
+    void configChanged(qint32);
 
 private:
     double currentFtp(ErgFile *workout) const;
@@ -79,6 +81,7 @@ private:
     WorkoutGameSessionState sessionState;
     WorkoutGameCompetition competition;
     WorkoutGameGhostRecorder ghostRecorder;
+    WorkoutGameAudioFeedback audioFeedback;
     WorkoutGameRunner runner;
     QTimer *frameDrainTimer;
     WorkoutGameEngineFrame lastFrame;

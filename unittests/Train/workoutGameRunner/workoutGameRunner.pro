@@ -5,6 +5,7 @@ TARGET = testWorkoutGameRunner
 
 SOURCES = testWorkoutGameRunner.cpp \
           ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
+          ../../../src/Train/WorkoutGameAudioEvents.cpp \
           ../../../src/Train/WorkoutGameClock.cpp \
           ../../../src/Train/WorkoutGameCompetition.cpp \
           ../../../src/Train/WorkoutGameEngine.cpp \

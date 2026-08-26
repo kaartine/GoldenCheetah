@@ -751,6 +751,10 @@ TrainOptionsPage::TrainOptionsPage(QWidget *parent, Context *context) : QWidget(
     lapAlert = new QCheckBox(tr("Play sound before new lap"), this);
     lapAlert->setChecked(appsettings->value(this, TRAIN_LAPALERT, false).toBool());
 
+    workoutGameAudio = new QCheckBox(tr("Workout Game sound effects"), this);
+    workoutGameAudio->setChecked(appsettings->value(
+            this, TRAIN_WORKOUT_GAME_AUDIO, false).toBool());
+
     coalesce = new QCheckBox(tr("Coalesce contiguous sections of same wattage"), this);
     coalesce->setChecked(appsettings->value(this, TRAIN_COALESCE_SECTIONS, false).toBool());
 
@@ -777,6 +781,7 @@ TrainOptionsPage::TrainOptionsPage(QWidget *parent, Context *context) : QWidget(
     form->addRow("", autoConnect);
     form->addRow("", autoHide);
     form->addRow("", lapAlert);
+    form->addRow("", workoutGameAudio);
     form->addRow("", coalesce);
     form->addRow("", tooltips);
     form->addRow(tr("Start Countdown"), startDelay);
@@ -798,6 +803,8 @@ TrainOptionsPage::saveClicked()
     appsettings->setValue(TRAIN_STARTDELAY, startDelay->value());
     appsettings->setValue(TRAIN_AUTOHIDE, autoHide->isChecked());
     appsettings->setValue(TRAIN_LAPALERT, lapAlert->isChecked());
+    appsettings->setValue(
+            TRAIN_WORKOUT_GAME_AUDIO, workoutGameAudio->isChecked());
     appsettings->setValue(TRAIN_COALESCE_SECTIONS, coalesce->isChecked());
     appsettings->setValue(TRAIN_TOOLTIPS, tooltips->isChecked());
     appsettings->setValue(TRAIN_TELEMETRY_FONT_SCALING, telemetryScaling->currentIndex());

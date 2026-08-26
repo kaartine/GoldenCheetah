@@ -4,6 +4,7 @@ CONFIG += c++17
 TARGET = testWorkoutGameReplay
 
 SOURCES = testWorkoutGameReplay.cpp \
+          ../../../src/Train/WorkoutGameAudioEvents.cpp \
           ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
           ../../../src/Train/WorkoutGameCompetition.cpp \
           ../../../src/Train/WorkoutGameEngine.cpp \

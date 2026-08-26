@@ -6,6 +6,8 @@
         <file alias="images/workout-game-surface-stone.png">images/workout-game-surface-stone.png</file>
         <file alias="images/workout-game-surface-wood.png">images/workout-game-surface-wood.png</file>
         <file alias="images/workout-game-surface-rider.png">images/workout-game-surface-rider.png</file>
+        <file alias="audio/workout-game-feature.wav">audio/workout-game-feature.wav</file>
+        <file alias="audio/workout-game-landing.wav">audio/workout-game-landing.wav</file>
         <file alias="qml/assets/Wg_Tabletop_Greybox.qml">../Train/qml/assets/Wg_Tabletop_Greybox.qml</file>
         <file alias="qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Tabletop_LOD0_mesh.mesh</file>
         <file alias="qml/assets/Wg_LogOver_Greybox.qml">../Train/qml/assets/Wg_LogOver_Greybox.qml</file>

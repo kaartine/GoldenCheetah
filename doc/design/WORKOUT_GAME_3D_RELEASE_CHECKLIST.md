@@ -803,10 +803,32 @@ unexpected airborne frames while sustaining about 71 FPS median.
 - [x] `ENV-02` Eliminate tree pop, floating bases and buried visible geometry.
 - [x] `FX-01` Add bounded contact shadow, landing dust and success feedback.
 - [x] `FX-02` Add restrained feature/camera punctuation after physics is stable.
-- [ ] `AUDIO-01` Add optional low-cost feature and landing audio after visuals.
+- [x] `AUDIO-01` Add optional low-cost feature and landing audio after visuals.
 
 **Acceptance:** art improves depth and arcade identity without hiding the path,
 exceeding budgets or changing physics.
+
+**AUDIO-01 evidence:** Workout Game sounds are controlled by a separate global
+training preference that defaults off. Enabling it lazily creates two
+`QSoundEffect` instances; playback performs no file access, waiting or work on
+the simulation, trainer-control or recording paths. The simulation owner
+publishes feature-measure and authoritative landing-impact rising edges through
+an eight-entry fixed-capacity journal with event ids and reset epochs. Every
+newest-frame publication carries that journal, so replacement of intermediate
+mailbox frames cannot lose a cue. Pause/resume does not replay consumed events,
+while a real simulation reset or backward seek starts a new epoch. Both PCM
+mono 22,050 Hz cues are project-authored from the checked-in deterministic
+FFmpeg recipe; their packaged sizes are 8,016 and 9,780 bytes and SHA-256
+hashes are `3ef844884060a047e757a3610a0b4bfc84cde81aaf95985a7eabddabf147ee48`
+and `aa0252211d25de24a455f17c92da84244a7a5f4f20df79afbc01bcc308ca5e04`.
+The ten-test audio suite covers packaged RIFF/WAVE resources, unavailable and
+invalid input, one cue per action, landing thresholds and strength, overwritten
+frames, capacity, reset and backward seek; it passes normally and under
+ASan/UBSan. The 17-test Engine
+suite observes exactly eleven feature cues plus real landing cues over the
+complete deterministic Feature Lab, and the 11-test Runner lifecycle suite
+passes unchanged. The full production target compiles in the release build
+container.
 
 **ENV-02 evidence:** the project-authored `EN-01` set replaces the former
 built-in cone and cylinder trees with narrow, layered and broken-top conifer
@@ -945,6 +967,11 @@ trace-emission run produced one complete record without an unbounded log
 stream, and the production target compiles in the release container.
 
 ## Release And Legacy Retirement
+
+The repository-hosted `ci.yml` workflow is tracked separately as CI
+infrastructure debt and is not an acceptance gate for this private-use release.
+The release evidence below must come from the controlled local and remote
+build/test environments even when that historical workflow remains red.
 
 - [ ] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
 - [ ] `REL-02` Verify stop/save/cancel/continue and accidental-stop recovery.

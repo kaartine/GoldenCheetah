@@ -257,6 +257,7 @@ private:
 #define TRAIN_STARTDELAY                "<global-trainmode>train/startdelay"
 #define TRAIN_AUTOHIDE                  "<global-trainmode>train/autohide"
 #define TRAIN_LAPALERT                  "<global-trainmode>train/lapalert"
+#define TRAIN_WORKOUT_GAME_AUDIO        "<global-trainmode>train/workoutGameAudio"
 #define TRAIN_USESIMULATEDSPEED         "<global-trainmode>train/usesimulatedspeed"
 #define TRAIN_USESIMULATEDHYPOXIA       "<global-trainmode>train/usesimulatedhypoxia"
 #define TRAIN_COALESCE_SECTIONS         "<global-trainmode>train/coalesceSections"

@@ -10,6 +10,7 @@
 #ifndef _GC_WorkoutGameEngine_h
 #define _GC_WorkoutGameEngine_h
 
+#include "WorkoutGameAudioEvents.h"
 #include "WorkoutGameFeatureRuntime.h"
 #include "WorkoutGameVisualSmoother.h"
 
@@ -23,6 +24,7 @@ struct WorkoutGameEngineInput
 struct WorkoutGameEngineFrame
 {
     WorkoutGameVisualSnapshot visual;
+    WorkoutGameAudioEventJournal audioEvents;
     double watts = 0.0;
     double targetWatts = 0.0;
     int cadenceRpm = 0;
@@ -62,6 +64,7 @@ private:
     std::uint64_t sequence = 0;
     WorkoutGameSimulation simulation;
     WorkoutGameFeatureRuntime featureRuntime;
+    WorkoutGameAudioEventJournalBuilder audioEventJournal;
     WorkoutGamePhysics physics;
     WorkoutGameCamera camera;
 };

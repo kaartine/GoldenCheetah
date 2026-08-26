@@ -213,6 +213,7 @@ class TrainOptionsPage : public QWidget
         QSpinBox    *startDelay;
         QCheckBox   *autoHide;
         QCheckBox   *lapAlert;
+        QCheckBox   *workoutGameAudio;
         QCheckBox   *coalesce;
         QCheckBox   *tooltips;
         QComboBox   *telemetryScaling;

@@ -61,6 +61,7 @@ void WorkoutGameEngine::reset()
     } else {
         featureRuntime.reset();
     }
+    audioEventJournal.reset();
     worldClockInitialized = false;
     lastWorldTimeMs = 0;
     riderPedalCycles = 0.0;
@@ -159,6 +160,8 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
     result.visual.presentationTimeMs = presentationTimeMs;
     result.visual.skippedSimulationTicks = skippedTicks;
     result.visual.riderPedalCycles = riderPedalCycles;
+    result.audioEvents = audioEventJournal.update(
+            feature, world, snapshot.workoutTimeMs);
     result.watts = std::max(0.0, input.actualWatts);
     result.targetWatts = std::max(0.0, input.targetWatts);
     result.cadenceRpm = std::max(0, int(std::lround(input.cadenceRpm)));

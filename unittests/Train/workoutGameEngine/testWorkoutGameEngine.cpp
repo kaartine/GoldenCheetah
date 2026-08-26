@@ -128,6 +128,9 @@ private slots:
         QVERIFY(second.configure(course, FtpWatts, true));
 
         double priorDistance = 0.0;
+        WorkoutGameAudioCueTracker audioTracker;
+        int featureCueCount = 0;
+        int landingCueCount = 0;
         for (std::int64_t timeMs = 0; timeMs < course.durationMs;
              timeMs += 20) {
             WorkoutGameEngineInput input;
@@ -163,9 +166,17 @@ private slots:
                      right.visual.world.rider.pitchDegrees);
             QCOMPARE(left.visual.riderPedalCycles,
                      right.visual.riderPedalCycles);
+            QCOMPARE(left.audioEvents.count, right.audioEvents.count);
+            QCOMPARE(left.audioEvents.epoch, right.audioEvents.epoch);
+            const WorkoutGameAudioEvents audio = audioTracker.update(
+                    left.audioEvents);
+            if (audio.feature) ++featureCueCount;
+            if (audio.landing) ++landingCueCount;
             priorDistance = left.visual.world.rider.distanceMeters;
         }
         QVERIFY(priorDistance > 100.0);
+        QCOMPARE(featureCueCount, 11);
+        QVERIFY(landingCueCount > 0);
     }
 
     void completeReplayDigestIsStableAcrossTwentyRuns()

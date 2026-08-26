@@ -170,6 +170,10 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     connect(context, &Context::pause, this, &WorkoutGameWindow::pause);
     connect(context, &Context::unpause, this, &WorkoutGameWindow::unpause);
     connect(context, &Context::stop, this, &WorkoutGameWindow::stop);
+    connect(context, &Context::configChanged,
+            this, &WorkoutGameWindow::configChanged);
+
+    configChanged(0);
 
     frameDrainTimer->setTimerType(Qt::PreciseTimer);
     frameDrainTimer->setInterval(16);
@@ -283,6 +287,7 @@ double WorkoutGameWindow::currentFtp(ErgFile *workout) const
 
 void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
 {
+    audioFeedback.reset();
     sessionState.workoutSelected();
     currentCourse = WorkoutGameCourse();
     distanceRuntime.reset();
@@ -361,6 +366,7 @@ void WorkoutGameWindow::setNow(long workoutPosition)
 
 void WorkoutGameWindow::start()
 {
+    audioFeedback.reset();
     sessionState.started();
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
     hasFrame = false;
@@ -414,6 +420,8 @@ void WorkoutGameWindow::stop()
     sessionState.stopped();
     threeDWindow->setSessionRunning(false);
     sceneGraphWindow->setSessionRunning(false);
+    sessionActive = false;
+    audioFeedback.reset();
     WorkoutGameEngineFrame finalFrame;
     if (runner.stopAndTakeLatest(currentWorkoutTimeMs, finalFrame)) {
         ghostRecorder.record(finalFrame.visual.simulation);
@@ -421,9 +429,14 @@ void WorkoutGameWindow::stop()
         hasFrame = true;
         displayFrame(finalFrame);
     }
-    sessionActive = false;
     presentationSuspended = false;
     storeGhost();
+}
+
+void WorkoutGameWindow::configChanged(qint32)
+{
+    audioFeedback.setEnabled(appsettings->value(
+            this, TRAIN_WORKOUT_GAME_AUDIO, false).toBool());
 }
 
 void WorkoutGameWindow::useSceneGraphFallback()
@@ -541,6 +554,9 @@ void WorkoutGameWindow::drainRunnerFrame()
 
 void WorkoutGameWindow::displayFrame(const WorkoutGameEngineFrame &frame)
 {
+    if (sessionActive && !paused && isVisible()) {
+        audioFeedback.update(frame.audioEvents);
+    }
     QWidget *renderer = renderStack->currentWidget();
     if (renderer == painterCanvas) {
         painterCanvas->setFrame(
