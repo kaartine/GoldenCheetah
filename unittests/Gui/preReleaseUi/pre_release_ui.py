@@ -216,6 +216,12 @@ class UiDriver:
         except Exception:
             return False
 
+    def selected(self, node) -> bool:
+        try:
+            return node.getState().contains(self.pyatspi.STATE_SELECTED)
+        except Exception:
+            return False
+
     def wait_for_application(self, timeout=30.0):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -404,7 +410,7 @@ class UiDriver:
         self.click(item)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.name(combo) == name:
+            if self.name(combo) == name or self.selected(item):
                 return combo
             time.sleep(0.1)
         raise UiFailure(f"Combo box did not select {name!r}")

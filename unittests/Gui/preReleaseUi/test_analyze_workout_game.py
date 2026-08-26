@@ -52,6 +52,25 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 timeout=0.01,
             )
 
+    def test_combo_selection_accepts_selected_item_when_name_is_stale(self):
+        combo = object()
+        item = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.combo_with_items = mock.Mock(return_value=combo)
+        driver.click = mock.Mock()
+        driver.find = mock.Mock(return_value=item)
+        driver.name = mock.Mock(return_value="Workout Game")
+        driver.selected = mock.Mock(return_value=True)
+
+        selected = driver.select_combo_item(
+            ["Workout Game", "Workout Editor"],
+            "Workout Editor",
+            timeout=0.01,
+        )
+
+        self.assertIs(selected, combo)
+        self.assertEqual(driver.click.call_args_list, [mock.call(combo), mock.call(item)])
+
     def test_prepare_anchors_a_usable_workout_library(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
