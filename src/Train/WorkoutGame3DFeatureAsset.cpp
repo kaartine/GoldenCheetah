@@ -33,8 +33,6 @@ AssetSpec specFor(WorkoutGameTerrainKind terrain)
         return {true, 1.68, 0.14, 0.20};
     case WorkoutGameTerrainKind::LogOver:
         return {true, 0.75, 0.54, 0.54};
-    case WorkoutGameTerrainKind::Tabletop:
-        return {true, 0.75, 4.84, 0.446};
     case WorkoutGameTerrainKind::Drop:
         return {true, 0.0, 22.0, 0.70};
     default:

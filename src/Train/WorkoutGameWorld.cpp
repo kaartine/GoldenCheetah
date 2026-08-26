@@ -9,11 +9,14 @@
 
 #include "WorkoutGameWorld.h"
 #include "WorkoutGameFeatureCatalog.h"
+#include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameSkinnyGeometry.h"
+#include "WorkoutGameTabletopGeometry.h"
+#include "WorkoutGameTrailBranch.h"
 
 #include <box2d/box2d.h>
 
@@ -36,15 +39,19 @@ constexpr std::int64_t MaximumCatchupMicroseconds = 1000000;
 constexpr std::int64_t WalkDecisionMicroseconds = 1500000;
 constexpr float BunnyHopLaunchSpeedMetersPerSecond = 3.0f;
 constexpr float TechnicalFeatureLaunchSpeedMetersPerSecond = 4.8f;
-constexpr float TabletopLaunchSpeedMetersPerSecond = 6.6f;
 
-float featureLaunchSpeed(WorkoutGameTerrainKind terrain)
+float featureLaunchSpeed(
+        WorkoutGameTerrainKind terrain,
+        double forwardSpeedMetersPerSecond,
+        double difficulty)
 {
     if (terrain == WorkoutGameTerrainKind::BunnyHop) {
         return BunnyHopLaunchSpeedMetersPerSecond;
     }
     if (terrain == WorkoutGameTerrainKind::Tabletop) {
-        return TabletopLaunchSpeedMetersPerSecond;
+        return float(WorkoutGameTabletopGeometry::profile(
+                difficulty).launchSpeedMetersPerSecond(
+                    forwardSpeedMetersPerSecond));
     }
     return TechnicalFeatureLaunchSpeedMetersPerSecond;
 }
@@ -130,15 +137,46 @@ double physicalSurfaceElevation(
     const double datum = sample.center.elevationMeters
             - sample.surfaceOffsetMeters;
     if (sample.pieceIndex >= course.pieces.size()) return datum;
-    const WorkoutGameRoadPiece &piece = course.pieces[sample.pieceIndex];
-    if (!piece.challenge.enabled
-            || piece.terrain != WorkoutGameTerrainKind::RockGarden) {
+    const WorkoutGameRoadPiece &currentPiece =
+            course.pieces[sample.pieceIndex];
+    const WorkoutGameRoadPiece *tabletopOwner = nullptr;
+    for (const WorkoutGameRoadPiece &candidate : course.pieces) {
+        if (candidate.challenge.enabled
+                && candidate.terrain == WorkoutGameTerrainKind::Tabletop
+                && sample.distanceMeters
+                    >= candidate.challenge.bypassStartDistanceMeters
+                && sample.distanceMeters
+                    <= candidate.challenge.bypassEndDistanceMeters) {
+            tabletopOwner = &candidate;
+            break;
+        }
+    }
+    if (tabletopOwner) {
+        const WorkoutGameRoadChallengeGate &challenge =
+                tabletopOwner->challenge;
+        const double length = challenge.bypassEndDistanceMeters
+                - challenge.bypassStartDistanceMeters;
+        if (length <= 0.0) return datum;
+        const double pulse = WorkoutGameTrailBranch::blend(
+                (sample.distanceMeters
+                 - challenge.bypassStartDistanceMeters) / length);
+        const double lateral = WorkoutGameTrailBranch::lateralAt(
+                sample.distanceMeters,
+                challenge.bypassStartDistanceMeters,
+                challenge.bypassEndDistanceMeters,
+                challenge.bypassLateralMeters);
+        return WorkoutGame3DTerrainProfile::bypassSurfaceElevationMeters(
+                sample, sample.distanceMeters, course.seed, lateral,
+                WorkoutGameTrailBranch::treadLiftMeters(pulse));
+    }
+    if (!currentPiece.challenge.enabled
+            || currentPiece.terrain != WorkoutGameTerrainKind::RockGarden) {
         return datum;
     }
     const WorkoutGameRockGardenGeometryProfile rocks =
-            WorkoutGameRockGardenGeometry::profile(piece.difficulty);
+            WorkoutGameRockGardenGeometry::profile(currentPiece.difficulty);
     const double local = sample.distanceMeters
-            - piece.challenge.obstacleDistanceMeters;
+            - currentPiece.challenge.obstacleDistanceMeters;
     return datum + rocks.surfaceOffsetMeters(
             local, rocks.safeLineOffsetMeters(local));
 }
@@ -550,7 +588,9 @@ struct WorkoutGamePhysics::Impl
         result.rider.distanceMeters = authoritativeDistanceMeters >= 0.0
                 ? authoritativeDistanceMeters
                 : distanceBase + double(position.x) - RiderStartMeters;
-        result.terrainOffsetMeters = double(position.x)
+        const double physicalDistanceMeters = distanceBase
+                + double(position.x) - RiderStartMeters;
+        result.terrainOffsetMeters = physicalDistanceMeters
                 - result.rider.distanceMeters;
         const WorkoutGameRoadSample groundOrigin = roadCourse.ready
                 ? WorkoutGameRoadCourseBuilder::sample(
@@ -589,7 +629,7 @@ struct WorkoutGamePhysics::Impl
                     ground, safeBypassActive, roadCourse)
                 : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
-        result.rider.airborne = !grounded()
+        result.rider.airborne = !safeBypassActive && !grounded()
                 && !retainsOrdinaryGroundContact(terrain);
         result.rider.walking = weakClimbMicroseconds
                 >= WalkDecisionMicroseconds;
@@ -609,7 +649,9 @@ struct WorkoutGamePhysics::Impl
         result.rider.distanceMeters = std::max(
                 publishedDistanceMeters, result.rider.distanceMeters);
         publishedDistanceMeters = result.rider.distanceMeters;
-        result.terrainOffsetMeters = double(b2Body_GetPosition(chassis).x)
+        const double physicalDistanceMeters = distanceBase
+                + double(b2Body_GetPosition(chassis).x) - RiderStartMeters;
+        result.terrainOffsetMeters = physicalDistanceMeters
                 - result.rider.distanceMeters;
         return result;
     }
@@ -641,10 +683,37 @@ struct WorkoutGamePhysics::Impl
                 && grounded()) {
             if (input.featureActionId != 0
                     && input.featureActionId != lastFeatureActionId) {
-                const float launchSpeed = featureLaunchSpeed(terrain);
-                const float impulse = b2Body_GetMass(chassis) * launchSpeed;
-                b2Body_ApplyLinearImpulseToCenter(
-                        chassis, {0.0f, impulse}, true);
+                const double courseSpeed = input.courseSpeedMetersPerSecond
+                        >= 0.0
+                    ? input.courseSpeedMetersPerSecond : requestedSpeed;
+                const WorkoutGameTabletopGeometryProfile tabletop =
+                        WorkoutGameTabletopGeometry::profile(difficulty);
+                const bool supportedTabletopJump = terrain
+                            != WorkoutGameTerrainKind::Tabletop
+                        || tabletop.supportsJumpAtForwardSpeed(courseSpeed);
+                if (supportedTabletopJump) {
+                    const float launchSpeed = featureLaunchSpeed(
+                            terrain, courseSpeed, difficulty);
+                    const auto launchBody =
+                            [launchSpeed, this](b2BodyId body) {
+                        const float currentVerticalSpeed =
+                                b2Body_GetLinearVelocity(body).y;
+                        const float impulse = b2Body_GetMass(body)
+                                * (launchSpeed - currentVerticalSpeed);
+                        if (std::abs(impulse) > 1e-6f
+                                && (terrain
+                                        == WorkoutGameTerrainKind::Tabletop
+                                    || impulse > 0.0f)) {
+                            b2Body_ApplyLinearImpulseToCenter(
+                                    body, {0.0f, impulse}, true);
+                        }
+                    };
+                    launchBody(chassis);
+                    if (terrain == WorkoutGameTerrainKind::Tabletop) {
+                        launchBody(rearWheel);
+                        launchBody(frontWheel);
+                    }
+                }
                 lastFeatureActionId = input.featureActionId;
             } else if (input.featureActionId == 0) {
                 const double distance = distanceBase
@@ -766,13 +835,8 @@ double WorkoutGamePhysics::terrainHeight(
         return slope + obstacle;
     }
     case WorkoutGameTerrainKind::Tabletop: {
-        const double height = 0.45 + 0.35 * challenge;
-        if (phase < 26.0 || phase >= 38.0) return slope;
-        if (phase < 30.0) {
-            return slope + height * smoothStep((phase - 26.0) / 4.0);
-        }
-        if (phase < 34.0) return slope + height;
-        return slope + height * (1.0 - smoothStep((phase - 34.0) / 4.0));
+        return slope + WorkoutGameTabletopGeometry::profile(
+                challenge).surfaceOffsetMeters(phase - 32.0);
     }
     case WorkoutGameTerrainKind::RockSlab: {
         const double slabTile = std::fmod(phase, 14.0) - 7.0;
@@ -816,6 +880,11 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
     input.courseDistanceMeters = std::isfinite(input.courseDistanceMeters)
             && input.courseDistanceMeters >= 0.0
             ? input.courseDistanceMeters : -1.0;
+    input.courseSpeedMetersPerSecond =
+            std::isfinite(input.courseSpeedMetersPerSecond)
+                && input.courseSpeedMetersPerSecond >= 0.0
+            ? std::clamp(input.courseSpeedMetersPerSecond, 0.0, 16.0)
+            : -1.0;
     impl->authoritativeDistanceMeters = input.courseDistanceMeters;
     if (!impl->initialized && input.courseDistanceMeters >= 0.0) {
         impl->distanceBase = input.courseDistanceMeters;

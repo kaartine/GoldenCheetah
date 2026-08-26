@@ -18,6 +18,7 @@
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameSkinnyGeometry.h"
+#include "WorkoutGameTabletopGeometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -80,7 +81,9 @@ double jumpFlightDurationSeconds(
     const double speedBonus = std::clamp(
             (speedKph - 25.0) / 20.0, 0.0, 1.0);
     if (terrain == WorkoutGameTerrainKind::Tabletop) {
-        return 1.7 + 0.8 * challenge + 2.2 * speedBonus;
+        const double forwardSpeed = std::max(0.0, speedKph) / 3.6;
+        return WorkoutGameTabletopGeometry::profile(
+                challenge).flightDurationSeconds(forwardSpeed);
     }
     if (terrain == WorkoutGameTerrainKind::BunnyHop) {
         return 0.65 + 0.25 * challenge + 0.15 * speedBonus;
@@ -240,6 +243,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     double actionStart = result.obstacleDistanceMeters;
     double actionEnd = std::min(
             layout->endDistanceMeters, actionStart + 6.0);
+    bool jumpSpeedSupported = true;
     if (piece->terrain == WorkoutGameTerrainKind::Climb) {
         const WorkoutGameClimbGeometryProfile climb =
                 WorkoutGameClimbGeometry::profile(piece->difficulty);
@@ -305,21 +309,37 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         const double timelineMetersPerSecond = layout->durationMs > 0
                 ? sectionLengthMeters / sectionSeconds
                 : std::max(3.0, simulation.speedKph / 3.6);
+        const double flightSpeedKph = piece->terrain
+                    == WorkoutGameTerrainKind::Tabletop
+                ? timelineMetersPerSecond * 3.6
+                : std::max(0.0, simulation.speedKph);
+        if (piece->terrain == WorkoutGameTerrainKind::Tabletop) {
+            jumpSpeedSupported = WorkoutGameTabletopGeometry::profile(
+                    piece->difficulty).supportsJumpAtForwardSpeed(
+                        timelineMetersPerSecond);
+        }
         const double requestedFlightSeconds = jumpFlightDurationSeconds(
-                piece->terrain, piece->difficulty,
-                std::max(0.0, simulation.speedKph));
+                piece->terrain, piece->difficulty, flightSpeedKph);
         actionStart = result.physicalTakeoffDistanceMeters;
-        actionEnd = std::min(
-                layout->endDistanceMeters,
-                std::max({actionStart + minimumJumpTravelMeters(
-                                    piece->terrain),
-                         result.obstacleDistanceMeters
-                            + geometry.endMeters + 1.5,
-                         actionStart + timelineMetersPerSecond
-                            * requestedFlightSeconds}));
-        result.flightDurationSeconds = std::clamp(
-                (actionEnd - actionStart) / timelineMetersPerSecond,
-                0.0, 5.0);
+        if (piece->terrain == WorkoutGameTerrainKind::Tabletop) {
+            actionEnd = std::min(
+                    layout->endDistanceMeters,
+                    actionStart + timelineMetersPerSecond
+                        * requestedFlightSeconds);
+            result.flightDurationSeconds = requestedFlightSeconds;
+        } else {
+            actionEnd = std::min(
+                    layout->endDistanceMeters,
+                    std::max({actionStart + minimumJumpTravelMeters(
+                                        piece->terrain),
+                             result.obstacleDistanceMeters
+                                + geometry.endMeters + 1.5,
+                             actionStart + timelineMetersPerSecond
+                                * requestedFlightSeconds}));
+            result.flightDurationSeconds = std::clamp(
+                    (actionEnd - actionStart) / timelineMetersPerSecond,
+                    0.0, 5.0);
+        }
     }
     result.actionStartDistanceMeters = actionStart;
     result.actionEndDistanceMeters = actionEnd;
@@ -403,6 +423,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                         actionEnd - actionStart),
                 0.0, 1.0);
         if (result.motion == WorkoutGameFeatureMotion::Jump && completed
+                && jumpSpeedSupported
                 && !bypass) {
             result.triggerJump = true;
             result.verticalOffsetMeters = jumpHeight(piece->terrain)

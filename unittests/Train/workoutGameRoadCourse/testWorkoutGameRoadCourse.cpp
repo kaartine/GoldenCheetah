@@ -17,6 +17,7 @@
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
 #include "Train/WorkoutGameSkinnyGeometry.h"
+#include "Train/WorkoutGameTabletopGeometry.h"
 #include "Train/WorkoutGameTrailBranch.h"
 
 #include <QTest>
@@ -88,6 +89,182 @@ class TestWorkoutGameRoadCourse : public QObject
     Q_OBJECT
 
 private slots:
+    void tabletopGeometryIsCanonicalAndDeterministic()
+    {
+        const auto profile = WorkoutGameTabletopGeometry::profile(0.7);
+        const auto repeated = WorkoutGameTabletopGeometry::profile(0.7);
+        const auto invalid = WorkoutGameTabletopGeometry::profile(
+                std::numeric_limits<double>::quiet_NaN());
+        QVERIFY(profile.ready);
+        QCOMPARE(profile.startMeters, repeated.startMeters);
+        QCOMPARE(profile.endMeters, repeated.endMeters);
+        QVERIFY(std::abs(profile.heightMeters - 0.654) < 1e-12);
+        QVERIFY(profile.lipMeters - profile.startMeters >= 2.0);
+        QVERIFY(std::abs(profile.deckEndMeters - profile.lipMeters - 2.49)
+                < 1e-12);
+        QVERIFY(profile.endMeters - profile.deckEndMeters
+                > profile.lipMeters - profile.startMeters);
+        QVERIFY(profile.endMeters - profile.startMeters < 8.0);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.startMeters), 0.0);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.lipMeters),
+                 profile.heightMeters);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.deckEndMeters),
+                 profile.heightMeters);
+        QCOMPARE(profile.surfaceOffsetMeters(profile.endMeters), 0.0);
+        QCOMPARE(invalid.heightMeters, 0.50);
+        for (const double difficulty : {0.0, 0.35, 0.7, 1.0}) {
+            const auto canonical =
+                    WorkoutGameTabletopGeometry::profile(difficulty);
+            const auto generic = WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::Tabletop, difficulty);
+            for (int sample = 0; sample <= 80; ++sample) {
+                const double local = canonical.startMeters
+                        + (canonical.endMeters - canonical.startMeters)
+                            * double(sample) / 80.0;
+                QVERIFY(std::abs(generic.surfaceOffset(local)
+                                 - canonical.surfaceOffsetMeters(local))
+                        < 1e-12);
+            }
+            for (const double speed : {3.0, 5.0, 7.0, 8.0}) {
+                const double landing =
+                        canonical.plannedLandingLocalMeters(speed);
+                QVERIFY(landing > canonical.deckEndMeters);
+                QVERIFY(landing < canonical.endMeters);
+                QVERIFY(canonical.flightDurationSeconds(speed) <= 2.0);
+            }
+            QVERIFY(!canonical.supportsJumpAtForwardSpeed(2.99));
+            QVERIFY(canonical.supportsJumpAtForwardSpeed(3.0));
+            QVERIFY(canonical.supportsJumpAtForwardSpeed(8.0));
+            QVERIFY(!canonical.supportsJumpAtForwardSpeed(8.01));
+        }
+    }
+
+    void tabletopSafeLineStartsAtDecisionAndClearsTheFeature()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 981u;
+        course.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::Tabletop;
+        section.durationMs = course.durationMs;
+        section.targetWatts = 260.0;
+        section.difficulty = 0.7;
+        section.challengeCount = 1;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const auto profile = WorkoutGameTabletopGeometry::profile(
+                piece->difficulty);
+        const WorkoutGameRoadSample entry =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, piece->challenge.obstacleDistanceMeters
+                        + profile.startMeters);
+        const WorkoutGameRoadSample exit =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, piece->challenge.obstacleDistanceMeters
+                        + profile.endMeters);
+        QVERIFY(std::abs(entry.center.halfWidthMeters
+                         - profile.socketHalfWidthMeters) < 1e-12);
+        QVERIFY(std::abs(exit.center.halfWidthMeters
+                         - profile.socketHalfWidthMeters) < 1e-12);
+        QCOMPARE(piece->challenge.bypassStartDistanceMeters,
+                 piece->challenge.decisionDistanceMeters);
+        QVERIFY(piece->challenge.prepareDistanceMeters
+                <= piece->challenge.decisionDistanceMeters
+                    - profile.splitLeadMeters + 1e-9);
+        QVERIFY(piece->challenge.bypassEndDistanceMeters
+                - piece->challenge.bypassStartDistanceMeters
+                    >= profile.minimumBypassLengthMeters - 1e-9);
+        QVERIFY(piece->challenge.bypassEndDistanceMeters
+                >= piece->challenge.obstacleDistanceMeters
+                    + profile.endMeters
+                    + profile.bypassExitRunoutMeters - 1e-9);
+        const double atObstacle = std::abs(
+                WorkoutGameTrailBranch::lateralAt(
+                    piece->challenge.obstacleDistanceMeters,
+                    piece->challenge.bypassStartDistanceMeters,
+                    piece->challenge.bypassEndDistanceMeters,
+                    piece->challenge.bypassLateralMeters));
+        QVERIFY(atObstacle > 1.5);
+    }
+
+    void shortExplicitTabletopPreservesDistanceWithoutClippingAChallenge()
+    {
+        for (const double length : {5.0, 20.0, 28.0, 35.9}) {
+            WorkoutGameCourse course;
+            course.status = WorkoutGameCourseStatus::Ready;
+            course.seed = 1181u;
+            course.durationMs = 5000;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = WorkoutGameTerrainKind::Tabletop;
+            section.durationMs = course.durationMs;
+            section.lengthMeters = length;
+            section.targetWatts = 260.0;
+            section.difficulty = 1.0;
+            section.challengeCount = 1;
+            course.sections = {section};
+
+            const WorkoutGameRoadCourse road =
+                    WorkoutGameRoadCourseBuilder::build(course, 200.0);
+            QVERIFY(road.ready);
+            QCOMPARE(road.totalLengthMeters, length);
+            QVERIFY(std::none_of(
+                    road.pieces.begin(), road.pieces.end(),
+                    [](const WorkoutGameRoadPiece &piece) {
+                        return piece.challenge.enabled;
+                    }));
+            for (double distance = 0.0; distance <= length;
+                 distance += 0.25) {
+                const WorkoutGameRoadSample sample =
+                        WorkoutGameRoadCourseBuilder::sample(road, distance);
+                QVERIFY(sample.ready);
+                QCOMPARE(sample.surfaceOffsetMeters, 0.0);
+                QVERIFY(std::isfinite(sample.center.elevationMeters));
+            }
+        }
+    }
+
+    void minimumExplicitTabletopProvidesTheCompleteBypass()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 1182u;
+        course.durationMs = 12000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::Tabletop;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 36.0;
+        section.targetWatts = 260.0;
+        section.difficulty = 1.0;
+        section.challengeCount = 1;
+        course.sections = {section};
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        QCOMPARE(road.totalLengthMeters, 36.0);
+        QCOMPARE(piece->challenge.bypassStartDistanceMeters, 8.0);
+        QCOMPARE(piece->challenge.bypassEndDistanceMeters, 36.0);
+        QCOMPARE(piece->challenge.bypassEndDistanceMeters
+                    - piece->challenge.bypassStartDistanceMeters,
+                 28.0);
+    }
+
     void climbProfileIsDeterministicAndHasExactTrailSockets()
     {
         const auto profile = WorkoutGameClimbGeometry::profile(0.65);

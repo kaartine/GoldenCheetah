@@ -179,7 +179,7 @@ Distant terrain art and final relief acceptance remain open.
 ### `VS-02` Build complete tabletop and bypass
 
 - [x] Model belly, lip, deck, knuckle, landing and joined side terrain.
-- [ ] Model a readable split, safe line and merge before the decision marker.
+- [x] Model a readable split at the decision and a merge after the feature.
 - [x] Keep the canonical measured profile as the physics authority.
 - [x] Place prepare, decision, action, lip, apex and landing markers.
 
@@ -189,15 +189,25 @@ completed/bypass captures and bounded speed-dependent flight.
 **Done when:** a rider identifies the jump and both lines without HUD text and
 the wheels meet the landing surface at the reported landing event.
 
-**Current evidence:** the deterministic Blender source now generates tapered
-joined terrain and a raised bypass in the same 78-vertex/96-triangle mesh.
-The production ViewModel derives the asset socket transform and difficulty
-scale from the authoritative road profile, and the actual game QML renders
-the packaged Balsam component. Khronos validation, two reproducible Blender
-and Balsam runs, 13 policy tests, 14 interactive X11 view tests and a
-three-camera 1,080-frame motion audit pass. The split and jump silhouette are
-still too subdued for HUD-free acceptance, so visual readability remains
-open.
+**Current evidence:** production now uses one project-authored procedural
+tabletop surface shared by road generation, Box2D contact, legacy comparison
+geometry and Quick 3D. At catalog difficulty 0.70 it is 0.65 m high, has an
+18-degree take-off, a 2.49 m deck, exact 0.68 m half-width sockets and bounded
+eased entry and landing transitions. The preparation window starts eight
+metres before the decision. The safe branch starts at that decision, clears
+the complete mound, stays grounded and merges over a minimum 28 m branch.
+Explicit sections shorter than the 36 m preparation-plus-branch contract
+preserve their authored distance and omit the challenge instead of clipping a
+jump into a socket.
+
+The former deterministic Blender/Balsam greybox remains a reproducible audit
+artifact, but is no longer placed in the production scene; this removes its
+duplicate mound and incompatible bypass from the rendered and physical trail.
+Matched 72-frame X11/OpenGL captures show the completed rider leaving the
+ground with a ground-fixed shadow and landing on the visible surface, while
+the bypass rider remains grounded. The completed and bypassed 960 by 540,
+15 FPS, 4.8-second videos are stored in
+`$HOME/Documents/personal/gc-ui-ftr11-final-v2` on the build host.
 
 ### `VS-03` Integrate rider and bike
 
@@ -310,7 +320,7 @@ and a runtime/geometry regression test.
 - [x] `FTR-08` Rock slab: asymmetric mass, crest, sides and surface following.
 - [x] `FTR-09` Skinny: narrow deck, supports, ground clearance and transitions.
 - [x] `FTR-10` Climb: visible rising face, crest and effort pose.
-- [ ] `FTR-11` Tabletop: promote the accepted vertical slice to production.
+- [x] `FTR-11` Tabletop: promote the accepted vertical slice to production.
 
 **FTR-01 evidence:** a 16-sided transverse log now extends beyond both
 trail edges, includes end-grain faces and a buried lower hull, and scales from
@@ -615,6 +625,35 @@ values are respectively
 `10c28b8a217aeb277ae5fdfe23bf962e009c5216cd040add10e969b91cb52f7b`,
 `13b8e6121c76dfd0f5da13574aa34cc72ea345cec5c5f31229774fd97517f694`
 and `2027d76c4de9ae704715322bde5e36332ec8a2238f2486ebc0907c244b7e2ea9`.
+No external model, image or texture was added.
+
+**FTR-11 evidence:** Tabletop is a project-owned procedural jump driven by
+`WorkoutGameTabletopGeometry`. One canonical profile supplies its sockets,
+belly, 18-degree lip, deck, knuckle, landing, safe-line clearance and launch
+calibration. The road, terrain mesh and Box2D world therefore expose the same
+surface; the old rigid GLB is retained only as an isolated comparison asset
+and is not instantiated by production QML. The main rider preloads during the
+last 0.9 m, follows speed-dependent Box2D flight and absorbs the measured
+landing impact. A ground-fixed shadow makes the bounded air phase readable.
+The bypass mesh, rider anchor and Box2D contact use the same deterministic
+side-terrain surface and publish no airborne frames.
+
+Clean focused suites pass `44 + 24 + 32 + 42 + 12 + 7` road, runtime, mesh,
+world, terrain-profile and asset tests. Simulation, engine, Quick 3D geometry
+and legacy comparison scene pass `33 + 15 + 27 + 20` tests. The same suites
+pass under ASan/UBSan. Real road-configured Box2D runs at 3, 5 and 7 m/s land
+on the authored landing ramp within two seconds, remain below 1.8 m and
+produce speed-dependent flight. Unsupported launch speeds are explicitly
+gated, while natural tyre contact remains physical. Engine integration also
+checks the authoritative-timeline landing point and bounds every 20 ms bypass
+lateral step. The complete X11/OpenGL view suite passes 54
+tests with 12 explicit opt-in exporters skipped; the tabletop still and motion
+exporters pass separately. Their completed and bypassed 72-frame videos show
+235/220 W completion and 150/220 W bypass outcomes. Video SHA-256 values are
+respectively
+`b98ace83b0d75d9c9449015309f2211c0ec2bbaa61212397b5f3134fcaccf813`
+and
+`42b5b6e1863d187ef3939318072f6d4856270fe2cc0ecbd9203748d4efe70e49`.
 No external model, image or texture was added.
 
 **Feature acceptance:** each feature is identifiable without its name, joins

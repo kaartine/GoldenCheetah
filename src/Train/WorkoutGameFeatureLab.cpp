@@ -20,7 +20,7 @@ constexpr std::int64_t TabletopDurationMs = 12000;
 constexpr std::int64_t RecoveryDurationMs = 1000;
 constexpr double FeatureLengthMeters = 28.0;
 constexpr double DropLengthMeters = 36.0;
-constexpr double TabletopLengthMeters = 100.0;
+constexpr double TabletopLengthMeters = 84.0;
 constexpr double RecoveryLengthMeters = 8.0;
 
 WorkoutGameFeature featureForTerrain(WorkoutGameTerrainKind terrain)

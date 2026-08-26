@@ -45,6 +45,30 @@ Item {
             lookAtNode: cameraTarget
         }
 
+        Model {
+            objectName: "riderGroundShadow"
+            source: "#Sphere"
+            position: Qt.vector3d(
+                workoutGame3D.riderX,
+                workoutGame3D.groundY + 0.025,
+                workoutGame3D.riderZ)
+            scale: Qt.vector3d(
+                0.010 * Math.max(0.45,
+                    1.0 - workoutGame3D.riderAirHeight * 0.55),
+                0.00018,
+                0.016 * Math.max(0.45,
+                    1.0 - workoutGame3D.riderAirHeight * 0.55))
+            opacity: Math.max(0.18,
+                0.48 - workoutGame3D.riderAirHeight * 0.28)
+            materials: PrincipledMaterial {
+                baseColor: "#141817"
+                roughness: 1
+                alphaMode: PrincipledMaterial.Blend
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
         Node {
             id: cameraTarget
             position: Qt.vector3d(
@@ -242,27 +266,6 @@ Item {
             delegate: WorkoutGameAssets.Wg_LogOver_Greybox {
                 required property var modelData
                 visible: modelData.kind === 9
-                         && modelData.assetScaleY !== undefined
-                position: Qt.vector3d(
-                    modelData.assetX || 0,
-                    modelData.assetY || 0,
-                    modelData.assetZ || 0)
-                eulerRotation: Qt.vector3d(
-                    modelData.assetPitch || 0,
-                    modelData.assetYaw || 0,
-                    0)
-                scale: Qt.vector3d(
-                    1,
-                    modelData.assetScaleY || 1,
-                    modelData.assetScaleZ || 1)
-            }
-        }
-
-        Repeater3D {
-            model: workoutGame3D.features
-            delegate: WorkoutGameAssets.Wg_Tabletop_Greybox {
-                required property var modelData
-                visible: modelData.kind === 10
                          && modelData.assetScaleY !== undefined
                 position: Qt.vector3d(
                     modelData.assetX || 0,

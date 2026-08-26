@@ -39,9 +39,9 @@ WorkoutGameRiderVisualPose WorkoutGameRiderVisual::pose(
     result.liftPixels = result.airHeightMeters * pixelsPerMeter;
 
     const double flight = std::clamp(
-            result.airHeightMeters / 1.35, 0.0, 1.0);
+            result.airHeightMeters / 0.75, 0.0, 1.0);
     result.shadowScale = std::clamp(
-            1.0 - 0.38 * flight, 0.55, 1.0);
+            1.0 - 0.45 * flight, 0.55, 1.0);
     result.shadowOpacity = std::clamp(
             0.44 - 0.20 * flight, 0.20, 0.44);
     result.riderWidthScale = 1.0 + 0.035 * flight;

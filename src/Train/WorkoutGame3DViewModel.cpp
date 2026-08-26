@@ -19,6 +19,7 @@
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameSkinnyGeometry.h"
+#include "WorkoutGameTabletopGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 
 #include <QByteArray>
@@ -169,6 +170,8 @@ void WorkoutGame3DViewModel::setCourse(
     currentWorkoutProgress = 0.0;
     currentGradePercent = 0.0;
     riderPumpMeters = 0.0;
+    currentRiderAirHeightMeters = 0.0;
+    currentLandingImpact = 0.0;
     currentRiderStandingBlend = 0.0;
     currentRiderWalking = false;
     riderPoseInitialized = false;
@@ -207,7 +210,6 @@ void WorkoutGame3DViewModel::setFrame(
     const double rightX = std::cos(sample.center.headingRadians);
     const double rightZ = -std::sin(sample.center.headingRadians);
     riderPositionX = sample.center.xMeters + lateral * rightX;
-    cameraGroundY = sample.visualGroundElevationMeters();
     const double authoritativeAir = std::max(
             0.0, finiteOrZero(frame.world.rider.airHeightMeters()));
     double visualGround = sample.center.elevationMeters;
@@ -239,8 +241,9 @@ void WorkoutGame3DViewModel::setFrame(
             }
         }
         visualGround = terrain.ready
-                ? WorkoutGame3DTerrainProfile::elevationAtLateral(
-                    terrain, lateral) + treadLift
+                ? WorkoutGame3DTerrainProfile::bypassSurfaceElevationMeters(
+                    sample, distanceMeters, roadCourse.seed,
+                    lateral, treadLift)
                 : sample.visualGroundElevationMeters();
         if ((sample.terrain == WorkoutGameTerrainKind::Roots
                 || sample.terrain == WorkoutGameTerrainKind::RockSlab)
@@ -289,6 +292,7 @@ void WorkoutGame3DViewModel::setFrame(
                         piece.turnRadians);
         }
     }
+    cameraGroundY = visualGround;
     riderPositionY = visualGround + authoritativeAir;
     riderPositionZ = sample.center.zMeters + lateral * rightZ;
     riderHeadingDegrees = sample.center.headingRadians * 180.0 / Pi;
@@ -329,6 +333,9 @@ void WorkoutGame3DViewModel::setFrame(
         riderRollDegrees = targetRiderRollDegrees;
     }
     riderPoseInitialized = true;
+    currentRiderAirHeightMeters = authoritativeAir;
+    currentLandingImpact = std::clamp(
+            finiteOrZero(frame.world.landingImpact), 0.0, 1.0);
     currentRiderWalking = frame.world.rider.walking;
     double targetStandingBlend = 0.0;
     if (frame.world.terrain == WorkoutGameTerrainKind::Climb) {
@@ -376,7 +383,40 @@ void WorkoutGame3DViewModel::setFrame(
     if (frame.world.terrain != WorkoutGameTerrainKind::RockSlab) {
         slabCompressionInitialized = false;
     }
-    if (frame.world.terrain == WorkoutGameTerrainKind::Roots
+    if (frame.world.terrain == WorkoutGameTerrainKind::Tabletop
+            && frame.feature.route == WorkoutGameRoute::MainLine) {
+        double target = 0.0;
+        if (frame.world.rider.airborne) {
+            target = 0.045;
+        } else if (currentLandingImpact > 0.01) {
+            target = -0.10 * currentLandingImpact;
+        } else if (sample.pieceIndex < roadCourse.pieces.size()) {
+            const WorkoutGameRoadPiece &piece =
+                    roadCourse.pieces[sample.pieceIndex];
+            if (piece.challenge.enabled) {
+                const WorkoutGameTabletopGeometryProfile tabletop =
+                        WorkoutGameTabletopGeometry::profile(
+                            piece.difficulty);
+                const double local = distanceMeters
+                        - piece.challenge.obstacleDistanceMeters;
+                const double preloadStart = tabletop.lipMeters - 0.9;
+                if (local >= preloadStart
+                        && local <= tabletop.lipMeters) {
+                    const double progress = std::clamp(
+                            (local - preloadStart) / 0.9, 0.0, 1.0);
+                    target = -0.075 * std::sin(Pi * progress);
+                }
+            }
+        }
+        const double elapsedSeconds = lastRiderPoseTimeMs >= 0
+                ? std::clamp(double(frame.simulation.workoutTimeMs
+                                    - lastRiderPoseTimeMs) / 1000.0,
+                             0.0, 0.25)
+                : 0.08;
+        const double blend = 1.0 - std::exp(-elapsedSeconds / 0.09);
+        riderPumpMeters += (target - riderPumpMeters) * blend;
+        riderPumpMeters = std::clamp(riderPumpMeters, -0.10, 0.05);
+    } else if (frame.world.terrain == WorkoutGameTerrainKind::Roots
             && frame.feature.route == WorkoutGameRoute::MainLine
             && !frame.world.rider.airborne) {
         const double compression = std::clamp(0.5 * (

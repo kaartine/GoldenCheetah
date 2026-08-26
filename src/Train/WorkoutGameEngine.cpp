@@ -112,6 +112,17 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
                     roadCourse, snapshot.workoutTimeMs);
         physicsInput.courseDistanceMeters = road.ready
                 ? road.distanceMeters : -1.0;
+        if (snapshot.activeSection
+                < int(roadCourse.timeline.size())) {
+            const WorkoutGameRoadTimelineSection &timeline =
+                    roadCourse.timeline[std::size_t(snapshot.activeSection)];
+            if (timeline.durationMs > 0) {
+                physicsInput.courseSpeedMetersPerSecond =
+                        (timeline.endDistanceMeters
+                         - timeline.startDistanceMeters)
+                        * 1000.0 / double(timeline.durationMs);
+            }
+        }
         physicsInput.terrain = section.terrain;
         physicsInput.desiredSpeedMetersPerSecond = snapshot.speedKph / 3.6;
         const WorkoutGameRoadSample roadSurface = road.ready

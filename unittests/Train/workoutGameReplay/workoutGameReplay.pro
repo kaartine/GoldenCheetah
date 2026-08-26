@@ -4,6 +4,7 @@ CONFIG += c++17
 TARGET = testWorkoutGameReplay
 
 SOURCES = testWorkoutGameReplay.cpp \
+          ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
           ../../../src/Train/WorkoutGameCompetition.cpp \
           ../../../src/Train/WorkoutGameEngine.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
@@ -16,7 +17,8 @@ SOURCES = testWorkoutGameReplay.cpp \
           ../../../src/Train/WorkoutGameVisualSmoother.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
 
-HEADERS = ../../../src/Train/WorkoutGameReplay.h
+HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
+          ../../../src/Train/WorkoutGameReplay.h
 
 BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)
 include($$BOX2D_ROOT/box2d.pri)

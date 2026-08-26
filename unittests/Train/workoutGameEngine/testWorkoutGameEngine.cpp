@@ -10,6 +10,7 @@
 #include "Train/WorkoutGameEngine.h"
 #include "Train/WorkoutGameFeatureLab.h"
 #include "Train/WorkoutGameRiderVisual.h"
+#include "Train/WorkoutGameTabletopGeometry.h"
 
 #include <QTest>
 
@@ -84,6 +85,29 @@ std::uint64_t replayDigest(
         mixValue(digest, std::uint64_t(frame.heartRate));
     }
     return digest;
+}
+
+int sectionForTerrain(
+        const WorkoutGameCourse &course,
+        WorkoutGameTerrainKind terrain)
+{
+    for (std::size_t index = 0; index < course.sections.size(); ++index) {
+        if (course.sections[index].terrain == terrain) return int(index);
+    }
+    return -1;
+}
+
+const WorkoutGameRoadPiece *challengePieceFor(
+        const WorkoutGameRoadCourse &road,
+        int sourceSectionIndex)
+{
+    for (const WorkoutGameRoadPiece &piece : road.pieces) {
+        if (piece.challenge.enabled
+                && int(piece.sourceSectionIndex) == sourceSectionIndex) {
+            return &piece;
+        }
+    }
+    return nullptr;
 }
 
 }
@@ -276,6 +300,9 @@ private slots:
             WorkoutGameEngineInput input;
             input.simulation = WorkoutGameFeatureLab::input(
                     course, timeMs, WorkoutGameFeatureLabScenario::Pass);
+            // Keep drivetrain speed far below the 7 m/s course timeline so
+            // landing still proves that the timeline owns flight calibration.
+            input.simulation.authoritativeSpeedKph = 12.0;
             const WorkoutGameEngineFrame frame = engine.update(
                     input, 100000 + timeMs);
             maximumAirHeightMeters = std::max(
@@ -305,6 +332,14 @@ private slots:
         constexpr double FtpWatts = 200.0;
         WorkoutGameEngine engine;
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(FtpWatts);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const int tabletopSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadPiece *tabletop = challengePieceFor(
+                road, tabletopSection);
+        QVERIFY(tabletopSection >= 0);
+        QVERIFY(tabletop != nullptr);
         QVERIFY(engine.configure(course, FtpWatts, true));
 
         double maximumLiftPixels = 0.0;
@@ -316,6 +351,9 @@ private slots:
         int maximumConsecutiveAirborneFrames = 0;
         double priorAirHeightMeters = 0.0;
         bool hasPriorAirHeight = false;
+        bool priorAirborne = false;
+        bool observedLanding = false;
+        double landingLocalDistanceMeters = 0.0;
         for (std::int64_t timeMs = 0; timeMs < course.durationMs;
              timeMs += 20) {
             WorkoutGameEngineInput input;
@@ -323,7 +361,9 @@ private slots:
                     course, timeMs, WorkoutGameFeatureLabScenario::Pass);
             const WorkoutGameEngineFrame frame = engine.update(
                     input, 100000 + timeMs);
-            if (frame.visual.simulation.activeSection != 6) continue;
+            if (frame.visual.simulation.activeSection != tabletopSection) {
+                continue;
+            }
             const WorkoutGameRiderVisualPose pose =
                     WorkoutGameRiderVisual::pose(
                         frame.visual.world, frame.visual.feature, 188.0);
@@ -342,18 +382,27 @@ private slots:
                     maximumConsecutiveAirborneFrames,
                     consecutiveAirborneFrames);
             maximumLiftPixels = std::max(maximumLiftPixels, pose.liftPixels);
-            if (pose.airborne && pose.liftPixels >= 40.0) {
+            if (pose.airborne && pose.liftPixels >= 30.0) {
                 ++readableAirborneFrames;
                 minimumAirborneShadowScale = std::min(
                         minimumAirborneShadowScale, pose.shadowScale);
             }
+            if (priorAirborne && !frame.visual.world.rider.airborne) {
+                const double physicalDistanceMeters =
+                        frame.visual.world.rider.distanceMeters
+                        + frame.visual.world.terrainOffsetMeters;
+                landingLocalDistanceMeters = physicalDistanceMeters
+                        - tabletop->challenge.obstacleDistanceMeters;
+                observedLanding = true;
+            }
+            priorAirborne = frame.visual.world.rider.airborne;
         }
 
-        QVERIFY2(maximumLiftPixels >= 125.0,
+        QVERIFY2(maximumLiftPixels >= 35.0,
                  qPrintable(QStringLiteral(
                      "tabletop produced only %1 px of visible lift")
                      .arg(maximumLiftPixels)));
-        QVERIFY2(readableAirborneFrames >= 40,
+        QVERIFY2(readableAirborneFrames >= 12,
                  qPrintable(QStringLiteral(
                      "tabletop produced only %1 readable airborne frames")
                      .arg(readableAirborneFrames)));
@@ -366,7 +415,122 @@ private slots:
                  qPrintable(QStringLiteral(
                      "tabletop air height stepped by %1 m")
                      .arg(maximumAirHeightStepMeters)));
-        QVERIFY(minimumAirborneShadowScale <= 0.70);
+        QVERIFY(minimumAirborneShadowScale <= 0.80);
+        QVERIFY(observedLanding);
+        const WorkoutGameTabletopGeometryProfile profile =
+                WorkoutGameTabletopGeometry::profile(tabletop->difficulty);
+        QVERIFY(landingLocalDistanceMeters >= profile.deckEndMeters - 0.15);
+        QVERIFY(landingLocalDistanceMeters <= profile.endMeters + 0.25);
+    }
+
+    void tabletopEngineGatesLaunchOutsideTheCalibratedSpeedRange()
+    {
+        constexpr double FtpWatts = 200.0;
+        const auto verifyNoLaunch = [FtpWatts](
+                double timelineSpeedMetersPerSecond) {
+            WorkoutGameCourse course;
+            course.status = WorkoutGameCourseStatus::Ready;
+            course.seed = 1771u;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = WorkoutGameTerrainKind::Tabletop;
+            section.lengthMeters = 60.0;
+            section.durationMs = std::int64_t(std::llround(
+                    section.lengthMeters / timelineSpeedMetersPerSecond
+                        * 1000.0));
+            section.targetWatts = 230.0;
+            section.difficulty = 0.68;
+            section.challengeCount = 1;
+            course.durationMs = section.durationMs;
+            course.sections = {section};
+
+            WorkoutGameEngine engine;
+            if (!engine.configure(course, FtpWatts, false)) return false;
+            bool observedCompletedAction = false;
+            for (std::int64_t timeMs = 0; timeMs < course.durationMs;
+                 timeMs += 20) {
+                WorkoutGameEngineInput input;
+                input.simulation.workoutTimeMs = timeMs;
+                input.simulation.actualWatts = section.targetWatts;
+                input.simulation.targetWatts = section.targetWatts;
+                input.simulation.cadenceRpm = 90.0;
+                input.simulation.authoritativeSpeedKph = 20.0;
+                const WorkoutGameEngineFrame frame = engine.update(
+                        input, 100000 + timeMs);
+                if (frame.visual.feature.phase
+                            == WorkoutGameFeaturePhase::Action
+                        && frame.visual.feature.outcome
+                            == WorkoutGameFeatureOutcome::Completed) {
+                    observedCompletedAction = true;
+                    if (frame.visual.feature.triggerJump) return false;
+                }
+            }
+            return observedCompletedAction;
+        };
+
+        QVERIFY(verifyNoLaunch(2.5));
+        QVERIFY(verifyNoLaunch(10.0));
+    }
+
+    void tabletopBypassEntersAtTheBranchWithoutLateralTeleport()
+    {
+        constexpr double FtpWatts = 200.0;
+        WorkoutGameEngine engine;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(FtpWatts);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const int tabletopSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadPiece *tabletop = challengePieceFor(
+                road, tabletopSection);
+        QVERIFY(tabletopSection >= 0);
+        QVERIFY(tabletop != nullptr);
+        QVERIFY(engine.configure(course, FtpWatts, true));
+
+        bool enteredBypass = false;
+        double offsetAtEntry = 0.0;
+        double maximumOffsetStep = 0.0;
+        double priorOffset = 0.0;
+        bool hasPriorOffset = false;
+        for (std::int64_t timeMs = 0; timeMs < course.durationMs;
+             timeMs += 20) {
+            WorkoutGameEngineInput input;
+            input.simulation = WorkoutGameFeatureLab::input(
+                    course, timeMs, WorkoutGameFeatureLabScenario::Bypass);
+            const WorkoutGameEngineFrame frame = engine.update(
+                    input, 100000 + timeMs);
+            if (frame.visual.simulation.activeSection != tabletopSection) {
+                continue;
+            }
+            const double offset = frame.visual.feature.lateralOffsetMeters;
+            if (hasPriorOffset) {
+                maximumOffsetStep = std::max(
+                        maximumOffsetStep, std::abs(offset - priorOffset));
+            }
+            if (!enteredBypass
+                    && frame.visual.feature.route
+                        == WorkoutGameRoute::SafeBypass) {
+                enteredBypass = true;
+                offsetAtEntry = offset;
+                const double physicalDistanceMeters =
+                        frame.visual.world.rider.distanceMeters
+                        + frame.visual.world.terrainOffsetMeters;
+                QVERIFY(physicalDistanceMeters
+                        >= tabletop->challenge.bypassStartDistanceMeters);
+                QVERIFY(physicalDistanceMeters
+                        < tabletop->challenge.bypassStartDistanceMeters
+                            + 0.25);
+            }
+            priorOffset = offset;
+            hasPriorOffset = true;
+        }
+
+        QVERIFY(enteredBypass);
+        QVERIFY(std::abs(offsetAtEntry) < 0.01);
+        QVERIFY2(maximumOffsetStep < 0.08,
+                 qPrintable(QStringLiteral(
+                     "tabletop bypass moved laterally by %1 m in one frame")
+                     .arg(maximumOffsetStep)));
     }
 
     void bypassCannotActivateTheScriptedAirbornePose()

@@ -4,6 +4,7 @@ CONFIG += c++17
 TARGET = testWorkoutGameCanvas
 
 SOURCES = testWorkoutGameCanvas.cpp \
+          ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
           ../../../src/Train/WorkoutGameCanvas.cpp \
           ../../../src/Train/WorkoutGameClock.cpp \
           ../../../src/Train/WorkoutGameCompetition.cpp \
@@ -18,7 +19,8 @@ SOURCES = testWorkoutGameCanvas.cpp \
           ../../../src/Train/WorkoutGameVisualSmoother.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
 
-HEADERS = ../../../src/Train/WorkoutGameCanvas.h \
+HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
+          ../../../src/Train/WorkoutGameCanvas.h \
           ../../../src/Train/WorkoutGameClock.h \
           ../../../src/Train/WorkoutGameCompetition.h \
           ../../../src/Train/WorkoutGameCourse.h \

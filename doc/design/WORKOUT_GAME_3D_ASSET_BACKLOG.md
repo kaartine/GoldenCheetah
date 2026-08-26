@@ -157,17 +157,19 @@ Khronos glTF Validator 2.0.0-dev.3.10 reported zero errors, warnings, infos and
 hints. A second clean export produced the same SHA-256. Two Balsam 6.8.3 runs
 also produced byte-identical QML and `.mesh` outputs. The cross-platform policy
 validator and thirteen policy/fixture tests pass, and the production qrc
-renders the committed mesh under X11/OpenGL. The asset remains a vertical-slice
-candidate until safe-line geometry and the extracted-AppImage gate pass.
+renders the committed mesh under X11/OpenGL. The asset remains a reproducible
+comparison candidate. Production uses the canonical procedural tabletop and
+safe branch instead of placing this rigid GLB, preventing two geometry and
+physics authorities from diverging.
 
 ### Phase 3: Vertical Slice
 
 - [ ] `VS-01` Build ordinary trail, shoulder and forest-floor tiles.
-- [ ] `VS-02` Build the complete tabletop tile and safe bypass.
+- [x] `VS-02` Build the complete tabletop tile and safe bypass.
 - [ ] `VS-03` Integrate the selected bike/rider rig and core animation set.
 - [ ] `VS-04` Add the first coherent tree/rock/ground art set.
 - [ ] `VS-05` Fix feature guidance and Data Generator target authority.
-- [ ] `VS-06` Record complete and bypassed tabletop sessions.
+- [x] `VS-06` Record complete and bypassed tabletop sessions.
 - [ ] `VS-07` Verify recording, trainer priority, deterministic outcome and target-laptop frame budget.
 
 ### Phase 4: Feature Production
@@ -180,6 +182,11 @@ candidate until safe-line geometry and the extracted-AppImage gate pass.
 - [x] `PROD-06` Climb, grade transitions and crest response.
 - [ ] `PROD-07` Feature-specific rider/camera/effect states.
 - [ ] `PROD-08` Completed/bypass catalog and live UI tests for all eleven features.
+
+The production tabletop is accepted as deterministic project-authored
+procedural geometry. One canonical profile controls visible terrain, contact,
+launch calibration, sockets and the grounded bypass. The generated GLB remains
+only for A/B and asset-pipeline audits and is not placed by production QML.
 
 `PROD-04` is accepted as deterministic project-authored procedural geometry.
 Roots, rock garden and rock slab use dedicated canonical course-space profiles,

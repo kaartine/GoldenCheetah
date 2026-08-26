@@ -686,7 +686,7 @@ private slots:
         QVERIFY(landing.verticalOffsetMeters > 0.05);
     }
 
-    void tabletopFlightDurationGrowsWithSpeedButStaysBounded()
+    void tabletopFlightDurationUsesAuthoritativeTimelineSpeed()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
         const WorkoutGameRoadCourse road =
@@ -710,17 +710,23 @@ private slots:
         const WorkoutGameFeatureRuntimeSnapshot fastFlight =
                 runtime.update(fast);
 
-        QVERIFY2(normalFlight.flightDurationSeconds >= 1.5,
+        QVERIFY2(normalFlight.flightDurationSeconds >= 0.45,
                  qPrintable(QStringLiteral(
                      "normal tabletop flight lasted only %1 seconds")
                      .arg(normalFlight.flightDurationSeconds)));
-        QVERIFY2(fastFlight.flightDurationSeconds
-                    > normalFlight.flightDurationSeconds,
-                 qPrintable(QStringLiteral(
-                     "fast tabletop flight %1 s did not exceed normal %2 s")
-                     .arg(fastFlight.flightDurationSeconds)
-                     .arg(normalFlight.flightDurationSeconds)));
-        QVERIFY(fastFlight.flightDurationSeconds <= 5.0);
+        QCOMPARE(fastFlight.flightDurationSeconds,
+                 normalFlight.flightDurationSeconds);
+        const WorkoutGameRoadTimelineSection &timeline =
+                road.timeline[std::size_t(section)];
+        const double timelineSpeed =
+                (timeline.endDistanceMeters - timeline.startDistanceMeters)
+                    * 1000.0 / double(timeline.durationMs);
+        const double expected = WorkoutGameTabletopGeometry::profile(
+                piece->difficulty).flightDurationSeconds(timelineSpeed);
+        QVERIFY(std::abs(normalFlight.flightDurationSeconds - expected)
+                < 1e-9);
+        QVERIFY(normalFlight.flightDurationSeconds <= 2.0);
+        QVERIFY(fastFlight.flightDurationSeconds <= 2.0);
     }
 
     void bypassLineEasesInAndOutWithoutLateralJumps()

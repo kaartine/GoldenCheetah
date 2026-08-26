@@ -40,16 +40,21 @@ silhouette, scale, trail integration, and line readability from future art.
 | Skinny | Boardwalk construction, p. 48 | The production tile now has individually spaced deck boards, longitudinal beams, ground-reaching supports, visible clearance, a same-tile packed-dirt safe line and exact width/elevation sockets. | Preserve the canonical deck, ground datum, subtle deterministic balance response and seam overlap when final wood and ground materials replace the current vertex colors. |
 | Berm | Berm cross-section, p. 30 | The production tile now has a 75-degree curved centreline, broad banked bowl, level sockets and an integrated slower inside line. Road, rider, mesh and camera share the same distance profile. | Preserve the canonical profile and socket contract when final ground materials replace the current low-poly shading. |
 | Log over | Drop/obstacle examples, p. 36 | The tapered round log is one of the clearest current features. | Extend it beyond the trail, partly bury it, and add end-grain and broken branch details. |
-| Tabletop | Jump anatomy and examples, pp. 38-40 | The main proportions are plausible, but the current solid mound hides the take-off belly, lip, knuckle, and landing transition. | Preserve the measured dimensions while exposing those named parts in the silhouette and shading. |
+| Tabletop | Jump anatomy and examples, pp. 38-40 | The production tile now exposes the belly, 18-degree lip, 2.49 m deck, knuckle and landing as one canonical physical and visible surface. Its separate safe line splits at the decision, stays grounded and rejoins after the complete mound. | Preserve the canonical surface, exact sockets, route split and bounded Box2D flight when final ground materials replace the current vertex colors. |
 | Rock slab | Track armouring, p. 35 | The production tile now forms one asymmetric rollover face with an irregular footprint, exposed buried sides and fissures. The low-relief safe line stays on the widened tread and physics follows the same surface rendered by Quick 3D. | Preserve the canonical rounded crest, same-tread safe line and exact sockets when final rock and ground materials replace the current vertex colors. |
 
 ## Numeric Checks
 
-At catalog difficulty 0.65, the current tabletop is approximately 1.01 m
-high. Its 3.3 m take-off is about 3.3 times the height and its 2.6 m deck is
-inside the guideline ranges for an intermediate tabletop. Its dimensions are
-therefore a reasonable baseline; visual anatomy and trail integration are the
-larger problems.
+At catalog difficulty 0.70, the production tabletop is approximately 0.65 m
+high. Its eased entry joins an 18-degree planar take-off, a 2.49 m deck and a
+longer eased landing. The core profile is approximately 7.3 m long before
+ordinary-trail runout. These intermediate dimensions are deliberately more
+compact than the retired greybox, keep target-speed flight below two seconds
+and expose the jump anatomy in the chase camera. A speed-dependent planned
+landing point stays between the knuckle and exit transition at 3-8 m/s; the
+same profile derives Box2D launch speed and runtime action duration. Outside
+that calibrated range the rider rolls the physical surface without an added
+jump impulse.
 
 The current 7.2 m roller strip reaches only about 0.26 m. Its height is
 credible for an easy roller, but the sampled profile and material bands need

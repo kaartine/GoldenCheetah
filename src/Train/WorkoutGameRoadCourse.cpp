@@ -17,6 +17,7 @@
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameSkinnyGeometry.h"
+#include "WorkoutGameTabletopGeometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -142,6 +143,10 @@ double trailReliefOffset(
 
 double targetHalfWidth(WorkoutGameTerrainKind terrain)
 {
+    if (terrain == WorkoutGameTerrainKind::Tabletop) {
+        return WorkoutGameTabletopGeometry::profile(
+                0.0).socketHalfWidthMeters;
+    }
     return 0.68 * WorkoutGameFeatureCatalog::definition(
             terrain).trailWidthScale;
 }
@@ -208,8 +213,7 @@ double nonPhysicalFeatureOffsetAt(
     for (std::size_t candidate = first; candidate <= last; ++candidate) {
         const WorkoutGameRoadPiece &piece = course.pieces[candidate];
         if (piece.terrain == WorkoutGameTerrainKind::BunnyHop
-                || piece.terrain == WorkoutGameTerrainKind::LogOver
-                || piece.terrain == WorkoutGameTerrainKind::Tabletop) {
+                || piece.terrain == WorkoutGameTerrainKind::LogOver) {
             offset += featureSurfaceOffset(piece, distanceMeters);
         }
     }
@@ -571,6 +575,34 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
         const WorkoutGameFeatureGeometryProfile featureGeometry =
                 WorkoutGameFeatureGeometry::profile(
                     section.terrain, section.difficulty);
+        bool featureFitsSection = true;
+        if (section.terrain == WorkoutGameTerrainKind::Tabletop
+                && featureGeometry.ready) {
+            const WorkoutGameTabletopGeometryProfile tabletop =
+                    WorkoutGameTabletopGeometry::profile(
+                        section.difficulty);
+            featureFitsSection = sectionLength
+                    >= tabletop.splitLeadMeters
+                        + tabletop.minimumBypassLengthMeters;
+            if (featureFitsSection) {
+                const double minimumDecision = sectionStart
+                        + tabletop.splitLeadMeters;
+                const double maximumDecision = sectionStart + sectionLength
+                        - tabletop.minimumBypassLengthMeters;
+                challengeDistance = std::clamp(
+                        challengeDistance - tabletop.splitLeadMeters,
+                        minimumDecision, maximumDecision);
+                obstacleDistance = challengeDistance
+                        + tabletop.splitLeadMeters + 4.0;
+                const double requiredEnd = std::max(
+                        challengeDistance
+                            + tabletop.minimumBypassLengthMeters,
+                        obstacleDistance + tabletop.endMeters
+                            + tabletop.bypassExitRunoutMeters);
+                featureFitsSection = requiredEnd
+                        <= sectionStart + sectionLength + 1e-9;
+            }
+        }
         if (challenge.enabled
                 && section.terrain == WorkoutGameTerrainKind::RockSlab) {
             const WorkoutGameRockSlabGeometryProfile slab =
@@ -705,6 +737,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             const double pieceEnd = piece.startDistanceMeters
                     + piece.lengthMeters;
             const bool ownsChallenge = challenge.enabled
+                    && featureFitsSection
                     && obstacleDistance >= piece.startDistanceMeters
                     && (obstacleDistance < pieceEnd
                         || (part + 1 == pieceCount
@@ -719,7 +752,13 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 const double maximumPreparationMeters = section.terrain
                         == WorkoutGameTerrainKind::BunnyHop ? 3.0 : 6.0;
                 piece.challenge.prepareDistanceMeters =
-                        section.terrain == WorkoutGameTerrainKind::Roots
+                        section.terrain == WorkoutGameTerrainKind::Tabletop
+                    ? std::max(
+                        sectionStart,
+                        challengeDistance
+                            - WorkoutGameTabletopGeometry::profile(
+                                piece.difficulty).splitLeadMeters)
+                    : section.terrain == WorkoutGameTerrainKind::Roots
                             || section.terrain
                                 == WorkoutGameTerrainKind::RockGarden
                             || section.terrain
@@ -768,14 +807,26 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 } else {
                     piece.challenge.bypassStartDistanceMeters =
                             challengeDistance;
-                    constexpr double MinimumBypassLengthMeters = 18.0;
-                    constexpr double BypassExitRunoutMeters = 10.0;
+                    double minimumBypassLengthMeters = 18.0;
+                    double bypassExitRunoutMeters = 10.0;
+                    if (section.terrain
+                            == WorkoutGameTerrainKind::Tabletop) {
+                        const WorkoutGameTabletopGeometryProfile tabletop =
+                                WorkoutGameTabletopGeometry::profile(
+                                    piece.difficulty);
+                        piece.challenge.bypassStartDistanceMeters =
+                                challengeDistance;
+                        minimumBypassLengthMeters =
+                                tabletop.minimumBypassLengthMeters;
+                        bypassExitRunoutMeters =
+                                tabletop.bypassExitRunoutMeters;
+                    }
                     piece.challenge.bypassEndDistanceMeters = std::min(
                             sectionStart + sectionLength,
                             std::max(
-                                featureEnd + BypassExitRunoutMeters,
+                                featureEnd + bypassExitRunoutMeters,
                                 piece.challenge.bypassStartDistanceMeters
-                                    + MinimumBypassLengthMeters));
+                                    + minimumBypassLengthMeters));
                     const double bypassClearance =
                             featureClearanceHalfWidth(section.terrain)
                             + 0.35 + 0.38 + 0.25;

@@ -119,6 +119,46 @@ private slots:
                          profile, 1.05), 3.98));
     }
 
+    void tabletopMoundUsesDirtShouldersInsideTheForestFloor()
+    {
+        WorkoutGameRoadSample road = roadSample();
+        road.terrain = WorkoutGameTerrainKind::Tabletop;
+        const WorkoutGame3DTerrainProfileSnapshot profile =
+                WorkoutGame3DTerrainProfile::build(road, 42.0, 17u);
+
+        QVERIFY(profile.ready);
+        for (std::size_t index : {2u, 3u, 4u, 5u}) {
+            QVERIFY(profile.vertices[index].red
+                    > profile.vertices[index].green);
+        }
+        QVERIFY(profile.vertices.front().green
+                > profile.vertices.front().red);
+        QVERIFY(profile.vertices.back().green
+                > profile.vertices.back().red);
+    }
+
+    void tabletopBypassSurfaceMatchesRenderedSideTerrain()
+    {
+        WorkoutGameRoadSample road = roadSample();
+        road.terrain = WorkoutGameTerrainKind::Tabletop;
+        road.center.elevationMeters = 4.654;
+        road.baseElevationMeters = 4.0;
+        road.surfaceOffsetMeters = 0.654;
+
+        const auto main = WorkoutGame3DTerrainProfile::build(
+                road, 42.0, 17u);
+        QVERIFY(main.ready);
+        const double lateral = 2.08;
+        const double lift = 0.08;
+        const double expected =
+                WorkoutGame3DTerrainProfile::elevationAtLateral(
+                    main, lateral) + lift;
+        QVERIFY(near(
+                WorkoutGame3DTerrainProfile::bypassSurfaceElevationMeters(
+                    road, 42.0, 17u, lateral, lift),
+                expected));
+    }
+
     void usesGlobalDistanceForChunkSocketContinuity()
     {
         const WorkoutGame3DTerrainProfileSnapshot first =

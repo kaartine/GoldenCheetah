@@ -1949,12 +1949,15 @@ void WorkoutGame3DGeometry::buildBypasses(
                 QVector3D normal = QVector3D::crossProduct(forward, right);
                 normal.normalize();
                 const bool tread = vertexIndex == 1 || vertexIndex == 2;
-                const double elevation =
+                const double terrainElevation =
                         WorkoutGame3DTerrainProfile::elevationAtLateral(
-                            terrain, lateral)
-                        + (tread
-                            ? WorkoutGameTrailBranch::treadLiftMeters(pulse)
-                            : WorkoutGameTrailBranch::edgeLiftMeters(pulse));
+                            terrain, lateral);
+                const double elevation = tread
+                    ? WorkoutGame3DTerrainProfile::bypassSurfaceElevationMeters(
+                        sample, distance, course.seed, lateral,
+                        WorkoutGameTrailBranch::treadLiftMeters(pulse))
+                    : terrainElevation
+                        + WorkoutGameTrailBranch::edgeLiftMeters(pulse);
                 const float x = float(sample.center.xMeters
                         + lateral * rightX);
                 const float y = float(elevation);

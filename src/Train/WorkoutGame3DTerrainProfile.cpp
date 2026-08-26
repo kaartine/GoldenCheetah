@@ -87,17 +87,27 @@ WorkoutGame3DTerrainProfileSnapshot WorkoutGame3DTerrainProfile::build(
             (leftRidge - 0.72) / 0.63, 0.0, 1.0));
     const float rightShade = float(std::clamp(
             (rightRidge - 0.72) / 0.63, 0.0, 1.0));
+    const bool dirtMound = road.terrain
+            == WorkoutGameTerrainKind::Tabletop;
+    const float shoulderRed = dirtMound ? 0.42f : 0.25f;
+    const float shoulderGreen = dirtMound ? 0.28f : 0.32f;
+    const float shoulderBlue = dirtMound ? 0.15f : 0.17f;
+    const float seamRed = dirtMound ? 0.50f : 0.36f;
+    const float seamGreen = dirtMound ? 0.32f : 0.29f;
+    const float seamBlue = dirtMound ? 0.16f : 0.15f;
     result.vertices = {{
         vertex(-OuterTerrainMeters, leftOuterElevation,
                0.15f, 0.29f + leftShade * 0.07f, 0.14f),
         vertex(-MidTerrainMeters, leftMidElevation,
                0.18f, 0.34f + leftShade * 0.06f, 0.17f),
         vertex(-(halfWidth + ShoulderWidthMeters), leftShoulderElevation,
-               0.25f, 0.32f, 0.17f),
-        vertex(-halfWidth, leftSeamElevation, 0.36f, 0.29f, 0.15f),
-        vertex(halfWidth, rightSeamElevation, 0.36f, 0.29f, 0.15f),
+               shoulderRed, shoulderGreen, shoulderBlue),
+        vertex(-halfWidth, leftSeamElevation,
+               seamRed, seamGreen, seamBlue),
+        vertex(halfWidth, rightSeamElevation,
+               seamRed, seamGreen, seamBlue),
         vertex(halfWidth + ShoulderWidthMeters, rightShoulderElevation,
-               0.25f, 0.32f, 0.17f),
+               shoulderRed, shoulderGreen, shoulderBlue),
         vertex(MidTerrainMeters, rightMidElevation,
                0.18f, 0.34f + rightShade * 0.06f, 0.17f),
         vertex(OuterTerrainMeters, rightOuterElevation,
@@ -105,6 +115,23 @@ WorkoutGame3DTerrainProfileSnapshot WorkoutGame3DTerrainProfile::build(
     }};
     result.ready = true;
     return result;
+}
+
+double WorkoutGame3DTerrainProfile::bypassSurfaceElevationMeters(
+        const WorkoutGameRoadSample &road,
+        double distanceMeters,
+        std::uint32_t seed,
+        double lateralMeters,
+        double treadLiftMeters)
+{
+    if (!std::isfinite(lateralMeters) || !std::isfinite(treadLiftMeters)) {
+        return 0.0;
+    }
+    const WorkoutGame3DTerrainProfileSnapshot terrain = build(
+            road, distanceMeters, seed);
+    return terrain.ready
+            ? elevationAtLateral(terrain, lateralMeters) + treadLiftMeters
+            : 0.0;
 }
 
 double WorkoutGame3DTerrainProfile::elevationAtLateral(

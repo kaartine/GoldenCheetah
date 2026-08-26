@@ -117,6 +117,6 @@
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
     "reviewedAt": "2026-08-25",
-    "notes": "GLB includes tapered joined terrain and a raised safe-bypass strip. The streamed forest floor closes the underside, so the tile has no visible perimeter skirt. Deterministic Blender and Balsam conversion, Khronos validation, production-qrc rendering and game-scene integration pass. Vertical-slice approval still requires HUD-free silhouette and bypass readability."
+    "notes": "Reproducible audit candidate retained for A/B and asset-pipeline validation. Production no longer places this rigid GLB because its mound and bypass duplicated the canonical procedural road, terrain and Box2D surface. Deterministic Blender and Balsam conversion, Khronos validation and isolated qrc rendering still pass."
   }
 }

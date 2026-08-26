@@ -706,7 +706,7 @@ private slots:
                  profile.heightMeters);
     }
 
-    void tabletopFitsTheGradeTwoReferenceEnvelope()
+    void tabletopFitsTheIntermediateReferenceEnvelope()
     {
         const WorkoutGameFeatureGeometryProfile profile =
                 WorkoutGameFeatureGeometry::profile(
@@ -718,14 +718,15 @@ private slots:
                 - profile.plateauStartMeters;
         const double landingRun = profile.endMeters
                 - profile.plateauEndMeters;
-        QVERIFY(profile.heightMeters <= 0.5 + 1e-9);
+        QVERIFY(profile.heightMeters >= 0.5 - 1e-9);
+        QVERIFY(profile.heightMeters <= 0.75 + 1e-9);
         QVERIFY(takeoffRun >= profile.heightMeters * 3.0);
-        QVERIFY(takeoffRun <= 2.0);
-        QVERIFY(tabletopLength >= 1.0);
+        QVERIFY(takeoffRun <= 2.8);
+        QVERIFY(tabletopLength >= 2.0);
         QVERIFY(tabletopLength <= 3.0);
         QVERIFY(landingRun >= profile.heightMeters * 3.0);
-        QVERIFY(landingRun <= 2.0);
-        QVERIFY(profile.endMeters - profile.startMeters <= 5.0);
+        QVERIFY(landingRun <= 3.2);
+        QVERIFY(profile.endMeters - profile.startMeters <= 8.0);
         const WorkoutGameMesh tabletop = WorkoutGameMeshLibrary::feature(
                 WorkoutGameTerrainKind::Tabletop, 0.7);
         const auto highlightCount = std::count_if(
@@ -750,7 +751,10 @@ private slots:
                 / (linearEnd - linearMiddle);
         QVERIFY(std::abs(firstSlope - secondSlope) < 1e-9);
         constexpr double Pi = 3.14159265358979323846;
-        QVERIFY(std::atan(secondSlope) * 180.0 / Pi <= 15.0 + 1e-9);
+        const double takeoffDegrees =
+                std::atan(secondSlope) * 180.0 / Pi;
+        QVERIFY(takeoffDegrees >= 17.9);
+        QVERIFY(takeoffDegrees <= 18.1);
     }
 
     void dropHasASharpLedgeAndLowerLandingInsteadOfADip()

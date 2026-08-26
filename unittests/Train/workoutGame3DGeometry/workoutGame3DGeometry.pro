@@ -13,6 +13,7 @@ SOURCES += testWorkoutGame3DGeometry.cpp \
 
 HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGameClimbGeometry.h \
+           ../../../src/Train/WorkoutGameTabletopGeometry.h \
            ../../../src/Train/WorkoutGame3DTerrainProfile.h \
            ../../../src/Train/WorkoutGameRoadCourse.h \
            ../../../src/Train/WorkoutGameFeatureCatalog.h \

@@ -67,8 +67,8 @@ bool WorkoutGameSimulation::configure(
             }
         }
     }
-    for (std::size_t index = 0; index < challengeProfiles.size(); ++index) {
-        if (!challengeProfiles[index].enabled) {
+    if (!road.ready) {
+        for (std::size_t index = 0; index < challengeProfiles.size(); ++index) {
             challengeProfiles[index] = WorkoutGameFeatureChallenge::profile(
                     configuredCourse.sections[index]);
         }

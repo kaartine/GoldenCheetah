@@ -22,6 +22,7 @@ SOURCES += testWorkoutGame3DView.cpp \
 
 HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGameClimbGeometry.h \
+           ../../../src/Train/WorkoutGameTabletopGeometry.h \
            ../../../src/Train/WorkoutGame3DFeatureAsset.h \
            ../../../src/Train/WorkoutGame3DTerrainProfile.h \
            ../../../src/Train/WorkoutGame3DViewModel.h \

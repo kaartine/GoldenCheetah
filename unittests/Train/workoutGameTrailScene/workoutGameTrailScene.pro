@@ -4,12 +4,14 @@ CONFIG += c++17
 TARGET = testWorkoutGameTrailScene
 
 SOURCES = testWorkoutGameTrailScene.cpp \
+          ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameTrailScene.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
 
-HEADERS = ../../../src/Train/WorkoutGameCourse.h \
+HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
+          ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameFeatureCatalog.h \
           ../../../src/Train/WorkoutGameFeatureChallenge.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \

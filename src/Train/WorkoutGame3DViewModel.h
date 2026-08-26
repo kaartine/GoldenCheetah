@@ -50,6 +50,8 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(double riderPitch READ riderPitch NOTIFY sceneChanged)
     Q_PROPERTY(double riderRoll READ riderRoll NOTIFY sceneChanged)
     Q_PROPERTY(double riderPump READ riderPump NOTIFY sceneChanged)
+    Q_PROPERTY(double riderAirHeight READ riderAirHeight NOTIFY sceneChanged)
+    Q_PROPERTY(double landingImpact READ landingImpact NOTIFY sceneChanged)
     Q_PROPERTY(double riderStandingBlend READ riderStandingBlend
                NOTIFY sceneChanged)
     Q_PROPERTY(bool riderWalking READ riderWalking NOTIFY sceneChanged)
@@ -161,6 +163,8 @@ public:
     double riderPitch() const { return riderPitchDegrees; }
     double riderRoll() const { return riderRollDegrees; }
     double riderPump() const { return riderPumpMeters; }
+    double riderAirHeight() const { return currentRiderAirHeightMeters; }
+    double landingImpact() const { return currentLandingImpact; }
     double riderStandingBlend() const { return currentRiderStandingBlend; }
     bool riderWalking() const { return currentRiderWalking; }
     double pedalAngle() const { return currentPedalAngle; }
@@ -279,6 +283,8 @@ private:
     double riderRollDegrees = 0.0;
     bool riderPoseInitialized = false;
     double riderPumpMeters = 0.0;
+    double currentRiderAirHeightMeters = 0.0;
+    double currentLandingImpact = 0.0;
     double currentRiderStandingBlend = 0.0;
     bool currentRiderWalking = false;
     bool rootCompressionInitialized = false;

@@ -145,6 +145,21 @@ class TestWorkoutGameSimulation : public QObject
     Q_OBJECT
 
 private slots:
+    void roadOmittedShortTabletopDoesNotRestoreAChallenge()
+    {
+        WorkoutGameCourse course = challengeCourse(
+                WorkoutGameTerrainKind::Tabletop);
+        course.sections.front().lengthMeters = 20.0;
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(course, 200.0));
+
+        const WorkoutGameSimulationSnapshot result = simulation.update(
+                sample(1000, 240.0, 200.0, 90.0));
+        QVERIFY(!result.challenge.enabled);
+        QCOMPARE(result.featureOutcome, WorkoutGameFeatureOutcome::None);
+        QVERIFY(!result.challengeMeasurementActive);
+    }
+
     void invalidCourseCannotBeConfigured()
     {
         WorkoutGameSimulation simulation;

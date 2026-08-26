@@ -74,6 +74,7 @@ struct WorkoutGamePhysicsInput
     std::int64_t workoutTimeMs = 0;
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
     double desiredSpeedMetersPerSecond = 0.0;
+    double courseSpeedMetersPerSecond = -1.0;
     double courseDistanceMeters = -1.0;
     double gradePercent = 0.0;
     double difficulty = 0.0;

@@ -1505,7 +1505,7 @@ private slots:
         QCOMPARE(cadence->property("text").toString(), QStringLiteral("91 RPM"));
     }
 
-    void tabletopAssetUsesAuthoritativeRoadAnchorAndProfile()
+    void tabletopUsesOnlyTheProceduralRoadSurfaceInProduction()
     {
         const WorkoutGameCourse course = catalogCourse(
                 WorkoutGameTerrainKind::Tabletop);
@@ -1520,11 +1520,6 @@ private slots:
                             && candidate.challenge.enabled;
                 });
         QVERIFY(piece != road.pieces.end());
-        const WorkoutGameFeatureGeometryProfile profile =
-                WorkoutGameFeatureGeometry::profile(
-                        piece->terrain, piece->difficulty);
-        QVERIFY(profile.ready);
-
         WorkoutGame3DViewModel viewModel;
         viewModel.setCourse(course, FtpWatts);
         viewModel.setFrame(
@@ -1538,31 +1533,64 @@ private slots:
                 });
         QVERIFY(asset != features.end());
         const QVariantMap values = asset->toMap();
-        const double expectedScaleZ =
-                (profile.endMeters - profile.startMeters) / 4.84;
-        const double expectedStartDistance = std::clamp(
-                piece->challenge.obstacleDistanceMeters
-                    + profile.startMeters - 0.75 * expectedScaleZ,
-                0.0, road.totalLengthMeters);
-        const WorkoutGameRoadSample expected =
-                WorkoutGameRoadCourseBuilder::sample(
-                        road, expectedStartDistance);
-        QVERIFY(expected.ready);
-        QCOMPARE(values.value(QStringLiteral("assetX")).toDouble(),
-                 expected.center.xMeters);
-        QCOMPARE(values.value(QStringLiteral("assetY")).toDouble(),
-                 expected.center.elevationMeters
-                    - expected.nonPhysicalFeatureOffsetMeters);
-        QCOMPARE(values.value(QStringLiteral("assetZ")).toDouble(),
-                 expected.center.zMeters);
-        QCOMPARE(values.value(QStringLiteral("assetScaleY")).toDouble(),
-                 profile.heightMeters / 0.446);
-        QCOMPARE(values.value(QStringLiteral("assetScaleZ")).toDouble(),
-                 expectedScaleZ);
-        QVERIFY(std::isfinite(
-                values.value(QStringLiteral("assetPitch")).toDouble()));
-        QVERIFY(std::isfinite(
-                values.value(QStringLiteral("assetYaw")).toDouble()));
+        QVERIFY(!values.contains(QStringLiteral("assetX")));
+        QVERIFY(!values.contains(QStringLiteral("assetScaleY")));
+        auto *trail = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.trailGeometry());
+        auto *bypass = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.bypassGeometry());
+        QVERIFY(trail && trail->ready());
+        QVERIFY(bypass && bypass->ready());
+    }
+
+    void tabletopPosePreloadsFloatsAndAbsorbsLanding()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const auto tabletop = WorkoutGameTabletopGeometry::profile(
+                piece->difficulty);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        WorkoutGameVisualSnapshot preload = frameAt(
+                road, piece->challenge.obstacleDistanceMeters
+                    + tabletop.lipMeters - 0.45);
+        preload.feature.ready = true;
+        preload.feature.terrain = WorkoutGameTerrainKind::Tabletop;
+        preload.feature.route = WorkoutGameRoute::MainLine;
+        preload.world.terrain = WorkoutGameTerrainKind::Tabletop;
+        for (int index = 0; index < 8; ++index) {
+            preload.simulation.workoutTimeMs = 1000 + index * 80;
+            viewModel.setFrame(preload, 250.0, 240.0, 88, 150, 7);
+        }
+        QVERIFY(viewModel.riderPump() < -0.03);
+
+        WorkoutGameVisualSnapshot airborne = preload;
+        airborne.world.rider.airborne = true;
+        airborne.world.rider.clearanceMeters = 1.82;
+        for (int index = 0; index < 8; ++index) {
+            airborne.simulation.workoutTimeMs = 1800 + index * 80;
+            viewModel.setFrame(airborne, 0.0, 240.0, 0, 150, 7);
+        }
+        QVERIFY(viewModel.riderPump() > 0.02);
+        QCOMPARE(viewModel.riderAirHeight(), 1.0);
+
+        WorkoutGameVisualSnapshot landed = preload;
+        landed.world.landingImpact = 1.0;
+        for (int index = 0; index < 8; ++index) {
+            landed.simulation.workoutTimeMs = 2600 + index * 80;
+            viewModel.setFrame(landed, 0.0, 240.0, 0, 150, 7);
+        }
+        QVERIFY(viewModel.riderPump() < -0.05);
+        QCOMPARE(viewModel.landingImpact(), 1.0);
     }
 
     void packagedTabletopAssetLoadsWithRequiredNodes()
@@ -2047,6 +2075,10 @@ private slots:
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
         QTest::qWait(900);
+        QVERIFY(!window.rootObject()->findChild<QObject *>(
+                QStringLiteral("ROOT_Tabletop")));
+        QVERIFY(window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderGroundShadow")));
 
         const QImage first = window.grabWindow();
         QVERIFY(!first.isNull());
@@ -2279,6 +2311,10 @@ private slots:
                 << int(WorkoutGameTerrainKind::BunnyHop)
                 << QByteArray("GC_WORKOUT_GAME_BUNNY_HOP_LINE_SCREENSHOT_DIR")
                 << QStringLiteral("bunny-hop") << 1.02;
+        QTest::newRow("tabletop")
+                << int(WorkoutGameTerrainKind::Tabletop)
+                << QByteArray("GC_WORKOUT_GAME_TABLETOP_LINE_SCREENSHOT_DIR")
+                << QStringLiteral("tabletop") << 1.32;
         QTest::newRow("drop")
                 << int(WorkoutGameTerrainKind::Drop)
                 << QByteArray("GC_WORKOUT_GAME_DROP_LINE_SCREENSHOT_DIR")
@@ -2318,6 +2354,17 @@ private slots:
         window.setCourse(course, FtpWatts);
 
         WorkoutGameVisualSnapshot main = frameAt(road, distance);
+        main.simulation.challenge = piece->challenge.profile;
+        WorkoutGameFeatureChallengeMetrics mainMetrics;
+        mainMetrics.averageActualWatts = 235.0;
+        mainMetrics.averageTargetWatts = 220.0;
+        mainMetrics.averageEffortRatio = 235.0 / 220.0;
+        mainMetrics.averageCadenceRpm = 92.0;
+        mainMetrics.averageSpeedKph = 22.5;
+        mainMetrics.averageAdherence = 1.0;
+        main.simulation.challengeAssessment =
+                WorkoutGameFeatureChallenge::assess(
+                    main.simulation.challenge, mainMetrics);
         main.feature.ready = true;
         main.feature.terrain = terrain;
         main.feature.route = WorkoutGameRoute::MainLine;
@@ -2333,6 +2380,17 @@ private slots:
         QVERIFY(sampledColorCount(completed) > 35);
 
         WorkoutGameVisualSnapshot bypassed = frameAt(road, distance);
+        bypassed.simulation.challenge = piece->challenge.profile;
+        WorkoutGameFeatureChallengeMetrics bypassMetrics;
+        bypassMetrics.averageActualWatts = 150.0;
+        bypassMetrics.averageTargetWatts = 220.0;
+        bypassMetrics.averageEffortRatio = 150.0 / 220.0;
+        bypassMetrics.averageCadenceRpm = 72.0;
+        bypassMetrics.averageSpeedKph = 22.5;
+        bypassMetrics.averageAdherence = 150.0 / 220.0;
+        bypassed.simulation.challengeAssessment =
+                WorkoutGameFeatureChallenge::assess(
+                    bypassed.simulation.challenge, bypassMetrics);
         bypassed.feature.ready = true;
         bypassed.feature.terrain = terrain;
         bypassed.feature.route = WorkoutGameRoute::SafeBypass;
@@ -2434,6 +2492,9 @@ private slots:
         QTest::newRow("bunny-hop")
                 << int(WorkoutGameTerrainKind::BunnyHop)
                 << QByteArray("GC_WORKOUT_GAME_BUNNY_HOP_VIDEO_DIR") << 0.43;
+        QTest::newRow("tabletop")
+                << int(WorkoutGameTerrainKind::Tabletop)
+                << QByteArray("GC_WORKOUT_GAME_TABLETOP_VIDEO_DIR") << 1.80;
         QTest::newRow("drop")
                 << int(WorkoutGameTerrainKind::Drop)
                 << QByteArray("GC_WORKOUT_GAME_DROP_VIDEO_DIR") << 1.10;
@@ -3350,15 +3411,18 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
         window.setCourse(course, FtpWatts);
         constexpr int FrameCount = 72;
-        const bool physicalDrop = terrain == WorkoutGameTerrainKind::Drop;
+        const bool physicalWorld = terrain == WorkoutGameTerrainKind::Drop
+                || terrain == WorkoutGameTerrainKind::Tabletop;
         const double start = std::max(
-                0.0, physicalDrop
+                0.0, terrain == WorkoutGameTerrainKind::Drop
                     ? piece->challenge.obstacleDistanceMeters - 3.0
                     : piece->challenge.bypassStartDistanceMeters - 2.0);
         const double end = std::min(
-                road.totalLengthMeters, physicalDrop
+                road.totalLengthMeters,
+                terrain == WorkoutGameTerrainKind::Drop
                     ? piece->challenge.obstacleDistanceMeters + 5.0
                     : piece->challenge.bypassEndDistanceMeters + 2.0);
+        constexpr double SpeedMetersPerSecond = 22.5 / 3.6;
 
         for (WorkoutGameRoute route : {
                  WorkoutGameRoute::MainLine,
@@ -3370,8 +3434,8 @@ private slots:
                     : QStringLiteral("completed");
             const QString directory = QDir(outputRoot).filePath(scenario);
             QVERIFY(QDir().mkpath(directory));
-            WorkoutGamePhysics dropPhysics;
-            if (physicalDrop) QVERIFY(dropPhysics.configure(road));
+            WorkoutGamePhysics physics;
+            if (physicalWorld) QVERIFY(physics.configure(road));
             QImage previous;
             int changedFrames = 0;
             double largestAirMeters = 0.0;
@@ -3388,24 +3452,43 @@ private slots:
                         ? WorkoutGameFeatureOutcome::Bypassed
                         : WorkoutGameFeatureOutcome::Completed;
                 frame.simulation.speedKph = 22.5;
+                frame.simulation.challenge = piece->challenge.profile;
+                WorkoutGameFeatureChallengeMetrics metrics;
+                metrics.averageActualWatts = safe ? 150.0 : 235.0;
+                metrics.averageTargetWatts = 220.0;
+                metrics.averageEffortRatio = metrics.averageActualWatts
+                        / metrics.averageTargetWatts;
+                metrics.averageCadenceRpm = safe ? 72.0 : 92.0;
+                metrics.averageSpeedKph = 22.5;
+                metrics.averageAdherence = safe
+                        ? metrics.averageEffortRatio : 1.0;
+                frame.simulation.challengeAssessment =
+                        WorkoutGameFeatureChallenge::assess(
+                            frame.simulation.challenge, metrics);
                 frame.feature = runtime.update(frame.simulation);
-                if (physicalDrop) {
+                if (physicalWorld) {
                     WorkoutGamePhysicsInput input;
-                    input.workoutTimeMs = frameIndex * 20;
+                    input.workoutTimeMs = std::int64_t(std::llround(
+                            (distance - start) / SpeedMetersPerSecond
+                                * 1000.0));
                     input.courseDistanceMeters = distance;
                     input.terrain = terrain;
-                    input.desiredSpeedMetersPerSecond = 22.5 / 3.6;
+                    input.desiredSpeedMetersPerSecond =
+                            SpeedMetersPerSecond;
                     input.effortRatio = safe ? 0.5 : 1.0;
                     input.forceGroundFollowing = safe;
-                    frame.world = dropPhysics.update(input);
+                    input.jumpRequested = !safe
+                            && frame.feature.triggerJump;
+                    input.featureActionId = frame.feature.actionId;
+                    frame.world = physics.update(input);
                     QVERIFY(frame.world.ready);
                 }
-                const double air = physicalDrop
+                const double air = physicalWorld
                         ? (frame.world.rider.airborne
                             ? frame.world.rider.airHeightMeters() : 0.0)
                         : frame.feature.verticalOffsetMeters;
                 largestAirMeters = std::max(largestAirMeters, air);
-                if (!physicalDrop) {
+                if (!physicalWorld) {
                     frame.world.rider.clearanceMeters = 0.82 + air;
                     frame.world.rider.airborne = air > 0.01;
                     frame.world.rider.pitchDegrees = frame.feature.pitchDegrees;

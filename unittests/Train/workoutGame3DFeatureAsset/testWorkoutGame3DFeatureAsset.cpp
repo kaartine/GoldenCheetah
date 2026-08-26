@@ -70,23 +70,14 @@ private slots:
                      course, challengePiece(course)).ready);
     }
 
-    void placesTabletopFromItsAuthoritativeProfile()
+    void leavesTabletopSurfaceToTheProceduralRoadGeometry()
     {
         const WorkoutGameRoadCourse course = courseWith(
                 WorkoutGameTerrainKind::Tabletop, 0.7);
         const WorkoutGameRoadPiece &piece = challengePiece(course);
         const WorkoutGame3DFeatureAssetSnapshot asset =
                 WorkoutGame3DFeatureAsset::place(course, piece);
-        const WorkoutGameFeatureGeometryProfile profile =
-                WorkoutGameFeatureGeometry::profile(
-                    piece.terrain, piece.difficulty);
-
-        QVERIFY(asset.ready);
-        QCOMPARE(asset.terrain, WorkoutGameTerrainKind::Tabletop);
-        QVERIFY(std::abs(asset.scaleY - profile.heightMeters / 0.446) < 1e-12);
-        QVERIFY(std::abs(asset.scaleZ
-                         - (profile.endMeters - profile.startMeters) / 4.84)
-                < 1e-12);
+        QVERIFY(!asset.ready);
     }
 
     void placesLogSocketTileAroundThePhysicalObstacle()

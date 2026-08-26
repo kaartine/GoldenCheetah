@@ -10,6 +10,17 @@ SOURCES = testWorkoutGame3DFeatureAsset.cpp \
 
 HEADERS = ../../../src/Train/WorkoutGame3DFeatureAsset.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
-          ../../../src/Train/WorkoutGameFeatureGeometry.h
+          ../../../src/Train/WorkoutGameFeatureGeometry.h \
+          ../../../src/Train/WorkoutGameTabletopGeometry.h
 
 include(../../unittests.pri)
+
+sanitize:!msvc {
+    QMAKE_CFLAGS += -fsanitize=address,undefined \
+                    -fno-omit-frame-pointer \
+                    -fno-sanitize-recover=all
+    QMAKE_CXXFLAGS += -fsanitize=address,undefined \
+                      -fno-omit-frame-pointer \
+                      -fno-sanitize-recover=all
+    QMAKE_LFLAGS += -fsanitize=address,undefined
+}

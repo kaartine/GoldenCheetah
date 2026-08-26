@@ -12,6 +12,7 @@ SOURCES = testWorkoutGameMesh.cpp \
 
 HEADERS = ../../../src/Train/WorkoutGameMesh.h \
           ../../../src/Train/WorkoutGameClimbGeometry.h \
+          ../../../src/Train/WorkoutGameTabletopGeometry.h \
           ../../../src/Train/WorkoutGameForestFloor.h \
           ../../../src/Train/WorkoutGameOcclusion.h \
           ../../../src/Train/WorkoutGameRootGeometry.h \

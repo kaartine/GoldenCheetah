@@ -40,6 +40,12 @@ public:
             const WorkoutGameRoadSample &road,
             double distanceMeters,
             std::uint32_t seed);
+    static double bypassSurfaceElevationMeters(
+            const WorkoutGameRoadSample &road,
+            double distanceMeters,
+            std::uint32_t seed,
+            double lateralMeters,
+            double treadLiftMeters);
     static double elevationAtLateral(
             const WorkoutGame3DTerrainProfileSnapshot &profile,
             double lateralMeters);

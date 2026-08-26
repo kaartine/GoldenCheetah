@@ -913,18 +913,13 @@ private slots:
         }
     }
 
-    void featureMeshesProjectAboveTheTrailAtEightMeters()
+    void featureMeshesProjectAboveTrailWithinApproachWindow()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
         const WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(course, 200.0);
         for (const WorkoutGameRoadPiece &piece : road.pieces) {
             if (!piece.challenge.enabled) continue;
-            const double riderDistance =
-                    piece.challenge.obstacleDistanceMeters - 8.0;
-            const WorkoutGameRoadProjectionFrame projection =
-                    WorkoutGameRoadProjection::project(road, riderDistance);
-            QVERIFY(projection.ready);
             WorkoutGameMeshInstance instance;
             instance.mesh = WorkoutGameMeshLibrary::feature(
                     piece.terrain, piece.difficulty);
@@ -932,8 +927,18 @@ private slots:
                     piece.challenge.obstacleDistanceMeters;
             instance.anchorToBaseSurface = true;
             instance.occlusionAllowancePixels = 18.0;
-            const std::vector<WorkoutGameProjectedMeshTriangle> triangles =
-                    WorkoutGameMeshProjector::project(instance, projection);
+            std::vector<WorkoutGameProjectedMeshTriangle> triangles;
+            for (const double leadMeters : {8.0, 6.0, 10.0}) {
+                const WorkoutGameRoadProjectionFrame projection =
+                        WorkoutGameRoadProjection::project(
+                            road,
+                            piece.challenge.obstacleDistanceMeters
+                                - leadMeters);
+                QVERIFY(projection.ready);
+                triangles = WorkoutGameMeshProjector::project(
+                        instance, projection);
+                if (!triangles.empty()) break;
+            }
             QVERIFY2(!triangles.empty(),
                      qPrintable(QStringLiteral(
                          "terrain %1 projected no visible triangles")

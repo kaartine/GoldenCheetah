@@ -4,6 +4,7 @@ CONFIG += c++17
 TARGET = testWorkoutGameRunner
 
 SOURCES = testWorkoutGameRunner.cpp \
+          ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
           ../../../src/Train/WorkoutGameClock.cpp \
           ../../../src/Train/WorkoutGameCompetition.cpp \
           ../../../src/Train/WorkoutGameEngine.cpp \
@@ -17,7 +18,8 @@ SOURCES = testWorkoutGameRunner.cpp \
           ../../../src/Train/WorkoutGameVisualSmoother.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
 
-HEADERS = ../../../src/Train/WorkoutGameClock.h \
+HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
+          ../../../src/Train/WorkoutGameClock.h \
           ../../../src/Train/WorkoutGameEngine.h \
           ../../../src/Train/WorkoutGameRunner.h
 
