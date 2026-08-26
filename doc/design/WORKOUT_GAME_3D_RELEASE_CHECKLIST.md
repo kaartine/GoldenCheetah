@@ -1007,6 +1007,11 @@ The repository-hosted `ci.yml` workflow is tracked separately as CI
 infrastructure debt and is not an acceptance gate for this private-use release.
 The release evidence below must come from the controlled local and remote
 build/test environments even when that historical workflow remains red.
+As of 2026-08-27, the GitHub Actions API reports 398 workflow runs, including
+77 successful runs; the newest success was 2026-08-06 at `fa650a8`. None of the
+newest 100 runs succeeded. This long-running baseline failure is not evidence
+of a regression in an individual Workout Game change, but it remains visible
+CI debt rather than being treated as a passing gate.
 
 - [x] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
 - [x] `REL-02` Verify stop/save/cancel/continue and accidental-stop recovery.
@@ -1144,5 +1149,11 @@ changes were observed with a maximum `0.089 km/h` speed step. It advanced
 791.356 m with no gear mismatch, backward frame, skipped simulation tick or
 unexpected airtime. Local and remote stable pointers now resolve to this image;
 both previous pointers retain the verified `556f27a` image.
+
+The packaging regression suite also passed in full from clean repository head
+`d18ddaf` in the Jammy/Qt 6.8.3 release container after anchoring the hardened
+30-second AppImage smoke timeout in the immutable workflow policy. These later
+commits change release tooling, tests and documentation only, so the promoted
+application binary remains the reproducible `127af78` artifact above.
 
 The build is not a release candidate while any P0 task remains open.
