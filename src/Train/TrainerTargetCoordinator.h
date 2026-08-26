@@ -27,6 +27,8 @@ enum class TrainerTargetMode {
     Slope
 };
 
+const char *trainerTargetModeTraceName(TrainerTargetMode mode);
+
 struct TrainerTarget
 {
     static TrainerTarget erg(double load, double workoutPosition);

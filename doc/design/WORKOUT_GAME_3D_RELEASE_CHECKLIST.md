@@ -280,6 +280,14 @@ state. The catalog contact sheet SHA-256 is
 - [ ] Verify trainer target, recording and feature outcome agree.
 - [x] Measure target-laptop frame time and simulation skipped ticks.
 
+**Real-trainer gate:**
+`unittests/Gui/preReleaseUi/run-real-trainer-acceptance.sh` creates a fresh,
+isolated athlete profile and retains a copy of its raw recording without
+opening production athlete data. With `GC_WORKOUT_GAME_TRACE=1`, dispatch logs
+contain only mode, target, workout position and active-device count. The
+analyzer aligns those records with game telemetry and CSV samples and rejects
+target, power, cadence, heart-rate, virtual-gear or feature-decision drift.
+
 **Done when:** one tabletop workout can be ridden, understood, saved and
 replayed without a visual, physics, recording or performance release blocker.
 

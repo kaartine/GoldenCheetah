@@ -2996,6 +2996,19 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             Stop(DEVICE_OK);
             return false;
         }
+        static const bool traceWorkoutGameTargets =
+                qEnvironmentVariableIntValue("GC_WORKOUT_GAME_TRACE") != 0;
+        if (traceWorkoutGameTargets) {
+            QString traceLine;
+            QTextStream stream(&traceLine);
+            stream << "workout-game-trainer-target"
+                   << " mode=" << trainerTargetModeTraceName(target.mode)
+                   << " value=" << target.value
+                   << " wind=" << target.windResistance
+                   << " workout_pos=" << target.workoutPosition
+                   << " devices=" << targetDevices.size();
+            qInfo().noquote() << traceLine;
+        }
     }
 
     if (generatedCourseTargetWatts >= 0.0) {

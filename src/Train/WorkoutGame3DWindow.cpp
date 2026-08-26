@@ -48,6 +48,36 @@ const char *routeName(WorkoutGameRoute route)
     return route == WorkoutGameRoute::SafeBypass ? "bypass" : "main";
 }
 
+const char *featureOutcomeName(WorkoutGameFeatureOutcome outcome)
+{
+    switch (outcome) {
+    case WorkoutGameFeatureOutcome::None: return "none";
+    case WorkoutGameFeatureOutcome::Active: return "active";
+    case WorkoutGameFeatureOutcome::Completed: return "completed";
+    case WorkoutGameFeatureOutcome::Bypassed: return "bypassed";
+    }
+    return "none";
+}
+
+const char *terrainName(WorkoutGameTerrainKind terrain)
+{
+    switch (terrain) {
+    case WorkoutGameTerrainKind::SmoothTrail: return "smooth-trail";
+    case WorkoutGameTerrainKind::Roots: return "roots";
+    case WorkoutGameTerrainKind::Rollers: return "rollers";
+    case WorkoutGameTerrainKind::Climb: return "climb";
+    case WorkoutGameTerrainKind::RockGarden: return "rock-garden";
+    case WorkoutGameTerrainKind::BunnyHop: return "bunny-hop";
+    case WorkoutGameTerrainKind::Drop: return "drop";
+    case WorkoutGameTerrainKind::Skinny: return "skinny";
+    case WorkoutGameTerrainKind::Berm: return "berm";
+    case WorkoutGameTerrainKind::LogOver: return "log-over";
+    case WorkoutGameTerrainKind::Tabletop: return "tabletop";
+    case WorkoutGameTerrainKind::RockSlab: return "rock-slab";
+    }
+    return "smooth-trail";
+}
+
 }
 
 WorkoutGame3DWindow::WorkoutGame3DWindow(
@@ -329,6 +359,10 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
                 << publishedDiagnostics.longPresentationWorkCount
            << " feature_phase="
                 << featurePhaseName(presentedFrame.feature.phase)
+           << " feature_outcome="
+                << featureOutcomeName(presentedFrame.feature.outcome)
+           << " feature_terrain="
+                << terrainName(presentedFrame.feature.terrain)
            << " route=" << routeName(presentedFrame.feature.route)
            << " readiness=" << presentedFrame.feature.readiness
            << " action_distance_m="

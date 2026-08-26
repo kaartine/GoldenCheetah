@@ -135,6 +135,16 @@ private slots:
                  TrainerTargetResult::Applied);
         QCOMPARE(device.calls, QStringList({QStringLiteral("load:210")}));
     }
+
+    void traceModeNamesAreStable()
+    {
+        QCOMPARE(QString::fromLatin1(
+                         trainerTargetModeTraceName(TrainerTargetMode::Erg)),
+                 QStringLiteral("erg"));
+        QCOMPARE(QString::fromLatin1(
+                         trainerTargetModeTraceName(TrainerTargetMode::Slope)),
+                 QStringLiteral("slope"));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestTrainerTargetCoordinator)

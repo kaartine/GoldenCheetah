@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import bisect
+import csv
 import json
 import math
 from pathlib import Path
@@ -16,7 +18,14 @@ TRACE_MARKERS = (
     "workout-game-trace ",
     "workout-game-3d-trace ",
 )
+TRAINER_TARGET_MARKER = "workout-game-trainer-target "
 FIELD = re.compile(r"([a-z][a-z0-9_]*)=([^\s]+)")
+RECORDING_COLUMNS = (
+    "secs", "cad", "hr", "km", "watts", "slope", "target", "virtualgear",
+)
+
+TraceValue = float | str
+TraceSample = dict[str, TraceValue]
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -27,7 +36,17 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[max(0, index)]
 
 
-def parse_trace(path: Path) -> list[dict[str, float]]:
+def parse_fields(text: str) -> TraceSample:
+    fields: TraceSample = {}
+    for name, value in FIELD.findall(text):
+        try:
+            fields[name] = float(value)
+        except ValueError:
+            fields[name] = value
+    return fields
+
+
+def parse_trace(path: Path) -> list[TraceSample]:
     samples = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         match = next(
@@ -41,27 +60,232 @@ def parse_trace(path: Path) -> list[dict[str, float]]:
         if match is None:
             continue
         offset, marker = match
-        fields: dict[str, float] = {}
-        for name, value in FIELD.findall(line[offset + len(marker) :]):
-            try:
-                fields[name] = float(value)
-            except ValueError:
-                pass
+        fields = parse_fields(line[offset + len(marker) :])
         if fields:
             samples.append(fields)
     return samples
 
 
-def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
-    frame_ms = [sample["frame_ms"] for sample in samples if sample.get("frame_ms", 0) > 0]
-    fps = [sample["fps"] for sample in samples if sample.get("fps", 0) > 0]
-    reported_p95 = [sample["p95_frame_ms"] for sample in samples if sample.get("p95_frame_ms", 0) > 0]
-    reported_max = [sample["max_frame_ms"] for sample in samples if sample.get("max_frame_ms", 0) > 0]
-    distances = [sample["render_road_m"] for sample in samples if "render_road_m" in sample]
-    target_watts = [sample["target_watts"] for sample in samples if sample.get("target_watts", 0) > 0]
-    lateral_offsets = [
-        sample["lateral_m"] for sample in samples if "lateral_m" in sample
-    ]
+def parse_trainer_targets(path: Path) -> list[TraceSample]:
+    targets = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        offset = line.find(TRAINER_TARGET_MARKER)
+        if offset < 0:
+            continue
+        fields = parse_fields(line[offset + len(TRAINER_TARGET_MARKER) :])
+        if fields:
+            targets.append(fields)
+    return targets
+
+
+def parse_recording(path: Path) -> list[dict[str, float]]:
+    samples: list[dict[str, float]] = []
+    with path.open(newline="", encoding="utf-8-sig") as stream:
+        reader = csv.DictReader(stream, skipinitialspace=True)
+        available = {name.strip() for name in (reader.fieldnames or []) if name}
+        missing = sorted(set(RECORDING_COLUMNS) - available)
+        if missing:
+            raise ValueError(
+                "recording is missing required columns: " + ", ".join(missing)
+            )
+        previous_secs = -math.inf
+        for line_number, row in enumerate(reader, start=2):
+            normalized = {
+                (name.strip() if name else name): value
+                for name, value in row.items()
+            }
+            sample: dict[str, float] = {}
+            for name in RECORDING_COLUMNS:
+                raw = normalized.get(name)
+                try:
+                    value = float(raw) if raw is not None else math.nan
+                except ValueError as error:
+                    raise ValueError(
+                        f"recording line {line_number} has invalid {name}"
+                    ) from error
+                if not math.isfinite(value):
+                    raise ValueError(
+                        f"recording line {line_number} has non-finite {name}"
+                    )
+                sample[name] = value
+            if sample["secs"] <= previous_secs:
+                raise ValueError("recording time must be strictly increasing")
+            previous_secs = sample["secs"]
+            samples.append(sample)
+    return samples
+
+
+def numeric(sample: TraceSample, name: str) -> float | None:
+    value = sample.get(name)
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        return float(value)
+    return None
+
+
+def nearest_by(
+    samples: list[dict[str, float]] | list[TraceSample],
+    values: list[float],
+    position: float,
+):
+    if not samples:
+        return None
+    index = bisect.bisect_left(values, position)
+    candidates = [candidate for candidate in (index - 1, index)
+                  if 0 <= candidate < len(samples)]
+    if not candidates:
+        return None
+    return samples[min(candidates, key=lambda candidate: abs(
+        values[candidate] - position
+    ))]
+
+
+def reconcile_acceptance(
+    trace: list[TraceSample],
+    trainer_targets: list[TraceSample],
+    recording: list[dict[str, float]],
+) -> dict[str, float | int]:
+    timed_trace = sorted(
+        (sample for sample in trace if numeric(sample, "source_ms") is not None),
+        key=lambda sample: numeric(sample, "source_ms") or 0.0,
+    )
+    trace_times = [numeric(sample, "source_ms") or 0.0 for sample in timed_trace]
+    power_deltas = []
+    cadence_deltas = []
+    heart_rate_deltas = []
+    gear_mismatches = 0
+    matched_recordings = 0
+    for row in recording:
+        sample = nearest_by(timed_trace, trace_times, row["secs"] * 1000.0)
+        if sample is None:
+            continue
+        source_ms = numeric(sample, "source_ms")
+        if source_ms is None or abs(source_ms - row["secs"] * 1000.0) > 750.0:
+            continue
+        values = {
+            "watts": numeric(sample, "watts"),
+            "cadence": numeric(sample, "cadence"),
+            "hr": numeric(sample, "hr"),
+            "gear": numeric(sample, "gear"),
+        }
+        if any(value is None for value in values.values()):
+            continue
+        matched_recordings += 1
+        power_deltas.append(abs(values["watts"] - row["watts"]))
+        cadence_deltas.append(abs(values["cadence"] - row["cad"]))
+        heart_rate_deltas.append(abs(values["hr"] - row["hr"]))
+        gear_mismatches += int(round(values["gear"]) != round(row["virtualgear"]))
+
+    recording_times = [row["secs"] * 1000.0 for row in recording]
+    recording_distances = [row["km"] * 1000.0 for row in recording]
+    trainer_target_deltas = []
+    trainer_targets_with_devices = 0
+    for target in trainer_targets:
+        mode = target.get("mode")
+        position = numeric(target, "workout_pos")
+        value = numeric(target, "value")
+        devices = numeric(target, "devices")
+        if mode not in ("erg", "slope") or position is None or value is None:
+            continue
+        trainer_targets_with_devices += int(devices is not None and devices > 0)
+        positions = recording_times if mode == "erg" else recording_distances
+        row = nearest_by(recording, positions, position)
+        if row is not None:
+            expected = row["target"] if mode == "erg" else row["slope"]
+            trainer_target_deltas.append(abs(value - expected))
+
+    decisions: dict[int, TraceSample] = {}
+    for sample in trace:
+        outcome = sample.get("feature_outcome")
+        action_id = numeric(sample, "action_id")
+        if outcome in ("completed", "bypassed") and action_id is not None:
+            decisions[int(action_id)] = sample
+    inconsistent_decisions = 0
+    for sample in decisions.values():
+        outcome = sample.get("feature_outcome")
+        route = sample.get("route")
+        terrain = str(sample.get(
+            "feature_terrain", sample.get("feature_geometry", "")
+        ))
+        readiness = numeric(sample, "readiness")
+        if readiness is None:
+            inconsistent_decisions += 1
+        elif outcome == "completed" and (route != "main" or readiness < 0.999):
+            inconsistent_decisions += 1
+        elif outcome == "bypassed" and readiness >= 0.999:
+            inconsistent_decisions += 1
+        elif (outcome == "bypassed" and route != "bypass"
+              and terrain not in ("rollers", "climb")):
+            inconsistent_decisions += 1
+
+    return {
+        "recording_samples": len(recording),
+        "matched_recording_samples": matched_recordings,
+        "recording_match_ratio": (
+            matched_recordings / len(recording) if recording else 0.0
+        ),
+        "maximum_power_delta_watts": max(power_deltas, default=0.0),
+        "maximum_cadence_delta_rpm": max(cadence_deltas, default=0.0),
+        "maximum_heart_rate_delta_bpm": max(heart_rate_deltas, default=0.0),
+        "gear_mismatches": gear_mismatches,
+        "trainer_target_dispatches": len(trainer_targets),
+        "trainer_targets_with_devices": trainer_targets_with_devices,
+        "maximum_trainer_target_delta": max(trainer_target_deltas, default=0.0),
+        "feature_decisions": len(decisions),
+        "inconsistent_feature_decisions": inconsistent_decisions,
+    }
+
+
+def validate_acceptance(
+    summary: dict[str, float | int],
+    minimum_recording_matches: int,
+    minimum_recording_match_ratio: float,
+    maximum_power_delta_watts: float,
+    maximum_cadence_delta_rpm: float,
+    maximum_heart_rate_delta_bpm: float,
+    maximum_gear_mismatches: int,
+    maximum_trainer_target_delta: float,
+    minimum_trainer_target_dispatches: int,
+    minimum_feature_decisions: int,
+) -> list[str]:
+    failures = []
+    if summary["matched_recording_samples"] < minimum_recording_matches:
+        failures.append("too few recording samples matched the game trace")
+    if summary["recording_match_ratio"] < minimum_recording_match_ratio:
+        failures.append("recording-to-trace match ratio is too low")
+    if summary["maximum_power_delta_watts"] > maximum_power_delta_watts:
+        failures.append("recorded power disagrees with game telemetry")
+    if summary["maximum_cadence_delta_rpm"] > maximum_cadence_delta_rpm:
+        failures.append("recorded cadence disagrees with game telemetry")
+    if summary["maximum_heart_rate_delta_bpm"] > maximum_heart_rate_delta_bpm:
+        failures.append("recorded heart rate disagrees with game telemetry")
+    if summary["gear_mismatches"] > maximum_gear_mismatches:
+        failures.append("recorded virtual gear disagrees with game telemetry")
+    if summary["trainer_target_dispatches"] < minimum_trainer_target_dispatches:
+        failures.append("too few trainer target dispatches were traced")
+    if summary["trainer_targets_with_devices"] < minimum_trainer_target_dispatches:
+        failures.append("trainer targets were dispatched without active devices")
+    if summary["maximum_trainer_target_delta"] > maximum_trainer_target_delta:
+        failures.append("trainer target disagrees with the recording")
+    if summary["feature_decisions"] < minimum_feature_decisions:
+        failures.append("too few feature decisions were observed")
+    if summary["inconsistent_feature_decisions"]:
+        failures.append("feature decision disagrees with readiness or route")
+    return failures
+
+
+def analyze(samples: list[TraceSample]) -> dict[str, float | int]:
+    def values(name: str, positive: bool = False) -> list[float]:
+        result = [value for sample in samples
+                  if (value := numeric(sample, name)) is not None]
+        return [value for value in result if value > 0.0] if positive else result
+
+    frame_ms = values("frame_ms", positive=True)
+    fps = values("fps", positive=True)
+    reported_p95 = values("p95_frame_ms", positive=True)
+    reported_max = values("max_frame_ms", positive=True)
+    distances = values("render_road_m")
+    target_watts = values("target_watts", positive=True)
+    lateral_offsets = values("lateral_m")
     trace_regressions = sum(
         1 for previous, current in zip(distances, distances[1:])
         if current < previous - 1e-6
@@ -79,15 +303,14 @@ def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
         ),
         "reported_max_frame_ms": max(reported_max, default=0.0),
         "backward_frames": int(max(
-            (sample.get("backwards", 0) for sample in samples), default=0
+            values("backwards"), default=0
         )),
         "trace_regressions": trace_regressions,
         "skipped_simulation_ticks": int(max(
-            (sample.get("skipped_ticks", 0) for sample in samples), default=0
+            values("skipped_ticks"), default=0
         )),
         "unexpected_airborne_frames": int(max(
-            (sample.get("unexpected_airborne_frames", 0) for sample in samples),
-            default=0,
+            values("unexpected_airborne_frames"), default=0,
         )),
         "distance_advanced_m": max(0.0, distances[-1] - distances[0])
             if len(distances) >= 2 else 0.0,
@@ -163,6 +386,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("log", type=Path)
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--recording", type=Path)
     parser.add_argument("--minimum-samples", type=int, default=8)
     parser.add_argument("--minimum-fps", type=float, default=25.0)
     parser.add_argument("--maximum-p95-ms", type=float, default=45.0)
@@ -174,9 +398,25 @@ def main() -> int:
         "--maximum-unexpected-airborne-frames", type=int, default=0
     )
     parser.add_argument("--maximum-lateral-step-m", type=float, default=1.0)
+    parser.add_argument("--minimum-recording-matches", type=int, default=5)
+    parser.add_argument(
+        "--minimum-recording-match-ratio", type=float, default=0.75
+    )
+    parser.add_argument("--maximum-power-delta-watts", type=float, default=20.0)
+    parser.add_argument("--maximum-cadence-delta-rpm", type=float, default=10.0)
+    parser.add_argument(
+        "--maximum-heart-rate-delta-bpm", type=float, default=10.0
+    )
+    parser.add_argument("--maximum-gear-mismatches", type=int, default=1)
+    parser.add_argument("--maximum-trainer-target-delta", type=float, default=5.0)
+    parser.add_argument(
+        "--minimum-trainer-target-dispatches", type=int, default=1
+    )
+    parser.add_argument("--minimum-feature-decisions", type=int, default=1)
     args = parser.parse_args()
 
-    summary = analyze(parse_trace(args.log))
+    trace = parse_trace(args.log)
+    summary = analyze(trace)
     failures = validate(
         summary,
         args.minimum_samples,
@@ -189,6 +429,25 @@ def main() -> int:
         args.maximum_unexpected_airborne_frames,
         args.maximum_lateral_step_m,
     )
+    if args.recording:
+        acceptance = reconcile_acceptance(
+            trace,
+            parse_trainer_targets(args.log),
+            parse_recording(args.recording),
+        )
+        summary.update(acceptance)
+        failures.extend(validate_acceptance(
+            acceptance,
+            args.minimum_recording_matches,
+            args.minimum_recording_match_ratio,
+            args.maximum_power_delta_watts,
+            args.maximum_cadence_delta_rpm,
+            args.maximum_heart_rate_delta_bpm,
+            args.maximum_gear_mismatches,
+            args.maximum_trainer_target_delta,
+            args.minimum_trainer_target_dispatches,
+            args.minimum_feature_decisions,
+        ))
     summary["passed"] = not failures
     summary["failures"] = failures
     rendered = json.dumps(summary, indent=2, sort_keys=True)

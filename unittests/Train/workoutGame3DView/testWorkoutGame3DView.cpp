@@ -988,7 +988,9 @@ private slots:
         window.resize(960, 540);
         WorkoutGameVisualSnapshot initial = frameAt(road, 18.0);
         initial.feature.ready = true;
+        initial.feature.terrain = WorkoutGameTerrainKind::BunnyHop;
         initial.feature.phase = WorkoutGameFeaturePhase::Measure;
+        initial.feature.outcome = WorkoutGameFeatureOutcome::Active;
         initial.feature.route = WorkoutGameRoute::MainLine;
         initial.feature.readiness = 0.73;
         initial.feature.distanceToObstacleMeters = 4.5;
@@ -1033,6 +1035,8 @@ private slots:
         QVERIFY(trace.contains(QStringLiteral("geometry_queue=")));
         QVERIFY(trace.contains(QStringLiteral("presentation_work_ms=")));
         QVERIFY(trace.contains(QStringLiteral("feature_phase=measure")));
+        QVERIFY(trace.contains(QStringLiteral("feature_outcome=active")));
+        QVERIFY(trace.contains(QStringLiteral("feature_terrain=bunny-hop")));
         QVERIFY(trace.contains(QStringLiteral("route=main")));
         QVERIFY(trace.contains(QStringLiteral("readiness=0.73")));
         QVERIFY(trace.contains(QStringLiteral("action_distance_m=4.5")));

@@ -15,6 +15,15 @@ constexpr double WorkoutFinishedTarget = -100.0;
 
 }
 
+const char *trainerTargetModeTraceName(TrainerTargetMode mode)
+{
+    switch (mode) {
+    case TrainerTargetMode::Erg: return "erg";
+    case TrainerTargetMode::Slope: return "slope";
+    }
+    return "unknown";
+}
+
 TrainerTarget TrainerTarget::erg(double load, double workoutPosition)
 {
     TrainerTarget target;

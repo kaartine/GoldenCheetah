@@ -90,3 +90,22 @@ Required Linux packages are `Xvfb`, `dbus-run-session`, `gdbus`, Python 3,
 PyGObject AT-SPI bindings (`python3-pyatspi`) and Python Xlib
 (`python3-xlib`). The AppImage is run with extraction mode so FUSE is not a
 test prerequisite.
+
+## Isolated real-trainer acceptance
+
+The final trainer gate is interactive, but it still uses a generated athlete
+library and does not open normal athlete data. Run it from the target desktop:
+
+```bash
+unittests/Gui/preReleaseUi/run-real-trainer-acceptance.sh \
+  /path/to/GoldenCheetah.AppImage /tmp/gc-real-trainer-acceptance
+```
+
+Add or select the real trainer in the opened profile, select the prepared
+workout and Workout Game, then ride through at least one feature. The runner
+keeps an evidence copy of the raw recording even if the session is discarded.
+After GoldenCheetah closes, it verifies that rendered power, cadence, heart
+rate and virtual gear agree with the recording, that the dispatched ERG/slope
+target agrees with the corresponding recording field, and that feature
+outcome, readiness and route agree. The report is written to
+`workout-game-trainer-summary.json`; logs contain no device names or addresses.

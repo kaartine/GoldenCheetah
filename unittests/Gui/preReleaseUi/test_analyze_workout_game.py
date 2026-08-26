@@ -374,7 +374,9 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             path.write_text(
                 "[info] workout-game-3d-trace frame=12 frame_ms=16 "
                 "fps=61.2 render_road_m=18.5 target_watts=220 "
-                "lateral_m=0.2 unexpected_airborne_frames=0\n",
+                "lateral_m=0.2 unexpected_airborne_frames=0 "
+                "feature_phase=recovery feature_outcome=completed "
+                "route=main feature_geometry=jump\n",
                 encoding="utf-8",
             )
 
@@ -384,6 +386,215 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertEqual(samples[0]["frame"], 12)
             self.assertEqual(samples[0]["target_watts"], 220)
             self.assertEqual(samples[0]["lateral_m"], 0.2)
+            self.assertEqual(samples[0]["feature_phase"], "recovery")
+            self.assertEqual(samples[0]["feature_outcome"], "completed")
+            self.assertEqual(samples[0]["route"], "main")
+
+    def test_malformed_numeric_trace_field_does_not_break_analysis(self):
+        samples = [{
+            "frame_ms": "unavailable",
+            "fps": 60.0,
+            "render_road_m": 12.0,
+            "feature_phase": "approach",
+        }]
+
+        summary = ANALYZER.analyze(samples)
+
+        self.assertEqual(summary["samples"], 1)
+        self.assertEqual(summary["median_fps"], 60.0)
+        self.assertEqual(summary["median_frame_ms"], 0.0)
+
+    def test_parses_anonymous_trainer_target_dispatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app.log"
+            path.write_text(
+                "[info] workout-game-trainer-target mode=slope value=4.25 "
+                "wind=0.31 workout_pos=125.5 devices=1\n",
+                encoding="utf-8",
+            )
+
+            targets = ANALYZER.parse_trainer_targets(path)
+
+            self.assertEqual(targets, [{
+                "mode": "slope",
+                "value": 4.25,
+                "wind": 0.31,
+                "workout_pos": 125.5,
+                "devices": 1.0,
+            }])
+
+    def test_reconciles_trace_trainer_target_and_recording(self):
+        trace = [
+            {
+                "source_ms": float(index * 1000),
+                "watts": 210.0 + index,
+                "cadence": 84.0 + index,
+                "hr": 140.0 + index,
+                "gear": 7.0,
+                "action_id": 19.0,
+                "feature_outcome": "completed",
+                "feature_phase": "recovery",
+                "route": "main",
+                "readiness": 1.0,
+                "feature_terrain": "bunny-hop",
+            }
+            for index in range(3)
+        ]
+        recording = [
+            {
+                "secs": float(index),
+                "cad": 84.0 + index,
+                "hr": 140.0 + index,
+                "km": index * 0.01,
+                "watts": 210.0 + index,
+                "slope": 4.0 + index,
+                "target": 220.0,
+                "virtualgear": 7.0,
+            }
+            for index in range(3)
+        ]
+        targets = [
+            {
+                "mode": "slope",
+                "value": 4.0 + index,
+                "workout_pos": index * 10.0,
+                "devices": 1.0,
+            }
+            for index in range(3)
+        ]
+
+        summary = ANALYZER.reconcile_acceptance(trace, targets, recording)
+
+        self.assertEqual(summary["matched_recording_samples"], 3)
+        self.assertEqual(summary["trainer_target_dispatches"], 3)
+        self.assertEqual(summary["feature_decisions"], 1)
+        self.assertEqual(
+            ANALYZER.validate_acceptance(
+                summary,
+                minimum_recording_matches=3,
+                minimum_recording_match_ratio=1.0,
+                maximum_power_delta_watts=1.0,
+                maximum_cadence_delta_rpm=1.0,
+                maximum_heart_rate_delta_bpm=1.0,
+                maximum_gear_mismatches=0,
+                maximum_trainer_target_delta=0.01,
+                minimum_trainer_target_dispatches=3,
+                minimum_feature_decisions=1,
+            ),
+            [],
+        )
+
+    def test_rejects_recording_and_feature_outcome_disagreement(self):
+        trace = [{
+            "source_ms": 1000.0,
+            "watts": 250.0,
+            "cadence": 90.0,
+            "hr": 150.0,
+            "gear": 8.0,
+            "action_id": 20.0,
+            "feature_outcome": "completed",
+            "feature_phase": "recovery",
+            "route": "bypass",
+            "readiness": 0.4,
+            "feature_terrain": "tabletop",
+        }]
+        recording = [{
+            "secs": 1.0,
+            "cad": 70.0,
+            "hr": 120.0,
+            "km": 0.02,
+            "watts": 180.0,
+            "slope": 2.0,
+            "target": 200.0,
+            "virtualgear": 3.0,
+        }]
+        targets = [{
+            "mode": "slope",
+            "value": 8.0,
+            "workout_pos": 20.0,
+            "devices": 1.0,
+        }]
+
+        summary = ANALYZER.reconcile_acceptance(trace, targets, recording)
+        failures = ANALYZER.validate_acceptance(
+            summary,
+            minimum_recording_matches=1,
+            minimum_recording_match_ratio=1.0,
+            maximum_power_delta_watts=5.0,
+            maximum_cadence_delta_rpm=5.0,
+            maximum_heart_rate_delta_bpm=5.0,
+            maximum_gear_mismatches=0,
+            maximum_trainer_target_delta=0.1,
+            minimum_trainer_target_dispatches=1,
+            minimum_feature_decisions=1,
+        )
+
+        self.assertTrue(any("power" in failure for failure in failures))
+        self.assertTrue(any("trainer target" in failure for failure in failures))
+        self.assertTrue(any("feature decision" in failure for failure in failures))
+
+    def test_erg_target_is_aligned_by_workout_time(self):
+        recording = [{
+            "secs": 2.0,
+            "cad": 80.0,
+            "hr": 140.0,
+            "km": 0.01,
+            "watts": 220.0,
+            "slope": 0.0,
+            "target": 225.0,
+            "virtualgear": 5.0,
+        }]
+        targets = [{
+            "mode": "erg",
+            "value": 225.0,
+            "workout_pos": 2000.0,
+            "devices": 1.0,
+        }]
+
+        summary = ANALYZER.reconcile_acceptance([], targets, recording)
+
+        self.assertEqual(summary["maximum_trainer_target_delta"], 0.0)
+
+    def test_missed_climb_keeps_main_route_without_inconsistency(self):
+        trace = [{
+            "action_id": 21.0,
+            "feature_outcome": "bypassed",
+            "feature_terrain": "climb",
+            "route": "main",
+            "readiness": 0.6,
+        }]
+
+        summary = ANALYZER.reconcile_acceptance(trace, [], [])
+
+        self.assertEqual(summary["feature_decisions"], 1)
+        self.assertEqual(summary["inconsistent_feature_decisions"], 0)
+
+    def test_recording_parser_accepts_spaced_header_and_trailing_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recording.csv"
+            path.write_text(
+                "secs, cad, hr, km, watts, slope, target, virtualgear\n"
+                "1,80,140,0.01,200,3,210,5,\n",
+                encoding="utf-8",
+            )
+
+            samples = ANALYZER.parse_recording(path)
+
+            self.assertEqual(samples[0]["secs"], 1.0)
+            self.assertEqual(samples[0]["virtualgear"], 5.0)
+
+    def test_recording_parser_rejects_non_monotonic_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recording.csv"
+            path.write_text(
+                "secs,cad,hr,km,kph,watts,slope,target,virtualgear\n"
+                "2,80,140,0.01,20,200,3,210,5\n"
+                "1,81,141,0.02,21,201,4,211,5\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "strictly increasing"):
+                ANALYZER.parse_recording(path)
 
     def test_accepts_fractional_target_near_test_ftp(self):
         summary = ANALYZER.analyze(
