@@ -417,7 +417,7 @@ class UiDriver:
         combo = self.combo_with_items(expected)
         self.click(combo)
         item = self.find_combo_item(combo, name, timeout)
-        self.click(item)
+        self.activate(item)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.name(combo) == name or self.selected(item):

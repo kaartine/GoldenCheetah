@@ -58,6 +58,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         driver = object.__new__(UI.UiDriver)
         driver.combo_with_items = mock.Mock(return_value=combo)
         driver.click = mock.Mock()
+        driver.activate = mock.Mock()
         driver.find_combo_item = mock.Mock(return_value=item)
         driver.name = mock.Mock(return_value="Workout Game")
         driver.selected = mock.Mock(return_value=True)
@@ -69,7 +70,8 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
 
         self.assertIs(selected, combo)
-        self.assertEqual(driver.click.call_args_list, [mock.call(combo), mock.call(item)])
+        driver.click.assert_called_once_with(combo)
+        driver.activate.assert_called_once_with(item)
 
     def test_combo_selection_uses_its_own_item_instead_of_global_duplicate(self):
         combo = object()
@@ -77,6 +79,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         driver = object.__new__(UI.UiDriver)
         driver.combo_with_items = mock.Mock(return_value=combo)
         driver.click = mock.Mock()
+        driver.activate = mock.Mock()
         driver.find = mock.Mock(
             side_effect=AssertionError("global item lookup is ambiguous")
         )
@@ -101,10 +104,8 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
 
         self.assertIs(selected, combo)
-        self.assertEqual(
-            driver.click.call_args_list,
-            [mock.call(combo), mock.call(own_item)],
-        )
+        driver.click.assert_called_once_with(combo)
+        driver.activate.assert_called_once_with(own_item)
         driver.find.assert_not_called()
 
     def test_prepare_anchors_a_usable_workout_library(self):
