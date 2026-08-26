@@ -1054,6 +1054,65 @@ private slots:
         QCOMPARE(viewModel.riderPump(), 0.0);
     }
 
+    void authoredRiderWheelsAndDrivetrainFollowDistanceAndCadence()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::SmoothTrail);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 8.0), 190.0, 190.0, 86, 148, 6);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QCoreApplication::processEvents();
+
+        QObject *rearWheel = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("rearWheelPivot"));
+        QObject *frontWheel = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("frontWheelPivot"));
+        QObject *crank = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("crankPivot"));
+        QObject *lowerLeg = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("leftLowerLeg"));
+        QVERIFY(rearWheel);
+        QVERIFY(frontWheel);
+        QVERIFY(crank);
+        QVERIFY(lowerLeg);
+        const QVector3D firstRear =
+                rearWheel->property("eulerRotation").value<QVector3D>();
+        const QVector3D firstFront =
+                frontWheel->property("eulerRotation").value<QVector3D>();
+        const QVector3D firstCrank =
+                crank->property("eulerRotation").value<QVector3D>();
+        const QVector3D firstLeg =
+                lowerLeg->property("eulerRotation").value<QVector3D>();
+
+        viewModel.setFrame(frameAt(road, 9.0), 190.0, 190.0, 86, 148, 6);
+        QCoreApplication::processEvents();
+        const QVector3D secondRear =
+                rearWheel->property("eulerRotation").value<QVector3D>();
+        const QVector3D secondFront =
+                frontWheel->property("eulerRotation").value<QVector3D>();
+        const QVector3D secondCrank =
+                crank->property("eulerRotation").value<QVector3D>();
+        const QVector3D secondLeg =
+                lowerLeg->property("eulerRotation").value<QVector3D>();
+        QVERIFY(std::abs(secondRear.x() - firstRear.x()) > 1.0);
+        QCOMPARE(secondRear.x(), secondFront.x());
+        QCOMPARE(firstRear.x(), firstFront.x());
+        QVERIFY(std::abs(secondCrank.x() - firstCrank.x()) > 1.0);
+        QVERIFY((secondLeg - firstLeg).length() > 0.5f);
+    }
+
     void rootsUseFilteredSuspensionMotionWithoutCameraVibration()
     {
         const WorkoutGameCourse course = catalogCourse(

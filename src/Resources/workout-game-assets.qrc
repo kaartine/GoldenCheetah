@@ -8,5 +8,15 @@
         <file alias="qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh</file>
         <file alias="qml/assets/Wg_Drop_Greybox.qml">../Train/qml/assets/Wg_Drop_Greybox.qml</file>
         <file alias="qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh</file>
+        <file alias="qml/WorkoutGameRiderBike.qml">../Train/qml/WorkoutGameRiderBike.qml</file>
+        <file alias="qml/assets/meshes/geo_Crank_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_Frame_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Frame_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_Head_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Head_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_Limb_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Limb_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_Shadow_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Shadow_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_Torso_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Torso_LOD0_mesh.mesh</file>
     </qresource>
 </RCC>

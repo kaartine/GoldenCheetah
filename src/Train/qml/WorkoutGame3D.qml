@@ -52,30 +52,6 @@ Item {
             lookAtNode: cameraTarget
         }
 
-        Model {
-            objectName: "riderGroundShadow"
-            source: "#Sphere"
-            position: Qt.vector3d(
-                workoutGame3D.riderX,
-                workoutGame3D.groundY + 0.025,
-                workoutGame3D.riderZ)
-            scale: Qt.vector3d(
-                0.010 * Math.max(0.45,
-                    1.0 - workoutGame3D.riderAirHeight * 0.55),
-                0.00018,
-                0.016 * Math.max(0.45,
-                    1.0 - workoutGame3D.riderAirHeight * 0.55))
-            opacity: Math.max(0.18,
-                0.48 - workoutGame3D.riderAirHeight * 0.28)
-            materials: PrincipledMaterial {
-                baseColor: "#141817"
-                roughness: 1
-                alphaMode: PrincipledMaterial.Blend
-            }
-            castsShadows: false
-            receivesShadows: false
-        }
-
         Node {
             id: cameraTarget
             position: Qt.vector3d(
@@ -310,157 +286,21 @@ Item {
             }
         }
 
-        Node {
+        WorkoutGameRiderBike {
             id: rider
-            objectName: "riderNode"
             position: Qt.vector3d(
                 workoutGame3D.riderX,
                 workoutGame3D.riderY,
                 workoutGame3D.riderZ)
-            eulerRotation: Qt.vector3d(
-                workoutGame3D.riderPitch,
-                workoutGame3D.riderYaw,
-                workoutGame3D.riderRoll)
-
-            Node {
-                z: -0.52
-                y: 0.40
-                eulerRotation.x: workoutGame3D.pedalAngle * 2.6
-                Model {
-                    source: "#Cylinder"
-                    eulerRotation.z: 90
-                    scale: Qt.vector3d(0.0065, 0.00065, 0.0065)
-                    materials: PrincipledMaterial {
-                        baseColor: "#202326"
-                        metalness: 0.1
-                        roughness: 0.65
-                    }
-                }
-            }
-            Node {
-                z: 0.52
-                y: 0.40
-                eulerRotation.x: workoutGame3D.pedalAngle * 2.6
-                Model {
-                    source: "#Cylinder"
-                    eulerRotation.z: 90
-                    scale: Qt.vector3d(0.0065, 0.00065, 0.0065)
-                    materials: PrincipledMaterial {
-                        baseColor: "#202326"
-                        metalness: 0.1
-                        roughness: 0.65
-                    }
-                }
-            }
-            Model {
-                source: "#Cube"
-                y: 0.48
-                z: -0.26
-                scale: Qt.vector3d(0.0007, 0.0007, 0.0054)
-                eulerRotation.x: -16
-                materials: PrincipledMaterial {
-                    baseColor: "#e0b52f"
-                    metalness: 0.35
-                    roughness: 0.5
-                }
-            }
-            Model {
-                source: "#Cube"
-                y: 0.75
-                z: -0.06
-                scale: Qt.vector3d(0.0007, 0.0007, 0.0042)
-                eulerRotation.x: -107
-                materials: PrincipledMaterial {
-                    baseColor: "#e0b52f"
-                    metalness: 0.35
-                    roughness: 0.5
-                }
-            }
-            Model {
-                source: "#Cube"
-                y: 0.94
-                z: 0.13
-                scale: Qt.vector3d(0.0007, 0.0007, 0.0050)
-                eulerRotation.x: 2
-                materials: PrincipledMaterial {
-                    baseColor: "#e0b52f"
-                    metalness: 0.35
-                    roughness: 0.5
-                }
-            }
-            Model {
-                source: "#Cube"
-                y: 0.74
-                z: 0.19
-                scale: Qt.vector3d(0.0007, 0.0007, 0.0054)
-                eulerRotation.x: -45
-                materials: PrincipledMaterial {
-                    baseColor: "#e0b52f"
-                    metalness: 0.35
-                    roughness: 0.5
-                }
-            }
-            Model {
-                source: "#Cube"
-                y: 0.67
-                z: 0.45
-                scale: Qt.vector3d(0.0007, 0.0007, 0.0055)
-                eulerRotation.x: 75
-                materials: PrincipledMaterial {
-                    baseColor: "#d8d9d2"
-                    metalness: 0.65
-                    roughness: 0.35
-                }
-            }
-            Model {
-                source: "#Cube"
-                y: 0.99
-                z: -0.13
-                scale: Qt.vector3d(0.0023, 0.00035, 0.0010)
-                materials: PrincipledMaterial {
-                    baseColor: "#242729"
-                    roughness: 0.8
-                }
-            }
-            Model {
-                source: "#Cube"
-                y: 0.96
-                z: 0.41
-                scale: Qt.vector3d(0.0038, 0.00035, 0.00045)
-                materials: PrincipledMaterial {
-                    baseColor: "#242729"
-                    metalness: 0.55
-                    roughness: 0.45
-                }
-            }
-            Node {
-                id: riderBody
-                objectName: "riderBodyNode"
-                y: 1.23 + workoutGame3D.riderPump
-                   + 0.14 * workoutGame3D.riderStandingBlend
-                   - (workoutGame3D.riderWalking ? 0.10 : 0)
-                z: -0.03 + 0.12 * workoutGame3D.riderStandingBlend
-                eulerRotation.x: 12
-                    + 8 * workoutGame3D.riderStandingBlend
-                    - (workoutGame3D.riderWalking ? 5 : 0)
-                Model {
-                    source: "#Cylinder"
-                    scale: Qt.vector3d(0.0033, 0.0062, 0.0033)
-                    materials: PrincipledMaterial {
-                        baseColor: "#cf3e35"
-                        roughness: 0.85
-                    }
-                }
-                Model {
-                    source: "#Sphere"
-                    y: 0.55
-                    scale: Qt.vector3d(0.0026, 0.0029, 0.0026)
-                    materials: PrincipledMaterial {
-                        baseColor: "#f0c49b"
-                        roughness: 0.9
-                    }
-                }
-            }
+            distanceMeters: workoutGame3D.distanceMeters
+            pedalAngle: workoutGame3D.pedalAngle
+            airHeight: workoutGame3D.riderAirHeight
+            pump: workoutGame3D.riderPump
+            standingBlend: workoutGame3D.riderStandingBlend
+            walking: workoutGame3D.riderWalking
+            riderPitch: workoutGame3D.riderPitch
+            riderYaw: workoutGame3D.riderYaw
+            riderRoll: workoutGame3D.riderRoll
         }
     }
 

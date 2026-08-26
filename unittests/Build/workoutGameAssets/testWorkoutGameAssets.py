@@ -50,6 +50,14 @@ DROP_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_Drop_Greybox.glb"
 )
+RIDER_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/RB-01-rider-bike.json"
+)
+RIDER_GLB_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generated/WG_RiderBike.glb"
+)
 
 
 def sha256(path: Path) -> str:
@@ -96,6 +104,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "FT-02-log-over-greybox",
                 "FT-03-bunny-hop-greybox",
                 "FT-04-drop-greybox",
+                "RB-01-rider-bike",
             ],
         )
 
@@ -258,6 +267,39 @@ class TestWorkoutGameAssets(unittest.TestCase):
             manifest["technical"]["sockets"][1]["positionMeters"],
             [0.0, 0.0, 22.0],
         )
+
+    def test_rider_bike_has_29er_dimensions_named_pivots_and_no_primitives(self) -> None:
+        document, size = assets.read_glb(RIDER_GLB_PATH)
+        manifest = assets.load_json_file(RIDER_MANIFEST_PATH)
+        assets.validate_glb_document(document, size, manifest)
+
+        nodes = {node["name"]: node for node in document["nodes"]}
+        required_pivots = {
+            "PIVOT_REAR_AXLE",
+            "PIVOT_FRONT_AXLE",
+            "PIVOT_CRANK",
+            "PIVOT_STEER",
+            "PIVOT_PELVIS",
+            "PIVOT_CAMERA_TARGET",
+            "PIVOT_SHADOW",
+        }
+        self.assertTrue(required_pivots.issubset(nodes))
+        self.assertAlmostEqual(
+            nodes["PIVOT_FRONT_AXLE"]["translation"][2]
+            - nodes["PIVOT_REAR_AXLE"]["translation"][2],
+            1.16,
+            places=5,
+        )
+        self.assertAlmostEqual(
+            nodes["PIVOT_REAR_AXLE"]["translation"][1], 0.3683, places=4
+        )
+        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 1400)
+
+        runtime_qml = (
+            REPOSITORY / "src/Train/qml/WorkoutGameRiderBike.qml"
+        ).read_text(encoding="utf-8")
+        for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
+            self.assertNotIn(primitive, runtime_qml)
 
     def test_malformed_glb_structure_fails_cleanly(self) -> None:
         document, size = assets.read_glb(GLB_PATH)

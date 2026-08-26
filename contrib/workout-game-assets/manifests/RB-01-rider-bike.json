@@ -1,0 +1,158 @@
+{
+  "assetId": "RB-01-rider-bike",
+  "displayName": "Workout Game Rider And 29er MTB",
+  "role": "rider-bike",
+  "source": {
+    "kind": "project-authored",
+    "provider": "GoldenCheetah",
+    "author": "GoldenCheetah contributors",
+    "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_rider_bike.py",
+    "retrievedAt": "2026-08-26",
+    "originalFileName": "generate_rider_bike.py",
+    "originalSha256": "c25cbeeb96230312b2ccd05a714dbb893d44611d8512696f2b9fff956f573d90",
+    "generator": "Blender",
+    "generatorVersion": "4.0.2",
+    "promptOrScript": "contrib/workout-game-assets/blender/generate_rider_bike.py"
+  },
+  "license": {
+    "spdxId": "GPL-2.0-or-later",
+    "licenseUrl": "https://www.gnu.org/licenses/old-licenses/gpl-2.0.html",
+    "attribution": "GoldenCheetah contributors",
+    "modificationAllowed": true,
+    "redistributionAllowed": true,
+    "decision": "allow",
+    "policyVersion": "2026-08-25",
+    "archivedLicensePath": "COPYING",
+    "distributionScopes": [
+      "source",
+      "appimage",
+      "screenshots-video"
+    ],
+    "conditions": [],
+    "reviewNotes": "Project-authored deterministic geometry with no external model, image or texture."
+  },
+  "files": [
+    {
+      "path": "contrib/workout-game-assets/blender/generate_rider_bike.py",
+      "purpose": "source",
+      "sha256": "c25cbeeb96230312b2ccd05a714dbb893d44611d8512696f2b9fff956f573d90"
+    },
+    {
+      "path": "contrib/workout-game-assets/generated/WG_RiderBike.glb",
+      "purpose": "intermediate",
+      "sha256": "c0e61b03fd0025376550c42be503137a16c864a71e6880ace5ff62e08e3cade7"
+    },
+    {
+      "path": "src/Train/qml/WorkoutGameRiderBike.qml",
+      "purpose": "runtime",
+      "sha256": "16c68896cdaa4f3d194937c9101e5c6bf92520e13059123ae4875fea72f9f966"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "d6a59e755e65022b4741fa309d195c07b85f1c72df63808e129f1b21811fd38d"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Frame_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "fe0a37b7c11ef0aade020fb49269a48222c0cef01ff0b26cb76f46c467ba888e"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "c62a2d6c1ad3ff73fe2d88c3d9e304fe0326f425ebe7a85180415a0edce1dc45"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Head_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "4f5c428e8136bdd73d69ecede905d613ed93fce36b32a141658815be5728dde9"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "f0be337d1bc99f09e3889808e328f701eb92060856f9c19227d5aa97c2cabcfe"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Limb_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "a7c2f862a27bb3aa68a543ac2bef82266ea4d7e50649b16adec34ba690eabd52"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "5c8071d07f6139dd5a9ba6f4c6c4049f15938b4d4c55558918dbc56d0a32dfd1"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Shadow_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "c1d8b86bb61c2d0c1d4de3e60c5d4139b4582c43c82e7309f8fe5e5e0bc288f4"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Torso_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "e45e8ca58f610a8e829ad13463dbd5d4089b05a181a91351d53744cbda0d9518"
+    }
+  ],
+  "processing": {
+    "tool": "Blender and Qt Balsam",
+    "toolVersion": "Blender 4.0.2; Qt Balsam 6.8.3",
+    "steps": [
+      "Start Blender with --background --factory-startup.",
+      "Run generate_rider_bike.py with its dimension, pivot, topology and budget checks.",
+      "Export glTF 2.0 GLB with opaque materials, extras and no cameras, lights, textures or animations.",
+      "Validate with the repository GLB policy and reproduce the GLB byte for byte.",
+      "Convert the reviewed GLB twice with Qt Balsam 6.8.3 and compare every output byte.",
+      "Bind the converted meshes to the deterministic runtime pose properties in WorkoutGameRiderBike.qml."
+    ]
+  },
+  "technical": {
+    "format": "glb",
+    "unitMeters": 1.0,
+    "upAxis": "+Y",
+    "forwardAxis": "+Z",
+    "glbBytes": 39384,
+    "trianglesLod0": 636,
+    "materials": 6,
+    "textureBytes": 0,
+    "nodes": [
+      "GEO_Crank_LOD0",
+      "GEO_Frame_LOD0",
+      "GEO_FrontWheel_LOD0",
+      "GEO_Head_LOD0",
+      "GEO_Helmet_LOD0",
+      "GEO_Limb_LOD0",
+      "GEO_RearWheel_LOD0",
+      "GEO_Shadow_LOD0",
+      "GEO_Torso_LOD0",
+      "PIVOT_CAMERA_TARGET",
+      "PIVOT_CRANK",
+      "PIVOT_FRONT_AXLE",
+      "PIVOT_PELVIS",
+      "PIVOT_REAR_AXLE",
+      "PIVOT_SHADOW",
+      "PIVOT_STEER",
+      "ROOT_RiderBike"
+    ],
+    "animations": [],
+    "allowedExtensions": [],
+    "boundsMeters": {
+      "minimum": [-0.41999998688697815, -0.14000000059604645, -0.9483000040054321],
+      "maximum": [0.41999998688697815, 1.0116506814956665, 0.9483000040054321]
+    },
+    "budgets": {
+      "maxGlbBytes": 65536,
+      "maxTrianglesLod0": 1400,
+      "maxMaterials": 8,
+      "maxTextureBytes": 0
+    }
+  },
+  "review": {
+    "status": "approved",
+    "trademarkStatus": "not-applicable",
+    "personReleaseStatus": "not-applicable",
+    "propertyReleaseStatus": "not-applicable",
+    "reviewer": "GoldenCheetah engineering audit",
+    "reviewedAt": "2026-08-26",
+    "notes": "Approved project-authored low-poly rider and 29er bicycle base asset. Deterministic Blender and Balsam reproduction, policy validation, integrated X11/OpenGL rendering, wheel/crank/leg transform tests and a 72-frame completed tabletop motion review passed. Pixel-texture art and additional action clips remain separate integration tasks."
+  }
+}

@@ -4,8 +4,24 @@ This directory contains deterministic Blender source generators for custom
 Workout Game assets. `generate_tabletop.py` creates the first stylized
 low-poly tabletop socket tile, `generate_log_over.py` creates a socketed,
 partly buried log-over tile, `generate_bunny_hop.py` creates a compact
-practice hurdle, and `generate_drop.py` creates a faceted drop face. None of
-the generators downloads or embeds external assets.
+practice hurdle, `generate_drop.py` creates a faceted drop face, and
+`generate_rider_bike.py` creates the articulated low-poly rider and 29er MTB
+mesh set. None of the generators downloads or embeds external assets.
+
+## Rider-bike contract
+
+- The bicycle has a `0.7366 m` outside wheel diameter and `1.16 m` wheelbase.
+- Rear axle, front axle, crank, steering, pelvis, camera-target and shadow
+  pivots are named in the GLB. The runtime QML uses those same measured values.
+- Frame, wheels, crank, torso, head, helmet, reusable limb and contact-shadow
+  meshes are separate. Runtime wheel rotation follows distance while crank and
+  leg motion follow the authoritative pedal-cycle value.
+- The complete source asset has 636 triangles, six opaque flat-color materials,
+  no texture payload and no external source. The runtime component adds only a
+  bounded translucent contact-shadow material.
+- Blender validates topology, applied transforms, dimensions, pivots and the
+  1,400-triangle budget before export. Asset-policy tests additionally reject
+  built-in Quick 3D primitives in the final rider component.
 
 ## Drop contract
 

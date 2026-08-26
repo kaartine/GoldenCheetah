@@ -95,9 +95,9 @@ pixel-level clear-color hole checks.
 ### `PIPE-01` Approve asset rights and provenance
 
 - [x] Complete allow/conditional/reject license policy.
-- [ ] Record exact source, author, license/version, attribution and hashes.
+- [x] Record exact source, author, license/version, attribution and hashes.
 - [x] Reject NC, ND, editorial, personal-use, marketplace-only and unclear use.
-- [ ] Record all modification and conversion steps.
+- [x] Record all modification and conversion steps.
 
 **Tests:** validate every manifest against
 `workout_game_asset_manifest.schema.json`; fail packaging for missing,
@@ -125,8 +125,9 @@ reviewed source asset without a developer machine path.
 - [x] Complete the rider/bike, trail, terrain, feature, environment, effects,
   collision, camera and LOD inventory.
 - [x] Research reusable models and document license decisions.
-- [ ] Adapt suitable models while preserving their provenance.
-- [ ] Custom-author every gameplay-defining socket, silhouette and pivot.
+- [x] Select project-authored models instead of unsuitable external adaptations
+  and preserve their provenance.
+- [x] Custom-author every gameplay-defining socket, silhouette and pivot.
 
 **Tests:** deterministic catalog, asset-manifest validation, Blender/export
 reproducibility and AppImage packaging.
@@ -231,8 +232,8 @@ the bypass rider remains grounded. The completed and bypassed 960 by 540,
 
 ### `VS-03` Integrate rider and bike
 
-- [ ] Select/adapt or author a low-poly 29-inch MTB and articulated rider.
-- [ ] Correct forward orientation, wheelbase, axle, crank and steering pivots.
+- [x] Select/adapt or author a low-poly 29-inch MTB and articulated rider.
+- [x] Correct forward orientation, wheelbase, axle, crank and steering pivots.
 - [ ] Add high-contrast pixel-textured materials and a ground-fixed shadow.
 - [ ] Add pedal, coast, preload, air, land, absorb, lean and bypass clips.
 
@@ -241,6 +242,19 @@ contact, no root motion, animation bounds and catalog/video captures.
 
 **Done when:** pedalling, take-off, air and landing are readable at the normal
 camera distance and the bicycle never appears to travel sideways.
+
+**Current evidence:** the project-authored `RB-01` source produces separate
+frame, 29-inch wheels, crank, torso, head, helmet, limb and contact-shadow
+meshes with named axle, crank, steering, pelvis, camera and shadow pivots. Its
+`0.7366 m` wheel diameter, `1.16 m` wheelbase, 636 triangles and six source
+materials are manifest-validated. Two clean Blender 4.0.2 exports and two Qt
+Balsam 6.8.3 conversions are byte-identical. Runtime wheel rotation follows
+distance, while crank and articulated leg transforms follow pedal cycles;
+standing, walking, terrain pump, root pitch/roll and ground-fixed airborne
+shadow use the existing authoritative ViewModel values. The asset-policy suite
+rejects final rider QML containing built-in cube, cylinder, cone or sphere
+meshes. Flat high-contrast materials are present, but a coherent pixel-texture
+pass and the complete authored action-clip set remain open.
 
 ### `VS-04` Validate the vertical slice end to end
 

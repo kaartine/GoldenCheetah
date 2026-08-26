@@ -118,7 +118,7 @@ targets, feature decisions, or trainer resistance.
 - [x] `SRC-01` Rank reusable rider and MTB models.
 - [x] `SRC-02` Rank reusable vegetation, terrain and natural prop packs.
 - [x] `SRC-03` Search each technical feature and identify custom-model gaps.
-- [ ] `SRC-04` Record candidate assets in a machine-readable manifest.
+- [x] `SRC-04` Record accepted runtime assets in machine-readable manifests.
 - [ ] `ART-01` Approve one shared low-poly/pixel-textured art brief.
 
 ### Phase 2: Pipeline And Camera
