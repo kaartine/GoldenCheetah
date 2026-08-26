@@ -558,6 +558,41 @@ class UiDriver:
             time.sleep(0.1)
         raise UiFailure(f"Workout was not saved: {path}")
 
+    def wait_new_file(
+        self, directory: Path, existing: set[Path], pattern: str, timeout=8.0
+    ) -> Path:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            candidates = {
+                path for path in directory.glob(pattern)
+                if path.is_file() and path.stat().st_size > 0
+            } - existing
+            if len(candidates) == 1:
+                return candidates.pop()
+            if len(candidates) > 1:
+                raise UiFailure(
+                    f"Expected one new {pattern} file in {directory}, "
+                    f"found {len(candidates)}"
+                )
+            time.sleep(0.1)
+        raise UiFailure(f"No new {pattern} file appeared in {directory}")
+
+    def wait_file_growth(self, path: Path, initial_size: int, timeout=8.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if path.is_file() and path.stat().st_size > initial_size:
+                return
+            time.sleep(0.1)
+        raise UiFailure(f"Recording did not resume: {path}")
+
+    def wait_file_removed(self, path: Path, timeout=8.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not path.exists():
+                return
+            time.sleep(0.1)
+        raise UiFailure(f"Discarded recording still exists: {path}")
+
 
 class Suite:
     def __init__(self, driver: UiDriver, artifacts: Path):
@@ -798,23 +833,61 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
         def stop_continue():
             enter_train()
             driver.select_named("Manual Erg Mode")
+            records = root / "library" / ATHLETE / "records"
+            existing_records = set(records.glob("*.csv"))
             start = driver.find(
                 "Start or pause training", "push button", showing=True
             )
             driver.activate(start)
-            time.sleep(1.5)
-            driver.activate(driver.find("Stop training", "push button", showing=True))
+            recording = driver.wait_new_file(
+                records, existing_records, "*.csv"
+            )
+            time.sleep(1.0)
+            driver.activate(
+                driver.find("Stop training", "push button", showing=True)
+            )
             continue_button = driver.find(
                 "Continue Training", "push button", showing=True, timeout=8.0
             )
+            paused_size = recording.stat().st_size
             driver.activate(continue_button)
-            time.sleep(0.5)
+            driver.wait_file_growth(recording, paused_size)
             driver.screenshot("05-continued-training")
-            driver.activate(driver.find("Stop training", "push button", showing=True))
+            driver.activate(
+                driver.find("Stop training", "push button", showing=True)
+            )
             driver.activate(
                 driver.find("Cancel", "push button", showing=True, timeout=8.0)
             )
-            time.sleep(0.5)
+            driver.wait_file_removed(recording)
+
+        def stop_save():
+            enter_train()
+            driver.select_named("Manual Erg Mode")
+            activities = root / "library" / ATHLETE / "activities"
+            records = root / "library" / ATHLETE / "records"
+            existing_activities = set(activities.glob("*.json"))
+            existing_records = set(records.glob("*.csv"))
+            driver.activate(
+                driver.find(
+                    "Start or pause training", "push button", showing=True
+                )
+            )
+            driver.wait_new_file(records, existing_records, "*.csv")
+            time.sleep(1.0)
+            driver.activate(
+                driver.find("Stop training", "push button", showing=True)
+            )
+            driver.activate(
+                driver.find("Save", "push button", showing=True, timeout=8.0)
+            )
+            driver.wait_new_file(
+                activities, existing_activities, "*.json", timeout=15.0
+            )
+            driver.activate(
+                driver.find("Finish", "push button", showing=True, timeout=8.0)
+            )
+            driver.screenshot("06-training-saved")
 
         def save_workout():
             enter_train()
@@ -871,7 +944,8 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
         suite.run("train_control_accessibility", train_controls)
         suite.run("data_generator_and_virtual_gears", generator_and_gears)
         suite.run("workout_game_perspective", game)
-        suite.run("stop_and_continue_training", stop_continue)
+        suite.run("stop_continue_and_discard_training", stop_continue)
+        suite.run("stop_and_save_training", stop_save)
         if not skip_save_as_from_environment():
             suite.run("new_workout_save_as", save_workout)
         suite.run("graceful_shutdown_request", shutdown)

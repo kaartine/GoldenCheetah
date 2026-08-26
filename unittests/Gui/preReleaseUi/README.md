@@ -14,6 +14,12 @@ unittests/Gui/preReleaseUi/run-pre-release-ui-matrix.sh \
 The output directory contains `junit.xml`, `goldencheetah.log`, screenshots and,
 when `GC_UI_RECORD_VIDEO=1` and `ffmpeg` are available, `session.mp4`.
 
+The stop workflow is verified through its filesystem effects as well as its
+buttons. Continuing must resume growth of the same raw recording, Cancel must
+remove that recording, and Save must publish a new activity JSON before the
+import dialog can finish. All paths run only inside the temporary athlete
+library.
+
 Set `GC_UI_GENERATOR_MODE` to `on-target`, `over-target`, `under-target`,
 `cadence-low`, `cadence-high` or `follow-target` to select the isolated Data
 Generator scenario. Unknown values stop the run before GoldenCheetah starts.

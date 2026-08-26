@@ -196,6 +196,29 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 ):
                     UI.prepare(Path(directory))
 
+    def test_recording_file_waits_verify_lifecycle(self):
+        driver = object.__new__(UI.UiDriver)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = root / "previous.csv"
+            previous.write_text("old\n", encoding="utf-8")
+            existing = set(root.glob("*.csv"))
+
+            recording = root / "recording.csv"
+            recording.write_text("header\n", encoding="utf-8")
+            self.assertEqual(
+                driver.wait_new_file(root, existing, "*.csv", timeout=0.01),
+                recording,
+            )
+
+            initial_size = recording.stat().st_size
+            with recording.open("a", encoding="utf-8") as stream:
+                stream.write("sample\n")
+            driver.wait_file_growth(recording, initial_size, timeout=0.01)
+
+            recording.unlink()
+            driver.wait_file_removed(recording, timeout=0.01)
+
     def test_game_duration_is_bounded_and_configurable(self):
         with mock.patch.dict(
             os.environ, {"GC_UI_GAME_RUN_SECONDS": "72.5"}

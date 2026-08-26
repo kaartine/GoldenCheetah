@@ -989,7 +989,7 @@ The release evidence below must come from the controlled local and remote
 build/test environments even when that historical workflow remains red.
 
 - [ ] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
-- [ ] `REL-02` Verify stop/save/cancel/continue and accidental-stop recovery.
+- [x] `REL-02` Verify stop/save/cancel/continue and accidental-stop recovery.
 - [x] `REL-03` Verify AppImage startup, QML/Quick 3D modules, assets, licenses,
   attribution, SBOM and isolated production-like athlete data.
 - [ ] `REL-04` Complete user A/B ride on the target laptop and real trainer.
@@ -1009,19 +1009,22 @@ configured private Strava OAuth fallback without exposing either credential.
 The package passed its embedded manifest, dependency provenance, attribution,
 QML module, Quick 3D asset, keychain, OAuth and isolated GUI smoke gates.
 
-The promoted package then passed 9/9 QPainter and 9/9 Scene Graph pre-release
+The promoted package then passed 10/10 QPainter and 10/10 Scene Graph pre-release
 UI cases covering startup, navigation, isolated workout import, Train controls,
-Data Generator, virtual gears, Workout Game, stop/continue, Save As and clean
-shutdown. The Scene Graph trace advanced 140.43 m at 113.77 median FPS with a
-10.35 ms reported p95, zero backward frames, zero skipped simulation ticks and
-zero unexpected airborne frames. Quick 3D passed its eight renderer-dependent
+Data Generator, virtual gears, Workout Game, stop/continue/discard, recording
+save, workout Save As and clean shutdown. The stop workflow proves that
+continuing resumes growth of the same raw CSV, explicit Cancel removes it and
+Save publishes a new activity JSON in the isolated athlete library. The Scene
+Graph trace advanced 126.59 m at 115.87 median FPS with an 8.98 ms reported
+p95, zero backward frames, zero skipped simulation ticks and zero unexpected
+airborne frames. Quick 3D passed its eight renderer-dependent
 UI cases under desktop OpenGL. Its 466-sample trace advanced 716.71 m at 56.22
 median FPS, reached a 347 W target, reported a 10.79 ms stable p95 and 103 ms
 maximum frame, and recorded no backward frames, simulation skips or unexpected
 airborne frames. The forced-software Xvfb comparison exposed one 166 ms stall;
 the desktop-OpenGL acceptance run did not reproduce it. Focused Quick 3D tests
 also passed 62 executed cases with 13 platform skips, and the pre-release
-analyzer/harness passed 21 Python regression tests.
+analyzer/harness passed 22 Python regression tests.
 
 Promotion used the verified release store. `GoldenCheetah-latest.AppImage`
 points atomically to the new release, while the prior working image remains at
