@@ -82,7 +82,9 @@ public:
     double frameRendered(std::int64_t monotonicTimeMs);
     double frameRenderedNanoseconds(std::int64_t monotonicTimeNs);
     double framesPerSecond() const { return currentFps; }
+    double p50FrameIntervalMilliseconds() const { return p50FrameIntervalMs; }
     double p95FrameIntervalMilliseconds() const { return p95FrameIntervalMs; }
+    double p99FrameIntervalMilliseconds() const { return p99FrameIntervalMs; }
 
 private:
     bool initialized = false;
@@ -90,7 +92,9 @@ private:
     std::int64_t intervalTotalNs = 0;
     std::deque<std::int64_t> recentIntervalsNs;
     double currentFps = 0.0;
+    double p50FrameIntervalMs = 0.0;
     double p95FrameIntervalMs = 0.0;
+    double p99FrameIntervalMs = 0.0;
 };
 
 #endif

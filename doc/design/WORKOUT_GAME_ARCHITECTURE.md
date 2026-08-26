@@ -518,8 +518,9 @@ nodes or textures whose lifetime belongs to the render thread.
    rejected/out-of-order values, and support field-specific validity periods.
 2. **P1: end-to-end scheduling and frame-pacing evidence is incomplete.** Add a
    virtual-clock runner/executor test and retain a bounded raw presentation
-   timestamp series. Release analysis now reports observed p95/p99/max plus the
-   renderer's rolling p95 and maximum; missed-refresh and burst-sequence
+   timestamp series. The shared completed-frame counter now reports rolling
+   p50/p95/p99 from its bounded one-second window. Release analysis reports
+   observed p95/p99/max; Quick 3D publication, missed-refresh and burst-sequence
    reporting remain.
 3. **P2: incomplete snapshot identity and latency accounting.** Runner frames
    have publication sequences and timestamps, but diagnostics cannot yet state

@@ -467,7 +467,9 @@ void WorkoutGameFrameRateCounter::reset()
     intervalTotalNs = 0;
     recentIntervalsNs.clear();
     currentFps = 0.0;
+    p50FrameIntervalMs = 0.0;
     p95FrameIntervalMs = 0.0;
+    p99FrameIntervalMs = 0.0;
 }
 
 double WorkoutGameFrameRateCounter::frameRendered(
@@ -485,7 +487,9 @@ double WorkoutGameFrameRateCounter::frameRenderedNanoseconds(
         intervalTotalNs = 0;
         recentIntervalsNs.clear();
         currentFps = 0.0;
+        p50FrameIntervalMs = 0.0;
         p95FrameIntervalMs = 0.0;
+        p99FrameIntervalMs = 0.0;
         return currentFps;
     }
 
@@ -504,11 +508,15 @@ double WorkoutGameFrameRateCounter::frameRenderedNanoseconds(
     std::vector<std::int64_t> ordered(
             recentIntervalsNs.begin(), recentIntervalsNs.end());
     std::sort(ordered.begin(), ordered.end());
-    const std::size_t percentileIndex = ordered.empty() ? 0
-            : std::min(
+    const auto percentileMilliseconds = [&ordered](double percentile) {
+        if (ordered.empty()) return 0.0;
+        const std::size_t index = std::min(
                 ordered.size() - 1,
-                std::size_t(std::ceil(ordered.size() * 0.95)) - 1);
-    p95FrameIntervalMs = ordered.empty()
-            ? 0.0 : double(ordered[percentileIndex]) / 1000000.0;
+                std::size_t(std::ceil(ordered.size() * percentile)) - 1);
+        return double(ordered[index]) / 1000000.0;
+    };
+    p50FrameIntervalMs = percentileMilliseconds(0.50);
+    p95FrameIntervalMs = percentileMilliseconds(0.95);
+    p99FrameIntervalMs = percentileMilliseconds(0.99);
     return currentFps;
 }

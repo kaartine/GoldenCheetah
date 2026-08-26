@@ -684,7 +684,9 @@ private slots:
 
         const double expected = 6.0 * 1000.0 / 106.0;
         QVERIFY(std::abs(counter.framesPerSecond() - expected) < 1e-9);
+        QCOMPARE(counter.p50FrameIntervalMilliseconds(), 16.0);
         QCOMPARE(counter.p95FrameIntervalMilliseconds(), 24.0);
+        QCOMPARE(counter.p99FrameIntervalMilliseconds(), 24.0);
     }
 
     void frameRateCounterPreservesSubMillisecondPresentationTiming()
@@ -702,7 +704,11 @@ private slots:
         }
 
         QVERIFY(std::abs(counter.framesPerSecond() - 60.0) < 1e-6);
+        QVERIFY(std::abs(counter.p50FrameIntervalMilliseconds()
+                         - 16.666667) < 1e-9);
         QVERIFY(std::abs(counter.p95FrameIntervalMilliseconds()
+                         - 16.666667) < 1e-9);
+        QVERIFY(std::abs(counter.p99FrameIntervalMilliseconds()
                          - 16.666667) < 1e-9);
     }
 
