@@ -13,7 +13,10 @@
 #include <QQmlError>
 #include <QDebug>
 #include <QStringList>
+#include <QTextStream>
 #include <QUrl>
+
+#include <chrono>
 
 WorkoutGame3DWindow::WorkoutGame3DWindow(
         bool rendererEnabled,
@@ -21,6 +24,10 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
     QQuickView(parent),
     viewModel(new WorkoutGame3DViewModel(this))
 {
+    diagnosticsEnabled = qEnvironmentVariableIntValue(
+            "GC_WORKOUT_GAME_DIAGNOSTICS") != 0;
+    traceEnabled = qEnvironmentVariableIntValue(
+            "GC_WORKOUT_GAME_TRACE") != 0;
     setResizeMode(QQuickView::SizeRootObjectToView);
     setColor(QColor(105, 154, 184));
     rootContext()->setContextProperty(
@@ -28,12 +35,17 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
     connect(this, &QQuickView::statusChanged,
             this, &WorkoutGame3DWindow::handleStatusChanged);
     connect(this, &QQuickWindow::frameSwapped, this, [this]() {
-        if (!sessionRunning) return;
-        const double fps = frameRateCounter.frameRenderedNanoseconds(
-                monotonicClock.nsecsElapsed());
-        viewModel->setFps(fps);
-        presentFrame();
-    }, Qt::QueuedConnection);
+        const std::int64_t presentationTimeNs =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        QMetaObject::invokeMethod(
+                this,
+                [this, presentationTimeNs]() {
+                    handlePresentedFrame(presentationTimeNs);
+                },
+                Qt::QueuedConnection);
+    }, Qt::DirectConnection);
     connect(this, &QQuickWindow::sceneGraphError,
             this, &WorkoutGame3DWindow::handleSceneGraphError);
     monotonicClock.start();
@@ -54,6 +66,14 @@ void WorkoutGame3DWindow::setCourse(
         double ftpWatts)
 {
     visualSmoother.reset();
+    diagnostics.reset();
+    publishedDiagnostics = {};
+    viewModel->setDiagnostics(publishedDiagnostics);
+    roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
+    sourceFrame = {};
+    presentedFrame = {};
+    frameNumber = 0;
+    lastTracePublishMs = -1;
     hasFrame = false;
     viewModel->setCourse(course, ftpWatts);
 }
@@ -66,6 +86,7 @@ void WorkoutGame3DWindow::setFrame(
         int newHeartRate,
         int newVirtualGear)
 {
+    sourceFrame = frame;
     watts = newWatts;
     targetWatts = newTargetWatts;
     cadenceRpm = newCadenceRpm;
@@ -101,6 +122,13 @@ void WorkoutGame3DWindow::setTelemetry(
 
 void WorkoutGame3DWindow::setSessionRunning(bool running)
 {
+    if (running != sessionRunning) {
+        diagnostics.reset();
+        publishedDiagnostics = {};
+        viewModel->setDiagnostics(publishedDiagnostics);
+        frameNumber = 0;
+        lastTracePublishMs = -1;
+    }
     sessionRunning = running;
     if (running) {
         frameRateCounter.reset();
@@ -116,9 +144,132 @@ void WorkoutGame3DWindow::setGeneratorState(const QString &state)
 void WorkoutGame3DWindow::presentFrame()
 {
     if (!hasFrame) return;
+    presentedFrame = visualSmoother.sample(monotonicClock.elapsed());
     viewModel->setFrame(
-            visualSmoother.sample(monotonicClock.elapsed()),
+            presentedFrame,
             watts, targetWatts, cadenceRpm, heartRate, virtualGear);
+}
+
+void WorkoutGame3DWindow::handlePresentedFrame(
+        std::int64_t presentationTimeNs)
+{
+    if (!sessionRunning) return;
+    const double fps = frameRateCounter.frameRenderedNanoseconds(
+            presentationTimeNs);
+    viewModel->setFps(fps);
+    QElapsedTimer presentationWork;
+    presentationWork.start();
+    presentFrame();
+    updateDiagnostics(
+            presentationTimeNs / 1000000,
+            double(presentationWork.nsecsElapsed()) / 1000000.0);
+}
+
+void WorkoutGame3DWindow::updateDiagnostics(
+        std::int64_t monotonicTimeMs,
+        double presentationWorkMs)
+{
+    if ((!diagnosticsEnabled && !traceEnabled)
+            || !sessionRunning || !hasFrame) {
+        return;
+    }
+
+    const WorkoutGameRoadTimelineSample sourceTimeline =
+            WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                roadCourse, sourceFrame.simulation.workoutTimeMs);
+    const WorkoutGameRoadTimelineSample renderedTimeline =
+            WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                roadCourse, presentedFrame.simulation.workoutTimeMs);
+    WorkoutGameDiagnosticsInput input;
+    input.ready = sourceTimeline.ready && renderedTimeline.ready;
+    input.sessionRunning = sessionRunning;
+    input.movingForward = presentedFrame.simulation.ready
+            && !presentedFrame.simulation.finished
+            && presentedFrame.simulation.speedKph > 0.2;
+    input.frameNumber = ++frameNumber;
+    input.monotonicTimeMs = monotonicTimeMs;
+    input.sourceWorkoutTimeMs = sourceFrame.simulation.workoutTimeMs;
+    input.renderedWorkoutTimeMs =
+            presentedFrame.simulation.workoutTimeMs;
+    input.sourceSection = sourceTimeline.ready
+            ? int(sourceTimeline.sourceSectionIndex) : -1;
+    input.renderedSection = renderedTimeline.ready
+            ? int(renderedTimeline.sourceSectionIndex) : -1;
+    input.sourceSectionProgress = sourceTimeline.sectionProgress;
+    input.renderedSectionProgress = renderedTimeline.sectionProgress;
+    input.sourceRoadDistanceMeters = sourceTimeline.distanceMeters;
+    input.renderedRoadDistanceMeters = renderedTimeline.distanceMeters;
+    input.framesPerSecond = frameRateCounter.framesPerSecond();
+    input.p50FrameIntervalMs =
+            frameRateCounter.p50FrameIntervalMilliseconds();
+    input.p95FrameIntervalMs =
+            frameRateCounter.p95FrameIntervalMilliseconds();
+    input.p99FrameIntervalMs =
+            frameRateCounter.p99FrameIntervalMilliseconds();
+    input.skippedSimulationTicks =
+            presentedFrame.skippedSimulationTicks;
+    input.rendererQueueDepth = viewModel->geometryQueueDepth();
+    input.presentationWorkMs = presentationWorkMs;
+    input.worldReady = presentedFrame.world.ready;
+    input.riderAirborne = presentedFrame.world.rider.airborne;
+    input.airborneExpected = WorkoutGameFeatureRuntime::airborneExpected(
+            presentedFrame.feature);
+    input.riderElevationMeters =
+            presentedFrame.world.rider.elevationMeters;
+    input.surfaceElevationMeters =
+            presentedFrame.world.surfaceElevationMeters;
+    input.riderClearanceMeters =
+            presentedFrame.world.rider.clearanceMeters;
+    input.airHeightMeters =
+            presentedFrame.world.rider.airHeightMeters();
+    input.lateralOffsetMeters =
+            presentedFrame.feature.lateralOffsetMeters;
+    input.visibleElevationChangeMeters =
+            presentedFrame.world.rider.elevationMeters
+            - presentedFrame.world.surfaceElevationMeters;
+    input.renderedGradePercent = presentedFrame.world.gradePercent;
+    publishedDiagnostics = diagnostics.update(input);
+    viewModel->setDiagnostics(publishedDiagnostics);
+
+    if (traceEnabled && publishedDiagnostics.ready
+            && (lastTracePublishMs < 0
+                || monotonicTimeMs - lastTracePublishMs >= 250)) {
+        lastTracePublishMs = monotonicTimeMs;
+        qInfo().noquote() << diagnosticsTraceLine();
+    }
+}
+
+QString WorkoutGame3DWindow::diagnosticsTraceLine() const
+{
+    if (!publishedDiagnostics.ready) return QString();
+    const WorkoutGameDiagnosticsInput &input = publishedDiagnostics.input;
+    QString result;
+    QTextStream stream(&result);
+    stream << "workout-game-3d-trace"
+           << " frame=" << input.frameNumber
+           << " mono_ms=" << input.monotonicTimeMs
+           << " source_ms=" << input.sourceWorkoutTimeMs
+           << " render_ms=" << input.renderedWorkoutTimeMs
+           << " source_road_m=" << input.sourceRoadDistanceMeters
+           << " render_road_m=" << input.renderedRoadDistanceMeters
+           << " delta_m=" << publishedDiagnostics.frameDistanceDeltaMeters
+           << " fps=" << input.framesPerSecond
+           << " p50_frame_ms=" << input.p50FrameIntervalMs
+           << " p95_frame_ms=" << input.p95FrameIntervalMs
+           << " p99_frame_ms=" << input.p99FrameIntervalMs
+           << " max_frame_ms="
+                << publishedDiagnostics.largestFrameIntervalMs
+           << " late_frames=" << publishedDiagnostics.lateFrameCount
+           << " backwards=" << publishedDiagnostics.backwardFrameCount
+           << " stationary=" << publishedDiagnostics.stationaryFrameCount
+           << " skipped_ticks=" << input.skippedSimulationTicks
+           << " geometry_queue=" << input.rendererQueueDepth
+           << " presentation_work_ms=" << input.presentationWorkMs
+           << " max_presentation_work_ms="
+                << publishedDiagnostics.largestPresentationWorkMs
+           << " long_presentation_work="
+                << publishedDiagnostics.longPresentationWorkCount;
+    return result;
 }
 
 void WorkoutGame3DWindow::handleStatusChanged(QQuickView::Status status)

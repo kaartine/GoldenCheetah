@@ -1282,10 +1282,12 @@ void WorkoutGameSceneGraphItem::rebuildHud()
                 QRect(8, BaseHudHeight + 26, hudImage.width() - 16, 24),
                 Qt::AlignLeft | Qt::AlignVCenter,
                 QStringLiteral(
-                    "DT %1 ms  P95 %2 ms  MAX %3 ms  LATE %4  BACK %5  "
-                    "STILL %6  SKIP %7  FRAME %8")
+                    "DT %1 ms  P50/P95/P99 %2/%3/%4 ms  MAX %5 ms  "
+                    "LATE %6  BACK %7  STILL %8  SKIP %9  FRAME %10")
                     .arg(snapshot.frameIntervalMs)
+                    .arg(input.p50FrameIntervalMs, 0, 'f', 1)
                     .arg(input.p95FrameIntervalMs, 0, 'f', 1)
+                    .arg(input.p99FrameIntervalMs, 0, 'f', 1)
                     .arg(snapshot.largestFrameIntervalMs)
                     .arg(snapshot.lateFrameCount)
                     .arg(snapshot.backwardFrameCount)
@@ -1345,8 +1347,14 @@ void WorkoutGameSceneGraphItem::publishDiagnostics(
                 << " backwards=" << snapshot.backwardFrameCount
                 << " stationary=" << snapshot.stationaryFrameCount
                 << " fps=" << input.framesPerSecond
+                << " p50_frame_ms=" << input.p50FrameIntervalMs
                 << " p95_frame_ms=" << input.p95FrameIntervalMs
+                << " p99_frame_ms=" << input.p99FrameIntervalMs
                 << " skipped_ticks=" << input.skippedSimulationTicks
+                << " renderer_queue=" << input.rendererQueueDepth
+                << " presentation_work_ms=" << input.presentationWorkMs
+                << " long_presentation_work="
+                    << snapshot.longPresentationWorkCount
                 << " grade=" << input.renderedGradePercent
                 << " view_dz_m=" << input.visibleElevationChangeMeters
                 << " surface_m=" << input.surfaceElevationMeters
@@ -1569,8 +1577,12 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     diagnosticsInput.sourceRoadDistanceMeters = sourceTimeline.distanceMeters;
     diagnosticsInput.renderedRoadDistanceMeters = renderedTimeline.distanceMeters;
     diagnosticsInput.framesPerSecond = fps;
+    diagnosticsInput.p50FrameIntervalMs =
+            frameRateCounter.p50FrameIntervalMilliseconds();
     diagnosticsInput.p95FrameIntervalMs =
             frameRateCounter.p95FrameIntervalMilliseconds();
+    diagnosticsInput.p99FrameIntervalMs =
+            frameRateCounter.p99FrameIntervalMilliseconds();
     diagnosticsInput.skippedSimulationTicks =
             currentFrame.skippedSimulationTicks;
     diagnosticsInput.worldReady = visual.world.ready;

@@ -393,6 +393,19 @@ value comes from `QQuickWindow::frameSwapped`, so it measures completed
 presentation rather than simulation ticks or a requested refresh rate. Missing
 sensor values are presentation state only and never alter recorded telemetry.
 
+The shared completed-frame counter keeps at most the latest one second of
+nanosecond swap intervals and reports realized FPS plus nearest-rank
+p50/p95/p99 frame time. `WorkoutGameDiagnostics` combines those values with
+authoritative source/render road positions, skipped simulation ticks, bounded
+renderer geometry-queue depth and GUI presentation work. It counts backward,
+stationary, late and over-eight-millisecond presentation-work frames without
+retaining an unbounded timestamp history. Quick 3D publishes the snapshot on
+the GUI thread after each completed swap; `GC_WORKOUT_GAME_DIAGNOSTICS=1`
+shows the same bounded values in a compact bar, while
+`GC_WORKOUT_GAME_TRACE=1` emits them at most four times per second. These
+presentation counters neither acquire runner locks nor feed back into physics,
+trainer control or recording.
+
 The Qt Quick 3D near terrain has one additional pure boundary:
 `WorkoutGame3DTerrainProfile` maps an authoritative road sample, global course
 distance and course seed to an ordered eight-vertex lateral cross-section. Its

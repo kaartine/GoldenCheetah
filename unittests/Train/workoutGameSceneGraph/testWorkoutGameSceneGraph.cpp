@@ -352,19 +352,30 @@ private slots:
         input.renderedWorkoutTimeMs = 1000;
         input.renderedRoadDistanceMeters = 10.0;
         input.framesPerSecond = 57.4;
+        input.p50FrameIntervalMs = 17.0;
         input.p95FrameIntervalMs = 21.0;
+        input.p99FrameIntervalMs = 31.0;
         input.skippedSimulationTicks = 2;
+        input.rendererQueueDepth = 1;
+        input.presentationWorkMs = 4.0;
         const WorkoutGameDiagnosticsSnapshot first = diagnostics.update(input);
         QVERIFY(first.ready);
         QCOMPARE(first.input.framesPerSecond, 57.4);
+        QCOMPARE(first.input.p50FrameIntervalMs, 17.0);
         QCOMPARE(first.input.p95FrameIntervalMs, 21.0);
+        QCOMPARE(first.input.p99FrameIntervalMs, 31.0);
         QCOMPARE(first.input.skippedSimulationTicks, std::size_t(2));
+        QCOMPARE(first.input.rendererQueueDepth, 1);
 
         input.renderedWorkoutTimeMs = 1016;
         input.monotonicTimeMs = 16;
         input.renderedRoadDistanceMeters = 10.0;
-        QCOMPARE(diagnostics.update(input).stationaryFrameCount,
-                 std::uint64_t(1));
+        input.presentationWorkMs = 9.0;
+        const WorkoutGameDiagnosticsSnapshot stationary =
+                diagnostics.update(input);
+        QCOMPARE(stationary.stationaryFrameCount, std::uint64_t(1));
+        QCOMPARE(stationary.longPresentationWorkCount, std::uint64_t(1));
+        QCOMPARE(stationary.largestPresentationWorkMs, 9.0);
 
         input.renderedWorkoutTimeMs = 1032;
         input.monotonicTimeMs = 48;
@@ -1129,8 +1140,16 @@ private slots:
                     window.diagnosticsSnapshot().ready
                     && window.diagnosticsSnapshot().input.framesPerSecond > 1.0
                     && window.diagnosticsSnapshot().input
-                        .p95FrameIntervalMs > 0.0,
+                        .p50FrameIntervalMs > 0.0
+                    && window.diagnosticsSnapshot().input
+                        .p95FrameIntervalMs > 0.0
+                    && window.diagnosticsSnapshot().input
+                        .p99FrameIntervalMs > 0.0,
                     3000);
+            QVERIFY(window.diagnosticsSnapshot().input.p50FrameIntervalMs
+                    <= window.diagnosticsSnapshot().input.p95FrameIntervalMs);
+            QVERIFY(window.diagnosticsSnapshot().input.p95FrameIntervalMs
+                    <= window.diagnosticsSnapshot().input.p99FrameIntervalMs);
             QVERIFY(window.diagnosticsSnapshot().input.frameNumber > 1);
         }
         qunsetenv("GC_WORKOUT_GAME_DIAGNOSTICS");

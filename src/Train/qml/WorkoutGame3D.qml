@@ -415,7 +415,9 @@ Item {
     WorkoutGameSuccessFeedback {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
-        anchors.topMargin: trainingHud.y + trainingHud.height + 8
+        anchors.topMargin: trainingHud.y + trainingHud.height
+                           + (diagnosticHud.visible
+                              ? diagnosticHud.height + 12 : 8)
         triggerId: workoutGame3D.successEffectId
         effectText: workoutGame3D.successEffectText
     }
@@ -428,6 +430,35 @@ Item {
         anchors.margins: 14
         height: implicitHeight
         viewModel: workoutGame3D
+    }
+
+    Rectangle {
+        id: diagnosticHud
+        objectName: "diagnosticHud"
+        visible: workoutGame3D.diagnosticsEnabled
+        anchors.left: trainingHud.left
+        anchors.right: trainingHud.right
+        anchors.top: trainingHud.bottom
+        anchors.topMargin: 6
+        height: 26
+        color: "#e60a1012"
+        border.color: "#77838a84"
+        border.width: 1
+
+        Text {
+            objectName: "diagnosticText"
+            anchors.fill: parent
+            anchors.leftMargin: 7
+            anchors.rightMargin: 7
+            text: workoutGame3D.diagnosticsText
+            color: "#dbe8e5"
+            font.pixelSize: 11
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 7
+            verticalAlignment: Text.AlignVCenter
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+        }
     }
 
     Rectangle {

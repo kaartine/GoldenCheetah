@@ -876,8 +876,8 @@ container.
 
 ## Diagnostics And Performance
 
-- [ ] `DIA-01` Count actual presented frames and report p50/p95/p99 frame time.
-- [ ] `DIA-02` Count backward distance, unexplained stationary frames, skipped
+- [x] `DIA-01` Count actual presented frames and report p50/p95/p99 frame time.
+- [x] `DIA-02` Count backward distance, unexplained stationary frames, skipped
   simulation ticks, renderer queue depth and long frame work.
 - [ ] `DIA-03` Trace feature phase, route, readiness, action distance, rider
   contacts, camera transform and active asset/LOD identities.
@@ -894,6 +894,22 @@ snapshots. Production rendering exposes custom-mesh triangle counts and Qt
 Quick 3D extended draw-call statistics; the all-feature budget course rejects
 more than 30,000 visible custom triangles or 50 actual draw calls and passes
 normally and under ASan/UBSan.
+
+**DIA-01/DIA-02 evidence:** the shared frame counter uses completed
+`frameSwapped` nanosecond timestamps and a bounded one-second window to publish
+realized FPS plus nearest-rank p50/p95/p99 intervals. Quick 3D now compares its
+latest source snapshot with the smoothed presented snapshot and feeds the
+existing diagnostics module with road distance, section/progress, skipped
+simulation ticks, the bounded geometry queue and measured GUI presentation
+work. The module counts backward, stationary, over-25-ms and over-8-ms work
+frames and keeps only cumulative counters and maxima. Both Quick 3D and Scene
+Graph expose the values through tests, trace output and opt-in HUDs. Real
+X11/OpenGL tests cover active, resized and stopped lifecycle states; the
+reviewed 960 by 540 Quick 3D HUD capture has SHA-256
+`a810a170296b2b78cdf7a39a4f949775f2b8c6aa36d9ede301d7aa6edfaa2e19`.
+The complete Quick 3D suite passes 62 tests and the complete Scene Graph suite
+passes 20 tests without failures. Focused tests pass under ASan/UBSan for both
+renderers, and the production target compiles in the release container.
 
 ## Release And Legacy Retirement
 

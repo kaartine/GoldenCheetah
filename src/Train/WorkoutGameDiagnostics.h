@@ -29,8 +29,12 @@ struct WorkoutGameDiagnosticsInput
     double sourceRoadDistanceMeters = 0.0;
     double renderedRoadDistanceMeters = 0.0;
     double framesPerSecond = 0.0;
+    double p50FrameIntervalMs = 0.0;
     double p95FrameIntervalMs = 0.0;
+    double p99FrameIntervalMs = 0.0;
     std::size_t skippedSimulationTicks = 0;
+    int rendererQueueDepth = 0;
+    double presentationWorkMs = 0.0;
     bool worldReady = false;
     bool riderAirborne = false;
     bool airborneExpected = false;
@@ -53,7 +57,9 @@ struct WorkoutGameDiagnosticsSnapshot
     std::uint64_t backwardFrameCount = 0;
     std::uint64_t stationaryFrameCount = 0;
     std::uint64_t lateFrameCount = 0;
+    std::uint64_t longPresentationWorkCount = 0;
     std::uint64_t unexpectedAirborneFrameCount = 0;
+    double largestPresentationWorkMs = 0.0;
     double largestRegressionMeters = 0.0;
 };
 
@@ -72,8 +78,10 @@ private:
     std::uint64_t backwardFrameCount = 0;
     std::uint64_t stationaryFrameCount = 0;
     std::uint64_t lateFrameCount = 0;
+    std::uint64_t longPresentationWorkCount = 0;
     std::uint64_t unexpectedAirborneFrameCount = 0;
     std::int64_t largestFrameIntervalMs = 0;
+    double largestPresentationWorkMs = 0.0;
     double largestRegressionMeters = 0.0;
 };
 

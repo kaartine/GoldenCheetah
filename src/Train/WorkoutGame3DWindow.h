@@ -11,6 +11,8 @@
 #define _GC_WorkoutGame3DWindow_h
 
 #include "WorkoutGame3DViewModel.h"
+#include "WorkoutGameDiagnostics.h"
+#include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameVisualSmoother.h"
 
 #include <QElapsedTimer>
@@ -44,6 +46,11 @@ public:
     void setGeneratorState(const QString &state);
     bool rendererAvailable() const { return status() != QQuickView::Error; }
     QString rendererLabel() const { return QStringLiteral("Qt Quick 3D"); }
+    WorkoutGameDiagnosticsSnapshot diagnosticsSnapshot() const
+    {
+        return publishedDiagnostics;
+    }
+    QString diagnosticsTraceLine() const;
 
 signals:
     void rendererFailed();
@@ -56,20 +63,33 @@ private slots:
             const QString &message);
 
 private:
+    void handlePresentedFrame(std::int64_t presentationTimeNs);
+    void updateDiagnostics(
+            std::int64_t monotonicTimeMs,
+            double presentationWorkMs);
     void reportFailure(const QString &message);
 
     WorkoutGame3DViewModel *viewModel;
     WorkoutGameVisualSmoother visualSmoother;
     WorkoutGameFrameRateCounter frameRateCounter;
+    WorkoutGameDiagnostics diagnostics;
+    WorkoutGameDiagnosticsSnapshot publishedDiagnostics;
+    WorkoutGameRoadCourse roadCourse;
+    WorkoutGameVisualSnapshot sourceFrame;
+    WorkoutGameVisualSnapshot presentedFrame;
     QElapsedTimer monotonicClock;
     double watts = 0.0;
     double targetWatts = 0.0;
     int cadenceRpm = 0;
     int heartRate = 0;
     int virtualGear = 1;
+    std::uint64_t frameNumber = 0;
+    std::int64_t lastTracePublishMs = -1;
     bool hasFrame = false;
     bool sessionRunning = false;
     bool failureReported = false;
+    bool diagnosticsEnabled = false;
+    bool traceEnabled = false;
 };
 
 #endif

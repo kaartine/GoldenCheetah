@@ -17,6 +17,7 @@ namespace {
 constexpr double MovementEpsilonMeters = 1e-6;
 constexpr double VisibleAirborneHeightMeters = 0.08;
 constexpr std::int64_t LateFrameThresholdMs = 25;
+constexpr double LongPresentationWorkThresholdMs = 8.0;
 
 }
 
@@ -29,8 +30,10 @@ void WorkoutGameDiagnostics::reset()
     backwardFrameCount = 0;
     stationaryFrameCount = 0;
     lateFrameCount = 0;
+    longPresentationWorkCount = 0;
     unexpectedAirborneFrameCount = 0;
     largestFrameIntervalMs = 0;
+    largestPresentationWorkMs = 0.0;
     largestRegressionMeters = 0.0;
 }
 
@@ -56,8 +59,10 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
         result.backwardFrameCount = backwardFrameCount;
         result.stationaryFrameCount = stationaryFrameCount;
         result.lateFrameCount = lateFrameCount;
+        result.longPresentationWorkCount = longPresentationWorkCount;
         result.unexpectedAirborneFrameCount = unexpectedAirborneFrameCount;
         result.largestFrameIntervalMs = largestFrameIntervalMs;
+        result.largestPresentationWorkMs = largestPresentationWorkMs;
         result.largestRegressionMeters = largestRegressionMeters;
         return result;
     }
@@ -68,6 +73,14 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
     largestFrameIntervalMs = std::max(
             largestFrameIntervalMs, result.frameIntervalMs);
     if (result.frameIntervalMs > LateFrameThresholdMs) ++lateFrameCount;
+    const double presentationWorkMs =
+            std::isfinite(input.presentationWorkMs)
+            ? std::max(0.0, input.presentationWorkMs) : 0.0;
+    largestPresentationWorkMs = std::max(
+            largestPresentationWorkMs, presentationWorkMs);
+    if (presentationWorkMs > LongPresentationWorkThresholdMs) {
+        ++longPresentationWorkCount;
+    }
     if (input.worldReady && input.riderAirborne
             && input.airHeightMeters >= VisibleAirborneHeightMeters
             && !input.airborneExpected) {
@@ -89,8 +102,10 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
     result.backwardFrameCount = backwardFrameCount;
     result.stationaryFrameCount = stationaryFrameCount;
     result.lateFrameCount = lateFrameCount;
+    result.longPresentationWorkCount = longPresentationWorkCount;
     result.unexpectedAirborneFrameCount = unexpectedAirborneFrameCount;
     result.largestFrameIntervalMs = largestFrameIntervalMs;
+    result.largestPresentationWorkMs = largestPresentationWorkMs;
     result.largestRegressionMeters = largestRegressionMeters;
     previousRoadDistanceMeters = input.renderedRoadDistanceMeters;
     previousMonotonicTimeMs = input.monotonicTimeMs;

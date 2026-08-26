@@ -12,6 +12,7 @@
 
 #include "WorkoutGame3DChunkBuilder.h"
 #include "WorkoutGame3DGeometry.h"
+#include "WorkoutGameDiagnostics.h"
 #include "WorkoutGameEngine.h"
 #include "WorkoutGameFeatureHud.h"
 
@@ -80,6 +81,9 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(int heartRate READ heartRate NOTIFY telemetryChanged)
     Q_PROPERTY(int virtualGear READ virtualGear NOTIFY telemetryChanged)
     Q_PROPERTY(double fps READ fps NOTIFY fpsChanged)
+    Q_PROPERTY(bool diagnosticsEnabled READ diagnosticsEnabled CONSTANT)
+    Q_PROPERTY(QString diagnosticsText READ diagnosticsText
+               NOTIFY diagnosticsChanged)
     Q_PROPERTY(int visibleTriangles READ visibleTriangles
                NOTIFY renderWorkChanged)
     Q_PROPERTY(int geometryQueueDepth READ geometryQueueDepth
@@ -146,6 +150,7 @@ public:
             int heartRate,
             int virtualGear);
     void setFps(double value);
+    void setDiagnostics(const WorkoutGameDiagnosticsSnapshot &snapshot);
     void setGeneratorState(const QString &state);
 
     QObject *trailGeometry() const { return trail.get(); }
@@ -214,6 +219,12 @@ public:
     int heartRate() const { return currentHeartRate; }
     int virtualGear() const { return currentVirtualGear; }
     double fps() const { return currentFps; }
+    bool diagnosticsEnabled() const
+    {
+        return qEnvironmentVariableIntValue(
+                "GC_WORKOUT_GAME_DIAGNOSTICS") != 0;
+    }
+    QString diagnosticsText() const { return currentDiagnosticsText; }
     int visibleTriangles() const { return currentVisibleTriangles; }
     int geometryQueueDepth() const;
     QString generatorState() const { return currentGeneratorState; }
@@ -279,6 +290,7 @@ signals:
     void sceneChanged();
     void telemetryChanged();
     void fpsChanged();
+    void diagnosticsChanged();
     void renderWorkChanged();
     void generatorStateChanged();
     void courseChanged();
@@ -363,6 +375,7 @@ private:
     int currentHeartRate = 0;
     int currentVirtualGear = 1;
     double currentFps = 0.0;
+    QString currentDiagnosticsText;
     int currentVisibleTriangles = 0;
     QString currentGeneratorState;
     QString currentTerrainName;

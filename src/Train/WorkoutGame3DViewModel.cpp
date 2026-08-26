@@ -788,6 +788,32 @@ void WorkoutGame3DViewModel::setFps(double value)
     emit fpsChanged();
 }
 
+void WorkoutGame3DViewModel::setDiagnostics(
+        const WorkoutGameDiagnosticsSnapshot &snapshot)
+{
+    QString text;
+    if (snapshot.ready) {
+        const WorkoutGameDiagnosticsInput &input = snapshot.input;
+        text = QStringLiteral(
+                "P50 %1  P95 %2  P99 %3 MS   MAX %4   LATE %5   "
+                "BACK %6   STILL %7   SKIP %8   QUEUE %9   WORK %10/%11 MS")
+                .arg(input.p50FrameIntervalMs, 0, 'f', 1)
+                .arg(input.p95FrameIntervalMs, 0, 'f', 1)
+                .arg(input.p99FrameIntervalMs, 0, 'f', 1)
+                .arg(snapshot.largestFrameIntervalMs)
+                .arg(snapshot.lateFrameCount)
+                .arg(snapshot.backwardFrameCount)
+                .arg(snapshot.stationaryFrameCount)
+                .arg(input.skippedSimulationTicks)
+                .arg(input.rendererQueueDepth)
+                .arg(input.presentationWorkMs, 0, 'f', 1)
+                .arg(snapshot.largestPresentationWorkMs, 0, 'f', 1);
+    }
+    if (currentDiagnosticsText == text) return;
+    currentDiagnosticsText = text;
+    emit diagnosticsChanged();
+}
+
 int WorkoutGame3DViewModel::geometryQueueDepth() const
 {
     return int(chunkBuilder.pendingDepth());

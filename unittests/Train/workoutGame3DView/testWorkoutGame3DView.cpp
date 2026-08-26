@@ -794,6 +794,107 @@ private slots:
         window.setSessionRunning(false);
     }
 
+    void productionWindowPublishesCompletedFrameDiagnostics()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const ScopedEnvironmentVariable restoreDiagnostics(
+                "GC_WORKOUT_GAME_DIAGNOSTICS");
+        qputenv("GC_WORKOUT_GAME_DIAGNOSTICS", "1");
+        const WorkoutGameCourse course = sampleCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.setCourse(course, FtpWatts);
+        window.resize(960, 540);
+        window.setFrame(
+                frameAt(road, 18.0), 225.0, 220.0, 88, 149, 8);
+        window.setSessionRunning(true);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                window.diagnosticsSnapshot().ready
+                && window.diagnosticsSnapshot().input.frameNumber > 2
+                && window.diagnosticsSnapshot().input.framesPerSecond > 1.0
+                && window.diagnosticsSnapshot().input
+                    .p50FrameIntervalMs > 0.0
+                && window.diagnosticsSnapshot().input
+                    .p95FrameIntervalMs > 0.0
+                && window.diagnosticsSnapshot().input
+                    .p99FrameIntervalMs > 0.0,
+                5000);
+        const WorkoutGameDiagnosticsSnapshot first =
+                window.diagnosticsSnapshot();
+        QVERIFY(first.input.p50FrameIntervalMs
+                <= first.input.p95FrameIntervalMs);
+        QVERIFY(first.input.p95FrameIntervalMs
+                <= first.input.p99FrameIntervalMs);
+        QVERIFY(first.input.rendererQueueDepth <= 1);
+        QVERIFY(first.input.presentationWorkMs >= 0.0);
+        QVERIFY(first.largestPresentationWorkMs
+                >= first.input.presentationWorkMs);
+        const QString trace = window.diagnosticsTraceLine();
+        QVERIFY(trace.startsWith(QStringLiteral("workout-game-3d-trace")));
+        QVERIFY(trace.contains(QStringLiteral("p50_frame_ms=")));
+        QVERIFY(trace.contains(QStringLiteral("p95_frame_ms=")));
+        QVERIFY(trace.contains(QStringLiteral("p99_frame_ms=")));
+        QVERIFY(trace.contains(QStringLiteral("geometry_queue=")));
+        QVERIFY(trace.contains(QStringLiteral("presentation_work_ms=")));
+        QObject *diagnosticHud = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("diagnosticHud"));
+        QObject *diagnosticText = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("diagnosticText"));
+        QVERIFY(diagnosticHud);
+        QVERIFY(diagnosticText);
+        QVERIFY(diagnosticHud->property("visible").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(
+                diagnosticText->property("text").toString().contains(
+                    QStringLiteral("P50"))
+                && diagnosticText->property("text").toString().contains(
+                    QStringLiteral("P95"))
+                && diagnosticText->property("text").toString().contains(
+                    QStringLiteral("P99")),
+                1000);
+        const QString diagnosticScreenshot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_3D_DIAGNOSTICS_SCREENSHOT");
+        if (!diagnosticScreenshot.isEmpty()) {
+            const QImage image = window.grabWindow();
+            QVERIFY(!image.isNull());
+            QVERIFY2(image.save(diagnosticScreenshot),
+                     qPrintable(diagnosticScreenshot));
+        }
+        window.resize(360, 640);
+        QTRY_COMPARE_WITH_TIMEOUT(window.rootObject()->width(), 360.0, 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(window.rootObject()->height(), 640.0, 1000);
+        auto *diagnosticItem = qobject_cast<QQuickItem *>(diagnosticHud);
+        auto *trainingItem = window.rootObject()->findChild<QQuickItem *>(
+                QStringLiteral("trainingHud"));
+        QVERIFY(diagnosticItem);
+        QVERIFY(trainingItem);
+        QVERIFY(diagnosticItem->x() >= 0.0);
+        QVERIFY(diagnosticItem->x() + diagnosticItem->width() <= 360.0);
+        QVERIFY(diagnosticItem->y()
+                >= trainingItem->y() + trainingItem->height());
+
+        WorkoutGameVisualSnapshot advanced = frameAt(road, 24.0);
+        advanced.simulation.workoutTimeMs += 1000;
+        advanced.skippedSimulationTicks = 3;
+        window.setFrame(advanced, 235.0, 230.0, 90, 151, 9);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                window.diagnosticsSnapshot().input.skippedSimulationTicks
+                    == std::size_t(3)
+                && window.diagnosticsSnapshot().input
+                    .renderedRoadDistanceMeters
+                    > first.input.renderedRoadDistanceMeters,
+                3000);
+        window.setSessionRunning(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.diagnosticsSnapshot().ready, 1000);
+    }
+
     void cameraCompositionDefaultsToCentreAndSupportsAuditVariants()
     {
         const ScopedEnvironmentVariable restore(
