@@ -38,12 +38,16 @@ ring. None of the generators downloads or embeds external assets.
 
 ## Rider-bike contract
 
-- The bicycle has a `0.7366 m` outside wheel diameter and `1.16 m` wheelbase.
+- The bicycle has a `0.7366 m` outside wheel diameter, `1.313 m` wheelbase,
+  `0.455 m` chainstay and separately articulated main frame, swingarm, fork and
+  rear shock. These dimensions use Pole Voima K2's public geometry table as a
+  reference without copying branded surfaces, graphics or source assets.
 - Rear axle, front axle, crank, steering, pelvis, camera-target and shadow
   pivots are named in the GLB. The runtime QML uses those same measured values.
-- Frame, wheels, crank, torso, head, helmet, reusable limb and contact-shadow
-  meshes are separate. Runtime wheel rotation follows distance while crank and
-  leg motion follow the authoritative pedal-cycle value.
+- Main frame, swingarm, fork, rear shock, wheels, crank, torso, head, helmet,
+  reusable limb and contact-shadow meshes are separate. Runtime wheel rotation
+  follows distance, suspension follows the physics snapshot, and crank and leg
+  motion follow the authoritative pedal-cycle value.
 - The complete source asset has 636 triangles, six opaque flat-color materials,
   no texture payload and no external source. The runtime component adds only a
   bounded translucent contact-shadow material.

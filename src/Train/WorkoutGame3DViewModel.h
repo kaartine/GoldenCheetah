@@ -68,6 +68,12 @@ class WorkoutGame3DViewModel : public QObject
                NOTIFY sceneChanged)
     Q_PROPERTY(double riderStandingBlend READ riderStandingBlend
                NOTIFY sceneChanged)
+    Q_PROPERTY(double riderPedalEffort READ riderPedalEffort
+               NOTIFY sceneChanged)
+    Q_PROPERTY(double rearSuspensionCompression READ rearSuspensionCompression
+               NOTIFY sceneChanged)
+    Q_PROPERTY(double frontSuspensionCompression READ frontSuspensionCompression
+               NOTIFY sceneChanged)
     Q_PROPERTY(bool riderWalking READ riderWalking NOTIFY sceneChanged)
     Q_PROPERTY(QString riderPoseState READ riderPoseState NOTIFY sceneChanged)
     Q_PROPERTY(double pedalAngle READ pedalAngle NOTIFY sceneChanged)
@@ -211,6 +217,15 @@ public:
     }
     QString successEffectText() const { return currentSuccessEffectText; }
     double riderStandingBlend() const { return currentRiderStandingBlend; }
+    double riderPedalEffort() const { return currentRiderPedalEffort; }
+    double rearSuspensionCompression() const
+    {
+        return currentRearSuspensionCompression;
+    }
+    double frontSuspensionCompression() const
+    {
+        return currentFrontSuspensionCompression;
+    }
     bool riderWalking() const { return currentRiderWalking; }
     QString riderPoseState() const { return currentRiderPoseState; }
     double pedalAngle() const { return currentPedalAngle; }
@@ -362,6 +377,9 @@ private:
     std::uint64_t lastSuccessActionId = 0;
     QString currentSuccessEffectText;
     double currentRiderStandingBlend = 0.0;
+    double currentRiderPedalEffort = 0.0;
+    double currentRearSuspensionCompression = 0.0;
+    double currentFrontSuspensionCompression = 0.0;
     bool currentRiderWalking = false;
     QString currentRiderPoseState = QStringLiteral("pedal");
     bool rootCompressionInitialized = false;

@@ -16,6 +16,7 @@
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
+#include "WorkoutGameRiderAnimation.h"
 #include "WorkoutGameSkinnyGeometry.h"
 #include "WorkoutGameTrailBranch.h"
 #include "Train/TrainerTargetCoordinator.h"
@@ -496,6 +497,32 @@ class TestWorkoutGame3DView : public QObject
     Q_OBJECT
 
 private slots:
+    void riderEffortPoseRequiresPowerAndGrade()
+    {
+        const auto seated = WorkoutGameRiderAnimation::target({
+            175.0, 200.0, 1.0, 82.0, false, false
+        });
+        QVERIFY(seated.pedalEffortBlend > 0.20);
+        QVERIFY(seated.standingBlend < 0.01);
+
+        const auto standing = WorkoutGameRiderAnimation::target({
+            310.0, 260.0, 10.0, 55.0, false, false
+        });
+        QVERIFY(standing.pedalEffortBlend > seated.pedalEffortBlend);
+        QVERIFY(standing.standingBlend > 0.70);
+
+        const auto spinning = WorkoutGameRiderAnimation::target({
+            310.0, 260.0, 10.0, 95.0, false, false
+        });
+        QVERIFY(spinning.standingBlend < standing.standingBlend);
+        QCOMPARE(WorkoutGameRiderAnimation::target({
+            310.0, 260.0, 10.0, 55.0, true, false
+        }).standingBlend, 0.0);
+        QCOMPARE(WorkoutGameRiderAnimation::target({
+            310.0, 260.0, 10.0, 55.0, false, true
+        }).standingBlend, 0.0);
+    }
+
     void rendererRequestsNonBlockingPresentation()
     {
         WorkoutGame3DWindow window(false);
@@ -1697,7 +1724,15 @@ private slots:
         QObject *body = window.rootObject()->findChild<QObject *>(
                 QStringLiteral("riderBodyNode"));
         QVERIFY(body);
-        QVERIFY(std::abs(body->property("y").toDouble() - 1.13) < 1.0e-6);
+        const double bodyY = body->property("y").toDouble();
+        QVERIFY(bodyY >= 1.13);
+        QVERIFY(bodyY <= 1.153);
+        QVERIFY(viewModel.rearSuspensionCompression() > 0.70);
+        QVERIFY(viewModel.frontSuspensionCompression() > 0.70);
+        QObject *sprungBike = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("sprungBikeNode"));
+        QVERIFY(sprungBike);
+        QVERIFY(sprungBike->property("y").toDouble() < -0.07);
 
         frame.world.rider.rearSuspension = 0.0;
         frame.world.rider.frontSuspension = 0.0;

@@ -416,6 +416,11 @@ Item {
             airHeight: workoutGame3D.riderAirHeight
             pump: workoutGame3D.riderPump
             standingBlend: workoutGame3D.riderStandingBlend
+            pedalEffort: workoutGame3D.riderPedalEffort
+            rearSuspensionCompression:
+                workoutGame3D.rearSuspensionCompression
+            frontSuspensionCompression:
+                workoutGame3D.frontSuspensionCompression
             walking: workoutGame3D.riderWalking
             poseState: workoutGame3D.riderPoseState
             riderPitch: workoutGame3D.riderPitch

@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_rider_bike.py",
     "retrievedAt": "2026-08-26",
     "originalFileName": "generate_rider_bike.py",
-    "originalSha256": "0d7eed12cec3082cca12c395d781a32399b6b34c24b283294828f354981594dd",
+    "originalSha256": "c0bd4127af40bcad5a2a66fc098ea84fe555a1d8e6aae6fae60109c38220a8af",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_rider_bike.py"
@@ -35,32 +35,47 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_rider_bike.py",
       "purpose": "source",
-      "sha256": "0d7eed12cec3082cca12c395d781a32399b6b34c24b283294828f354981594dd"
+      "sha256": "c0bd4127af40bcad5a2a66fc098ea84fe555a1d8e6aae6fae60109c38220a8af"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_RiderBike.glb",
       "purpose": "intermediate",
-      "sha256": "8010b676756fc424542cf93a5c66c3a65689145524f830359d3e90a14be019a9"
+      "sha256": "22a342ae4ac46c743fe95b90f94ec9450721100d594e9781df33be02bc926d69"
     },
     {
       "path": "src/Train/qml/WorkoutGameRiderBike.qml",
       "purpose": "runtime",
-      "sha256": "2773d66ed8b52121e499ff6a44e8b7f893c06760cee3c303c5233706b9d731f5"
+      "sha256": "a17429a537dfb049b8da1e852e469c0d57e4e78717bdf6ddbfe334cdd061863b"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "abf189210bdb58fc037ed59af19d594366c824e841d4779d432d5e1ebace7a1a"
+      "sha256": "5434de59bc12f10449681bd5f533018a8e76075e17306f81654d300a23f635fa"
     },
     {
-      "path": "src/Train/qml/assets/meshes/geo_Frame_LOD0_mesh.mesh",
+      "path": "src/Train/qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "fe60dd6f8de569650c8f47702e34298bdbfef043a734ea2caa5045b7d6722529"
+      "sha256": "4038803759b1b62988fc909c519495a243bea85f1b352e30a053778c8c553ec0"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Swingarm_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "6645ef786ca7109896f54d0bdb68d1573acc7cd5dc5c0cd88809c182ee40af78"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Fork_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "cc20a8303308235f59a84049ff9df81f87329e9f21e0a5716661d3de2fe47d14"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_RearShock_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "15647a3915e5e702a229b5a89acb47721547ac21b8ed474dcc477a45eaa455af"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "5f45c386fbee04489b7716b84797ffa9c25c160ffcf454bf1f44094a637c35b7"
+      "sha256": "727bd2753078c6533a0f6cd4256a3d29f1c19282622b9b8fd2a2d0cacd5f8bba"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Head_LOD0_mesh.mesh",
@@ -80,7 +95,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "53f88753a26cd49d5ac2b501b24c80a6c40e0b199128499cd7e8089797eec904"
+      "sha256": "a687447f6d620aebcb709950e0b6340eced51716578ea3302ddbfcf614a22a79"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Shadow_LOD0_mesh.mesh",
@@ -110,7 +125,7 @@
       "Convert the reviewed GLB twice with Qt Balsam 6.8.3 and compare every output byte.",
       "Bind the converted meshes to the deterministic runtime pose properties in WorkoutGameRiderBike.qml.",
       "Apply the shared project-authored rider pixel tile to the bike, jersey, shorts and helmet with mipmapped minification.",
-      "Blend pedal, coast, preload, air, land, absorb, lean and bypass poses from the authoritative runtime snapshot without root motion."
+      "Blend pedal, effort sway, standing climb, suspension, coast, preload, air, land, absorb, lean and bypass poses from the authoritative runtime snapshot without root motion."
     ]
   },
   "technical": {
@@ -118,19 +133,22 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 49912,
-    "trianglesLod0": 636,
+    "glbBytes": 58820,
+    "trianglesLod0": 756,
     "materials": 6,
     "textureBytes": 0,
     "nodes": [
       "GEO_Crank_LOD0",
-      "GEO_Frame_LOD0",
+      "GEO_Fork_LOD0",
       "GEO_FrontWheel_LOD0",
       "GEO_Head_LOD0",
       "GEO_Helmet_LOD0",
       "GEO_Limb_LOD0",
+      "GEO_MainFrame_LOD0",
+      "GEO_RearShock_LOD0",
       "GEO_RearWheel_LOD0",
       "GEO_Shadow_LOD0",
+      "GEO_Swingarm_LOD0",
       "GEO_Torso_LOD0",
       "PIVOT_CAMERA_TARGET",
       "PIVOT_CRANK",
@@ -144,8 +162,8 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [-0.41999998688697815, -0.14000000059604645, -0.9483000040054321],
-      "maximum": [0.41999998688697815, 1.0116506814956665, 0.9483000040054321]
+      "minimum": [-0.41999998688697815, -0.14000000059604645, -0.8233000040054321],
+      "maximum": [0.41999998688697815, 1.0555884838104248, 1.2263000011444092]
     },
     "budgets": {
       "maxGlbBytes": 65536,
@@ -161,6 +179,6 @@
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
     "reviewedAt": "2026-08-26",
-    "notes": "Approved project-authored low-poly rider and 29er bicycle asset. Deterministic Blender and Balsam reproduction, UV and texture policy validation, integrated X11/OpenGL rendering, wheel/crank/leg transform tests, an eight-state action catalog and a 72-frame completed tabletop motion review passed. Runtime poses are snapshot-driven and intentionally use no baked GLB animation or root motion."
+    "notes": "Approved project-authored low-poly rider and full-suspension 29er bicycle asset. Public Pole Voima K2 dimensions inform wheelbase, chainstay, head angle and suspension travel only; no Pole model surfaces, logos or textures are copied. Runtime poses are snapshot-driven and intentionally use no baked GLB animation or root motion."
   }
 }

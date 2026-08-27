@@ -17,6 +17,7 @@
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
+#include "WorkoutGameRiderAnimation.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameSkinnyGeometry.h"
 #include "WorkoutGameTabletopGeometry.h"
@@ -194,6 +195,9 @@ void WorkoutGame3DViewModel::setCourse(
     lastSuccessActionId = 0;
     currentSuccessEffectText.clear();
     currentRiderStandingBlend = 0.0;
+    currentRiderPedalEffort = 0.0;
+    currentRearSuspensionCompression = 0.0;
+    currentFrontSuspensionCompression = 0.0;
     currentRiderWalking = false;
     currentRiderPoseState = QStringLiteral("pedal");
     riderPoseInitialized = false;
@@ -369,6 +373,15 @@ void WorkoutGame3DViewModel::setFrame(
         ++currentSuccessEffectId;
     }
     currentRiderWalking = frame.world.rider.walking;
+    const WorkoutGameRiderAnimationTarget animationTarget =
+            WorkoutGameRiderAnimation::target({
+                currentWatts,
+                currentTargetWatts,
+                finiteOrZero(frame.world.gradePercent),
+                double(currentCadenceRpm),
+                currentRiderWalking,
+                frame.world.rider.airborne
+            });
     double targetStandingBlend = 0.0;
     if (frame.world.terrain == WorkoutGameTerrainKind::Climb) {
         const auto climbPiece = std::find_if(
@@ -393,6 +406,8 @@ void WorkoutGame3DViewModel::setFrame(
                             - piece.challenge.obstacleDistanceMeters);
         }
     }
+    targetStandingBlend = std::max(
+            targetStandingBlend, animationTarget.standingBlend);
     const double poseElapsedSeconds = lastRiderPoseTimeMs >= 0
             ? std::clamp(double(frame.simulation.workoutTimeMs
                                 - lastRiderPoseTimeMs) / 1000.0,
@@ -406,6 +421,20 @@ void WorkoutGame3DViewModel::setFrame(
             - currentRiderStandingBlend) * standingBlend;
     currentRiderStandingBlend = std::clamp(
             currentRiderStandingBlend, 0.0, 1.0);
+    const double effortBlend = 1.0 - std::exp(
+            -poseElapsedSeconds / 0.16);
+    currentRiderPedalEffort += (animationTarget.pedalEffortBlend
+            - currentRiderPedalEffort) * effortBlend;
+    currentRiderPedalEffort = std::clamp(
+            currentRiderPedalEffort, 0.0, 1.0);
+    const double suspensionBlend = 1.0 - std::exp(
+            -poseElapsedSeconds / 0.055);
+    currentRearSuspensionCompression += (std::clamp(
+            finiteOrZero(frame.world.rider.rearSuspension), 0.0, 1.0)
+            - currentRearSuspensionCompression) * suspensionBlend;
+    currentFrontSuspensionCompression += (std::clamp(
+            finiteOrZero(frame.world.rider.frontSuspension), 0.0, 1.0)
+            - currentFrontSuspensionCompression) * suspensionBlend;
     if (frame.world.terrain != WorkoutGameTerrainKind::Roots) {
         rootCompressionInitialized = false;
     }

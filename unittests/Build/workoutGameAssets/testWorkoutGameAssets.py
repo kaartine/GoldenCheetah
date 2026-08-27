@@ -323,7 +323,13 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertAlmostEqual(
             nodes["PIVOT_FRONT_AXLE"]["translation"][2]
             - nodes["PIVOT_REAR_AXLE"]["translation"][2],
-            1.16,
+            1.313,
+            places=5,
+        )
+        self.assertAlmostEqual(
+            nodes["PIVOT_CRANK"]["translation"][2]
+            - nodes["PIVOT_REAR_AXLE"]["translation"][2],
+            0.455,
             places=5,
         )
         self.assertAlmostEqual(

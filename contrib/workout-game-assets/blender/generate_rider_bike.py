@@ -19,15 +19,26 @@ from generate_tabletop import canonical_to_blender, create_empty, make_material
 
 ROOT_NAME = "ROOT_RiderBike"
 WHEEL_RADIUS_M = 0.3683
-WHEELBASE_M = 1.16
-REAR_AXLE = (0.0, WHEEL_RADIUS_M, -WHEELBASE_M * 0.5)
-FRONT_AXLE = (0.0, WHEEL_RADIUS_M, WHEELBASE_M * 0.5)
-CRANK = (0.0, 0.58, -0.08)
-STEER = (0.0, 0.91, 0.43)
-PELVIS = (0.0, 1.08, -0.12)
+WHEELBASE_M = 1.313
+CHAINSTAY_M = 0.455
+HEAD_ANGLE_DEGREES = 63.5
+SUSPENSION_TRAVEL_M = 0.190
+REAR_AXLE = (0.0, WHEEL_RADIUS_M, -CHAINSTAY_M)
+FRONT_AXLE = (0.0, WHEEL_RADIUS_M, WHEELBASE_M - CHAINSTAY_M)
+CRANK = (0.0, 0.45, 0.0)
+STEER = (0.0, 1.04, 0.39)
+PELVIS = (0.0, 1.08, -0.10)
+SEAT = (0.0, 0.96, -0.10)
+HEAD_LOW = (0.0, 0.70, 0.53)
+HEAD_HIGH = (0.0, 1.00, 0.39)
+REAR_PIVOT = (0.0, 0.60, -0.07)
+SHOCK_UPPER = (0.0, 0.88, -0.17)
 
 MESH_NAMES = {
-    "GEO_Frame_LOD0",
+    "GEO_MainFrame_LOD0",
+    "GEO_Swingarm_LOD0",
+    "GEO_Fork_LOD0",
+    "GEO_RearShock_LOD0",
     "GEO_RearWheel_LOD0",
     "GEO_FrontWheel_LOD0",
     "GEO_Crank_LOD0",
@@ -183,27 +194,51 @@ def wheel_mesh(center):
     return vertices, faces
 
 
-def frame_mesh():
+def tube_mesh(rods):
     vertices = []
     faces = []
-    seat = (0.0, 0.94, -0.20)
-    head_low = (0.0, 0.70, 0.35)
-    head_high = (0.0, 0.94, 0.42)
-    frame_rods = (
-        (REAR_AXLE, CRANK, 0.022),
-        (REAR_AXLE, seat, 0.022),
-        (CRANK, seat, 0.026),
-        (CRANK, head_low, 0.030),
-        (seat, head_high, 0.027),
-        (head_low, head_high, 0.032),
-        (head_low, FRONT_AXLE, 0.022),
-        (head_high, FRONT_AXLE, 0.022),
-        ((-0.30, 0.96, 0.43), (0.30, 0.96, 0.43), 0.018),
-        ((-0.13, 0.99, -0.20), (0.13, 0.99, -0.20), 0.025),
-    )
-    for start, end, radius in frame_rods:
+    for start, end, radius in rods:
         append_tube(vertices, faces, start, end, radius)
     return vertices, faces
+
+
+def main_frame_mesh():
+    return tube_mesh((
+        (CRANK, SEAT, 0.033),
+        (CRANK, HEAD_LOW, 0.060),
+        (SEAT, HEAD_HIGH, 0.032),
+        (HEAD_LOW, HEAD_HIGH, 0.038),
+        (REAR_PIVOT, SEAT, 0.028),
+        ((-0.34, STEER[1], STEER[2]),
+         (0.34, STEER[1], STEER[2]), 0.018),
+        ((-0.14, 1.01, SEAT[2]), (0.14, 1.01, SEAT[2]), 0.026),
+    ))
+
+
+def swingarm_mesh():
+    return tube_mesh((
+        (REAR_AXLE, REAR_PIVOT, 0.030),
+        (REAR_AXLE, CRANK, 0.026),
+        (CRANK, REAR_PIVOT, 0.025),
+    ))
+
+
+def fork_mesh():
+    return tube_mesh((
+        ((-0.045, HEAD_LOW[1], HEAD_LOW[2]),
+         (-0.055, FRONT_AXLE[1], FRONT_AXLE[2]), 0.025),
+        ((0.045, HEAD_LOW[1], HEAD_LOW[2]),
+         (0.055, FRONT_AXLE[1], FRONT_AXLE[2]), 0.025),
+        (HEAD_LOW, HEAD_HIGH, 0.031),
+    ))
+
+
+def rear_shock_mesh():
+    midpoint = vector_scale(vector_add(REAR_PIVOT, SHOCK_UPPER), 0.5)
+    return tube_mesh((
+        (REAR_PIVOT, midpoint, 0.027),
+        (midpoint, SHOCK_UPPER, 0.038),
+    ))
 
 
 def crank_mesh():
@@ -319,11 +354,22 @@ def build_scene():
     root["up_axis"] = "+Y"
     root["forward_axis"] = "+Z"
     root["physics_authority"] = "external"
+    root["reference_geometry"] = "Pole Voima K2 public geometry table"
+    root["wheelbase_m"] = WHEELBASE_M
+    root["chainstay_m"] = CHAINSTAY_M
+    root["head_angle_degrees"] = HEAD_ANGLE_DEGREES
+    root["suspension_travel_m"] = SUSPENSION_TRAVEL_M
 
     materials = {name: make_material(name, color) for name, color in MATERIALS}
-    frame_vertices, frame_faces = frame_mesh()
-    create_mesh(root, "GEO_Frame_LOD0", frame_vertices, frame_faces,
-                materials["MAT_Bike_Yellow"])
+    for name, generator in (
+        ("GEO_MainFrame_LOD0", main_frame_mesh),
+        ("GEO_Swingarm_LOD0", swingarm_mesh),
+        ("GEO_Fork_LOD0", fork_mesh),
+        ("GEO_RearShock_LOD0", rear_shock_mesh),
+    ):
+        vertices, faces = generator()
+        create_mesh(root, name, vertices, faces,
+                    materials["MAT_Bike_Yellow"])
     for name, center in (
         ("GEO_RearWheel_LOD0", REAR_AXLE),
         ("GEO_FrontWheel_LOD0", FRONT_AXLE),
@@ -375,6 +421,8 @@ def self_check(root) -> tuple[int, int]:
         raise RuntimeError("Wheelbase contract changed")
     if not math.isclose(REAR_AXLE[1], WHEEL_RADIUS_M, abs_tol=1e-9):
         raise RuntimeError("29er wheel does not touch the ground")
+    if not math.isclose(CRANK[2] - REAR_AXLE[2], CHAINSTAY_M, abs_tol=1e-9):
+        raise RuntimeError("Chainstay contract changed")
     triangle_count = 0
     vertex_count = 0
     for name in MESH_NAMES:

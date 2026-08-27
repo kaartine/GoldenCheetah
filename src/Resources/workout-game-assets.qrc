@@ -27,7 +27,10 @@
         <file alias="qml/assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_Crank_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh</file>
-        <file alias="qml/assets/meshes/geo_Frame_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Frame_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_Swingarm_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Swingarm_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_Fork_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Fork_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_RearShock_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_RearShock_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_Head_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Head_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh</file>

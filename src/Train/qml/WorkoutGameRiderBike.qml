@@ -10,6 +10,9 @@ Node {
     required property real airHeight
     required property real pump
     required property real standingBlend
+    required property real pedalEffort
+    required property real rearSuspensionCompression
+    required property real frontSuspensionCompression
     required property bool walking
     required property string poseState
     required property real riderPitch
@@ -17,6 +20,11 @@ Node {
     required property real riderRoll
 
     readonly property real wheelRadius: 0.3683
+    readonly property real wheelbase: 1.313
+    readonly property real rearAxleZ: -0.455
+    readonly property real frontAxleZ: 0.858
+    readonly property real crankY: 0.45
+    readonly property real crankZ: 0
     readonly property real wheelAngle:
         -distanceMeters / (2 * Math.PI * wheelRadius) * 360
     property real actionHeight: poseState === "preload" ? -0.09
@@ -33,13 +41,29 @@ Node {
     property real actionForward: poseState === "air" ? 0.05
                                  : poseState === "bypass" ? -0.04 : 0
     property real coastBlend: poseState === "coast" ? 1 : 0
+    readonly property real rearTravel: 0.11 * Math.max(
+        0, Math.min(1, rearSuspensionCompression))
+    readonly property real frontTravel: 0.11 * Math.max(
+        0, Math.min(1, frontSuspensionCompression))
+    readonly property real frameHeave: -0.5 * (rearTravel + frontTravel)
+    readonly property real framePitch: Math.atan2(
+        rearTravel - frontTravel, wheelbase) * 180 / Math.PI
 
     Behavior on actionHeight { NumberAnimation { duration: 120 } }
     Behavior on actionPitch { NumberAnimation { duration: 120 } }
     Behavior on actionForward { NumberAnimation { duration: 120 } }
     Behavior on coastBlend { NumberAnimation { duration: 120 } }
 
-    readonly property real bodyY: 1.23 + pump + 0.14 * standingBlend
+    readonly property real pedalStroke: Math.sin(crankRadians)
+    readonly property real effortSway: pedalStroke * pedalEffort
+                                  * (0.012 + 0.024 * standingBlend)
+    readonly property real effortRoll: -pedalStroke * pedalEffort
+                                  * (0.8 + 2.4 * standingBlend)
+    readonly property real effortBob: (0.5 + 0.5 * Math.cos(
+        2 * crankRadians)) * pedalEffort * (0.008 + 0.015 * standingBlend)
+    readonly property real bodyX: effortSway
+    readonly property real bodyY: 1.23 + pump + effortBob
+                                  + 0.14 * standingBlend
                                   + actionHeight
                                   - (walking ? 0.10 : 0)
     readonly property real bodyZ: -0.03 + 0.12 * standingBlend
@@ -49,18 +73,20 @@ Node {
     readonly property real crankRadians: pedalAngle * Math.PI / 180
     readonly property vector3d leftPedal: Qt.vector3d(
         -0.13,
-        (0.58 + 0.16 * Math.cos(crankRadians)) * (1 - coastBlend)
-            + 0.58 * coastBlend,
-        (-0.08 + 0.16 * Math.sin(crankRadians)) * (1 - coastBlend)
-            + 0.08 * coastBlend)
+        (crankY + 0.16 * Math.cos(crankRadians)) * (1 - coastBlend)
+            + crankY * coastBlend,
+        (crankZ + 0.16 * Math.sin(crankRadians)) * (1 - coastBlend)
+            + (crankZ + 0.16) * coastBlend)
     readonly property vector3d rightPedal: Qt.vector3d(
         0.13,
-        (0.58 - 0.16 * Math.cos(crankRadians)) * (1 - coastBlend)
-            + 0.58 * coastBlend,
-        (-0.08 - 0.16 * Math.sin(crankRadians)) * (1 - coastBlend)
-            - 0.24 * coastBlend)
-    readonly property vector3d leftHip: Qt.vector3d(-0.12, pelvisY, pelvisZ)
-    readonly property vector3d rightHip: Qt.vector3d(0.12, pelvisY, pelvisZ)
+        (crankY - 0.16 * Math.cos(crankRadians)) * (1 - coastBlend)
+            + crankY * coastBlend,
+        (crankZ - 0.16 * Math.sin(crankRadians)) * (1 - coastBlend)
+            + (crankZ - 0.16) * coastBlend)
+    readonly property vector3d leftHip: Qt.vector3d(
+        bodyX - 0.12, pelvisY, pelvisZ)
+    readonly property vector3d rightHip: Qt.vector3d(
+        bodyX + 0.12, pelvisY, pelvisZ)
     readonly property vector3d leftKnee: Qt.vector3d(
         -0.13, (leftHip.y + leftPedal.y) * 0.5 + 0.12,
         (leftHip.z + leftPedal.z) * 0.5 + 0.10)
@@ -183,20 +209,14 @@ Node {
         objectName: "articulatedRiderNode"
         eulerRotation: Qt.vector3d(riderPitch, riderYaw, riderRoll)
 
-        Model {
-            source: "assets/meshes/geo_Frame_LOD0_mesh.mesh"
-            materials: bikeMaterial
-            castsShadows: false
-            receivesShadows: false
-        }
-
         Node {
             objectName: "rearWheelPivot"
-            position: Qt.vector3d(0, 0.3683, -0.58)
+            position: Qt.vector3d(0, root.wheelRadius, root.rearAxleZ)
             eulerRotation.x: root.wheelAngle
             Model {
                 source: "assets/meshes/geo_RearWheel_LOD0_mesh.mesh"
-                position: Qt.vector3d(0, -0.3683, 0.58)
+                position: Qt.vector3d(
+                    0, -root.wheelRadius, -root.rearAxleZ)
                 materials: tireMaterial
                 castsShadows: false
                 receivesShadows: false
@@ -204,23 +224,26 @@ Node {
         }
         Node {
             objectName: "frontWheelPivot"
-            position: Qt.vector3d(0, 0.3683, 0.58)
+            position: Qt.vector3d(0, root.wheelRadius, root.frontAxleZ)
             eulerRotation.x: root.wheelAngle
             Model {
                 source: "assets/meshes/geo_FrontWheel_LOD0_mesh.mesh"
-                position: Qt.vector3d(0, -0.3683, -0.58)
+                position: Qt.vector3d(
+                    0, -root.wheelRadius, -root.frontAxleZ)
                 materials: tireMaterial
                 castsShadows: false
                 receivesShadows: false
             }
         }
+
         Node {
-            objectName: "crankPivot"
-            position: Qt.vector3d(0, 0.58, -0.08)
-            eulerRotation.x: root.pedalAngle
+            objectName: "rearSwingarmPivot"
+            position: Qt.vector3d(0, root.wheelRadius, root.rearAxleZ)
+            eulerRotation.x: -root.rearTravel * 34
             Model {
-                source: "assets/meshes/geo_Crank_LOD0_mesh.mesh"
-                position: Qt.vector3d(0, -0.58, 0.08)
+                source: "assets/meshes/geo_Swingarm_LOD0_mesh.mesh"
+                position: Qt.vector3d(
+                    0, -root.wheelRadius, -root.rearAxleZ)
                 materials: bikeMaterial
                 castsShadows: false
                 receivesShadows: false
@@ -228,90 +251,150 @@ Node {
         }
 
         Node {
-            id: body
-            objectName: "riderBodyNode"
-            position: Qt.vector3d(0, root.bodyY, root.bodyZ)
-            eulerRotation.x: 13 + 8 * root.standingBlend + root.actionPitch
-                               - (root.walking ? 5 : 0)
+            objectName: "frontForkPivot"
+            position: Qt.vector3d(0, root.wheelRadius, root.frontAxleZ)
+            eulerRotation.x: root.frontTravel * 18
             Model {
-                source: "assets/meshes/geo_Torso_LOD0_mesh.mesh"
-                position: Qt.vector3d(0, -0.15, -0.09)
-                materials: jerseyMaterial
+                source: "assets/meshes/geo_Fork_LOD0_mesh.mesh"
+                position: Qt.vector3d(
+                    0, -root.wheelRadius, -root.frontAxleZ)
+                materials: bikeMaterial
                 castsShadows: false
                 receivesShadows: false
             }
+        }
+
+        Node {
+            id: sprungBike
+            objectName: "sprungBikeNode"
+            y: root.frameHeave
+            eulerRotation: Qt.vector3d(
+                root.framePitch, 0, root.effortRoll * 0.22)
+
             Model {
-                source: "assets/meshes/geo_Torso_LOD0_mesh.mesh"
-                position: Qt.vector3d(0, -0.11, -0.19)
-                scale: Qt.vector3d(0.72, 0.70, 0.60)
-                materials: shortsMaterial
+                source: "assets/meshes/geo_MainFrame_LOD0_mesh.mesh"
+                materials: bikeMaterial
                 castsShadows: false
                 receivesShadows: false
             }
+
+            Model {
+                source: "assets/meshes/geo_RearShock_LOD0_mesh.mesh"
+                scale: Qt.vector3d(
+                    1, Math.max(0.72, 1 - root.rearTravel * 1.8), 1)
+                materials: bikeMaterial
+                castsShadows: false
+                receivesShadows: false
+            }
+
             Node {
-                position: Qt.vector3d(0, 0.42, -0.03)
+                objectName: "crankPivot"
+                position: Qt.vector3d(0, root.crankY, root.crankZ)
+                eulerRotation.x: root.pedalAngle
                 Model {
-                    source: "assets/meshes/geo_Head_LOD0_mesh.mesh"
-                    materials: skinMaterial
-                    castsShadows: false
-                    receivesShadows: false
-                }
-                Model {
-                    source: "assets/meshes/geo_Helmet_LOD0_mesh.mesh"
-                    y: 0.045
-                    materials: helmetMaterial
+                    source: "assets/meshes/geo_Crank_LOD0_mesh.mesh"
+                    position: Qt.vector3d(0, -root.crankY, -root.crankZ)
+                    materials: bikeMaterial
                     castsShadows: false
                     receivesShadows: false
                 }
             }
-        }
 
-        LimbSegment {
-            objectName: "leftUpperLeg"
-            from: root.leftHip
-            to: root.leftKnee
-            segmentMaterial: shortsMaterial
-        }
-        LimbSegment {
-            objectName: "leftLowerLeg"
-            from: root.leftKnee
-            to: root.leftPedal
-            thickness: 0.62
-            segmentMaterial: skinMaterial
-        }
-        LimbSegment {
-            from: root.rightHip
-            to: root.rightKnee
-            segmentMaterial: shortsMaterial
-        }
-        LimbSegment {
-            from: root.rightKnee
-            to: root.rightPedal
-            thickness: 0.62
-            segmentMaterial: skinMaterial
-        }
+            Node {
+                id: body
+                objectName: "riderBodyNode"
+                position: Qt.vector3d(root.bodyX, root.bodyY, root.bodyZ)
+                eulerRotation: Qt.vector3d(
+                    13 + 8 * root.standingBlend + root.actionPitch
+                        - (root.walking ? 5 : 0),
+                    0,
+                    root.effortRoll)
+                Model {
+                    source: "assets/meshes/geo_Torso_LOD0_mesh.mesh"
+                    position: Qt.vector3d(0, -0.15, -0.09)
+                    materials: jerseyMaterial
+                    castsShadows: false
+                    receivesShadows: false
+                }
+                Model {
+                    source: "assets/meshes/geo_Torso_LOD0_mesh.mesh"
+                    position: Qt.vector3d(0, -0.11, -0.19)
+                    scale: Qt.vector3d(0.72, 0.70, 0.60)
+                    materials: shortsMaterial
+                    castsShadows: false
+                    receivesShadows: false
+                }
+                Node {
+                    position: Qt.vector3d(0, 0.42, -0.03)
+                    Model {
+                        source: "assets/meshes/geo_Head_LOD0_mesh.mesh"
+                        materials: skinMaterial
+                        castsShadows: false
+                        receivesShadows: false
+                    }
+                    Model {
+                        source: "assets/meshes/geo_Helmet_LOD0_mesh.mesh"
+                        y: 0.045
+                        materials: helmetMaterial
+                        castsShadows: false
+                        receivesShadows: false
+                    }
+                }
+            }
 
-        LimbSegment {
-            from: Qt.vector3d(-0.19, root.bodyY + 0.24, root.bodyZ - 0.04)
-            to: Qt.vector3d(-0.25, root.bodyY + 0.07, root.bodyZ + 0.16)
-            thickness: 0.58
-        }
-        LimbSegment {
-            from: Qt.vector3d(-0.25, root.bodyY + 0.07, root.bodyZ + 0.16)
-            to: Qt.vector3d(-0.28, 0.96, 0.43)
-            thickness: 0.52
-            segmentMaterial: skinMaterial
-        }
-        LimbSegment {
-            from: Qt.vector3d(0.19, root.bodyY + 0.24, root.bodyZ - 0.04)
-            to: Qt.vector3d(0.25, root.bodyY + 0.07, root.bodyZ + 0.16)
-            thickness: 0.58
-        }
-        LimbSegment {
-            from: Qt.vector3d(0.25, root.bodyY + 0.07, root.bodyZ + 0.16)
-            to: Qt.vector3d(0.28, 0.96, 0.43)
-            thickness: 0.52
-            segmentMaterial: skinMaterial
+            LimbSegment {
+                objectName: "leftUpperLeg"
+                from: root.leftHip
+                to: root.leftKnee
+                segmentMaterial: shortsMaterial
+            }
+            LimbSegment {
+                objectName: "leftLowerLeg"
+                from: root.leftKnee
+                to: root.leftPedal
+                thickness: 0.62
+                segmentMaterial: skinMaterial
+            }
+            LimbSegment {
+                from: root.rightHip
+                to: root.rightKnee
+                segmentMaterial: shortsMaterial
+            }
+            LimbSegment {
+                from: root.rightKnee
+                to: root.rightPedal
+                thickness: 0.62
+                segmentMaterial: skinMaterial
+            }
+
+            LimbSegment {
+                from: Qt.vector3d(root.bodyX - 0.19,
+                                  root.bodyY + 0.24, root.bodyZ - 0.04)
+                to: Qt.vector3d(root.bodyX - 0.25,
+                                root.bodyY + 0.07, root.bodyZ + 0.16)
+                thickness: 0.58
+            }
+            LimbSegment {
+                from: Qt.vector3d(root.bodyX - 0.25,
+                                  root.bodyY + 0.07, root.bodyZ + 0.16)
+                to: Qt.vector3d(-0.30, 1.04, 0.39)
+                thickness: 0.52
+                segmentMaterial: skinMaterial
+            }
+            LimbSegment {
+                from: Qt.vector3d(root.bodyX + 0.19,
+                                  root.bodyY + 0.24, root.bodyZ - 0.04)
+                to: Qt.vector3d(root.bodyX + 0.25,
+                                root.bodyY + 0.07, root.bodyZ + 0.16)
+                thickness: 0.58
+            }
+            LimbSegment {
+                from: Qt.vector3d(root.bodyX + 0.25,
+                                  root.bodyY + 0.07, root.bodyZ + 0.16)
+                to: Qt.vector3d(0.30, 1.04, 0.39)
+                thickness: 0.52
+                segmentMaterial: skinMaterial
+            }
         }
     }
 }
