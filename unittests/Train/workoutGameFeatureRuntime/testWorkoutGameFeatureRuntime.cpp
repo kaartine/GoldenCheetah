@@ -766,47 +766,54 @@ private slots:
         QVERIFY(std::abs(afterReturn) < 1e-9);
     }
 
-    void bermSafeLineStaysInsideTheSameTrailAndRejoinsItsSockets()
+    void ambientBermUsesEffortToSelectAContinuousBankLine()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
         const WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(course, 200.0);
         WorkoutGameFeatureRuntime runtime;
         QVERIFY(runtime.configure(road));
-        const int section = sectionFor(course, WorkoutGameTerrainKind::Berm);
-        const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
-        QVERIFY(piece != nullptr);
-        QCOMPARE(piece->challenge.bypassStartDistanceMeters,
-                 piece->challenge.bypassEndDistanceMeters);
-        QCOMPARE(piece->challenge.bypassLateralMeters, 0.0);
+        const auto sectionIt = std::find_if(
+                course.sections.begin(), course.sections.end(),
+                [](const WorkoutGameSection &candidate) {
+                    return candidate.terrain == WorkoutGameTerrainKind::Berm;
+                });
+        QVERIFY(sectionIt != course.sections.end());
+        const int section = int(std::distance(course.sections.begin(), sectionIt));
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [section](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.sourceSectionIndex == std::size_t(section)
+                            && candidate.terrain == WorkoutGameTerrainKind::Berm;
+                });
+        QVERIFY(piece != road.pieces.end());
+        QVERIFY(!piece->challenge.enabled);
         const WorkoutGameBermGeometryProfile profile =
                 WorkoutGameBermGeometry::profile(piece->difficulty);
-        const WorkoutGameFeatureRuntimeSnapshot layout = runtime.update(
-                snapshot(section, 0.99,
-                         WorkoutGameFeatureOutcome::Completed));
-        QCOMPARE(layout.actionStartDistanceMeters,
-                 piece->challenge.obstacleDistanceMeters
-                    + profile.startMeters);
-        QCOMPARE(layout.actionEndDistanceMeters,
-                 piece->challenge.obstacleDistanceMeters
-                    + profile.endMeters);
-        const auto lateralAt = [&](double local) {
-            return runtime.update(snapshot(
-                    section,
-                    progressAtDistance(
-                        road, section,
-                        piece->challenge.obstacleDistanceMeters + local),
-                    WorkoutGameFeatureOutcome::Bypassed,
-                    WorkoutGameRoute::SafeBypass)).lateralOffsetMeters;
+        const auto lineAt = [&](double local, double watts) {
+            return runtime.update(
+                    snapshot(section,
+                             progressAtDistance(
+                                road, section,
+                                piece->geometryAnchorDistanceMeters + local),
+                             WorkoutGameFeatureOutcome::Completed),
+                    watts, 180.0);
         };
 
-        QCOMPARE(lateralAt(profile.startMeters), 0.0);
-        const double inside = lateralAt(0.0);
-        QVERIFY(inside * piece->turnRadians > 0.0);
-        QVERIFY(std::abs(inside) <= 0.45);
-        QCOMPARE(lateralAt(profile.endMeters), 0.0);
-        QVERIFY(std::abs(lateralAt(profile.startMeters + 0.05)) < 0.01);
-        QVERIFY(std::abs(lateralAt(profile.endMeters - 0.05)) < 0.01);
+        const auto target = lineAt(0.0, 180.0);
+        const auto above = lineAt(0.0, 270.0);
+        const auto below = lineAt(0.0, 90.0);
+        QCOMPARE(target.phase, WorkoutGameFeaturePhase::None);
+        QCOMPARE(target.outcome, WorkoutGameFeatureOutcome::None);
+        QCOMPARE(target.actionId, std::uint64_t(0));
+        QVERIFY(std::abs(target.lateralOffsetMeters) < 1e-9);
+        QVERIFY(above.bermLineBias > 0.99);
+        QVERIFY(below.bermLineBias < -0.99);
+        QVERIFY(above.lateralOffsetMeters * piece->turnRadians < 0.0);
+        QVERIFY(below.lateralOffsetMeters * piece->turnRadians > 0.0);
+        QVERIFY(std::abs(above.lateralOffsetMeters) <= 0.55);
+        QCOMPARE(lineAt(profile.startMeters, 270.0).lateralOffsetMeters, 0.0);
+        QCOMPARE(lineAt(profile.endMeters, 90.0).lateralOffsetMeters, 0.0);
     }
 
     void dropPoseDoesNotSynthesizeASecondLandingImpact()

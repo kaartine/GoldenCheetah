@@ -981,21 +981,29 @@ private slots:
                  profile.socketHalfWidthMeters);
         QCOMPARE(profile.halfWidthMeters(0.0),
                  profile.activeHalfWidthMeters);
-        QCOMPARE(profile.safeLineLateralMeters(
-                     profile.startMeters, RightTurnRadians), 0.0);
-        QVERIFY(profile.safeLineLateralMeters(
-                    0.0, RightTurnRadians) > 0.44);
-        QCOMPARE(profile.safeLineLateralMeters(
-                     profile.endMeters, RightTurnRadians), 0.0);
-        QVERIFY(profile.riderWorldRollRadians(
-                    0.0, RightTurnRadians, 5.0, false) < -0.25);
-        QVERIFY(std::abs(profile.riderWorldRollRadians(
-                    0.0, RightTurnRadians, 5.0, true))
-                < std::abs(profile.riderWorldRollRadians(
-                    0.0, RightTurnRadians, 5.0, false)));
+        QCOMPARE(profile.effortLineBias(180.0, 180.0), 0.0);
+        QCOMPARE(profile.effortLineBias(270.0, 180.0), 1.0);
+        QCOMPARE(profile.effortLineBias(90.0, 180.0), -1.0);
+        QCOMPARE(profile.effortLineLateralMeters(
+                     profile.startMeters, RightTurnRadians, 1.0), 0.0);
+        QVERIFY(profile.effortLineLateralMeters(
+                    0.0, RightTurnRadians, 1.0) < -0.51);
+        QVERIFY(profile.effortLineLateralMeters(
+                    0.0, RightTurnRadians, -1.0) > 0.51);
+        QCOMPARE(profile.effortLineLateralMeters(
+                     profile.endMeters, RightTurnRadians, -1.0), 0.0);
+        const double centerRoll = profile.riderWorldRollRadians(
+                0.0, RightTurnRadians, 5.0, 0.0);
+        const double highLineRoll = profile.riderWorldRollRadians(
+                0.0, RightTurnRadians, 5.0, 1.0);
+        const double lowLineRoll = profile.riderWorldRollRadians(
+                0.0, RightTurnRadians, 5.0, -1.0);
+        QVERIFY(centerRoll < -0.25);
+        QVERIFY(std::abs(highLineRoll) > std::abs(centerRoll));
+        QVERIFY(std::abs(lowLineRoll) < std::abs(centerRoll));
     }
 
-    void bermRoadSampleUsesTheSameLocalCurveAndBankProfile()
+    void ambientBermRoadSampleUsesTheSameLocalCurveAndBankProfile()
     {
         WorkoutGameCourse source;
         source.status = WorkoutGameCourseStatus::Ready;
@@ -1008,7 +1016,7 @@ private slots:
         section.lengthMeters = 70.0;
         section.targetWatts = 180.0;
         section.difficulty = 0.65;
-        section.challengeCount = 1;
+        section.challengeCount = 0;
         section.visualVariant = 0u;
         source.sections = {section};
         const WorkoutGameRoadCourse road =
@@ -1016,12 +1024,13 @@ private slots:
         const auto piece = std::find_if(
                 road.pieces.begin(), road.pieces.end(),
                 [](const WorkoutGameRoadPiece &candidate) {
-                    return candidate.challenge.enabled;
+                    return candidate.terrain == WorkoutGameTerrainKind::Berm;
                 });
         QVERIFY(piece != road.pieces.end());
+        QVERIFY(!piece->challenge.enabled);
         const WorkoutGameBermGeometryProfile profile =
                 WorkoutGameBermGeometry::profile(piece->difficulty);
-        const double center = piece->challenge.obstacleDistanceMeters;
+        const double center = piece->geometryAnchorDistanceMeters;
         QCOMPARE(std::abs(piece->turnRadians),
                  profile.turnMagnitudeRadians);
         const WorkoutGameRoadSample entry =
@@ -1061,7 +1070,7 @@ private slots:
             section.lengthMeters = 400.0;
             section.targetWatts = 180.0;
             section.difficulty = 0.65;
-            section.challengeCount = 1;
+            section.challengeCount = 0;
             section.visualVariant = variant;
             source.sections = {section};
             return WorkoutGameRoadCourseBuilder::build(source, 200.0);
@@ -1073,18 +1082,18 @@ private slots:
         QCOMPARE(right.pieces.size(), std::size_t(1));
         const WorkoutGameRoadPiece &leftPiece = left.pieces.front();
         const WorkoutGameRoadPiece &rightPiece = right.pieces.front();
-        QVERIFY(leftPiece.challenge.enabled);
-        QVERIFY(rightPiece.challenge.enabled);
+        QVERIFY(!leftPiece.challenge.enabled);
+        QVERIFY(!rightPiece.challenge.enabled);
         const WorkoutGameBermGeometryProfile profile =
                 WorkoutGameBermGeometry::profile(leftPiece.difficulty);
-        QVERIFY(leftPiece.challenge.obstacleDistanceMeters
+        QVERIFY(leftPiece.geometryAnchorDistanceMeters
                     + profile.startMeters > 0.0);
-        QVERIFY(leftPiece.challenge.obstacleDistanceMeters
+        QVERIFY(leftPiece.geometryAnchorDistanceMeters
                     + profile.endMeters < left.totalLengthMeters);
 
-        const double start = leftPiece.challenge.obstacleDistanceMeters
+        const double start = leftPiece.geometryAnchorDistanceMeters
                 + profile.startMeters;
-        const double end = leftPiece.challenge.obstacleDistanceMeters
+        const double end = leftPiece.geometryAnchorDistanceMeters
                 + profile.endMeters;
         WorkoutGameRoadSample previous =
                 WorkoutGameRoadCourseBuilder::sample(left, start);

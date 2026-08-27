@@ -55,6 +55,7 @@ struct WorkoutGameFeatureRuntimeSnapshot
     double actionEndDistanceMeters = 0.0;
     double distanceToObstacleMeters = 0.0;
     double readiness = 0.0;
+    double bermLineBias = 0.0;
     double lateralOffsetMeters = 0.0;
     double verticalOffsetMeters = 0.0;
     double flightDurationSeconds = 0.0;
@@ -73,7 +74,9 @@ public:
     static bool airborneExpected(
             const WorkoutGameFeatureRuntimeSnapshot &feature);
     WorkoutGameFeatureRuntimeSnapshot update(
-            const WorkoutGameSimulationSnapshot &simulation) const;
+            const WorkoutGameSimulationSnapshot &simulation,
+            double actualWatts = 0.0,
+            double targetWatts = 0.0) const;
 
 private:
     struct SectionLayout
@@ -84,6 +87,8 @@ private:
         double endDistanceMeters = 0.0;
         std::int64_t durationMs = 0;
         std::size_t challengePieceIndex =
+                std::numeric_limits<std::size_t>::max();
+        std::size_t terrainPieceIndex =
                 std::numeric_limits<std::size_t>::max();
     };
 

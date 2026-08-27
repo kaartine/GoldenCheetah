@@ -53,8 +53,7 @@ WorkoutGameFeatureChallengeProfile baseProfile(
         return {true, Cue::HoldLine, 0.20, 0.85,
                 1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::Berm:
-        return {true, Cue::CarrySpeed, 0.40, 0.78,
-                1.0, 0.0, 0.0, 0.0, 0.0, 0};
+        return {};
     case WorkoutGameTerrainKind::Tabletop:
         return {true, Cue::Jump, 0.62, 0.72,
                 1.0, 0.0, 0.0, 0.0, 0.0, 0};

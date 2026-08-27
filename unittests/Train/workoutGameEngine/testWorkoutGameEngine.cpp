@@ -175,7 +175,7 @@ private slots:
             priorDistance = left.visual.world.rider.distanceMeters;
         }
         QVERIFY(priorDistance > 100.0);
-        QCOMPARE(featureCueCount, 14);
+        QCOMPARE(featureCueCount, 10);
         QVERIFY(landingCueCount > 0);
     }
 
@@ -281,7 +281,7 @@ private slots:
                     .arg(int(mode)).arg(int(expected)).arg(section)));
                 ++observedFeatures;
             }
-            QCOMPARE(observedFeatures, 14);
+            QCOMPARE(observedFeatures, 10);
             if (expected == WorkoutGameFeatureOutcome::Completed) {
                 QVERIFY(maximumMainLineLateralMeters < 0.01);
             } else {

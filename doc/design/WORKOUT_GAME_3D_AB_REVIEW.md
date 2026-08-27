@@ -39,9 +39,10 @@ The directory contains `feature-contact-sheet.png`, `comparison-session.mp4`,
 per-feature image pairs, and both source session videos.
 
 The application session in that artifact uses the five-feature lab included in
-the reviewed AppImage. The updated source now provides a 105-second audit
-course containing fourteen challenges across all eleven feature types,
-including four progressive berms. Static catalogs cover all eleven types.
+the reviewed AppImage. The updated source now provides a 109.5-second audit
+course containing ten scored challenges across eleven terrain types plus six
+progressive ambient berms. Berm line height and lean respond continuously to
+power without presenting a challenge cue. Static catalogs cover all types.
 
 ## Preserve These Properties
 
@@ -210,7 +211,7 @@ them.
    dust/debris, and clear success feedback.
 3. Validate progressive virtual gearing and speed response with generated and
    real trainer input.
-4. Test the 105-second all-feature course on the target laptop and record a
+4. Test the 109.5-second all-terrain course on the target laptop and record a
    successful and bypassed pass without production athlete data.
 
 ### P2: Later additions

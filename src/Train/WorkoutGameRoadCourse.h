@@ -63,6 +63,7 @@ struct WorkoutGameRoadPiece
     double riseMeters = 0.0;
     double difficulty = 0.0;
     double reliefScale = 1.0;
+    double geometryAnchorDistanceMeters = 0.0;
     WorkoutGameRoadConnector entry;
     WorkoutGameRoadConnector exit;
     WorkoutGameRoadChallengeGate challenge;

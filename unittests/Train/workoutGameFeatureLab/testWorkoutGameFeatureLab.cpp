@@ -45,17 +45,13 @@ private slots:
             WorkoutGameTerrainKind::Climb,
             WorkoutGameTerrainKind::BunnyHop,
             WorkoutGameTerrainKind::Skinny,
-            WorkoutGameTerrainKind::Berm,
-            WorkoutGameTerrainKind::Berm,
-            WorkoutGameTerrainKind::Berm,
-            WorkoutGameTerrainKind::Berm,
             WorkoutGameTerrainKind::RockSlab
         };
         QCOMPARE(challenged, expected);
-        QCOMPARE(course.durationMs, std::int64_t(105000));
+        QCOMPARE(course.durationMs, std::int64_t(109500));
         QCOMPARE(course.sections.back().terrain,
                  WorkoutGameTerrainKind::SmoothTrail);
-        QCOMPARE(course.sections.back().startMs, std::int64_t(100000));
+        QCOMPARE(course.sections.back().startMs, std::int64_t(104500));
         QCOMPARE(course.sections.back().durationMs, std::int64_t(5000));
         QCOMPARE(course.sections.back().lengthMeters, 30.0);
         QCOMPARE(course.sections.back().targetWatts, 110.0);
@@ -70,14 +66,14 @@ private slots:
 
         std::vector<const WorkoutGameRoadPiece *> berms;
         for (const WorkoutGameRoadPiece &piece : road.pieces) {
-            if (piece.terrain == WorkoutGameTerrainKind::Berm
-                    && piece.challenge.enabled) {
+            if (piece.terrain == WorkoutGameTerrainKind::Berm) {
                 berms.push_back(&piece);
             }
         }
-        QCOMPARE(berms.size(), std::size_t(4));
+        QCOMPARE(berms.size(), std::size_t(6));
         for (std::size_t index = 0; index < berms.size(); ++index) {
             const WorkoutGameRoadPiece &piece = *berms[index];
+            QVERIFY(!piece.challenge.enabled);
             const auto profile = WorkoutGameBermGeometry::profile(
                     piece.difficulty);
             QCOMPARE(std::abs(piece.turnRadians),
@@ -98,7 +94,7 @@ private slots:
                 ++rollingTransitions;
             }
         }
-        QCOMPARE(rollingTransitions, 5);
+        QCOMPARE(rollingTransitions, 7);
     }
 
     void skinnyIsLongAndHasNoChickenLine()

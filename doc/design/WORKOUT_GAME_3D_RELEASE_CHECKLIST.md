@@ -17,9 +17,9 @@ visual-readability task.
   features at 1280 by 720 and a fixed ten-metre approach.
 - [x] `AUD-02` Capture isolated-data legacy and 3D application sessions plus a
   side-by-side comparison video.
-- [x] `AUD-03` Provide a deterministic 105-second course containing fourteen
-  challenges across all eleven feature types with completed and bypassed
-  scenarios.
+- [x] `AUD-03` Provide a deterministic 109.5-second course containing ten
+  scored challenges across eleven terrain types, six ambient berms, and
+  completed and bypassed scenarios for challenge features.
 - [x] `AUD-04` Preserve normal trail half-width at 0.68 m with a geometry
   regression test.
 - [x] `AUD-05` Document feature-by-feature graphics, physics, animation, HUD,

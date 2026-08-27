@@ -425,6 +425,9 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
                 to.feature.distanceToObstacleMeters, amount);
         result.feature.readiness = lerp(
                 from.feature.readiness, to.feature.readiness, amount);
+        result.feature.bermLineBias = lerp(
+                from.feature.bermLineBias,
+                to.feature.bermLineBias, amount);
         result.feature.lateralOffsetMeters = lerp(
                 from.feature.lateralOffsetMeters,
                 to.feature.lateralOffsetMeters, amount);

@@ -89,7 +89,8 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
             input.drivetrainSpeedLimitKph, MaximumSpeedKph);
     const WorkoutGameSimulationSnapshot snapshot = simulation.update(input);
     const WorkoutGameFeatureRuntimeSnapshot feature =
-            featureRuntime.update(snapshot);
+            featureRuntime.update(snapshot, input.actualWatts,
+                                  input.targetWatts);
     WorkoutGameWorldSnapshot world;
     WorkoutGameCameraSnapshot view;
     if (snapshot.ready

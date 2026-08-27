@@ -19,16 +19,17 @@ constexpr std::int64_t FeatureDurationMs = 5000;
 constexpr std::int64_t TabletopDurationMs = 12000;
 constexpr std::int64_t DropDurationMs = 7000;
 constexpr std::int64_t SkinnyDurationMs = 8000;
+constexpr std::int64_t BermDurationMs = 4000;
 constexpr std::int64_t RecoveryDurationMs = 1000;
-constexpr std::int64_t FlowTransitionDurationMs = 2000;
+constexpr std::int64_t FlowTransitionDurationMs = 1500;
 constexpr std::int64_t FinalRunoutDurationMs = 5000;
 constexpr double FeatureLengthMeters = 28.0;
 constexpr double DropLengthMeters = 46.0;
 constexpr double SkinnyLengthMeters = 44.0;
-constexpr double BermLengthMeters = 36.0;
+constexpr double BermLengthMeters = 32.0;
 constexpr double TabletopLengthMeters = 84.0;
 constexpr double RecoveryLengthMeters = 8.0;
-constexpr double FlowTransitionLengthMeters = 22.0;
+constexpr double FlowTransitionLengthMeters = 16.0;
 constexpr double FinalRunoutLengthMeters = 30.0;
 
 WorkoutGameFeature featureForTerrain(WorkoutGameTerrainKind terrain)
@@ -62,7 +63,9 @@ WorkoutGameSection featureSection(
             : terrain == WorkoutGameTerrainKind::Drop
             ? DropDurationMs
             : terrain == WorkoutGameTerrainKind::Skinny
-            ? SkinnyDurationMs : FeatureDurationMs;
+            ? SkinnyDurationMs
+            : terrain == WorkoutGameTerrainKind::Berm
+            ? BermDurationMs : FeatureDurationMs;
     section.lengthMeters = terrain == WorkoutGameTerrainKind::Tabletop
             ? TabletopLengthMeters
             : terrain == WorkoutGameTerrainKind::Drop
@@ -74,7 +77,7 @@ WorkoutGameSection featureSection(
     section.targetWatts = targetWatts;
     section.gradePercent = gradePercent;
     section.difficulty = difficulty;
-    section.challengeCount = 1;
+    section.challengeCount = terrain == WorkoutGameTerrainKind::Berm ? 0 : 1;
     section.visualVariant = variant;
     section.reliefScale = terrain == WorkoutGameTerrainKind::Berm
             ? 1.35 + 0.25 * difficulty : 1.0;
@@ -169,13 +172,17 @@ WorkoutGameCourse WorkoutGameFeatureLab::course(
         featureSection(WorkoutGameTerrainKind::Skinny,
                        ftpWatts * 0.78, 0.0, 0.60, 9u),
         featureSection(WorkoutGameTerrainKind::Berm,
-                       ftpWatts * 0.84, 2.0, 0.10, 20u),
+                       ftpWatts * 0.82, 2.0, 0.08, 20u),
         featureSection(WorkoutGameTerrainKind::Berm,
-                       ftpWatts * 0.88, -3.0, 0.40, 21u),
+                       ftpWatts * 0.85, -3.0, 0.25, 21u),
         featureSection(WorkoutGameTerrainKind::Berm,
-                       ftpWatts * 0.92, 3.0, 0.70, 22u),
+                       ftpWatts * 0.89, 3.0, 0.45, 22u),
         featureSection(WorkoutGameTerrainKind::Berm,
-                       ftpWatts * 0.96, -4.0, 1.00, 23u),
+                       ftpWatts * 0.91, -4.0, 0.65, 23u),
+        featureSection(WorkoutGameTerrainKind::Berm,
+                       ftpWatts * 0.94, 4.0, 0.82, 24u),
+        featureSection(WorkoutGameTerrainKind::Berm,
+                       ftpWatts * 0.97, -5.0, 1.00, 25u),
         featureSection(WorkoutGameTerrainKind::RockSlab,
                        ftpWatts * 0.92, -4.0, 0.70, 11u)
     };

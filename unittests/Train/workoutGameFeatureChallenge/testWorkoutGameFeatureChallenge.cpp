@@ -31,6 +31,16 @@ private slots:
         QVERIFY(!WorkoutGameFeatureChallenge::profile(section).enabled);
     }
 
+    void bermIsCourseGeometryNotAScoredChallenge()
+    {
+        WorkoutGameSection section;
+        section.terrain = WorkoutGameTerrainKind::Berm;
+        section.challengeCount = 4;
+        section.difficulty = 1.0;
+
+        QVERIFY(!WorkoutGameFeatureChallenge::profile(section).enabled);
+    }
+
     void terrainSelectsSkillButUsesOneVisiblePowerRequirement()
     {
         struct Expected {
@@ -52,8 +62,6 @@ private slots:
                          WorkoutGameChallengeCue::CarrySpeed},
                 Expected{WorkoutGameTerrainKind::Skinny,
                          WorkoutGameChallengeCue::HoldLine},
-                Expected{WorkoutGameTerrainKind::Berm,
-                         WorkoutGameChallengeCue::CarrySpeed},
                 Expected{WorkoutGameTerrainKind::LogOver,
                          WorkoutGameChallengeCue::Jump},
                 Expected{WorkoutGameTerrainKind::Tabletop,

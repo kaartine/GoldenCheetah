@@ -1623,16 +1623,17 @@ private slots:
         section.lengthMeters = 70.0;
         section.targetWatts = 180.0;
         section.difficulty = 0.65;
-        section.challengeCount = 1;
+        section.challengeCount = 0;
         course.sections = {section};
         const WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(course, 200.0);
         const auto piece = std::find_if(
                 road.pieces.begin(), road.pieces.end(),
                 [](const WorkoutGameRoadPiece &candidate) {
-                    return candidate.challenge.enabled;
+                    return candidate.terrain == WorkoutGameTerrainKind::Berm;
                 });
         QVERIFY(piece != road.pieces.end());
+        QVERIFY(!piece->challenge.enabled);
         const WorkoutGameBermGeometryProfile profile =
                 WorkoutGameBermGeometry::profile(piece->difficulty);
 
@@ -1643,9 +1644,9 @@ private slots:
             input.terrain = WorkoutGameTerrainKind::Berm;
             input.desiredSpeedMetersPerSecond = speed;
             input.effortRatio = 1.0;
-            const double start = piece->challenge.obstacleDistanceMeters
+            const double start = piece->geometryAnchorDistanceMeters
                     + profile.startMeters - 1.0;
-            const double end = piece->challenge.obstacleDistanceMeters
+            const double end = piece->geometryAnchorDistanceMeters
                     + profile.endMeters + 1.0;
             for (int tick = 0; tick <= 160; ++tick) {
                 input.workoutTimeMs = tick * 20;

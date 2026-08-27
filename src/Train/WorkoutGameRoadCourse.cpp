@@ -347,14 +347,13 @@ WorkoutGameRoadConnector connectorAt(
     const double progress = std::clamp(requestedProgress, 0.0, 1.0);
     WorkoutGameRoadConnector result = piece.entry;
     const auto headingProgress = [&piece](double sampleProgress) {
-        if (piece.terrain == WorkoutGameTerrainKind::Berm
-                && piece.challenge.enabled) {
+        if (piece.terrain == WorkoutGameTerrainKind::Berm) {
             const WorkoutGameBermGeometryProfile profile =
                     WorkoutGameBermGeometry::profile(piece.difficulty);
             const double distance = piece.startDistanceMeters
                     + piece.lengthMeters * sampleProgress;
             return profile.headingProgress(
-                    distance - piece.challenge.obstacleDistanceMeters);
+                    distance - piece.geometryAnchorDistanceMeters);
         }
         return smoothStep(sampleProgress);
     };
@@ -387,17 +386,16 @@ WorkoutGameRoadConnector connectorAt(
 
     double x = piece.entry.xMeters;
     double z = piece.entry.zMeters;
-    if (piece.terrain == WorkoutGameTerrainKind::Berm
-            && piece.challenge.enabled) {
+    if (piece.terrain == WorkoutGameTerrainKind::Berm) {
         const WorkoutGameBermGeometryProfile berm =
                 WorkoutGameBermGeometry::profile(piece.difficulty);
         const double travelMeters = piece.lengthMeters * progress;
         const double curveStartMeters = std::clamp(
-                piece.challenge.obstacleDistanceMeters
+                piece.geometryAnchorDistanceMeters
                     + berm.curveStartMeters - piece.startDistanceMeters,
                 0.0, piece.lengthMeters);
         const double curveEndMeters = std::clamp(
-                piece.challenge.obstacleDistanceMeters
+                piece.geometryAnchorDistanceMeters
                     + berm.curveEndMeters - piece.startDistanceMeters,
                 curveStartMeters, piece.lengthMeters);
         const double straightEntryMeters = std::min(
@@ -719,6 +717,10 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     std::isfinite(section.reliefScale)
                         ? section.reliefScale : 1.0,
                     0.0, 2.5);
+            piece.geometryAnchorDistanceMeters =
+                    section.terrain == WorkoutGameTerrainKind::Berm
+                ? sectionStart + sectionLength * 0.5
+                : piece.startDistanceMeters + piece.lengthMeters * 0.5;
             piece.entry = connector;
             piece.exit = connector;
             piece.exit.halfWidthMeters = targetHalfWidth(section.terrain);
@@ -782,6 +784,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     : measuredPreparationDistance;
                 piece.challenge.decisionDistanceMeters = challengeDistance;
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;
+                piece.geometryAnchorDistanceMeters = obstacleDistance;
                 const double featureEnd = obstacleDistance
                         + (section.terrain
                                     == WorkoutGameTerrainKind::RockSlab
@@ -849,7 +852,6 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             }
 
             if (section.terrain == WorkoutGameTerrainKind::Berm) {
-                if (!ownsChallenge) piece.turnRadians = 0.0;
                 piece.exit = connector;
                 piece.exit.halfWidthMeters = targetHalfWidth(section.terrain);
                 piece.exit.gradePercent = section.gradePercent;
@@ -938,12 +940,11 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     result.nonPhysicalFeatureOffsetMeters =
             nonPhysicalFeatureOffsetAt(course, distance);
     result.rideableSurface = rideableSurfaceAt(course, distance);
-    if (piece.terrain == WorkoutGameTerrainKind::Berm
-            && piece.challenge.enabled) {
+    if (piece.terrain == WorkoutGameTerrainKind::Berm) {
         const WorkoutGameBermGeometryProfile berm =
                 WorkoutGameBermGeometry::profile(piece.difficulty);
         const double local = distance
-                - piece.challenge.obstacleDistanceMeters;
+                - piece.geometryAnchorDistanceMeters;
         result.bermBankRadians = berm.bankRadians(local, piece.turnRadians);
         result.center.halfWidthMeters = berm.halfWidthMeters(local);
         result.renderableTrailSurface = local <= berm.startMeters

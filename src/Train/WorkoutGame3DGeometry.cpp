@@ -211,13 +211,12 @@ void appendFeatureSamples(
         }
     }
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
-        if (!piece.challenge.enabled
-                || piece.terrain != WorkoutGameTerrainKind::Berm) {
+        if (piece.terrain != WorkoutGameTerrainKind::Berm) {
             continue;
         }
         const WorkoutGameBermGeometryProfile profile =
                 WorkoutGameBermGeometry::profile(piece.difficulty);
-        const double center = piece.challenge.obstacleDistanceMeters;
+        const double center = piece.geometryAnchorDistanceMeters;
         const auto append = [&](double distance) {
             if (distance >= startDistanceMeters
                     && distance <= endDistanceMeters) {
@@ -1758,14 +1757,13 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildBerms(
     int totalSamples = 0;
 
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
-        if (!piece.challenge.enabled
-                || piece.terrain != WorkoutGameTerrainKind::Berm) {
+        if (piece.terrain != WorkoutGameTerrainKind::Berm) {
             continue;
         }
         const WorkoutGameBermGeometryProfile profile =
                 WorkoutGameBermGeometry::profile(piece.difficulty);
         if (!profile.ready) continue;
-        const double center = piece.challenge.obstacleDistanceMeters;
+        const double center = piece.geometryAnchorDistanceMeters;
         const double start = std::max(
                 startDistanceMeters, center + profile.startMeters);
         const double end = std::min(

@@ -121,6 +121,7 @@ bool WorkoutGameFeatureRuntime::configure(
             layout.valid = true;
             layout.terrain = piece.terrain;
             layout.startDistanceMeters = piece.startDistanceMeters;
+            layout.terrainPieceIndex = pieceIndex;
         }
         layout.endDistanceMeters = piece.startDistanceMeters + piece.lengthMeters;
         if (piece.challenge.enabled) {
@@ -159,7 +160,9 @@ void WorkoutGameFeatureRuntime::reset()
 }
 
 WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
-        const WorkoutGameSimulationSnapshot &simulation) const
+        const WorkoutGameSimulationSnapshot &simulation,
+        double actualWatts,
+        double targetWatts) const
 {
     WorkoutGameFeatureRuntimeSnapshot result;
     if (!configuredCourse.ready || !simulation.ready
@@ -212,6 +215,24 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             0.0, 1.0);
 
     if (layout->challengePieceIndex >= configuredCourse.pieces.size()) {
+        if (layout->terrain == WorkoutGameTerrainKind::Berm
+                && layout->terrainPieceIndex < configuredCourse.pieces.size()) {
+            result.outcome = WorkoutGameFeatureOutcome::None;
+            result.route = WorkoutGameRoute::MainLine;
+            result.readiness = 0.0;
+            const WorkoutGameRoadPiece &piece =
+                    configuredCourse.pieces[layout->terrainPieceIndex];
+            const WorkoutGameBermGeometryProfile berm =
+                    WorkoutGameBermGeometry::profile(piece.difficulty);
+            const double local = result.visualDistanceMeters
+                    - piece.geometryAnchorDistanceMeters;
+            result.obstacleDistanceMeters =
+                    piece.geometryAnchorDistanceMeters;
+            result.bermLineBias = berm.effortLineBias(
+                    actualWatts, targetWatts);
+            result.lateralOffsetMeters = berm.effortLineLateralMeters(
+                    local, piece.turnRadians, result.bermLineBias);
+        }
         return result;
     }
     const WorkoutGameRoadPiece *piece =
@@ -253,15 +274,6 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         actionEnd = std::min(
                 layout->endDistanceMeters,
                 result.obstacleDistanceMeters + climb.endMeters);
-    } else if (piece->terrain == WorkoutGameTerrainKind::Berm) {
-        const WorkoutGameBermGeometryProfile berm =
-                WorkoutGameBermGeometry::profile(piece->difficulty);
-        actionStart = std::max(
-                layout->startDistanceMeters,
-                result.obstacleDistanceMeters + berm.startMeters);
-        actionEnd = std::min(
-                layout->endDistanceMeters,
-                result.obstacleDistanceMeters + berm.endMeters);
     } else if (piece->terrain == WorkoutGameTerrainKind::Roots) {
         const WorkoutGameRootGeometryProfile roots =
                 WorkoutGameRootGeometry::profile(piece->difficulty);
@@ -371,14 +383,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             && (result.outcome == WorkoutGameFeatureOutcome::Bypassed
                 || result.route == WorkoutGameRoute::SafeBypass);
     if (bypass) {
-        if (piece->terrain == WorkoutGameTerrainKind::Berm) {
-            const WorkoutGameBermGeometryProfile berm =
-                    WorkoutGameBermGeometry::profile(piece->difficulty);
-            result.lateralOffsetMeters = berm.safeLineLateralMeters(
-                    result.visualDistanceMeters
-                        - piece->challenge.obstacleDistanceMeters,
-                    piece->turnRadians);
-        } else if (piece->terrain == WorkoutGameTerrainKind::Roots) {
+        if (piece->terrain == WorkoutGameTerrainKind::Roots) {
             const WorkoutGameRootGeometryProfile roots =
                     WorkoutGameRootGeometry::profile(piece->difficulty);
             result.lateralOffsetMeters = roots.safeLineOffsetMeters(

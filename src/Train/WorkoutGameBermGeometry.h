@@ -74,11 +74,23 @@ struct WorkoutGameBermGeometryProfile
                 / (curveEndMeters - curveStartMeters);
     }
 
-    double safeLineLateralMeters(
+    double effortLineBias(double actualWatts, double targetWatts) const
+    {
+        if (!ready || !std::isfinite(actualWatts)
+                || !std::isfinite(targetWatts) || targetWatts <= 0.0) {
+            return 0.0;
+        }
+        return std::clamp(
+                (actualWatts / targetWatts - 1.0) / 0.40, -1.0, 1.0);
+    }
+
+    double effortLineLateralMeters(
             double localDistanceMeters,
-            double turnRadians) const
+            double turnRadians,
+            double lineBias) const
     {
         if (!ready || turnRadians == 0.0
+                || !std::isfinite(lineBias)
                 || localDistanceMeters <= startMeters
                 || localDistanceMeters >= endMeters) {
             return 0.0;
@@ -88,22 +100,20 @@ struct WorkoutGameBermGeometryProfile
                 (localDistanceMeters - startMeters)
                     / (endMeters - startMeters),
                 0.0, 1.0);
-        return std::copysign(
-                0.45 * std::pow(std::sin(Pi * progress), 2.0),
-                turnRadians);
+        const double outsideDirection = -std::copysign(1.0, turnRadians);
+        return outsideDirection * 0.52 * std::clamp(lineBias, -1.0, 1.0)
+                * std::pow(std::sin(Pi * progress), 2.0);
     }
 
     double riderWorldRollRadians(
             double localDistanceMeters,
             double turnRadians,
             double speedMetersPerSecond,
-            bool safeLine) const
+            double lineBias) const
     {
         constexpr double GravityMetersPerSecondSquared = 9.80665;
         constexpr double MaximumRollRadians =
-                28.0 * 3.14159265358979323846 / 180.0;
-        constexpr double MaximumSafeLineRollRadians =
-                8.0 * 3.14159265358979323846 / 180.0;
+                38.0 * 3.14159265358979323846 / 180.0;
         const double speed = std::max(
                 0.0, std::isfinite(speedMetersPerSecond)
                     ? speedMetersPerSecond : 0.0);
@@ -112,10 +122,13 @@ struct WorkoutGameBermGeometryProfile
         const double ideal = -std::atan(
                 speed * speed * curvature
                     / GravityMetersPerSecondSquared);
-        const double limit = safeLine
-                ? MaximumSafeLineRollRadians : MaximumRollRadians;
-        return std::clamp((safeLine ? 0.35 : 1.0) * ideal,
-                          -limit, limit);
+        const double bias = std::clamp(
+                std::isfinite(lineBias) ? lineBias : 0.0, -1.0, 1.0);
+        const double lineLeanScale = bias >= 0.0
+                ? 1.0 + 0.30 * bias : 1.0 + 0.45 * bias;
+        constexpr double CenterLineLeanScale = 0.72;
+        return std::clamp(lineLeanScale * CenterLineLeanScale * ideal,
+                          -MaximumRollRadians, MaximumRollRadians);
     }
 
     double halfWidthMeters(double localDistanceMeters) const

@@ -710,16 +710,22 @@ private slots:
             const WorkoutGameRoadCourse road =
                     WorkoutGameRoadCourseBuilder::build(course, 200.0);
             QVERIFY(road.ready);
-            const auto challenge = std::find_if(
+            const auto featurePiece = std::find_if(
                     road.pieces.begin(), road.pieces.end(),
-                    [](const WorkoutGameRoadPiece &piece) {
-                        return piece.challenge.enabled;
+                    [entry](const WorkoutGameRoadPiece &piece) {
+                        return entry.terrain == WorkoutGameTerrainKind::Berm
+                            ? piece.terrain == WorkoutGameTerrainKind::Berm
+                            : piece.challenge.enabled;
                     });
-            QVERIFY(challenge != road.pieces.end());
+            QVERIFY(featurePiece != road.pieces.end());
             const WorkoutGameRoadTimelineSection &timeline = road.timeline.front();
+            const double featureDistance = entry.terrain
+                        == WorkoutGameTerrainKind::Berm
+                    ? featurePiece->geometryAnchorDistanceMeters
+                    : featurePiece->challenge.obstacleDistanceMeters;
             const double distance = std::max(
                     timeline.startDistanceMeters,
-                    challenge->challenge.obstacleDistanceMeters - 10.0);
+                    featureDistance - 10.0);
             WorkoutGameSimulationSnapshot simulation;
             simulation.ready = true;
             simulation.activeSection = 0;
@@ -739,7 +745,14 @@ private slots:
             QVERIFY(runtime.configure(road));
             WorkoutGameVisualSnapshot frame;
             frame.simulation = simulation;
-            frame.feature = runtime.update(simulation);
+            frame.feature = runtime.update(simulation, 220.0, 220.0);
+            if (entry.terrain == WorkoutGameTerrainKind::Berm) {
+                QCOMPARE(frame.feature.phase, WorkoutGameFeaturePhase::None);
+                QCOMPARE(frame.feature.outcome,
+                         WorkoutGameFeatureOutcome::None);
+                QCOMPARE(frame.feature.route, WorkoutGameRoute::MainLine);
+                QCOMPARE(frame.feature.readiness, 0.0);
+            }
             frame.world.ready = true;
             frame.world.generation = 1;
             frame.world.terrain = entry.terrain;

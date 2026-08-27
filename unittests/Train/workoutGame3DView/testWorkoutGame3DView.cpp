@@ -2330,10 +2330,13 @@ private slots:
         const auto piece = std::find_if(
                 road.pieces.begin(), road.pieces.end(),
                 [](const WorkoutGameRoadPiece &candidate) {
-                    return candidate.challenge.enabled;
+                    return candidate.terrain == WorkoutGameTerrainKind::Berm;
                 });
         QVERIFY(piece != road.pieces.end());
-        const double distance = piece->challenge.obstacleDistanceMeters;
+        QVERIFY(!piece->challenge.enabled);
+        const double distance = piece->geometryAnchorDistanceMeters;
+        const WorkoutGameBermGeometryProfile profile =
+                WorkoutGameBermGeometry::profile(piece->difficulty);
         const WorkoutGameRoadSample sample =
                 WorkoutGameRoadCourseBuilder::sample(road, distance);
         QVERIFY(sample.ready);
@@ -2350,9 +2353,13 @@ private slots:
         frame.world.rider.rollDegrees = 0.0;
         frame.simulation.speedKph = 20.0;
         frame.feature.route = WorkoutGameRoute::MainLine;
+        frame.feature.bermLineBias = 0.0;
         viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-        const double mainRoll = viewModel.riderRoll();
-        QVERIFY(std::abs(mainRoll) > 15.0);
+        QCOMPARE(viewModel.terrainName(), QStringLiteral("Singletrack"));
+        QVERIFY(!viewModel.featureHudVisible());
+        const double centerRoll = viewModel.riderRoll();
+        const double centerY = viewModel.riderY();
+        QVERIFY(std::abs(centerRoll) > 15.0);
         QVERIFY(viewModel.riderRoll() * sample.bermBankRadians > 0.0);
         const auto riderCameraAngleDegrees = [&viewModel]() {
             const double viewX = viewModel.cameraTargetX()
@@ -2373,11 +2380,25 @@ private slots:
                  qPrintable(QStringLiteral("main-line camera offset %1 degrees")
                      .arg(riderCameraAngleDegrees())));
 
-        frame.feature.route = WorkoutGameRoute::SafeBypass;
-        frame.feature.lateralOffsetMeters = 0.45;
-        viewModel.setFrame(frame, 150.0, 220.0, 72, 145, 4);
-        QVERIFY(std::abs(viewModel.riderRoll()) > 3.0);
-        QVERIFY(std::abs(viewModel.riderRoll()) < std::abs(mainRoll));
+        frame.feature.bermLineBias = 1.0;
+        frame.feature.lateralOffsetMeters = profile.effortLineLateralMeters(
+                0.0, piece->turnRadians, 1.0);
+        for (int frameIndex = 0; frameIndex < 30; ++frameIndex) {
+            viewModel.setFrame(frame, 330.0, 220.0, 88, 150, 9);
+        }
+        const double highRoll = viewModel.riderRoll();
+        const double highY = viewModel.riderY();
+        QVERIFY(std::abs(highRoll) > std::abs(centerRoll));
+        QVERIFY(highY > centerY + 0.10);
+
+        frame.feature.bermLineBias = -1.0;
+        frame.feature.lateralOffsetMeters = profile.effortLineLateralMeters(
+                0.0, piece->turnRadians, -1.0);
+        for (int frameIndex = 0; frameIndex < 30; ++frameIndex) {
+            viewModel.setFrame(frame, 110.0, 220.0, 72, 145, 4);
+        }
+        QVERIFY(std::abs(viewModel.riderRoll()) < std::abs(centerRoll));
+        QVERIFY(viewModel.riderY() < centerY - 0.10);
         QVERIFY2(riderCameraAngleDegrees() < 10.0,
                  qPrintable(QStringLiteral("safe-line camera offset %1 degrees")
                      .arg(riderCameraAngleDegrees())));
@@ -2392,7 +2413,7 @@ private slots:
         const auto piece = std::find_if(
                 road.pieces.begin(), road.pieces.end(),
                 [](const WorkoutGameRoadPiece &candidate) {
-                    return candidate.challenge.enabled;
+                    return candidate.terrain == WorkoutGameTerrainKind::Berm;
                 });
         QVERIFY(piece != road.pieces.end());
         const WorkoutGameBermGeometryProfile profile =
@@ -2401,9 +2422,9 @@ private slots:
         viewModel.setCourse(course, FtpWatts);
         constexpr double SpeedMetersPerSecond = 5.0;
         constexpr double FrameDistance = SpeedMetersPerSecond / 60.0;
-        const double start = piece->challenge.obstacleDistanceMeters
+        const double start = piece->geometryAnchorDistanceMeters
                 + profile.startMeters;
-        const double end = piece->challenge.obstacleDistanceMeters
+        const double end = piece->geometryAnchorDistanceMeters
                 + profile.endMeters;
         double priorRoll = 0.0;
         bool first = true;
@@ -2413,6 +2434,7 @@ private slots:
             frame.world.terrain = WorkoutGameTerrainKind::Berm;
             frame.simulation.speedKph = SpeedMetersPerSecond * 3.6;
             frame.feature.route = WorkoutGameRoute::MainLine;
+            frame.feature.bermLineBias = 0.0;
             viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
             if (!first) {
                 QVERIFY(std::abs(viewModel.riderRoll() - priorRoll)
@@ -3434,17 +3456,21 @@ private slots:
             const WorkoutGameRoadCourse road =
                     WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
             QVERIFY(road.ready);
-            const auto challenge = std::find_if(
+            const auto roadPiece = std::find_if(
                     road.pieces.begin(), road.pieces.end(),
                     [](const WorkoutGameRoadPiece &piece) {
-                        return piece.challenge.enabled;
+                        return piece.challenge.enabled
+                                || piece.terrain
+                                    == WorkoutGameTerrainKind::Berm;
                     });
-            QVERIFY(challenge != road.pieces.end());
+            QVERIFY(roadPiece != road.pieces.end());
             const WorkoutGameRoadTimelineSection &timeline =
                     road.timeline.front();
             const double distance = std::max(
                     timeline.startDistanceMeters,
-                    challenge->challenge.obstacleDistanceMeters - 10.0);
+                    (entry.terrain == WorkoutGameTerrainKind::Berm
+                        ? roadPiece->geometryAnchorDistanceMeters
+                        : roadPiece->challenge.obstacleDistanceMeters) - 10.0);
             const double progress = std::clamp(
                     (distance - timeline.startDistanceMeters)
                         / (timeline.endDistanceMeters
@@ -3461,7 +3487,7 @@ private slots:
             simulation.featureOutcome = WorkoutGameFeatureOutcome::Completed;
             simulation.route = WorkoutGameRoute::MainLine;
             simulation.challengeReadiness = 1.0;
-            simulation.challenge = challenge->challenge.profile;
+            simulation.challenge = roadPiece->challenge.profile;
             WorkoutGameFeatureChallengeMetrics metrics;
             metrics.averageActualWatts = 220.0;
             metrics.averageTargetWatts = 220.0;
@@ -3476,7 +3502,7 @@ private slots:
             QVERIFY(runtime.configure(road));
             WorkoutGameVisualSnapshot frame;
             frame.simulation = simulation;
-            frame.feature = runtime.update(simulation);
+            frame.feature = runtime.update(simulation, 220.0, 220.0);
             frame.world.ready = true;
             frame.world.generation = 1;
             frame.world.terrain = entry.terrain;
@@ -3808,7 +3834,7 @@ private slots:
         QVERIFY(visiblyChangedFrames > FrameCount * 4 / 5);
     }
 
-    void exportsBankedBermMainAndSafeLineMotionFrames()
+    void exportsBankedBermLowCenterAndHighLineMotionFrames()
     {
         if (!hasInteractiveGraphicsPlatform()) {
             QSKIP("Quick 3D rendering requires an interactive GPU platform");
@@ -3825,7 +3851,7 @@ private slots:
         const auto piece = std::find_if(
                 road.pieces.begin(), road.pieces.end(),
                 [](const WorkoutGameRoadPiece &candidate) {
-                    return candidate.challenge.enabled;
+                    return candidate.terrain == WorkoutGameTerrainKind::Berm;
                 });
         QVERIFY(piece != road.pieces.end());
         const WorkoutGameBermGeometryProfile profile =
@@ -3843,19 +3869,25 @@ private slots:
                     QStringLiteral("workoutGame3D")).value<QObject *>());
         QVERIFY(bermViewModel);
         constexpr int FrameCount = 96;
-        const double start = piece->challenge.obstacleDistanceMeters
+        const double start = piece->geometryAnchorDistanceMeters
                 + profile.startMeters - 2.0;
-        const double end = piece->challenge.obstacleDistanceMeters
+        const double end = piece->geometryAnchorDistanceMeters
                 + profile.endMeters + 2.0;
 
-        for (WorkoutGameRoute route : {
-                 WorkoutGameRoute::MainLine,
-                 WorkoutGameRoute::SafeBypass}) {
+        std::array<double, 3> maximumRolls = {{0.0, 0.0, 0.0}};
+        std::array<double, 3> maximumLaterals = {{0.0, 0.0, 0.0}};
+        const std::array<double, 3> lineBiases = {{-1.0, 0.0, 1.0}};
+        for (std::size_t lineIndex = 0;
+             lineIndex < lineBiases.size(); ++lineIndex) {
+            const double lineBias = lineBiases[lineIndex];
             window.setCourse(course, FtpWatts);
-            const bool safe = route == WorkoutGameRoute::SafeBypass;
+            const QString lineName = lineBias < 0.0
+                    ? QStringLiteral("low-line")
+                    : lineBias > 0.0
+                    ? QStringLiteral("high-line")
+                    : QStringLiteral("center-line");
             const QString directory = QDir(outputRoot).filePath(
-                    safe ? QStringLiteral("safe-line")
-                         : QStringLiteral("main-line"));
+                    lineName);
             QVERIFY(QDir().mkpath(directory));
             double maximumLateral = 0.0;
             double maximumRoll = 0.0;
@@ -3868,17 +3900,16 @@ private slots:
                 frame.simulation.activeSection = 0;
                 frame.simulation.sectionProgress = std::clamp(
                         distance / road.totalLengthMeters, 0.0, 1.0);
-                frame.simulation.route = route;
-                frame.simulation.featureOutcome = safe
-                        ? WorkoutGameFeatureOutcome::Bypassed
-                        : WorkoutGameFeatureOutcome::Completed;
+                frame.simulation.route = WorkoutGameRoute::MainLine;
+                frame.simulation.featureOutcome =
+                        WorkoutGameFeatureOutcome::None;
                 frame.simulation.speedKph = 20.0;
-                frame.feature = runtime.update(frame.simulation);
+                const double watts = 220.0 * (1.0 + 0.40 * lineBias);
+                frame.feature = runtime.update(
+                        frame.simulation, watts, 220.0);
                 frame.world.terrain = WorkoutGameTerrainKind::Berm;
                 frame.world.rider.airborne = false;
-                window.setFrame(frame,
-                        safe ? 150.0 : 225.0, 220.0,
-                        safe ? 72 : 88, 150, safe ? 4 : 7);
+                window.setFrame(frame, watts, 220.0, 88, 150, 7);
                 QTest::qWait(12);
                 maximumLateral = std::max(
                         maximumLateral,
@@ -3900,19 +3931,15 @@ private slots:
                 writer.setCompression(1);
                 QVERIFY2(writer.write(image), qPrintable(writer.errorString()));
             }
-            if (safe) {
-                QVERIFY(maximumLateral > 0.40);
-                QVERIFY(maximumRoll > 4.0);
-                QVERIFY2(maximumRoll < 12.0,
-                         qPrintable(QStringLiteral(
-                             "safe-line roll reached %1 degrees")
-                             .arg(maximumRoll)));
-            } else {
-                QCOMPARE(maximumLateral, 0.0);
-                QVERIFY(maximumRoll > 20.0);
-                QVERIFY(maximumRoll <= 28.0);
-            }
+            maximumLaterals[lineIndex] = maximumLateral;
+            maximumRolls[lineIndex] = maximumRoll;
         }
+        QVERIFY(maximumLaterals[0] > 0.50);
+        QCOMPARE(maximumLaterals[1], 0.0);
+        QVERIFY(maximumLaterals[2] > 0.50);
+        QVERIFY(maximumRolls[0] < maximumRolls[1]);
+        QVERIFY(maximumRolls[1] < maximumRolls[2]);
+        QVERIFY(maximumRolls[2] <= 38.0);
     }
 
     void exportsRootsMainAndSafeLineMotionFrames()

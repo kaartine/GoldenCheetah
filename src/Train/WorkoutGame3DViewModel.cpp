@@ -292,20 +292,20 @@ void WorkoutGame3DViewModel::setFrame(
             visualGround += rocks.surfaceOffsetMeters(local, lateral)
                     - sample.surfaceOffsetMeters;
         }
-        if (sample.terrain == WorkoutGameTerrainKind::Berm
-                && sample.pieceIndex < roadCourse.pieces.size()) {
-            const WorkoutGameRoadPiece &piece =
-                    roadCourse.pieces[sample.pieceIndex];
-            const WorkoutGameBermGeometryProfile bermProfile =
-                    WorkoutGameBermGeometry::profile(piece.difficulty);
-            const double local = distanceMeters
-                    - piece.challenge.obstacleDistanceMeters;
-            visualGround = sample.visualGroundElevationMeters()
-                    + bermProfile.surfaceOffsetMeters(
-                        local, lateral,
-                        bermProfile.halfWidthMeters(local),
-                        piece.turnRadians);
-        }
+    }
+    if (sample.terrain == WorkoutGameTerrainKind::Berm
+            && sample.pieceIndex < roadCourse.pieces.size()) {
+        const WorkoutGameRoadPiece &piece =
+                roadCourse.pieces[sample.pieceIndex];
+        const WorkoutGameBermGeometryProfile bermProfile =
+                WorkoutGameBermGeometry::profile(piece.difficulty);
+        const double local = distanceMeters
+                - piece.geometryAnchorDistanceMeters;
+        visualGround = sample.visualGroundElevationMeters()
+                + bermProfile.surfaceOffsetMeters(
+                    local, lateral,
+                    bermProfile.halfWidthMeters(local),
+                    piece.turnRadians);
     }
     cameraGroundY = visualGround;
     riderPositionY = visualGround + authoritativeAir;
@@ -322,10 +322,10 @@ void WorkoutGame3DViewModel::setFrame(
         const WorkoutGameBermGeometryProfile bermProfile =
                 WorkoutGameBermGeometry::profile(piece.difficulty);
         targetRiderRollDegrees = bermProfile.riderWorldRollRadians(
-                distanceMeters - piece.challenge.obstacleDistanceMeters,
+                distanceMeters - piece.geometryAnchorDistanceMeters,
                 piece.turnRadians,
                 std::max(0.0, frame.simulation.speedKph) / 3.6,
-                frame.feature.route == WorkoutGameRoute::SafeBypass)
+                frame.feature.bermLineBias)
                 * 180.0 / Pi;
     } else if (frame.world.terrain == WorkoutGameTerrainKind::Skinny
             && frame.feature.route == WorkoutGameRoute::MainLine
@@ -714,11 +714,10 @@ void WorkoutGame3DViewModel::updateCameraPose(
     }
     const WorkoutGameRoadPiece &piece =
             roadCourse.pieces[riderSample.pieceIndex];
-    if (!piece.challenge.enabled) return;
     const WorkoutGameBermGeometryProfile berm =
             WorkoutGameBermGeometry::profile(piece.difficulty);
     const double local = distanceMeters
-            - piece.challenge.obstacleDistanceMeters;
+            - piece.geometryAnchorDistanceMeters;
     if (local <= berm.startMeters || local >= berm.endMeters) return;
     const double progress = std::clamp(
             (local - berm.startMeters) / (berm.endMeters - berm.startMeters),
@@ -852,7 +851,7 @@ QString WorkoutGame3DViewModel::terrainText(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::BunnyHop: return tr("Bunny hop");
     case WorkoutGameTerrainKind::Drop: return tr("Drop");
     case WorkoutGameTerrainKind::Skinny: return tr("Skinny");
-    case WorkoutGameTerrainKind::Berm: return tr("Berm");
+    case WorkoutGameTerrainKind::Berm: return tr("Singletrack");
     case WorkoutGameTerrainKind::LogOver: return tr("Log over");
     case WorkoutGameTerrainKind::Tabletop: return tr("Tabletop");
     case WorkoutGameTerrainKind::RockSlab: return tr("Rock slab");

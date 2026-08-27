@@ -91,7 +91,7 @@ WorkoutGameRoadCourse bermCourse()
     section.lengthMeters = 70.0;
     section.targetWatts = 180.0;
     section.difficulty = 0.65;
-    section.challengeCount = 1;
+    section.challengeCount = 0;
     source.sections = {section};
     return WorkoutGameRoadCourseBuilder::build(source, 200.0);
 }
@@ -619,10 +619,11 @@ private slots:
         const auto piece = std::find_if(
                 course.pieces.begin(), course.pieces.end(),
                 [](const WorkoutGameRoadPiece &candidate) {
-                    return candidate.challenge.enabled;
+                    return candidate.terrain == WorkoutGameTerrainKind::Berm;
                 });
         QVERIFY(piece != course.pieces.end());
-        const double center = piece->challenge.obstacleDistanceMeters;
+        QVERIFY(!piece->challenge.enabled);
+        const double center = piece->geometryAnchorDistanceMeters;
         WorkoutGame3DGeometry trail(WorkoutGame3DGeometry::Layer::Trail);
         WorkoutGame3DGeometry berm(WorkoutGame3DGeometry::Layer::Berm);
         WorkoutGame3DGeometry floor(
