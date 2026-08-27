@@ -78,7 +78,7 @@ targets, feature decisions, or trainer resistance.
 | FT-07 | Roots | Accepted project-authored buried network of eight branches, widened same-tread safe line and exact sockets | Box2D suspension drives bounded torso roughness; no scripted air or camera vibration |
 | FT-08 | Rock garden | Accepted project-authored group of twelve sunk irregular stones, widened same-tread safe line and exact sockets | Box2D suspension drives bounded torso roughness and line choice; no scripted air or camera vibration |
 | FT-09 | Rock slab | Accepted project-authored asymmetric rollover face, exposed buried sides, four fissures, same-tread safe line and exact sockets | Box2D surface and front/rear suspension drive pitch and bounded torso response; no scripted air or camera vibration |
-| FT-10 | Skinny | Accepted project-authored deck boards, beams/supports, visible ground and exact width transitions | Deterministic subtle balance lean on the narrow line; grounded packed-dirt safe line |
+| FT-10 | Skinny | Accepted project-authored long deck, beams/supports, visible ground and exact width transitions | Deterministic subtle balance lean on the narrow line; a missed effort remains on the feature without a chicken line |
 | FT-11 | Climb | Accepted project-authored rising same-tread face with five embedded rock steps, bounded grade transitions and a readable crest | Grounded seated/standing/walking effort pose, bounded crest release and six-metre result carry |
 
 ### Environment And Effects
@@ -195,8 +195,8 @@ bounded merged geometry and no external asset or additional license obligation.
 
 `PROD-05` is accepted as deterministic project-authored procedural geometry.
 Skinny uses one canonical socketed profile for deck height, width transitions,
-same-tile safe line, physics contact and both renderers. Its merged Quick 3D
-range is bounded to 1,008 vertices and 504 triangles per tile with at most
+physics contact and both renderers. It deliberately has no bypass or chicken
+line. Its merged Quick 3D range is bounded to 1,584 vertices and 792 triangles per tile with at most
 twelve resident tiles and no external asset or additional license obligation.
 
 `PROD-06` is accepted as deterministic project-authored procedural geometry.

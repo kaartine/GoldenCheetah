@@ -67,7 +67,7 @@ Node {
         Node {
             id: marker_RECOVERY
             objectName: "MARKER_RECOVERY"
-            position: Qt.vector3d(0, -0.7, 15)
+            position: Qt.vector3d(0, -0.7, 16)
         }
         Node {
             id: socket_IN
@@ -76,7 +76,7 @@ Node {
         Node {
             id: socket_OUT
             objectName: "SOCKET_OUT"
-            position: Qt.vector3d(0, 0, 22)
+            position: Qt.vector3d(0, 0, 24)
         }
     }
 

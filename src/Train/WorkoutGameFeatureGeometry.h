@@ -155,11 +155,11 @@ public:
             };
             break;
         case WorkoutGameTerrainKind::BunnyHop: {
-            constexpr double HalfRun = 0.07;
-            constexpr double HalfTop = 0.05;
+            constexpr double HalfRun = 0.11;
+            constexpr double HalfTop = 0.075;
             result = {
                 true, -HalfRun, -HalfTop, HalfTop, HalfRun,
-                0.10 + 0.10 * difficulty,
+                0.18 + 0.14 * difficulty,
                 WorkoutGameFeatureGeometryShape::Hurdle
             };
             break;
@@ -188,10 +188,10 @@ public:
             break;
         }
         case WorkoutGameTerrainKind::Drop:
-            result = {true, -10.0, 0.0, 1.25, 12.0,
-                      -(0.35 + 0.35 * difficulty),
+            result = {true, -10.0, 0.0, 1.8 + difficulty, 14.0,
+                      -(0.60 + 0.40 * difficulty),
                       WorkoutGameFeatureGeometryShape::DropLedge,
-                      1.25, 5.0};
+                      1.8 + difficulty, 6.0};
             break;
         default:
             break;

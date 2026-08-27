@@ -378,9 +378,11 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
     std::vector<std::uint32_t> indices;
     std::vector<bool> rideableSamples;
     std::vector<bool> renderableTrailSamples;
+    std::vector<bool> floorUnderFeatureSamples;
     vertices.reserve(std::size_t(count * verticesPerSample));
     rideableSamples.reserve(std::size_t(count));
     renderableTrailSamples.reserve(std::size_t(count));
+    floorUnderFeatureSamples.reserve(std::size_t(count));
     indices.reserve(std::size_t(
             (count - 1) * stripsPerSample * 6));
 
@@ -402,6 +404,8 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
         }
         rideableSamples.push_back(sample.rideableSurface);
         renderableTrailSamples.push_back(sample.renderableTrailSurface);
+        floorUnderFeatureSamples.push_back(
+                sample.terrain == WorkoutGameTerrainKind::Skinny);
         const double rightX = std::cos(sample.center.headingRadians);
         const double rightZ = -std::sin(sample.center.headingRadians);
         const TerrainColor color = layer == Layer::Trail
@@ -500,8 +504,12 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
                     index * verticesPerSample);
             for (int strip = 0; strip < stripsPerSample; ++strip) {
                 if (layer == Layer::ForestFloor && strip == 3
-                        && (!renderableTrailSamples[std::size_t(index - 1)]
-                            || !renderableTrailSamples[std::size_t(index)])) {
+                        && ((!renderableTrailSamples[std::size_t(index - 1)]
+                                && !floorUnderFeatureSamples[
+                                    std::size_t(index - 1)])
+                            || (!renderableTrailSamples[std::size_t(index)]
+                                && !floorUnderFeatureSamples[
+                                    std::size_t(index)]))) {
                     continue;
                 }
                 const std::uint32_t left = std::uint32_t(strip);
@@ -1369,11 +1377,12 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildSkinnies(
         double startDistanceMeters,
         double endDistanceMeters)
 {
-    constexpr int BoardCount = 60;
-    constexpr int BeamSegments = 4;
+    constexpr int BoardCount = 96;
+    constexpr int BeamSegments = 8;
+    constexpr int SupportCount = 9;
     constexpr int MaximumSkinnies = 12;
-    constexpr int VerticesPerSkinny = 1008;
-    constexpr int TrianglesPerSkinny = 504;
+    constexpr int VerticesPerSkinny = 1584;
+    constexpr int TrianglesPerSkinny = 792;
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
     vertices.reserve(std::size_t(MaximumSkinnies * VerticesPerSkinny));
@@ -1556,7 +1565,10 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildSkinnies(
                 }
             }
         }
-        for (double local : {-2.4, -1.2, 0.0, 1.2, 2.4}) {
+        for (int support = 0; support < SupportCount; ++support) {
+            const double local = profile.deckStartMeters
+                    + (profile.deckEndMeters - profile.deckStartMeters)
+                        * (double(support) + 0.5) / double(SupportCount);
             for (double lateral : {-0.17, 0.17}) {
                 const double top = profile.deckHeightMeters - 0.16;
                 if (!appendPrism(
@@ -1568,58 +1580,6 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildSkinnies(
                     return {};
                 }
             }
-        }
-        constexpr int SafeLineSegments = 12;
-        constexpr double SafeLineHalfWidth = 0.38;
-        constexpr double GroundSeamOverlapMeters = 0.30;
-        for (int segment = 0; segment < SafeLineSegments; ++segment) {
-            const double fromLocal = profile.activeStartMeters
-                    + (profile.activeEndMeters - profile.activeStartMeters)
-                        * double(segment) / double(SafeLineSegments);
-            const double toLocal = profile.activeStartMeters
-                    + (profile.activeEndMeters - profile.activeStartMeters)
-                        * double(segment + 1) / double(SafeLineSegments);
-            const double fromLateral =
-                    profile.safeLineOffsetMeters(fromLocal);
-            const double toLateral = profile.safeLineOffsetMeters(toLocal);
-            const double fromGroundHalfWidth =
-                    profile.halfWidthMeters(fromLocal)
-                    + GroundSeamOverlapMeters;
-            const double toGroundHalfWidth = profile.halfWidthMeters(toLocal);
-            const double overlappedToGroundHalfWidth =
-                    toGroundHalfWidth + GroundSeamOverlapMeters;
-            std::array<QVector3D, 4> ground;
-            if (!worldPoint(center + fromLocal,
-                            -fromGroundHalfWidth, -0.018, ground[0])
-                    || !worldPoint(center + toLocal,
-                                   -overlappedToGroundHalfWidth,
-                                   -0.018, ground[1])
-                    || !worldPoint(center + toLocal,
-                                   overlappedToGroundHalfWidth,
-                                   -0.018, ground[2])
-                    || !worldPoint(center + fromLocal,
-                                   fromGroundHalfWidth, -0.018, ground[3])) {
-                return {};
-            }
-            appendFace(ground[0], ground[1], ground[2], ground[3],
-                       {0.25f, 0.32f, 0.17f});
-            std::array<QVector3D, 4> point;
-            if (!worldPoint(center + fromLocal,
-                            fromLateral - SafeLineHalfWidth,
-                            profile.safeLineSurfaceLiftMeters, point[0])
-                    || !worldPoint(center + toLocal,
-                                   toLateral - SafeLineHalfWidth,
-                                   profile.safeLineSurfaceLiftMeters, point[1])
-                    || !worldPoint(center + toLocal,
-                                   toLateral + SafeLineHalfWidth,
-                                   profile.safeLineSurfaceLiftMeters, point[2])
-                    || !worldPoint(center + fromLocal,
-                                   fromLateral + SafeLineHalfWidth,
-                                   profile.safeLineSurfaceLiftMeters, point[3])) {
-                return {};
-            }
-            appendFace(point[0], point[1], point[2], point[3],
-                       {0.48f, 0.31f, 0.15f});
         }
         ++skinnyCount;
     }

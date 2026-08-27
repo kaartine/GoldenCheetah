@@ -98,20 +98,20 @@ private slots:
         QVERIFY(profile.ready);
         QCOMPARE(profile.startMeters, repeated.startMeters);
         QCOMPARE(profile.endMeters, repeated.endMeters);
-        QVERIFY(std::abs(profile.heightMeters - 0.654) < 1e-12);
+        QVERIFY(std::abs(profile.heightMeters - 0.98) < 1e-12);
         QVERIFY(profile.lipMeters - profile.startMeters >= 2.0);
-        QVERIFY(std::abs(profile.deckEndMeters - profile.lipMeters - 2.49)
+        QVERIFY(std::abs(profile.deckEndMeters - profile.lipMeters - 2.96)
                 < 1e-12);
         QVERIFY(profile.endMeters - profile.deckEndMeters
                 > profile.lipMeters - profile.startMeters);
-        QVERIFY(profile.endMeters - profile.startMeters < 8.0);
+        QVERIFY(profile.endMeters - profile.startMeters < 11.0);
         QCOMPARE(profile.surfaceOffsetMeters(profile.startMeters), 0.0);
         QCOMPARE(profile.surfaceOffsetMeters(profile.lipMeters),
                  profile.heightMeters);
         QCOMPARE(profile.surfaceOffsetMeters(profile.deckEndMeters),
                  profile.heightMeters);
         QCOMPARE(profile.surfaceOffsetMeters(profile.endMeters), 0.0);
-        QCOMPARE(invalid.heightMeters, 0.50);
+        QCOMPARE(invalid.heightMeters, 0.70);
         for (const double difficulty : {0.0, 0.35, 0.7, 1.0}) {
             const auto canonical =
                     WorkoutGameTabletopGeometry::profile(difficulty);
@@ -449,18 +449,13 @@ private slots:
         const auto invalid = WorkoutGameSkinnyGeometry::profile(
                 std::numeric_limits<double>::quiet_NaN());
         QVERIFY(profile.ready);
-        QCOMPARE(profile.startMeters, -9.0);
-        QCOMPARE(profile.activeStartMeters, -7.0);
-        QCOMPARE(profile.safeLineStartMeters, -5.0);
-        QCOMPARE(profile.deckStartMeters, -3.5);
-        QCOMPARE(profile.deckEndMeters, 3.5);
-        QCOMPARE(profile.safeLineEndMeters, 5.0);
-        QCOMPARE(profile.activeEndMeters, 7.0);
-        QCOMPARE(profile.endMeters, 9.0);
+        QCOMPARE(profile.startMeters, -14.0);
+        QCOMPARE(profile.activeStartMeters, -12.0);
+        QCOMPARE(profile.deckStartMeters, -8.0);
+        QCOMPARE(profile.deckEndMeters, 8.0);
+        QCOMPARE(profile.activeEndMeters, 12.0);
+        QCOMPARE(profile.endMeters, 14.0);
         QCOMPARE(profile.socketHalfWidthMeters, 0.68);
-        QCOMPARE(profile.activeHalfWidthMeters, 1.55);
-        QCOMPARE(profile.safeLineLateralMeters, 1.05);
-        QCOMPARE(profile.safeLineSurfaceLiftMeters, 0.012);
         QCOMPARE(invalid.deckHeightMeters, easiest.deckHeightMeters);
         QCOMPARE(repeated.deckHeightMeters, profile.deckHeightMeters);
         QVERIFY(easiest.deckHeightMeters < hardest.deckHeightMeters);
@@ -479,15 +474,11 @@ private slots:
         QCOMPARE(profile.deckSurfaceOffsetMeters(profile.activeEndMeters), 0.0);
         QCOMPARE(profile.deckSurfaceOffsetMeters(profile.endMeters), 0.0);
         QCOMPARE(profile.surfaceOffsetMeters(
-                    0.0, profile.safeLineLateralMeters), 0.0);
-        QCOMPARE(profile.safeLineOffsetMeters(profile.startMeters), 0.0);
-        QCOMPARE(profile.safeLineOffsetMeters(0.0),
-                 profile.safeLineLateralMeters);
-        QCOMPARE(profile.safeLineOffsetMeters(profile.endMeters), 0.0);
+                    0.0, profile.deckHalfWidthMeters + 0.01), 0.0);
         QCOMPARE(profile.halfWidthMeters(profile.startMeters),
                  profile.socketHalfWidthMeters);
         QCOMPARE(profile.halfWidthMeters(0.0),
-                 profile.activeHalfWidthMeters);
+                 profile.socketHalfWidthMeters);
 
         double maximumBalance = 0.0;
         for (double local = profile.deckStartMeters;
@@ -500,8 +491,6 @@ private slots:
         }
         QVERIFY(maximumBalance >= 1.0);
         QVERIFY(maximumBalance <= 2.0);
-        QCOMPARE(profile.safeLineOffsetMeters(
-                    std::numeric_limits<double>::quiet_NaN()), 0.0);
         QCOMPARE(profile.halfWidthMeters(
                     std::numeric_limits<double>::quiet_NaN()),
                  profile.socketHalfWidthMeters);
@@ -945,13 +934,21 @@ private slots:
     {
         const WorkoutGameBermGeometryProfile profile =
                 WorkoutGameBermGeometry::profile(0.65);
+        const WorkoutGameBermGeometryProfile easiest =
+                WorkoutGameBermGeometry::profile(0.0);
+        const WorkoutGameBermGeometryProfile hardest =
+                WorkoutGameBermGeometry::profile(1.0);
         QVERIFY(profile.ready);
-        QCOMPARE(profile.startMeters, -3.87);
-        QCOMPARE(profile.curveStartMeters, -2.62);
-        QCOMPARE(profile.curveEndMeters, 2.62);
-        QCOMPARE(profile.endMeters, 3.87);
+        QCOMPARE(profile.startMeters, -5.8);
+        QCOMPARE(profile.curveStartMeters, -4.3);
+        QCOMPARE(profile.curveEndMeters, 4.3);
+        QCOMPARE(profile.endMeters, 5.8);
         QCOMPARE(profile.socketHalfWidthMeters, 0.68 * 1.17);
-        QCOMPARE(profile.activeHalfWidthMeters, 0.95);
+        QCOMPARE(profile.activeHalfWidthMeters, 0.9975);
+        QVERIFY(easiest.turnMagnitudeRadians < profile.turnMagnitudeRadians);
+        QVERIFY(profile.turnMagnitudeRadians < hardest.turnMagnitudeRadians);
+        QVERIFY(easiest.curveEndMeters - easiest.curveStartMeters
+                < hardest.curveEndMeters - hardest.curveStartMeters);
         QCOMPARE(profile.headingProgress(profile.startMeters), 0.0);
         QCOMPARE(profile.headingProgress(profile.curveStartMeters), 0.0);
         QCOMPARE(profile.headingProgress(0.0), 0.5);
@@ -1275,9 +1272,9 @@ private slots:
         const WorkoutGameRoadSample gap =
                 WorkoutGameRoadCourseBuilder::sample(road, lip + 0.5);
         const WorkoutGameRoadSample landing =
-                WorkoutGameRoadCourseBuilder::sample(road, lip + 1.25);
+                WorkoutGameRoadCourseBuilder::sample(road, lip + 2.55);
         const WorkoutGameRoadSample runout =
-                WorkoutGameRoadCourseBuilder::sample(road, lip + 4.0);
+                WorkoutGameRoadCourseBuilder::sample(road, lip + 5.5);
         QVERIFY(approach.ready && gap.ready && landing.ready && runout.ready);
         QVERIFY(approach.rideableSurface);
         QVERIFY(!gap.rideableSurface);

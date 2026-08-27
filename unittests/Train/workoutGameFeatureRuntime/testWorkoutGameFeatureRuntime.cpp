@@ -208,7 +208,7 @@ private slots:
         QCOMPARE(expired.phase, WorkoutGameFeaturePhase::None);
     }
 
-    void skinnyUsesCanonicalBalanceWindowAndSmoothGroundedSafeLine()
+    void skinnyUsesCanonicalBalanceWindowWithoutAChickenLine()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
         const WorkoutGameRoadCourse road =
@@ -240,23 +240,9 @@ private slots:
         QCOMPARE(main.verticalOffsetMeters, 0.0);
         QCOMPARE(main.pitchDegrees, 0.0);
         QVERIFY(!main.triggerJump);
-        QCOMPARE(at(center + skinny.startMeters,
-                    WorkoutGameRoute::SafeBypass).lateralOffsetMeters, 0.0);
-        QCOMPARE(at(center, WorkoutGameRoute::SafeBypass).lateralOffsetMeters,
-                 skinny.safeLineLateralMeters);
-        QCOMPARE(at(center + skinny.endMeters,
-                    WorkoutGameRoute::SafeBypass).lateralOffsetMeters, 0.0);
-
-        double previousLateral = 0.0;
-        constexpr double FrameTravelMeters = 5.0 / 60.0;
-        for (double local = skinny.startMeters;
-             local <= skinny.endMeters; local += FrameTravelMeters) {
-            const double lateral = at(
-                    center + local,
-                    WorkoutGameRoute::SafeBypass).lateralOffsetMeters;
-            QVERIFY(std::abs(lateral - previousLateral) < 0.05);
-            previousLateral = lateral;
-        }
+        const auto missed = at(center, WorkoutGameRoute::SafeBypass);
+        QCOMPARE(missed.outcome, WorkoutGameFeatureOutcome::Bypassed);
+        QCOMPARE(missed.lateralOffsetMeters, 0.0);
     }
 
     void invalidCoursesFailClosed()

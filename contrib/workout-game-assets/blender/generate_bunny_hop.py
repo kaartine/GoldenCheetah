@@ -19,7 +19,7 @@ MESH_NAME = "GEO_BunnyHopHurdle_LOD0"
 
 SOCKET_HALF_WIDTH_M = 0.68
 DEAD_ZONE_M = 1.68
-CORE_LENGTH_M = 0.14
+CORE_LENGTH_M = 0.22
 TILE_LENGTH_M = DEAD_ZONE_M * 2.0 + CORE_LENGTH_M
 HURDLE_CENTER_Z_M = TILE_LENGTH_M * 0.5
 HURDLE_HEIGHT_M = 0.20
@@ -244,7 +244,7 @@ def build_scene():
                  (0.0, HURDLE_HEIGHT_M, HURDLE_CENTER_Z_M),
                  0.22, marker_properties)
     create_empty(root, "MARKER_LAND",
-                 (0.0, 0.0, 2.75),
+                 (0.0, 0.0, 2.83),
                  0.22, marker_properties)
     return root, hurdle, vertices
 
@@ -259,6 +259,7 @@ def self_check(root, hurdle, vertices: Sequence[Sequence[float]]) -> None:
             f"unexpected={sorted(names - REQUIRED_NAMES)}"
         )
     assert_close(SOCKET_HALF_WIDTH_M, 0.68, "Ordinary socket half-width")
+    assert_close(TILE_LENGTH_M, 3.58, "Bunny-hop tile length")
     if HURDLE_HEIGHT_M >= 0.54:
         raise RuntimeError("Bunny-hop hurdle must remain lower than the log")
     if BAR_HALF_LENGTH_M <= SOCKET_HALF_WIDTH_M + 0.25:

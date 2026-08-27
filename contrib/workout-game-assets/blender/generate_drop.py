@@ -22,7 +22,7 @@ ROOT_NAME = "ROOT_Drop"
 MESH_NAME = "GEO_DropFace_LOD0"
 
 SOCKET_HALF_WIDTH_M = 0.68
-TILE_LENGTH_M = 22.0
+TILE_LENGTH_M = 24.0
 LIP_Z_M = 10.0
 SOURCE_HEIGHT_M = 0.70
 FACE_HALF_WIDTH_M = 1.30
@@ -151,7 +151,7 @@ def build_scene():
         ("MARKER_LIP", (0.0, 0.0, LIP_Z_M)),
         ("MARKER_AIR", (0.0, -0.20, 10.65)),
         ("MARKER_LAND", (0.0, -SOURCE_HEIGHT_M, 12.5)),
-        ("MARKER_RECOVERY", (0.0, -SOURCE_HEIGHT_M, 15.0)),
+        ("MARKER_RECOVERY", (0.0, -SOURCE_HEIGHT_M, 16.0)),
     ):
         create_empty(root, name, location, 0.18, marker_properties)
     return root, face, vertices
@@ -169,7 +169,7 @@ def self_check(root, face, vertices) -> None:
             f"unexpected={sorted(names - REQUIRED_NAMES)}"
         )
     assert_close(SOCKET_HALF_WIDTH_M, 0.68, "Ordinary socket half-width")
-    assert_close(TILE_LENGTH_M, 22.0, "Drop tile length")
+    assert_close(TILE_LENGTH_M, 24.0, "Drop tile length")
     assert_close(SOURCE_HEIGHT_M, 0.70, "Drop source height")
     if FACE_HALF_WIDTH_M <= SOCKET_HALF_WIDTH_M + 0.30:
         raise RuntimeError("Drop face must extend beyond both trail edges")

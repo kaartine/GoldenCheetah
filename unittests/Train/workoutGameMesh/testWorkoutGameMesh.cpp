@@ -102,9 +102,9 @@ private slots:
         QCOMPARE(mesh.exit.halfWidthMeters,
                  profile.socketHalfWidthMeters);
         QCOMPARE(mesh.lengthMeters, profile.endMeters - profile.startMeters);
-        QCOMPARE(mesh.colliders.size(), 12u);
-        QCOMPARE(mesh.vertices.size(), 384u);
-        QCOMPARE(mesh.triangles.size(), 576u);
+        QCOMPARE(mesh.colliders.size(), 24u);
+        QCOMPARE(mesh.vertices.size(), 736u);
+        QCOMPARE(mesh.triangles.size(), 1104u);
         double minimumUp = 1.0;
         double maximumUp = 0.0;
         for (const WorkoutGameMeshVertex &vertex : mesh.vertices) {
@@ -115,7 +115,7 @@ private slots:
         QVERIFY(maximumUp >= profile.deckHeightMeters - 1e-9);
     }
 
-    void skinnyLegacySafeLineUsesTheCanonicalRouteAndSockets()
+    void skinnyLegacyTileHasNoChickenLineBranch()
     {
         const WorkoutGameRoadCourse course = featureCourse(
                 WorkoutGameTerrainKind::Skinny, 0.65);
@@ -125,20 +125,11 @@ private slots:
                     return candidate.challenge.enabled;
                 });
         QVERIFY(piece != course.pieces.end());
-        const auto profile = WorkoutGameSkinnyGeometry::profile(
-                piece->difficulty);
         const WorkoutGameTrailTile tile =
                 WorkoutGameTrailTileAssembler::challenge(course, *piece);
         QVERIFY(tile.ready);
-        QCOMPARE(tile.bypass.anchorDistanceMeters,
-                 piece->challenge.obstacleDistanceMeters
-                    + profile.startMeters);
-        QCOMPARE(tile.bypass.mesh.entry.halfWidthMeters,
-                 profile.socketHalfWidthMeters);
-        QCOMPARE(tile.bypass.mesh.exit.halfWidthMeters,
-                 profile.socketHalfWidthMeters);
-        QCOMPARE(tile.bypass.mesh.vertices.size(), 148u);
-        QCOMPARE(tile.bypass.mesh.triangles.size(), 216u);
+        QCOMPARE(piece->challenge.bypassLateralMeters, 0.0);
+        QCOMPARE(tile.bypass.anchorDistanceMeters, tile.entryDistanceMeters);
         double maximumCenter = 0.0;
         for (std::size_t index = 0;
              index + 3u < tile.bypass.mesh.vertices.size(); index += 4u) {
@@ -147,12 +138,9 @@ private slots:
             const WorkoutGameMeshVertex &right =
                     tile.bypass.mesh.vertices[index + 2u];
             const double center = 0.5 * (left.rightMeters + right.rightMeters);
-            const double local = profile.startMeters + left.forwardMeters;
-            QVERIFY(std::abs(center - profile.safeLineOffsetMeters(local))
-                    < 1e-9);
-            maximumCenter = std::max(maximumCenter, center);
+            maximumCenter = std::max(maximumCenter, std::abs(center));
         }
-        QCOMPARE(maximumCenter, profile.safeLineLateralMeters);
+        QCOMPARE(maximumCenter, 0.0);
     }
 
     void rockSlabMeshUsesCanonicalAsymmetricMassAndFissureBudget()
@@ -344,8 +332,8 @@ private slots:
                     WorkoutGameTerrainKind::BunnyHop, 1.0);
         QVERIFY(easy.ready && hard.ready);
         QCOMPARE(easy.shape, WorkoutGameFeatureGeometryShape::Hurdle);
-        QCOMPARE(easy.heightMeters, 0.10);
-        QCOMPARE(hard.heightMeters, 0.20);
+        QCOMPARE(easy.heightMeters, 0.18);
+        QCOMPARE(hard.heightMeters, 0.32);
         QCOMPARE(easy.surfaceOffset(0.0), 0.0);
         QCOMPARE(hard.surfaceOffset(0.0), 0.0);
     }
@@ -718,15 +706,15 @@ private slots:
                 - profile.plateauStartMeters;
         const double landingRun = profile.endMeters
                 - profile.plateauEndMeters;
-        QVERIFY(profile.heightMeters >= 0.5 - 1e-9);
-        QVERIFY(profile.heightMeters <= 0.75 + 1e-9);
-        QVERIFY(takeoffRun >= profile.heightMeters * 3.0);
-        QVERIFY(takeoffRun <= 2.8);
-        QVERIFY(tabletopLength >= 2.0);
-        QVERIFY(tabletopLength <= 3.0);
+        QVERIFY(profile.heightMeters >= 0.7 - 1e-9);
+        QVERIFY(profile.heightMeters <= 1.1 + 1e-9);
+        QVERIFY(takeoffRun >= profile.heightMeters * 2.7);
+        QVERIFY(takeoffRun <= 3.6);
+        QVERIFY(tabletopLength >= 2.4);
+        QVERIFY(tabletopLength <= 3.2);
         QVERIFY(landingRun >= profile.heightMeters * 3.0);
-        QVERIFY(landingRun <= 3.2);
-        QVERIFY(profile.endMeters - profile.startMeters <= 8.0);
+        QVERIFY(landingRun <= 4.2);
+        QVERIFY(profile.endMeters - profile.startMeters <= 11.0);
         const WorkoutGameMesh tabletop = WorkoutGameMeshLibrary::feature(
                 WorkoutGameTerrainKind::Tabletop, 0.7);
         const auto highlightCount = std::count_if(
@@ -753,8 +741,8 @@ private slots:
         constexpr double Pi = 3.14159265358979323846;
         const double takeoffDegrees =
                 std::atan(secondSlope) * 180.0 / Pi;
-        QVERIFY(takeoffDegrees >= 17.9);
-        QVERIFY(takeoffDegrees <= 18.1);
+        QVERIFY(takeoffDegrees >= 19.9);
+        QVERIFY(takeoffDegrees <= 22.1);
     }
 
     void dropHasASharpLedgeAndLowerLandingInsteadOfADip()
@@ -767,15 +755,15 @@ private slots:
                  WorkoutGameFeatureGeometryShape::DropLedge);
         QCOMPARE(profile.startMeters, -10.0);
         QCOMPARE(profile.plateauStartMeters, 0.0);
-        QCOMPARE(profile.landingStartMeters, 1.25);
-        QCOMPARE(profile.recoveryStartMeters, 5.0);
-        QCOMPARE(profile.endMeters, 12.0);
-        QVERIFY(profile.heightMeters <= -0.35);
-        QVERIFY(profile.heightMeters >= -0.70);
+        QCOMPARE(profile.landingStartMeters, 2.45);
+        QCOMPARE(profile.recoveryStartMeters, 6.0);
+        QCOMPARE(profile.endMeters, 14.0);
+        QVERIFY(profile.heightMeters <= -0.60);
+        QVERIFY(profile.heightMeters >= -1.0);
         QCOMPARE(profile.surfaceOffset(-0.01), 0.0);
         QCOMPARE(profile.surfaceOffset(0.0), 0.0);
         QVERIFY(!profile.surfacePresent(0.01));
-        QVERIFY(!profile.surfacePresent(1.24));
+        QVERIFY(!profile.surfacePresent(2.44));
         QVERIFY(profile.surfacePresent(profile.landingStartMeters));
         QCOMPARE(profile.surfaceOffset(profile.landingStartMeters),
                  profile.heightMeters);

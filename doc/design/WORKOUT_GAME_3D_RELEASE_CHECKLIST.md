@@ -17,8 +17,9 @@ visual-readability task.
   features at 1280 by 720 and a fixed ten-metre approach.
 - [x] `AUD-02` Capture isolated-data legacy and 3D application sessions plus a
   side-by-side comparison video.
-- [x] `AUD-03` Provide a deterministic 77-second course containing all eleven
-  features with completed and bypassed scenarios.
+- [x] `AUD-03` Provide a deterministic 105-second course containing fourteen
+  challenges across all eleven feature types with completed and bypassed
+  scenarios.
 - [x] `AUD-04` Preserve normal trail half-width at 0.68 m with a geometry
   regression test.
 - [x] `AUD-05` Document feature-by-feature graphics, physics, animation, HUD,
@@ -813,8 +814,8 @@ profile parsing, exact mode contracts, target normalization, real-device
 isolation, aggregate telemetry publication, reproducibility, bounded source
 names and fractional-target survival through integer `RealtimeData`. The
 17-test Engine suite drives integer-quantized `OnTarget` and `UnderTarget`
-generator samples at FTP 190 through all eleven Feature Lab sections and
-observes 11 `Completed` plus 11 `Bypassed` outcomes. It also enforces expected
+generator samples at FTP 190 through all fourteen Feature Lab challenge
+sections and observes 14 `Completed` plus 14 `Bypassed` outcomes. It also enforces expected
 air time, a zero main-line lateral offset and a sub-one-metre safe-line step at
 the 250-ms trace cadence. The generator state is visible as a HUD badge only
 for generator telemetry; the 3D View suite verifies shown/hidden state and
@@ -855,7 +856,7 @@ The ten-test audio suite covers packaged RIFF/WAVE resources, unavailable and
 invalid input, one cue per action, landing thresholds and strength, overwritten
 frames, capacity, reset and backward seek; it passes normally and under
 ASan/UBSan. The 17-test Engine
-suite observes exactly eleven feature cues plus real landing cues over the
+suite observes exactly fourteen feature cues plus real landing cues over the
 complete deterministic Feature Lab, and the 11-test Runner lifecycle suite
 passes unchanged. The full production target compiles in the release build
 container.

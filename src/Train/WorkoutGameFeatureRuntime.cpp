@@ -67,8 +67,8 @@ WorkoutGameFeatureMotion motionFor(WorkoutGameTerrainKind terrain)
 
 double jumpHeight(WorkoutGameTerrainKind terrain)
 {
-    if (terrain == WorkoutGameTerrainKind::Tabletop) return 1.35;
-    if (terrain == WorkoutGameTerrainKind::BunnyHop) return 0.42;
+    if (terrain == WorkoutGameTerrainKind::Tabletop) return 1.55;
+    if (terrain == WorkoutGameTerrainKind::BunnyHop) return 0.58;
     return 0.72;
 }
 
@@ -367,6 +367,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             == WorkoutGameFeatureOutcome::Completed;
     const bool bypass = result.terrain != WorkoutGameTerrainKind::Rollers
             && result.terrain != WorkoutGameTerrainKind::Climb
+            && result.terrain != WorkoutGameTerrainKind::Skinny
             && (result.outcome == WorkoutGameFeatureOutcome::Bypassed
                 || result.route == WorkoutGameRoute::SafeBypass);
     if (bypass) {
@@ -395,12 +396,6 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                     WorkoutGameRockSlabGeometry::profile(
                         piece->difficulty);
             result.lateralOffsetMeters = slab.safeLineOffsetMeters(
-                    result.visualDistanceMeters
-                        - piece->challenge.obstacleDistanceMeters);
-        } else if (piece->terrain == WorkoutGameTerrainKind::Skinny) {
-            const WorkoutGameSkinnyGeometryProfile skinny =
-                    WorkoutGameSkinnyGeometry::profile(piece->difficulty);
-            result.lateralOffsetMeters = skinny.safeLineOffsetMeters(
                     result.visualDistanceMeters
                         - piece->challenge.obstacleDistanceMeters);
         } else {
@@ -432,7 +427,11 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         } else if (result.motion == WorkoutGameFeatureMotion::Drop
                 && completed && !bypass) {
             result.pitchDegrees = -14.0 * std::sin(Pi * actionProgress);
-            result.verticalOffsetMeters = -0.45 * smoothStep(actionProgress);
+            const WorkoutGameFeatureGeometryProfile geometry =
+                    WorkoutGameFeatureGeometry::profile(
+                        piece->terrain, piece->difficulty);
+            result.verticalOffsetMeters = geometry.heightMeters
+                    * smoothStep(actionProgress);
         }
     }
     return result;

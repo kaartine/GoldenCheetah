@@ -354,15 +354,15 @@ private slots:
         WorkoutGame3DGeometry skinny(WorkoutGame3DGeometry::Layer::Skinny);
         skinny.setCourse(course);
         QVERIFY(skinny.ready());
-        QCOMPARE(skinny.sampleCount(), 1008);
+        QCOMPARE(skinny.sampleCount(), 1584);
         QCOMPARE(skinny.vertexData().size(),
                  skinny.sampleCount() * skinny.stride());
         const int triangleCount = skinny.indexData().size()
                 / int(3 * sizeof(quint32));
-        QCOMPARE(triangleCount, 504);
+        QCOMPARE(triangleCount, 792);
         QVERIFY(skinny.boundsMax().x() - skinny.boundsMin().x() > 0.45f);
         QVERIFY(skinny.boundsMax().y() - skinny.boundsMin().y() > 0.30f);
-        QVERIFY(skinny.boundsMax().z() - skinny.boundsMin().z() > 13.5f);
+        QVERIFY(skinny.boundsMax().z() - skinny.boundsMin().z() > 23.5f);
     }
 
     void skinnyRangeBuildExcludesDistantTiles()
@@ -374,6 +374,23 @@ private slots:
         QCOMPARE(skinny.sampleCount(), 0);
         skinny.setCourse(course);
         QVERIFY(skinny.ready());
+    }
+
+    void skinnyKeepsForestFloorUnderDeckWithoutRestoringDirtTrail()
+    {
+        const WorkoutGameRoadCourse course = skinnyCourse();
+        WorkoutGame3DGeometry trail(WorkoutGame3DGeometry::Layer::Trail);
+        WorkoutGame3DGeometry floor(
+                WorkoutGame3DGeometry::Layer::ForestFloor);
+        trail.setCourse(course);
+        floor.setCourse(course);
+
+        QVERIFY(trail.ready());
+        QVERIFY(floor.ready());
+        QVERIFY(trail.indexData().size()
+                < (trail.sampleCount() - 1) * 6 * int(sizeof(quint32)));
+        QCOMPARE(floor.indexData().size(),
+                 (floor.sampleCount() - 1) * 42 * int(sizeof(quint32)));
     }
 
     void rockSlabBuildsOneMergedAsymmetricMassWithinBudget()
@@ -649,7 +666,7 @@ private slots:
                  berm.sampleCount() * 7 * berm.stride());
         QVERIFY(berm.sampleCount() >= 52);
         QVERIFY(berm.indexData().size()
-                / int(3 * sizeof(quint32)) <= 768);
+                / int(3 * sizeof(quint32)) <= 1024);
         QVERIFY(trail.indexData().size()
                 < (trail.sampleCount() - 1) * 6 * int(sizeof(quint32)));
         QVERIFY(floor.indexData().size()
@@ -858,7 +875,7 @@ private slots:
                 maximumDistance = std::max(maximumDistance, distance);
             }
             QVERIFY2(!(minimumDistance <= lip + 1e-4
-                       && maximumDistance >= lip + 1.25 - 1e-4),
+                       && maximumDistance >= lip + 2.45 - 1e-4),
                      "trail triangle bridges the drop air gap");
         }
     }

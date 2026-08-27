@@ -175,7 +175,7 @@ private slots:
             priorDistance = left.visual.world.rider.distanceMeters;
         }
         QVERIFY(priorDistance > 100.0);
-        QCOMPARE(featureCueCount, 11);
+        QCOMPARE(featureCueCount, 14);
         QVERIFY(landingCueCount > 0);
     }
 
@@ -281,7 +281,7 @@ private slots:
                     .arg(int(mode)).arg(int(expected)).arg(section)));
                 ++observedFeatures;
             }
-            QCOMPARE(observedFeatures, 11);
+            QCOMPARE(observedFeatures, 14);
             if (expected == WorkoutGameFeatureOutcome::Completed) {
                 QVERIFY(maximumMainLineLateralMeters < 0.01);
             } else {
@@ -478,6 +478,9 @@ private slots:
         double maximumLiftPixels = 0.0;
         double maximumAirHeightMeters = 0.0;
         double maximumAirHeightStepMeters = 0.0;
+        double airHeightBeforeMaximumStepMeters = 0.0;
+        double airHeightAfterMaximumStepMeters = 0.0;
+        std::int64_t maximumAirHeightStepTimeMs = 0;
         double minimumAirborneShadowScale = 1.0;
         int readableAirborneFrames = 0;
         int consecutiveAirborneFrames = 0;
@@ -503,9 +506,14 @@ private slots:
             maximumAirHeightMeters = std::max(
                     maximumAirHeightMeters, pose.airHeightMeters);
             if (hasPriorAirHeight) {
-                maximumAirHeightStepMeters = std::max(
-                        maximumAirHeightStepMeters,
-                        std::abs(pose.airHeightMeters - priorAirHeightMeters));
+                const double step = std::abs(
+                        pose.airHeightMeters - priorAirHeightMeters);
+                if (step > maximumAirHeightStepMeters) {
+                    maximumAirHeightStepMeters = step;
+                    airHeightBeforeMaximumStepMeters = priorAirHeightMeters;
+                    airHeightAfterMaximumStepMeters = pose.airHeightMeters;
+                    maximumAirHeightStepTimeMs = timeMs;
+                }
             }
             priorAirHeightMeters = pose.airHeightMeters;
             hasPriorAirHeight = true;
@@ -546,14 +554,21 @@ private slots:
                      .arg(maximumConsecutiveAirborneFrames * 20)));
         QVERIFY2(maximumAirHeightStepMeters <= 0.25,
                  qPrintable(QStringLiteral(
-                     "tabletop air height stepped by %1 m")
-                     .arg(maximumAirHeightStepMeters)));
+                     "tabletop air height stepped by %1 m at %2 ms (%3 -> %4)")
+                     .arg(maximumAirHeightStepMeters)
+                     .arg(maximumAirHeightStepTimeMs)
+                     .arg(airHeightBeforeMaximumStepMeters)
+                     .arg(airHeightAfterMaximumStepMeters)));
         QVERIFY(minimumAirborneShadowScale <= 0.80);
         QVERIFY(observedLanding);
         const WorkoutGameTabletopGeometryProfile profile =
                 WorkoutGameTabletopGeometry::profile(tabletop->difficulty);
         QVERIFY(landingLocalDistanceMeters >= profile.deckEndMeters - 0.15);
-        QVERIFY(landingLocalDistanceMeters <= profile.endMeters + 0.25);
+        QVERIFY2(landingLocalDistanceMeters <= profile.endMeters + 0.25,
+                 qPrintable(QStringLiteral(
+                     "tabletop landed at local %1 m after profile end %2 m")
+                     .arg(landingLocalDistanceMeters)
+                     .arg(profile.endMeters)));
     }
 
     void tabletopEngineGatesLaunchOutsideTheCalibratedSpeedRange()

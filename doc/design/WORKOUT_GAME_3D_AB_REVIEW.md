@@ -32,16 +32,16 @@ outcome in both renderers.
   renderer tests were run in clean remote Docker build directories.
 - The application sessions did not use or modify production athlete data.
 
-Persistent review artifacts are in:
-
-`/home/jkaartinen/Documents/personal/gc-workout-game-ab-2a616fd`
+Persistent review artifacts are stored outside the repository in the release
+review artifact directory.
 
 The directory contains `feature-contact-sheet.png`, `comparison-session.mp4`,
 per-feature image pairs, and both source session videos.
 
 The application session in that artifact uses the five-feature lab included in
-the reviewed AppImage. The updated source now provides a 77-second audit course
-containing all eleven features. Static catalogs already cover all eleven.
+the reviewed AppImage. The updated source now provides a 105-second audit
+course containing fourteen challenges across all eleven feature types,
+including four progressive berms. Static catalogs cover all eleven types.
 
 ## Preserve These Properties
 
@@ -210,7 +210,7 @@ them.
    dust/debris, and clear success feedback.
 3. Validate progressive virtual gearing and speed response with generated and
    real trainer input.
-4. Test the 77-second all-feature course on the target laptop and record a
+4. Test the 105-second all-feature course on the target laptop and record a
    successful and bypassed pass without production athlete data.
 
 ### P2: Later additions

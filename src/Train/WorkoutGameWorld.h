@@ -69,6 +69,19 @@ struct WorkoutGameWorldSnapshot
     WorkoutGameVehiclePose rider;
     double speedMetersPerSecond = 0.0;
     double landingImpact = 0.0;
+
+    double visualAirHeightMeters() const
+    {
+        if (rider.airborne) return rider.airHeightMeters();
+        // Keep the rendered chassis continuous between first- and second-wheel
+        // contact while preserving airborne as the physical contact state.
+        const bool landingOnOneWheel = landingImpact > 0.0
+                && rider.rearWheelGrounded != rider.frontWheelGrounded;
+        if (!landingOnOneWheel || !std::isfinite(rider.clearanceMeters)) {
+            return 0.0;
+        }
+        return std::clamp(rider.clearanceMeters - 0.82, 0.0, 4.0);
+    }
 };
 
 struct WorkoutGamePhysicsInput

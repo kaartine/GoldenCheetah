@@ -276,7 +276,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertGreater(bounds["maximum"][0], 0.68 + 0.25)
         self.assertEqual(
             manifest["technical"]["sockets"][1]["positionMeters"],
-            [0.0, 0.0, 3.5],
+            [0.0, 0.0, 3.58],
         )
         self.assertLessEqual(manifest["technical"]["materials"], 2)
 
@@ -301,7 +301,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertEqual(
             manifest["technical"]["sockets"][1]["positionMeters"],
-            [0.0, 0.0, 22.0],
+            [0.0, 0.0, 24.0],
         )
 
     def test_rider_bike_has_29er_dimensions_named_pivots_and_no_primitives(self) -> None:

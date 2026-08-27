@@ -149,7 +149,7 @@ private slots:
         }
     }
 
-    void productionSkinnyTracksRaisedDeckAndGroundedSafeLine()
+    void productionSkinnyTracksTheRaisedDeckAtSupportedSpeeds()
     {
         WorkoutGameCourse course;
         course.status = WorkoutGameCourseStatus::Ready;
@@ -176,58 +176,47 @@ private slots:
                 piece->difficulty);
         const double center = piece->challenge.obstacleDistanceMeters;
         for (const double speed : {3.0, 5.0, 7.0}) {
-            for (int route = 0; route < 2; ++route) {
-                const bool safe = route == 1;
-                WorkoutGamePhysics physics;
-                QVERIFY(physics.configure(road));
-                WorkoutGamePhysicsInput input;
-                input.terrain = WorkoutGameTerrainKind::Skinny;
-                input.desiredSpeedMetersPerSecond = speed;
-                input.effortRatio = safe ? 0.75 : 1.0;
-                input.forceGroundFollowing = safe;
-                double maximumRise = 0.0;
-                double maximumVerticalStep = 0.0;
-                double previousElevation = 0.0;
-                const double start = center + skinny.startMeters;
-                const double end = center + skinny.endMeters;
-                const int ticks = int(std::ceil(
-                        (end - start) / (speed * 0.02)));
-                for (int tick = 0; tick <= ticks; ++tick) {
-                    input.workoutTimeMs = tick * 20;
-                    input.courseDistanceMeters = std::min(
-                            end, start + tick * speed * 0.02);
-                    const WorkoutGameRoadSample sample =
-                            WorkoutGameRoadCourseBuilder::sample(
-                                road, input.courseDistanceMeters);
-                    const WorkoutGameWorldSnapshot result =
-                            physics.update(input);
-                    QVERIFY(result.ready);
-                    QVERIFY(!result.rider.airborne);
-                    QCOMPARE(result.rider.airHeightMeters(), 0.0);
-                    const double datum = sample.center.elevationMeters
-                            - sample.surfaceOffsetMeters;
-                    const double expected = safe
-                            ? datum : sample.visualGroundElevationMeters();
-                    QVERIFY(std::abs(result.surfaceElevationMeters
-                                - expected) < 0.03);
-                    maximumRise = std::max(
-                            maximumRise,
-                            result.surfaceElevationMeters - datum);
-                    if (tick > 0) {
-                        maximumVerticalStep = std::max(
-                                maximumVerticalStep,
-                                std::abs(result.rider.elevationMeters
-                                    - previousElevation));
-                    }
-                    previousElevation = result.rider.elevationMeters;
+            WorkoutGamePhysics physics;
+            QVERIFY(physics.configure(road));
+            WorkoutGamePhysicsInput input;
+            input.terrain = WorkoutGameTerrainKind::Skinny;
+            input.desiredSpeedMetersPerSecond = speed;
+            input.effortRatio = 1.0;
+            double maximumRise = 0.0;
+            double maximumVerticalStep = 0.0;
+            double previousElevation = 0.0;
+            const double start = center + skinny.startMeters;
+            const double end = center + skinny.endMeters;
+            const int ticks = int(std::ceil(
+                    (end - start) / (speed * 0.02)));
+            for (int tick = 0; tick <= ticks; ++tick) {
+                input.workoutTimeMs = tick * 20;
+                input.courseDistanceMeters = std::min(
+                        end, start + tick * speed * 0.02);
+                const WorkoutGameRoadSample sample =
+                        WorkoutGameRoadCourseBuilder::sample(
+                            road, input.courseDistanceMeters);
+                const WorkoutGameWorldSnapshot result = physics.update(input);
+                QVERIFY(result.ready);
+                QVERIFY(!result.rider.airborne);
+                QCOMPARE(result.rider.airHeightMeters(), 0.0);
+                const double datum = sample.center.elevationMeters
+                        - sample.surfaceOffsetMeters;
+                QVERIFY(std::abs(result.surfaceElevationMeters
+                            - sample.visualGroundElevationMeters()) < 0.03);
+                maximumRise = std::max(
+                        maximumRise,
+                        result.surfaceElevationMeters - datum);
+                if (tick > 0) {
+                    maximumVerticalStep = std::max(
+                            maximumVerticalStep,
+                            std::abs(result.rider.elevationMeters
+                                - previousElevation));
                 }
-                QVERIFY(maximumVerticalStep < 0.10);
-                if (safe) {
-                    QVERIFY(maximumRise < 0.02);
-                } else {
-                    QVERIFY(maximumRise >= skinny.deckHeightMeters * 0.95);
-                }
+                previousElevation = result.rider.elevationMeters;
             }
+            QVERIFY(maximumVerticalStep < 0.10);
+            QVERIFY(maximumRise >= skinny.deckHeightMeters * 0.95);
         }
     }
 
@@ -1236,7 +1225,7 @@ private slots:
         QVERIFY(bunny.landed);
         QVERIFY(log.landed);
         QVERIFY(bunny.maximumAirMeters >= 0.25);
-        QVERIFY(bunny.maximumAirMeters <= 0.65);
+        QVERIFY(bunny.maximumAirMeters <= 0.80);
         QVERIFY(bunny.durationMs <= 1200);
         QVERIFY(bunny.maximumAirMeters < log.maximumAirMeters);
         QVERIFY(bunny.durationMs < log.durationMs);
@@ -1395,7 +1384,7 @@ private slots:
         QVERIFY(maximumAirMeters <= 1.10);
         QVERIFY(maximumImpact >= 0.05);
         QVERIFY(maximumImpact <= 0.65);
-        QVERIFY(minimumAirbornePitch >= -18.0);
+        QVERIFY(minimumAirbornePitch >= -30.0);
         QVERIFY(maximumAirbornePitch <= 4.0);
         QVERIFY(maximumElevationStep <= 0.20);
         QVERIFY(impactTicks >= 1);
@@ -1732,6 +1721,15 @@ private slots:
 
         world.rider.airborne = false;
         QCOMPARE(world.rider.airHeightMeters(), 0.0);
+        QCOMPARE(world.visualAirHeightMeters(), 0.0);
+        world.rider.frontWheelGrounded = true;
+        QCOMPARE(world.visualAirHeightMeters(), 0.0);
+        world.landingImpact = 0.5;
+        QCOMPARE(world.visualAirHeightMeters(), 1.0);
+        world.rider.rearWheelGrounded = true;
+        QCOMPARE(world.visualAirHeightMeters(), 0.0);
+        world.rider.frontWheelGrounded = false;
+        world.rider.rearWheelGrounded = false;
         world.rider.clearanceMeters = 0.90;
         QCOMPARE(world.rider.airHeightMeters(), 0.0);
         world.rider.airborne = true;

@@ -30,11 +30,11 @@ AssetSpec specFor(WorkoutGameTerrainKind terrain)
 {
     switch (terrain) {
     case WorkoutGameTerrainKind::BunnyHop:
-        return {true, 1.68, 0.14, 0.20};
+        return {true, 1.68, 0.22, 0.20};
     case WorkoutGameTerrainKind::LogOver:
         return {true, 0.75, 0.54, 0.54};
     case WorkoutGameTerrainKind::Drop:
-        return {true, 0.0, 22.0, 0.70};
+        return {true, 0.0, 24.0, 0.70};
     default:
         return {};
     }

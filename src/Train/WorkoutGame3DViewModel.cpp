@@ -233,8 +233,14 @@ void WorkoutGame3DViewModel::setFrame(
     const double rightX = std::cos(sample.center.headingRadians);
     const double rightZ = -std::sin(sample.center.headingRadians);
     riderPositionX = sample.center.xMeters + lateral * rightX;
-    const double authoritativeAir = std::max(
-            0.0, finiteOrZero(frame.world.rider.airHeightMeters()));
+    const bool completedAirFeature = frame.feature.ready
+            && frame.feature.outcome == WorkoutGameFeatureOutcome::Completed
+            && (frame.feature.motion == WorkoutGameFeatureMotion::Jump
+                || frame.feature.motion == WorkoutGameFeatureMotion::Drop);
+    const double authoritativeAir = std::max(0.0, finiteOrZero(
+            completedAirFeature
+                ? frame.world.visualAirHeightMeters()
+                : frame.world.rider.airHeightMeters()));
     double visualGround = sample.center.elevationMeters;
     if (frame.feature.route == WorkoutGameRoute::SafeBypass) {
         const WorkoutGame3DTerrainProfileSnapshot terrain =
@@ -272,20 +278,6 @@ void WorkoutGame3DViewModel::setFrame(
                 || sample.terrain == WorkoutGameTerrainKind::RockSlab)
                 && frame.feature.route == WorkoutGameRoute::SafeBypass) {
             visualGround -= sample.surfaceOffsetMeters;
-        }
-        if (sample.terrain == WorkoutGameTerrainKind::Skinny
-                && sample.pieceIndex < roadCourse.pieces.size()) {
-            const WorkoutGameRoadPiece &piece =
-                    roadCourse.pieces[sample.pieceIndex];
-            const WorkoutGameSkinnyGeometryProfile skinny =
-                    WorkoutGameSkinnyGeometry::profile(piece.difficulty);
-            visualGround = terrain.ready
-                    ? WorkoutGame3DTerrainProfile::elevationAtLateral(
-                        terrain, lateral)
-                        + skinny.safeLineSurfaceLiftMeters
-                    : sample.visualGroundElevationMeters()
-                        - sample.surfaceOffsetMeters
-                        + skinny.safeLineSurfaceLiftMeters;
         }
         if (sample.terrain == WorkoutGameTerrainKind::RockGarden
                 && frame.feature.route == WorkoutGameRoute::SafeBypass

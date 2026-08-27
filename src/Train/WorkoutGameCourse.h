@@ -44,6 +44,7 @@ struct WorkoutGameSection
     double gradePercent = 0.0;
     double lengthMeters = 0.0;
     double difficulty = 0.0;
+    double reliefScale = 1.0;
     int challengeCount = 0;
     std::uint32_t visualVariant = 0;
     bool gravityAssisted = false;

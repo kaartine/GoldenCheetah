@@ -119,7 +119,8 @@ double trailReliefOffset(
     const double phase = double((piece.sourceSectionIndex * 37u
             + std::size_t(std::llround(piece.startDistanceMeters))) % 101u)
             / 101.0 * 2.0 * Pi;
-    double amplitude = 0.68 + 0.58 * piece.difficulty;
+    double amplitude = (0.68 + 0.58 * piece.difficulty)
+            * piece.reliefScale;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Climb:
         return 0.0;
@@ -714,6 +715,10 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             piece.turnRadians = pieceTurn(
                     section, std::size_t(part));
             piece.difficulty = std::clamp(section.difficulty, 0.0, 1.0);
+            piece.reliefScale = std::clamp(
+                    std::isfinite(section.reliefScale)
+                        ? section.reliefScale : 1.0,
+                    0.0, 2.5);
             piece.entry = connector;
             piece.exit = connector;
             piece.exit.halfWidthMeters = targetHalfWidth(section.terrain);

@@ -37,10 +37,14 @@ struct WorkoutGameTabletopGeometryProfile
         const double landing = plannedLandingLocalMeters(forwardSpeed);
         const double verticalDisplacement =
                 surfaceOffsetMeters(landing) - heightMeters;
+        // Compensate for the sprung three-body bike so each difficulty lands
+        // on its authored runout instead of using point-mass ballistics.
+        const double bikeModelCalibration = 0.05 - 1.03 * difficulty;
         return std::clamp(
                 (verticalDisplacement
                  + 0.5 * GravityMetersPerSecondSquared
-                    * duration * duration) / duration,
+                    * duration * duration) / duration
+                    + bikeModelCalibration,
                 2.0, 5.4);
     }
 
@@ -138,10 +142,10 @@ public:
                 0.0, 1.0);
         constexpr double Pi = 3.14159265358979323846;
         constexpr double PlanarSlopeFactor = 1.125;
-        const double height = 0.50 + 0.22 * difficulty;
+        const double height = 0.70 + 0.40 * difficulty;
         const double rampRun = height * PlanarSlopeFactor
-                / std::tan(18.0 * Pi / 180.0);
-        const double deckLength = 2.0 + 0.70 * difficulty;
+                / std::tan((20.0 + 2.0 * difficulty) * Pi / 180.0);
+        const double deckLength = 2.4 + 0.80 * difficulty;
         const double halfDeck = deckLength * 0.5;
         const double landingRun = rampRun * 1.15;
         return {

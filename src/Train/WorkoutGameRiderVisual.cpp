@@ -22,8 +22,15 @@ WorkoutGameRiderVisualPose WorkoutGameRiderVisual::pose(
             && feature.route != WorkoutGameRoute::SafeBypass
             && feature.outcome == WorkoutGameFeatureOutcome::Completed
             ? feature.verticalOffsetMeters : 0.0;
+    const bool completedAirFeature = feature.ready
+            && feature.outcome == WorkoutGameFeatureOutcome::Completed
+            && (feature.motion == WorkoutGameFeatureMotion::Jump
+                || feature.motion == WorkoutGameFeatureMotion::Drop);
     const double authoritativeAir = world.ready
-            ? world.rider.airHeightMeters() : featureAir;
+            ? (completedAirFeature
+                ? world.visualAirHeightMeters()
+                : world.rider.airHeightMeters())
+            : featureAir;
     result.airHeightMeters = std::max(
             0.0,
             std::isfinite(authoritativeAir) ? authoritativeAir : 0.0);

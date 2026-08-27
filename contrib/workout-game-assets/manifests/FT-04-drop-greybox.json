@@ -7,9 +7,9 @@
     "provider": "GoldenCheetah",
     "author": "GoldenCheetah contributors",
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_drop.py",
-    "retrievedAt": "2026-08-25",
+    "retrievedAt": "2026-08-27",
     "originalFileName": "generate_drop.py",
-    "originalSha256": "08c8651b3474d8fee191c28ddf786ff85139de526737736a98da3e3adff42416",
+    "originalSha256": "e1f1c641dc5e4f0ebd532ca475507237e9dc2ae5b1d7a24c64186ba4d72a8e0d",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_drop.py"
@@ -35,17 +35,17 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_drop.py",
       "purpose": "source",
-      "sha256": "08c8651b3474d8fee191c28ddf786ff85139de526737736a98da3e3adff42416"
+      "sha256": "e1f1c641dc5e4f0ebd532ca475507237e9dc2ae5b1d7a24c64186ba4d72a8e0d"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_Drop_Greybox.glb",
       "purpose": "intermediate",
-      "sha256": "4ce9a5bec8345fe6a8c40f5b5594cc2669281c3399402747ca0281521cb08258"
+      "sha256": "f30d4e161ef47ec90740e8392d7c21761224319e269168ba5a9724a665d04ba4"
     },
     {
       "path": "src/Train/qml/assets/Wg_Drop_Greybox.qml",
       "purpose": "runtime",
-      "sha256": "42d6123f2788d5b166765f0c22d68611738c40b068f5aee5d5cf8991eeeb8252"
+      "sha256": "55478d7f36fd2e6a9695a5f5a5eb93827ccfd7bc8e2873e7632fe343149e0401"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh",
@@ -100,7 +100,7 @@
       },
       {
         "name": "SOCKET_OUT",
-        "positionMeters": [0.0, 0.0, 22.0],
+        "positionMeters": [0.0, 0.0, 24.0],
         "halfWidthMeters": 0.68
       }
     ],
@@ -117,7 +117,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
-    "reviewedAt": "2026-08-25",
-    "notes": "Approved project-authored faceted drop face with exact 22.0 m profile sockets and no duplicated trail, landing or bypass ground. Khronos validation, deterministic Blender and Balsam runs, asset-policy gates, packaged X11/OpenGL rendering, real-Box2D completed motion and grounded safe-line motion all passed."
+    "reviewedAt": "2026-08-27",
+    "notes": "Approved project-authored faceted drop face with exact 24.0 m profile sockets and no duplicated trail, landing or bypass ground. Runtime trail and Box2D remain authoritative for the larger difficulty-dependent drop."
   }
 }

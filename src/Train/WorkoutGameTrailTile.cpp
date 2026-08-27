@@ -9,8 +9,6 @@
 
 #include "WorkoutGameTrailTile.h"
 
-#include "WorkoutGameSkinnyGeometry.h"
-
 #include <algorithm>
 #include <cmath>
 
@@ -102,22 +100,13 @@ WorkoutGameTrailTile WorkoutGameTrailTileAssembler::challenge(
     result.mainLine.push_back(std::move(featureInstance));
     appendTrailSpan(result, course, featureEnd, result.exitDistanceMeters);
 
-    if (piece.terrain == WorkoutGameTerrainKind::Skinny) {
-        const WorkoutGameSkinnyGeometryProfile skinny =
-                WorkoutGameSkinnyGeometry::profile(piece.difficulty);
-        result.bypass.mesh = WorkoutGameMeshLibrary::skinnySafeLine(
-                piece.difficulty);
-        result.bypass.anchorDistanceMeters =
-                piece.challenge.obstacleDistanceMeters + skinny.startMeters;
-    } else {
-        result.bypass.mesh = WorkoutGameMeshLibrary::bypassRibbon(
-                result.exitDistanceMeters - result.entryDistanceMeters,
-                piece.challenge.bypassLateralMeters,
-                0.38,
-                result.entryHalfWidthMeters,
-                result.exitHalfWidthMeters);
-        result.bypass.anchorDistanceMeters = result.entryDistanceMeters;
-    }
+    result.bypass.mesh = WorkoutGameMeshLibrary::bypassRibbon(
+            result.exitDistanceMeters - result.entryDistanceMeters,
+            piece.challenge.bypassLateralMeters,
+            0.38,
+            result.entryHalfWidthMeters,
+            result.exitHalfWidthMeters);
+    result.bypass.anchorDistanceMeters = result.entryDistanceMeters;
     result.bypass.renderLayer = WorkoutGameMeshRenderLayer::TrailSurface;
     result.bypass.anchorToBaseSurface = false;
     result.ready = !result.mainLine.empty()

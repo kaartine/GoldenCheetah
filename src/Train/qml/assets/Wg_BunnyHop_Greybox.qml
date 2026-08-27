@@ -43,7 +43,7 @@ Node {
         Node {
             id: marker_APEX
             objectName: "MARKER_APEX"
-            position: Qt.vector3d(0, 0.2, 1.75)
+            position: Qt.vector3d(0, 0.2, 1.79)
         }
         Node {
             id: marker_DECISION
@@ -53,7 +53,7 @@ Node {
         Node {
             id: marker_LAND
             objectName: "MARKER_LAND"
-            position: Qt.vector3d(0, 0, 2.75)
+            position: Qt.vector3d(0, 0, 2.83)
         }
         Node {
             id: marker_PRELOAD
@@ -76,7 +76,7 @@ Node {
         Node {
             id: socket_OUT
             objectName: "SOCKET_OUT"
-            position: Qt.vector3d(0, 0, 3.5)
+            position: Qt.vector3d(0, 0, 3.58)
         }
     }
 

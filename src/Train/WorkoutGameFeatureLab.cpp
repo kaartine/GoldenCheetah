@@ -17,12 +17,18 @@ namespace {
 
 constexpr std::int64_t FeatureDurationMs = 5000;
 constexpr std::int64_t TabletopDurationMs = 12000;
+constexpr std::int64_t DropDurationMs = 7000;
+constexpr std::int64_t SkinnyDurationMs = 8000;
 constexpr std::int64_t RecoveryDurationMs = 1000;
+constexpr std::int64_t FlowTransitionDurationMs = 2000;
 constexpr std::int64_t FinalRunoutDurationMs = 5000;
 constexpr double FeatureLengthMeters = 28.0;
-constexpr double DropLengthMeters = 36.0;
+constexpr double DropLengthMeters = 46.0;
+constexpr double SkinnyLengthMeters = 44.0;
+constexpr double BermLengthMeters = 36.0;
 constexpr double TabletopLengthMeters = 84.0;
 constexpr double RecoveryLengthMeters = 8.0;
+constexpr double FlowTransitionLengthMeters = 22.0;
 constexpr double FinalRunoutLengthMeters = 30.0;
 
 WorkoutGameFeature featureForTerrain(WorkoutGameTerrainKind terrain)
@@ -52,17 +58,45 @@ WorkoutGameSection featureSection(
     section.feature = featureForTerrain(terrain);
     section.terrain = terrain;
     section.durationMs = terrain == WorkoutGameTerrainKind::Tabletop
-            ? TabletopDurationMs : FeatureDurationMs;
+            ? TabletopDurationMs
+            : terrain == WorkoutGameTerrainKind::Drop
+            ? DropDurationMs
+            : terrain == WorkoutGameTerrainKind::Skinny
+            ? SkinnyDurationMs : FeatureDurationMs;
     section.lengthMeters = terrain == WorkoutGameTerrainKind::Tabletop
             ? TabletopLengthMeters
             : terrain == WorkoutGameTerrainKind::Drop
-            ? DropLengthMeters : FeatureLengthMeters;
+            ? DropLengthMeters
+            : terrain == WorkoutGameTerrainKind::Skinny
+            ? SkinnyLengthMeters
+            : terrain == WorkoutGameTerrainKind::Berm
+            ? BermLengthMeters : FeatureLengthMeters;
     section.targetWatts = targetWatts;
     section.gradePercent = gradePercent;
     section.difficulty = difficulty;
     section.challengeCount = 1;
     section.visualVariant = variant;
+    section.reliefScale = terrain == WorkoutGameTerrainKind::Berm
+            ? 1.35 + 0.25 * difficulty : 1.0;
     section.gravityAssisted = terrain == WorkoutGameTerrainKind::Drop;
+    return section;
+}
+
+WorkoutGameSection flowTransitionSection(
+        double ftpWatts,
+        std::uint32_t variant)
+{
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::FlowTrail;
+    section.terrain = WorkoutGameTerrainKind::Rollers;
+    section.durationMs = FlowTransitionDurationMs;
+    section.lengthMeters = FlowTransitionLengthMeters;
+    section.targetWatts = ftpWatts * 0.68;
+    section.gradePercent = (variant & 1u) == 0u ? 5.0 : -7.0;
+    section.difficulty = 0.82;
+    section.reliefScale = 1.65;
+    section.visualVariant = variant;
+    section.gravityAssisted = section.gradePercent < 0.0;
     return section;
 }
 
@@ -135,7 +169,13 @@ WorkoutGameCourse WorkoutGameFeatureLab::course(
         featureSection(WorkoutGameTerrainKind::Skinny,
                        ftpWatts * 0.78, 0.0, 0.60, 9u),
         featureSection(WorkoutGameTerrainKind::Berm,
-                       ftpWatts * 0.88, -1.0, 0.66, 10u),
+                       ftpWatts * 0.84, 2.0, 0.10, 20u),
+        featureSection(WorkoutGameTerrainKind::Berm,
+                       ftpWatts * 0.88, -3.0, 0.40, 21u),
+        featureSection(WorkoutGameTerrainKind::Berm,
+                       ftpWatts * 0.92, 3.0, 0.70, 22u),
+        featureSection(WorkoutGameTerrainKind::Berm,
+                       ftpWatts * 0.96, -4.0, 1.00, 23u),
         featureSection(WorkoutGameTerrainKind::RockSlab,
                        ftpWatts * 0.92, -4.0, 0.70, 11u)
     };
@@ -147,8 +187,15 @@ WorkoutGameCourse WorkoutGameFeatureLab::course(
         result.sections.push_back(feature);
         startMs += feature.durationMs;
         if (index + 1 < std::size(features)) {
-            WorkoutGameSection recovery = recoverySection(
-                    ftpWatts, std::uint32_t(index + 20));
+            const bool bermFlow = feature.terrain
+                        == WorkoutGameTerrainKind::Berm
+                    || features[index + 1].terrain
+                        == WorkoutGameTerrainKind::Berm;
+            WorkoutGameSection recovery = bermFlow
+                    ? flowTransitionSection(
+                        ftpWatts, std::uint32_t(index + 40))
+                    : recoverySection(
+                        ftpWatts, std::uint32_t(index + 20));
             recovery.startMs = startMs;
             result.sections.push_back(recovery);
             startMs += recovery.durationMs;

@@ -18,50 +18,18 @@ struct WorkoutGameSkinnyGeometryProfile
     bool ready = false;
     double startMeters = 0.0;
     double activeStartMeters = 0.0;
-    double safeLineStartMeters = 0.0;
     double deckStartMeters = 0.0;
     double deckEndMeters = 0.0;
     double activeEndMeters = 0.0;
-    double safeLineEndMeters = 0.0;
     double endMeters = 0.0;
     double socketHalfWidthMeters = 0.0;
-    double activeHalfWidthMeters = 0.0;
-    double safeLineLateralMeters = 0.0;
-    double safeLineSurfaceLiftMeters = 0.0;
     double deckHalfWidthMeters = 0.0;
     double deckHeightMeters = 0.0;
     double deckThicknessMeters = 0.0;
 
-    double safeLineOffsetMeters(double localDistanceMeters) const
+    double halfWidthMeters(double) const
     {
-        if (!ready || !std::isfinite(localDistanceMeters)
-                || localDistanceMeters <= startMeters
-                || localDistanceMeters >= endMeters) {
-            return 0.0;
-        }
-        if (localDistanceMeters < safeLineStartMeters) {
-            return safeLineLateralMeters * smoothStep(
-                    (localDistanceMeters - startMeters)
-                        / (safeLineStartMeters - startMeters));
-        }
-        if (localDistanceMeters <= safeLineEndMeters) {
-            return safeLineLateralMeters;
-        }
-        return safeLineLateralMeters * smoothStep(
-                (endMeters - localDistanceMeters)
-                    / (endMeters - safeLineEndMeters));
-    }
-
-    double halfWidthMeters(double localDistanceMeters) const
-    {
-        if (!ready || !std::isfinite(localDistanceMeters)
-                || safeLineLateralMeters <= 0.0) {
-            return socketHalfWidthMeters;
-        }
-        const double envelope = safeLineOffsetMeters(localDistanceMeters)
-                / safeLineLateralMeters;
-        return socketHalfWidthMeters
-                + (activeHalfWidthMeters - socketHalfWidthMeters) * envelope;
+        return socketHalfWidthMeters;
     }
 
     double deckSurfaceOffsetMeters(double localDistanceMeters) const
@@ -109,13 +77,6 @@ struct WorkoutGameSkinnyGeometryProfile
         return (1.0 + difficulty) * envelope
                 * std::sin(4.0 * Pi * progress + 0.35);
     }
-
-private:
-    static double smoothStep(double value)
-    {
-        const double p = std::clamp(value, 0.0, 1.0);
-        return p * p * (3.0 - 2.0 * p);
-    }
 };
 
 class WorkoutGameSkinnyGeometry
@@ -130,18 +91,13 @@ public:
                 0.0, 1.0);
         WorkoutGameSkinnyGeometryProfile result;
         result.ready = true;
-        result.startMeters = -9.0;
-        result.activeStartMeters = -7.0;
-        result.safeLineStartMeters = -5.0;
-        result.deckStartMeters = -3.5;
-        result.deckEndMeters = 3.5;
-        result.safeLineEndMeters = 5.0;
-        result.activeEndMeters = 7.0;
-        result.endMeters = 9.0;
+        result.startMeters = -14.0;
+        result.activeStartMeters = -12.0;
+        result.deckStartMeters = -8.0;
+        result.deckEndMeters = 8.0;
+        result.activeEndMeters = 12.0;
+        result.endMeters = 14.0;
         result.socketHalfWidthMeters = 0.68;
-        result.activeHalfWidthMeters = 1.55;
-        result.safeLineLateralMeters = 1.05;
-        result.safeLineSurfaceLiftMeters = 0.012;
         result.deckHalfWidthMeters = 0.31 - 0.06 * difficulty;
         result.deckHeightMeters = 0.28 + 0.08 * difficulty;
         result.deckThicknessMeters = 0.06;

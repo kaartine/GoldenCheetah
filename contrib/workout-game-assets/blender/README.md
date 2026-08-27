@@ -53,14 +53,14 @@ ring. None of the generators downloads or embeds external assets.
 
 ## Drop contract
 
-- The `22.0 m` metadata tile matches the runtime profile from `-10.0 m` to
-  `+12.0 m`, with the physical lip at local `10.0 m`.
+- The `24.0 m` metadata tile matches the runtime profile from `-10.0 m` to
+  `+14.0 m`, with the physical lip at local `10.0 m`.
 - The asset contributes only a narrow, faceted rock face below the upper lip.
   The streamed socket trail owns the approach, actual gap, lower landing,
   recovery and safe branch, so no duplicate ground can overlap or bridge the
   drop.
 - The source face is `0.70 m` deep and scales only vertically to the
-  difficulty-dependent `0.35-0.70 m` runtime depth. Its rough edge extends
+  difficulty-dependent `0.60-1.00 m` runtime depth. Its rough edge extends
   beyond both sides of the `1.36 m` tread.
 - Prepare, decision, action, lip, air, land and recovery markers are visual
   metadata. Box2D remains the sole source of rider flight, pitch and landing
@@ -70,7 +70,7 @@ ring. None of the generators downloads or embeds external assets.
 
 ## Bunny-hop contract
 
-- The `3.50 m` visual tile uses exact `0.68 m` ordinary-trail sockets and a
+- The `3.58 m` visual tile uses exact `0.68 m` ordinary-trail sockets and a
   self-contained project-authored obstacle. It does not duplicate trail or
   terrain geometry.
 - The crossbar is `0.20 m` high and extends to `X = +/-1.02 m`; its supports

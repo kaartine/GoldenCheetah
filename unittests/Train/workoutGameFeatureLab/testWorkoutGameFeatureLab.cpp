@@ -8,8 +8,14 @@
  */
 
 #include "Train/WorkoutGameFeatureLab.h"
+#include "Train/WorkoutGameBermGeometry.h"
+#include "Train/WorkoutGameRoadCourse.h"
+#include "Train/WorkoutGameSkinnyGeometry.h"
 
 #include <QTest>
+
+#include <algorithm>
+#include <cmath>
 
 class TestWorkoutGameFeatureLab : public QObject
 {
@@ -40,16 +46,77 @@ private slots:
             WorkoutGameTerrainKind::BunnyHop,
             WorkoutGameTerrainKind::Skinny,
             WorkoutGameTerrainKind::Berm,
+            WorkoutGameTerrainKind::Berm,
+            WorkoutGameTerrainKind::Berm,
+            WorkoutGameTerrainKind::Berm,
             WorkoutGameTerrainKind::RockSlab
         };
         QCOMPARE(challenged, expected);
-        QCOMPARE(course.durationMs, std::int64_t(77000));
+        QCOMPARE(course.durationMs, std::int64_t(105000));
         QCOMPARE(course.sections.back().terrain,
                  WorkoutGameTerrainKind::SmoothTrail);
-        QCOMPARE(course.sections.back().startMs, std::int64_t(72000));
+        QCOMPARE(course.sections.back().startMs, std::int64_t(100000));
         QCOMPARE(course.sections.back().durationMs, std::int64_t(5000));
         QCOMPARE(course.sections.back().lengthMeters, 30.0);
         QCOMPARE(course.sections.back().targetWatts, 110.0);
+    }
+
+    void bermSequenceAlternatesDirectionAngleAndRollingRelief()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+
+        std::vector<const WorkoutGameRoadPiece *> berms;
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            if (piece.terrain == WorkoutGameTerrainKind::Berm
+                    && piece.challenge.enabled) {
+                berms.push_back(&piece);
+            }
+        }
+        QCOMPARE(berms.size(), std::size_t(4));
+        for (std::size_t index = 0; index < berms.size(); ++index) {
+            const WorkoutGameRoadPiece &piece = *berms[index];
+            const auto profile = WorkoutGameBermGeometry::profile(
+                    piece.difficulty);
+            QCOMPARE(std::abs(piece.turnRadians),
+                     profile.turnMagnitudeRadians);
+            QVERIFY(piece.reliefScale >= 1.35);
+            if (index > 0) {
+                QVERIFY(piece.turnRadians * berms[index - 1]->turnRadians < 0.0);
+                QVERIFY(std::abs(piece.turnRadians)
+                        > std::abs(berms[index - 1]->turnRadians));
+            }
+        }
+
+        int rollingTransitions = 0;
+        for (const WorkoutGameSection &section : course.sections) {
+            if (section.terrain == WorkoutGameTerrainKind::Rollers
+                    && section.challengeCount == 0
+                    && section.reliefScale > 1.0) {
+                ++rollingTransitions;
+            }
+        }
+        QCOMPARE(rollingTransitions, 5);
+    }
+
+    void skinnyIsLongAndHasNoChickenLine()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const auto found = std::find_if(
+                course.sections.begin(), course.sections.end(),
+                [](const WorkoutGameSection &section) {
+                    return section.terrain == WorkoutGameTerrainKind::Skinny;
+                });
+        QVERIFY(found != course.sections.end());
+        QVERIFY(found->lengthMeters >= 44.0);
+
+        const auto profile = WorkoutGameSkinnyGeometry::profile(
+                found->difficulty);
+        QVERIFY(profile.deckEndMeters - profile.deckStartMeters >= 16.0);
+        QCOMPARE(profile.halfWidthMeters(0.0),
+                 profile.socketHalfWidthMeters);
     }
 
     void generatedCourseIsDeterministicAndRejectsInvalidFtp()
@@ -116,6 +183,29 @@ private slots:
             QCOMPARE(simulation.sectionOutcomes()[index],
                      WorkoutGameFeatureOutcome::Bypassed);
         }
+    }
+
+    void missedSkinnyRemainsOnMainLine()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(course, 200.0));
+
+        bool observedMissedSkinny = false;
+        for (std::int64_t time = 0; time <= course.durationMs; time += 50) {
+            const WorkoutGameSimulationSnapshot snapshot = simulation.update(
+                    WorkoutGameFeatureLab::input(
+                        course, time, WorkoutGameFeatureLabScenario::Bypass));
+            if (snapshot.activeSection >= 0
+                    && course.sections[std::size_t(snapshot.activeSection)].terrain
+                        == WorkoutGameTerrainKind::Skinny
+                    && snapshot.featureOutcome
+                        == WorkoutGameFeatureOutcome::Bypassed) {
+                QCOMPARE(snapshot.route, WorkoutGameRoute::MainLine);
+                observedMissedSkinny = true;
+            }
+        }
+        QVERIFY(observedMissedSkinny);
     }
 };
 

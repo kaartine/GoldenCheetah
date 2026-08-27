@@ -170,16 +170,19 @@ public:
                 std::isfinite(requestedDifficulty)
                     ? requestedDifficulty : 0.0,
                 0.0, 1.0);
+        const double curveLengthMeters = 6.0 + 4.0 * difficulty;
+        const double curveHalfLengthMeters = curveLengthMeters * 0.5;
+        constexpr double SocketLengthMeters = 1.5;
         return {
             true,
-            -3.87,
-            -2.62,
-            2.62,
-            3.87,
+            -curveHalfLengthMeters - SocketLengthMeters,
+            -curveHalfLengthMeters,
+            curveHalfLengthMeters,
+            curveHalfLengthMeters + SocketLengthMeters,
             0.68 * 1.17,
-            0.95,
-            75.0 * Pi / 180.0,
-            (20.0 + 10.0 * difficulty) * Pi / 180.0
+            0.90 + 0.15 * difficulty,
+            (42.0 + 58.0 * difficulty) * Pi / 180.0,
+            (18.0 + 16.0 * difficulty) * Pi / 180.0
         };
     }
 };

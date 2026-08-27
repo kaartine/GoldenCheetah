@@ -395,7 +395,8 @@ WorkoutGameSimulationSnapshot WorkoutGameSimulation::snapshot(
         result.challengeReadiness = activeChallengeReadiness;
         if (result.featureOutcome == WorkoutGameFeatureOutcome::Bypassed
                 && section.terrain != WorkoutGameTerrainKind::Rollers
-                && section.terrain != WorkoutGameTerrainKind::Climb) {
+                && section.terrain != WorkoutGameTerrainKind::Climb
+                && section.terrain != WorkoutGameTerrainKind::Skinny) {
             result.route = WorkoutGameRoute::SafeBypass;
         }
     }
