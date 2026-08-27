@@ -25,7 +25,8 @@ constexpr std::array<WorkoutGame3DGeometry::Layer,
     WorkoutGame3DGeometry::Layer::Climb,
     WorkoutGame3DGeometry::Layer::RockGarden,
     WorkoutGame3DGeometry::Layer::RockSlab,
-    WorkoutGame3DGeometry::Layer::Skinny
+    WorkoutGame3DGeometry::Layer::Skinny,
+    WorkoutGame3DGeometry::Layer::ForestDressing
 }};
 
 void lowerWorkerPriority()

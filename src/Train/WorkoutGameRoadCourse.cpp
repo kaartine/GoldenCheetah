@@ -26,6 +26,7 @@ namespace {
 
 constexpr int IntegrationSteps = 48;
 constexpr double Pi = 3.14159265358979323846;
+constexpr double VisualRunoutMeters = 90.0;
 
 double smoothStep(double value)
 {
@@ -861,6 +862,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             && std::isfinite(result.totalLengthMeters)
             && result.totalLengthMeters > 0.0;
     if (!result.ready) return {};
+    result.visualLengthMeters = result.totalLengthMeters + VisualRunoutMeters;
     return result;
 }
 
@@ -991,5 +993,39 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
                     / (high - low) * 100.0;
         }
     }
+    return result;
+}
+
+WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sampleVisual(
+        const WorkoutGameRoadCourse &course,
+        double requestedDistanceMeters)
+{
+    if (!course.ready || course.pieces.empty()
+            || !std::isfinite(requestedDistanceMeters)) {
+        return {};
+    }
+    const double visualLength = std::max(
+            course.totalLengthMeters, course.visualLengthMeters);
+    const double distance = std::clamp(
+            requestedDistanceMeters, 0.0, visualLength);
+    if (distance <= course.totalLengthMeters) {
+        return sample(course, distance);
+    }
+
+    WorkoutGameRoadSample result;
+    const WorkoutGameRoadConnector &socket = course.pieces.back().exit;
+    const double runoutDistance = distance - course.totalLengthMeters;
+    result.ready = true;
+    result.pieceIndex = course.pieces.size() - 1u;
+    result.terrain = WorkoutGameTerrainKind::SmoothTrail;
+    result.distanceMeters = distance;
+    result.pieceProgress = 1.0;
+    result.center = socket;
+    result.center.xMeters += std::sin(socket.headingRadians) * runoutDistance;
+    result.center.zMeters += std::cos(socket.headingRadians) * runoutDistance;
+    result.center.gradePercent = 0.0;
+    result.center.halfWidthMeters = 0.68;
+    result.baseElevationMeters = result.center.elevationMeters;
+    result.baseGradePercent = 0.0;
     return result;
 }

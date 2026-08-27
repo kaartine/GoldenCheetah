@@ -45,6 +45,8 @@ class WorkoutGame3DViewModel : public QObject
                NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *floorGeometry READ floorGeometry
                NOTIFY floorGeometryChanged)
+    Q_PROPERTY(QObject *forestDressingGeometry READ forestDressingGeometry
+               NOTIFY floorGeometryChanged)
     Q_PROPERTY(bool ready READ ready NOTIFY sceneChanged)
     Q_PROPERTY(double riderX READ riderX NOTIFY sceneChanged)
     Q_PROPERTY(double riderY READ riderY NOTIFY sceneChanged)
@@ -179,6 +181,10 @@ public:
     QObject *floorGeometry() const
     {
         return floorBuffers[std::size_t(activeFloorBuffer)].get();
+    }
+    QObject *forestDressingGeometry() const
+    {
+        return forestDressingBuffers[std::size_t(activeFloorBuffer)].get();
     }
     bool ready() const { return sceneReady; }
     double riderX() const { return riderPositionX; }
@@ -316,6 +322,8 @@ private:
     std::unique_ptr<WorkoutGame3DGeometry> berm;
     std::unique_ptr<WorkoutGame3DGeometry> bypass;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
+    std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2>
+            forestDressingBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> climbBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rootBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> rockGardenBuffers;

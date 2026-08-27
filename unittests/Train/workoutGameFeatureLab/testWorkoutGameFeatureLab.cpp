@@ -43,7 +43,13 @@ private slots:
             WorkoutGameTerrainKind::RockSlab
         };
         QCOMPARE(challenged, expected);
-        QCOMPARE(course.durationMs, std::int64_t(72000));
+        QCOMPARE(course.durationMs, std::int64_t(77000));
+        QCOMPARE(course.sections.back().terrain,
+                 WorkoutGameTerrainKind::SmoothTrail);
+        QCOMPARE(course.sections.back().startMs, std::int64_t(72000));
+        QCOMPARE(course.sections.back().durationMs, std::int64_t(5000));
+        QCOMPARE(course.sections.back().lengthMeters, 30.0);
+        QCOMPARE(course.sections.back().targetWatts, 110.0);
     }
 
     void generatedCourseIsDeterministicAndRejectsInvalidFtp()

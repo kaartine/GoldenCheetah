@@ -1390,6 +1390,43 @@ private slots:
         QCOMPARE(end.sectionProgress, 1.0);
     }
 
+    void visualRunoutExtendsTheFinalSocketWithoutChangingWorkoutDistance()
+    {
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(sampleCourse(), 200.0);
+        QVERIFY(road.ready);
+        QVERIFY(road.visualLengthMeters >= road.totalLengthMeters + 80.0);
+
+        const WorkoutGameRoadTimelineSample workoutEnd =
+                WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                    road, 40000);
+        QCOMPARE(workoutEnd.distanceMeters, road.totalLengthMeters);
+
+        const WorkoutGameRoadSample socket =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, road.totalLengthMeters);
+        const WorkoutGameRoadSample physicalEnd =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, road.totalLengthMeters + 60.0);
+        const WorkoutGameRoadSample runout =
+                WorkoutGameRoadCourseBuilder::sampleVisual(
+                    road, road.totalLengthMeters + 60.0);
+        QVERIFY(socket.ready);
+        QVERIFY(physicalEnd.ready);
+        QVERIFY(runout.ready);
+        QCOMPARE(physicalEnd.distanceMeters, road.totalLengthMeters);
+        QCOMPARE(physicalEnd.center.xMeters, socket.center.xMeters);
+        QCOMPARE(physicalEnd.center.zMeters, socket.center.zMeters);
+        QCOMPARE(runout.terrain, WorkoutGameTerrainKind::SmoothTrail);
+        QCOMPARE(runout.surfaceOffsetMeters, 0.0);
+        QCOMPARE(runout.nonPhysicalFeatureOffsetMeters, 0.0);
+        const double horizontal = std::hypot(
+                runout.center.xMeters - socket.center.xMeters,
+                runout.center.zMeters - socket.center.zMeters);
+        QVERIFY(horizontal > 59.9);
+        QVERIFY(horizontal < 60.1);
+    }
+
     void savedDistanceCourseLengthsAreNotReestimated()
     {
         WorkoutGameCourse course = sampleCourse();

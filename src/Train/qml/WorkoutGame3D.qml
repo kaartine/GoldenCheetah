@@ -177,6 +177,20 @@ Item {
         }
 
         Model {
+            objectName: "forestDressingModel"
+            geometry: workoutGame3D.forestDressingGeometry
+            materials: PrincipledMaterial {
+                baseColor: "white"
+                roughness: 1
+                vertexColorsEnabled: true
+                lighting: PrincipledMaterial.FragmentLighting
+                cullMode: Material.NoCulling
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
+        Model {
             geometry: workoutGame3D.trailGeometry
             materials: PrincipledMaterial {
                 baseColor: "white"

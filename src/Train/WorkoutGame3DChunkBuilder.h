@@ -23,7 +23,7 @@
 
 struct WorkoutGame3DChunk
 {
-    static constexpr std::size_t LayerCount = 6;
+    static constexpr std::size_t LayerCount = 7;
 
     std::array<WorkoutGame3DMeshData, LayerCount> layers;
     int bucket = 0;

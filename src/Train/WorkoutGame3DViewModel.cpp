@@ -99,6 +99,11 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
         buffer = std::make_unique<WorkoutGame3DGeometry>(
                 WorkoutGame3DGeometry::Layer::ForestFloor);
     }
+    for (std::unique_ptr<WorkoutGame3DGeometry> &buffer
+            : forestDressingBuffers) {
+        buffer = std::make_unique<WorkoutGame3DGeometry>(
+                WorkoutGame3DGeometry::Layer::ForestDressing);
+    }
     for (std::unique_ptr<WorkoutGame3DGeometry> &buffer : climbBuffers) {
         buffer = std::make_unique<WorkoutGame3DGeometry>(
                 WorkoutGame3DGeometry::Layer::Climb);
@@ -663,12 +668,15 @@ void WorkoutGame3DViewModel::updateCameraPose(
     const double cameraDistance = std::max(
             0.0, distanceMeters - cameraBackDistanceMeters);
     const WorkoutGameRoadSample cameraSample =
-            WorkoutGameRoadCourseBuilder::sample(roadCourse, cameraDistance);
+            WorkoutGameRoadCourseBuilder::sampleVisual(
+                roadCourse, cameraDistance);
     const double targetDistance = std::min(
-            roadCourse.totalLengthMeters,
+            std::max(roadCourse.totalLengthMeters,
+                     roadCourse.visualLengthMeters),
             distanceMeters + cameraLookAheadDistanceMeters);
     const WorkoutGameRoadSample targetSample =
-            WorkoutGameRoadCourseBuilder::sample(roadCourse, targetDistance);
+            WorkoutGameRoadCourseBuilder::sampleVisual(
+                roadCourse, targetDistance);
     if (!cameraSample.ready || !targetSample.ready) return;
 
     const double cameraForwardX = std::sin(
@@ -696,7 +704,8 @@ void WorkoutGame3DViewModel::updateCameraPose(
             targetSample.center.headingRadians);
     const double missingAhead = std::max(
             0.0, distanceMeters + cameraLookAheadDistanceMeters
-                    - roadCourse.totalLengthMeters);
+                    - std::max(roadCourse.totalLengthMeters,
+                               roadCourse.visualLengthMeters));
     cameraTargetPositionX = targetSample.center.xMeters
             + targetForwardX * missingAhead;
     cameraTargetPositionZ = targetSample.center.zMeters
@@ -742,9 +751,10 @@ void WorkoutGame3DViewModel::updateCameraPose(
     const double chaseY = riderSample.visualGroundElevationMeters()
             + cameraHeightDistanceMeters;
     const WorkoutGameRoadSample bermTarget =
-            WorkoutGameRoadCourseBuilder::sample(
+            WorkoutGameRoadCourseBuilder::sampleVisual(
                 roadCourse,
-                std::min(roadCourse.totalLengthMeters,
+                std::min(std::max(roadCourse.totalLengthMeters,
+                                  roadCourse.visualLengthMeters),
                     distanceMeters + BermCameraLookAheadMeters));
     if (!bermTarget.ready) return;
     const double targetRightX = std::cos(
@@ -969,6 +979,8 @@ void WorkoutGame3DViewModel::rebuildFloor(
     if (!roadCourse.ready) {
         floorBuffers[0]->setCourse(roadCourse);
         floorBuffers[1]->setCourse(roadCourse);
+        forestDressingBuffers[0]->setCourse(roadCourse);
+        forestDressingBuffers[1]->setCourse(roadCourse);
         climbBuffers[0]->setCourse(roadCourse);
         climbBuffers[1]->setCourse(roadCourse);
         rootBuffers[0]->setCourse(roadCourse);
@@ -992,7 +1004,8 @@ void WorkoutGame3DViewModel::rebuildFloor(
     const double start = std::max(
             0.0, distanceMeters - FloorBehindMeters);
     const double end = std::min(
-            roadCourse.totalLengthMeters,
+            std::max(roadCourse.totalLengthMeters,
+                     roadCourse.visualLengthMeters),
             distanceMeters + FloorAheadMeters);
     if (!immediate) {
         chunkBuilder.request(
@@ -1009,7 +1022,8 @@ void WorkoutGame3DViewModel::rebuildFloor(
         WorkoutGame3DGeometry::Layer::Climb,
         WorkoutGame3DGeometry::Layer::RockGarden,
         WorkoutGame3DGeometry::Layer::RockSlab,
-        WorkoutGame3DGeometry::Layer::Skinny
+        WorkoutGame3DGeometry::Layer::Skinny,
+        WorkoutGame3DGeometry::Layer::ForestDressing
     }};
     std::array<WorkoutGame3DGeometry *, WorkoutGame3DChunk::LayerCount>
             targets = {{
@@ -1018,7 +1032,8 @@ void WorkoutGame3DViewModel::rebuildFloor(
         climbBuffers[std::size_t(nextBuffer)].get(),
         rockGardenBuffers[std::size_t(nextBuffer)].get(),
         rockSlabBuffers[std::size_t(nextBuffer)].get(),
-        skinnyBuffers[std::size_t(nextBuffer)].get()
+        skinnyBuffers[std::size_t(nextBuffer)].get(),
+        forestDressingBuffers[std::size_t(nextBuffer)].get()
     }};
     for (std::size_t index = 0; index < targets.size(); ++index) {
         targets[index]->setMeshData(WorkoutGame3DGeometry::buildMeshData(
@@ -1049,7 +1064,8 @@ void WorkoutGame3DViewModel::installReadyFloorChunk()
         climbBuffers[std::size_t(nextBuffer)].get(),
         rockGardenBuffers[std::size_t(nextBuffer)].get(),
         rockSlabBuffers[std::size_t(nextBuffer)].get(),
-        skinnyBuffers[std::size_t(nextBuffer)].get()
+        skinnyBuffers[std::size_t(nextBuffer)].get(),
+        forestDressingBuffers[std::size_t(nextBuffer)].get()
     }};
     for (std::size_t index = 0; index < targets.size(); ++index) {
         targets[index]->setMeshData(chunk.layers[index]);
@@ -1089,6 +1105,7 @@ void WorkoutGame3DViewModel::updateVisibleTriangleCount()
     triangles += rockGardenBuffers[active]->triangleCount();
     triangles += rockSlabBuffers[active]->triangleCount();
     triangles += skinnyBuffers[active]->triangleCount();
+    triangles += forestDressingBuffers[active]->triangleCount();
     if (triangles == currentVisibleTriangles) return;
     currentVisibleTriangles = triangles;
     emit renderWorkChanged();
@@ -1106,9 +1123,11 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
         if (slot < 0) continue;
         const double distance =
                 (double(slot) + 0.5) * TreeSpacingMeters;
-        if (distance > roadCourse.totalLengthMeters) break;
-        const WorkoutGameRoadSample sample = WorkoutGameRoadCourseBuilder::sample(
-                roadCourse, distance);
+        if (distance > std::max(roadCourse.totalLengthMeters,
+                                roadCourse.visualLengthMeters)) break;
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sampleVisual(
+                    roadCourse, distance);
         if (!sample.ready) continue;
         const std::uint32_t random = mix(
                 roadCourse.seed ^ std::uint32_t(slot * 0x9e3779b9u));

@@ -3266,13 +3266,18 @@ private slots:
                 viewModel.rockGardenGeometry());
         auto *rockSlabGeometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.rockSlabGeometry());
+        auto *forestDressingGeometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.forestDressingGeometry());
         QVERIFY(bypassGeometry);
         QVERIFY(bermGeometry);
         QVERIFY(rootsGeometry);
         QVERIFY(rockGardenGeometry);
         QVERIFY(rockSlabGeometry);
+        QVERIFY(forestDressingGeometry);
         QVERIFY(bypassGeometry->ready());
         QVERIFY(bypassGeometry->sampleCount() >= 20);
+        QVERIFY(forestDressingGeometry->ready());
+        QVERIFY(forestDressingGeometry->sampleCount() >= 70);
         QVERIFY(viewModel.trees().size() <= 10);
         QVERIFY(viewModel.features().size() <= 32);
         viewModel.setFrame(
@@ -3294,6 +3299,8 @@ private slots:
                 QStringLiteral("ROOT_Tabletop")));
         QVERIFY(window.rootObject()->findChild<QObject *>(
                 QStringLiteral("riderGroundShadow")));
+        QVERIFY(window.rootObject()->findChild<QObject *>(
+                QStringLiteral("forestDressingModel")));
 
         const QImage first = window.grabWindow();
         QVERIFY(!first.isNull());

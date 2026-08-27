@@ -81,6 +81,7 @@ struct WorkoutGameRoadCourse
     bool ready = false;
     std::uint32_t seed = 0;
     double totalLengthMeters = 0.0;
+    double visualLengthMeters = 0.0;
     std::vector<WorkoutGameRoadPiece> pieces;
     std::vector<WorkoutGameRoadTimelineSection> timeline;
 };
@@ -127,6 +128,9 @@ public:
             const WorkoutGameCourse &course,
             double ftpWatts);
     static WorkoutGameRoadSample sample(
+            const WorkoutGameRoadCourse &course,
+            double distanceMeters);
+    static WorkoutGameRoadSample sampleVisual(
             const WorkoutGameRoadCourse &course,
             double distanceMeters);
     static WorkoutGameRoadTimelineSample sampleAtWorkoutTime(

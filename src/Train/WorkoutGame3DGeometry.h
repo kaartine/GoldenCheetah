@@ -41,6 +41,7 @@ public:
         Berm,
         Bypass,
         Climb,
+        ForestDressing,
         ForestFloor,
         RockGarden,
         RockSlab,
@@ -81,6 +82,10 @@ private:
             double startDistanceMeters,
             double endDistanceMeters);
     static WorkoutGame3DMeshData buildClimbs(
+            const WorkoutGameRoadCourse &course,
+            double startDistanceMeters,
+            double endDistanceMeters);
+    static WorkoutGame3DMeshData buildForestDressing(
             const WorkoutGameRoadCourse &course,
             double startDistanceMeters,
             double endDistanceMeters);

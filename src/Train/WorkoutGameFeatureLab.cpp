@@ -18,10 +18,12 @@ namespace {
 constexpr std::int64_t FeatureDurationMs = 5000;
 constexpr std::int64_t TabletopDurationMs = 12000;
 constexpr std::int64_t RecoveryDurationMs = 1000;
+constexpr std::int64_t FinalRunoutDurationMs = 5000;
 constexpr double FeatureLengthMeters = 28.0;
 constexpr double DropLengthMeters = 36.0;
 constexpr double TabletopLengthMeters = 84.0;
 constexpr double RecoveryLengthMeters = 8.0;
+constexpr double FinalRunoutLengthMeters = 30.0;
 
 WorkoutGameFeature featureForTerrain(WorkoutGameTerrainKind terrain)
 {
@@ -64,13 +66,17 @@ WorkoutGameSection featureSection(
     return section;
 }
 
-WorkoutGameSection recoverySection(double ftpWatts, std::uint32_t variant)
+WorkoutGameSection recoverySection(
+        double ftpWatts,
+        std::uint32_t variant,
+        std::int64_t durationMs = RecoveryDurationMs,
+        double lengthMeters = RecoveryLengthMeters)
 {
     WorkoutGameSection section;
     section.feature = WorkoutGameFeature::FlowTrail;
     section.terrain = WorkoutGameTerrainKind::SmoothTrail;
-    section.durationMs = RecoveryDurationMs;
-    section.lengthMeters = RecoveryLengthMeters;
+    section.durationMs = durationMs;
+    section.lengthMeters = lengthMeters;
     section.targetWatts = ftpWatts * 0.55;
     section.gradePercent = -1.0;
     section.difficulty = 0.2;
@@ -148,6 +154,11 @@ WorkoutGameCourse WorkoutGameFeatureLab::course(
             startMs += recovery.durationMs;
         }
     }
+    WorkoutGameSection runout = recoverySection(
+            ftpWatts, 31u, FinalRunoutDurationMs, FinalRunoutLengthMeters);
+    runout.startMs = startMs;
+    result.sections.push_back(runout);
+    startMs += runout.durationMs;
     result.durationMs = startMs;
     return result;
 }

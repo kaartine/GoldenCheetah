@@ -705,6 +705,32 @@ private slots:
         QVERIFY(colorDistance > 0.15f);
     }
 
+    void forestDressingBuildsDenseDeterministicBatchedTreeLine()
+    {
+        const WorkoutGameRoadCourse course = straightCourse(160.0, 5.0);
+        const WorkoutGame3DMeshData first =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    course, 0.0, 145.0);
+        const WorkoutGame3DMeshData second =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    course, 0.0, 145.0);
+
+        QVERIFY(first.ready);
+        QVERIFY(first.sampleCount >= 80);
+        QVERIFY(first.triangleCount() >= first.sampleCount * 8);
+        QVERIFY(first.triangleCount() <= 2400);
+        QVERIFY(first.boundsMin.x() < -6.0f);
+        QVERIFY(first.boundsMax.x() > 6.0f);
+        QVERIFY(first.boundsMax.y() - first.boundsMin.y() > 4.0f);
+        QVERIFY(first.boundsMin.z() >= -0.1f);
+        QVERIFY(first.boundsMax.z() <= 145.1f);
+        QCOMPARE(first.sampleCount, second.sampleCount);
+        QCOMPARE(first.vertexData, second.vertexData);
+        QCOMPARE(first.indexData, second.indexData);
+    }
+
     void risingCourseExpandsVerticalBounds()
     {
         WorkoutGame3DGeometry geometry(

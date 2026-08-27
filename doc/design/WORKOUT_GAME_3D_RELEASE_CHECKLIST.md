@@ -17,7 +17,7 @@ visual-readability task.
   features at 1280 by 720 and a fixed ten-metre approach.
 - [x] `AUD-02` Capture isolated-data legacy and 3D application sessions plus a
   side-by-side comparison video.
-- [x] `AUD-03` Provide a deterministic 72-second course containing all eleven
+- [x] `AUD-03` Provide a deterministic 77-second course containing all eleven
   features with completed and bypassed scenarios.
 - [x] `AUD-04` Preserve normal trail half-width at 0.68 m with a geometry
   regression test.
@@ -882,6 +882,29 @@ X11/OpenGL contract, render-budget and 72-frame completed/bypassed motion tests
 cover the packaged result. The complete real-X11 suite passes 59 tests with no
 failures, selected tests pass under ASan/UBSan, and the production target
 compiles in the release container.
+
+The forest-density refresh adds two deterministic rows on both sides of the
+singletrack at four-metre stations. More than 80 terrain-anchored, crossed-card
+low-poly conifers fit in a normal 145-metre resident window, but all of them
+remain one custom geometry, material and draw call. They are generated as the
+seventh layer on the existing low-priority chunk worker and installed through
+the same generation-tagged capacity-one mailbox and double buffer as the
+forest floor; no tree work enters presentation, trainer control or recording.
+The existing ten authored foreground trees retain crown-aware camera/cue
+clearance and edge fades. Geometry passes 28 cases normally and under
+ASan/UBSan, the chunk handoff passes 8 cases normally and under ASan/UBSan, and
+the complete real-X11 Quick 3D suite passes 64 cases with 13 intentional export
+or performance skips. The target-GPU service gate measured 139.7 FPS, 8.43 ms
+p95 and 10.25 ms p99 frame intervals with zero missed trainer, recording or
+telemetry deadlines, zero skipped simulation ticks and an empty geometry
+queue. A full isolated Data Generator UI run traversed all eleven features and
+481.776 metres with no backward frame or simulation skip. Its software-rendered
+UI capture sustained 74.883 median FPS and showed the trail and forest still
+covering the camera view at workout completion. The Feature Lab now finishes
+its technical sequence at 72 seconds and provides a five-second, 30-metre
+forest recovery before automatic completion. All generated road courses also
+continue their final socket as a presentation-only 90-metre smooth trail; this
+does not change workout distance, timing, trainer targets or feature outcomes.
 
 **ART-01 evidence:** the approved
 `WORKOUT_GAME_3D_ART_BRIEF.md` fixes the visual hierarchy, palette, sampling,
