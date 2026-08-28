@@ -21,6 +21,7 @@ namespace {
 constexpr std::array<WorkoutGame3DGeometry::Layer,
                      WorkoutGame3DChunk::LayerCount> ChunkLayers = {{
     WorkoutGame3DGeometry::Layer::ForestFloor,
+    WorkoutGame3DGeometry::Layer::Berm,
     WorkoutGame3DGeometry::Layer::Roots,
     WorkoutGame3DGeometry::Layer::Climb,
     WorkoutGame3DGeometry::Layer::RockGarden,

@@ -645,7 +645,13 @@ private slots:
                     floor.vertexData(), floor.stride(), row * 8, 44) / 0.22;
             if (std::abs(distance - center) < 0.001) floorRow = row;
         }
-        QVERIFY(bermRow >= 0 && floorRow >= 0);
+        int trailRow = -1;
+        for (int row = 0; row < trail.sampleCount(); ++row) {
+            const double distance = vertexFloat(
+                    trail.vertexData(), trail.stride(), row * 2, 44) / 0.22;
+            if (std::abs(distance - center) < 0.001) trailRow = row;
+        }
+        QVERIFY(bermRow >= 0 && floorRow >= 0 && trailRow >= 0);
         const float trailLeftY = vertexFloat(
                 berm.vertexData(), berm.stride(), bermRow * 7 + 1, 4);
         const float trailRightY = vertexFloat(
@@ -654,7 +660,11 @@ private slots:
                 floor.vertexData(), floor.stride(), floorRow * 8 + 3, 4);
         const float floorRightY = vertexFloat(
                 floor.vertexData(), floor.stride(), floorRow * 8 + 4, 4);
+        const float backingY = vertexFloat(
+                trail.vertexData(), trail.stride(), trailRow * 2, 4);
         QVERIFY(std::abs(trailLeftY - trailRightY) > 0.60f);
+        QVERIFY2(backingY < std::min(trailLeftY, trailRightY) - 0.01f,
+                 "berm backing can occlude or z-fight the authored bank");
         QVERIFY(std::abs(trailLeftY - floorLeftY - 0.035f) < 0.002f);
         QVERIFY(std::abs(trailRightY - floorRightY - 0.035f) < 0.002f);
 
@@ -668,8 +678,8 @@ private slots:
         QVERIFY(berm.sampleCount() >= 52);
         QVERIFY(berm.indexData().size()
                 / int(3 * sizeof(quint32)) <= 1024);
-        QVERIFY(trail.indexData().size()
-                < (trail.sampleCount() - 1) * 6 * int(sizeof(quint32)));
+        QCOMPARE(trail.indexData().size(),
+                 (trail.sampleCount() - 1) * 6 * int(sizeof(quint32)));
         QVERIFY(floor.indexData().size()
                 < (floor.sampleCount() - 1) * 42 * int(sizeof(quint32)));
     }

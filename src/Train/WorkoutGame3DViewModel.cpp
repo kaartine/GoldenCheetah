@@ -42,8 +42,8 @@ constexpr double FeatureBucketMeters = 12.0;
 constexpr double FeatureBehindMeters = 15.0;
 constexpr double FeatureAheadMeters = 180.0;
 constexpr int MaximumVisibleFeatures = 32;
-constexpr double TreeSpacingMeters = 6.0;
-constexpr int MaximumVisibleTrees = 10;
+constexpr double TreeSpacingMeters = 7.0;
+constexpr int MaximumVisibleTrees = 18;
 constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double CameraCorridorClearanceMeters = 0.85;
 
@@ -91,14 +91,16 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     QObject(parent),
     trail(std::make_unique<WorkoutGame3DGeometry>(
             WorkoutGame3DGeometry::Layer::Trail)),
-    berm(std::make_unique<WorkoutGame3DGeometry>(
-            WorkoutGame3DGeometry::Layer::Berm)),
     bypass(std::make_unique<WorkoutGame3DGeometry>(
             WorkoutGame3DGeometry::Layer::Bypass))
 {
     for (std::unique_ptr<WorkoutGame3DGeometry> &buffer : floorBuffers) {
         buffer = std::make_unique<WorkoutGame3DGeometry>(
                 WorkoutGame3DGeometry::Layer::ForestFloor);
+    }
+    for (std::unique_ptr<WorkoutGame3DGeometry> &buffer : bermBuffers) {
+        buffer = std::make_unique<WorkoutGame3DGeometry>(
+                WorkoutGame3DGeometry::Layer::Berm);
     }
     for (std::unique_ptr<WorkoutGame3DGeometry> &buffer
             : forestDressingBuffers) {
@@ -173,7 +175,6 @@ void WorkoutGame3DViewModel::setCourse(
     }
     rebuildPowerProfile(course);
     trail->setCourse(roadCourse);
-    berm->setCourse(roadCourse);
     bypass->setCourse(roadCourse);
     floorBucket = std::numeric_limits<int>::min();
     requestedFloorBucket = std::numeric_limits<int>::min();
@@ -999,6 +1000,8 @@ void WorkoutGame3DViewModel::rebuildFloor(
     if (!roadCourse.ready) {
         floorBuffers[0]->setCourse(roadCourse);
         floorBuffers[1]->setCourse(roadCourse);
+        bermBuffers[0]->setCourse(roadCourse);
+        bermBuffers[1]->setCourse(roadCourse);
         forestDressingBuffers[0]->setCourse(roadCourse);
         forestDressingBuffers[1]->setCourse(roadCourse);
         climbBuffers[0]->setCourse(roadCourse);
@@ -1038,6 +1041,7 @@ void WorkoutGame3DViewModel::rebuildFloor(
     const std::array<WorkoutGame3DGeometry::Layer,
                      WorkoutGame3DChunk::LayerCount> layers = {{
         WorkoutGame3DGeometry::Layer::ForestFloor,
+        WorkoutGame3DGeometry::Layer::Berm,
         WorkoutGame3DGeometry::Layer::Roots,
         WorkoutGame3DGeometry::Layer::Climb,
         WorkoutGame3DGeometry::Layer::RockGarden,
@@ -1048,6 +1052,7 @@ void WorkoutGame3DViewModel::rebuildFloor(
     std::array<WorkoutGame3DGeometry *, WorkoutGame3DChunk::LayerCount>
             targets = {{
         floorBuffers[std::size_t(nextBuffer)].get(),
+        bermBuffers[std::size_t(nextBuffer)].get(),
         rootBuffers[std::size_t(nextBuffer)].get(),
         climbBuffers[std::size_t(nextBuffer)].get(),
         rockGardenBuffers[std::size_t(nextBuffer)].get(),
@@ -1080,6 +1085,7 @@ void WorkoutGame3DViewModel::installReadyFloorChunk()
     std::array<WorkoutGame3DGeometry *, WorkoutGame3DChunk::LayerCount>
             targets = {{
         floorBuffers[std::size_t(nextBuffer)].get(),
+        bermBuffers[std::size_t(nextBuffer)].get(),
         rootBuffers[std::size_t(nextBuffer)].get(),
         climbBuffers[std::size_t(nextBuffer)].get(),
         rockGardenBuffers[std::size_t(nextBuffer)].get(),
@@ -1116,9 +1122,10 @@ void WorkoutGame3DViewModel::scheduleReadyFloorChunk()
 
 void WorkoutGame3DViewModel::updateVisibleTriangleCount()
 {
-    int triangles = trail->triangleCount()
-            + berm->triangleCount() + bypass->triangleCount();
     const std::size_t active = std::size_t(activeFloorBuffer);
+    int triangles = trail->triangleCount()
+            + bermBuffers[active]->triangleCount()
+            + bypass->triangleCount();
     triangles += floorBuffers[active]->triangleCount();
     triangles += rootBuffers[active]->triangleCount();
     triangles += climbBuffers[active]->triangleCount();
@@ -1141,50 +1148,60 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
     for (int offset = -3; offset <= 15; ++offset) {
         const int slot = bucket + offset;
         if (slot < 0) continue;
-        const double distance =
-                (double(slot) + 0.5) * TreeSpacingMeters;
-        if (distance > std::max(roadCourse.totalLengthMeters,
-                                roadCourse.visualLengthMeters)) break;
-        const WorkoutGameRoadSample sample =
-                WorkoutGameRoadCourseBuilder::sampleVisual(
-                    roadCourse, distance);
-        if (!sample.ready) continue;
-        const std::uint32_t random = mix(
-                roadCourse.seed ^ std::uint32_t(slot * 0x9e3779b9u));
-        const double side = (random & 1u) == 0u ? -1.0 : 1.0;
-        const double lateral = side * (3.3 + double((random >> 8) & 255u) / 85.0);
-        const double rightX = std::cos(sample.center.headingRadians);
-        const double rightZ = -std::sin(sample.center.headingRadians);
-        const double scale =
-                0.75 + double((random >> 16) & 255u) / 510.0;
-        const double crownRadius = TreeCrownRadiusMeters * scale;
-        const double treeX = sample.center.xMeters + lateral * rightX;
-        const double treeZ = sample.center.zMeters + lateral * rightZ;
-        const WorkoutGame3DTerrainProfileSnapshot terrain =
-                WorkoutGame3DTerrainProfile::build(
-                    sample, distance, roadCourse.seed);
-        if (!terrain.ready) continue;
-        const double treeY = WorkoutGame3DTerrainProfile::elevationAtLateral(
-                terrain, lateral);
-        const double requiredClearance =
-                crownRadius + CameraCorridorClearanceMeters;
-        if (horizontalDistanceToSegmentSquared(
-                    treeX, treeZ,
-                    cameraPositionX, cameraPositionZ,
-                    cameraTargetPositionX, cameraTargetPositionZ)
-                < requiredClearance * requiredClearance) {
-            continue;
+        for (int sideIndex = 0; sideIndex < 2; ++sideIndex) {
+            const std::uint32_t random = mix(
+                    roadCourse.seed
+                    ^ std::uint32_t(slot * 0x9e3779b9u)
+                    ^ std::uint32_t((sideIndex + 1) * 0x85ebca6bu));
+            const double jitter =
+                    (double(random & 255u) / 255.0 - 0.5) * 2.2;
+            const double distance = (double(slot) + 0.5)
+                    * TreeSpacingMeters + jitter;
+            if (distance < 0.0) continue;
+            if (distance > std::max(roadCourse.totalLengthMeters,
+                                    roadCourse.visualLengthMeters)) break;
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        roadCourse, distance);
+            if (!sample.ready) continue;
+            const double side = sideIndex == 0 ? -1.0 : 1.0;
+            const double lateral = side * (
+                    3.0 + double((random >> 8) & 255u) / 110.0);
+            const double rightX = std::cos(sample.center.headingRadians);
+            const double rightZ = -std::sin(sample.center.headingRadians);
+            const double scale =
+                    0.75 + double((random >> 16) & 255u) / 510.0;
+            const double crownRadius = TreeCrownRadiusMeters * scale;
+            const double treeX = sample.center.xMeters + lateral * rightX;
+            const double treeZ = sample.center.zMeters + lateral * rightZ;
+            const WorkoutGame3DTerrainProfileSnapshot terrain =
+                    WorkoutGame3DTerrainProfile::build(
+                        sample, distance, roadCourse.seed);
+            if (!terrain.ready) continue;
+            const double treeY =
+                    WorkoutGame3DTerrainProfile::elevationAtLateral(
+                        terrain, lateral);
+            const double requiredClearance =
+                    crownRadius + CameraCorridorClearanceMeters;
+            if (horizontalDistanceToSegmentSquared(
+                        treeX, treeZ,
+                        cameraPositionX, cameraPositionZ,
+                        cameraTargetPositionX, cameraTargetPositionZ)
+                    < requiredClearance * requiredClearance) {
+                continue;
+            }
+            QVariantMap tree;
+            tree.insert(QStringLiteral("x"), treeX);
+            tree.insert(QStringLiteral("y"), treeY);
+            tree.insert(QStringLiteral("z"), treeZ);
+            tree.insert(QStringLiteral("distance"), distance);
+            tree.insert(QStringLiteral("lateral"), lateral);
+            tree.insert(QStringLiteral("scale"), scale);
+            tree.insert(QStringLiteral("crownRadius"), crownRadius);
+            tree.insert(QStringLiteral("variant"), int((random >> 24) & 3u));
+            visibleTrees.push_back(tree);
+            if (visibleTrees.size() >= MaximumVisibleTrees) break;
         }
-        QVariantMap tree;
-        tree.insert(QStringLiteral("x"), treeX);
-        tree.insert(QStringLiteral("y"), treeY);
-        tree.insert(QStringLiteral("z"), treeZ);
-        tree.insert(QStringLiteral("distance"), distance);
-        tree.insert(QStringLiteral("lateral"), lateral);
-        tree.insert(QStringLiteral("scale"), scale);
-        tree.insert(QStringLiteral("crownRadius"), crownRadius);
-        tree.insert(QStringLiteral("variant"), int((random >> 24) & 3u));
-        visibleTrees.push_back(tree);
         if (visibleTrees.size() >= MaximumVisibleTrees) break;
     }
     emit treesChanged();

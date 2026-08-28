@@ -38,7 +38,7 @@ constexpr int MaximumSamples = 16000;
 constexpr double MinimumSampleSpacingMeters = 0.75;
 constexpr double BypassHalfWidthMeters = 0.38;
 constexpr double BypassEdgeWidthMeters = 0.08;
-constexpr double ForestDressingSpacingMeters = 4.0;
+constexpr double ForestDressingSpacingMeters = 3.0;
 constexpr double Pi = 3.14159265358979323846;
 
 struct Vertex
@@ -377,10 +377,12 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
     std::vector<std::uint32_t> indices;
     std::vector<bool> rideableSamples;
     std::vector<bool> renderableTrailSamples;
+    std::vector<bool> trailBackingSamples;
     std::vector<bool> floorUnderFeatureSamples;
     vertices.reserve(std::size_t(count * verticesPerSample));
     rideableSamples.reserve(std::size_t(count));
     renderableTrailSamples.reserve(std::size_t(count));
+    trailBackingSamples.reserve(std::size_t(count));
     floorUnderFeatureSamples.reserve(std::size_t(count));
     indices.reserve(std::size_t(
             (count - 1) * stripsPerSample * 6));
@@ -403,6 +405,8 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
         }
         rideableSamples.push_back(sample.rideableSurface);
         renderableTrailSamples.push_back(sample.renderableTrailSurface);
+        trailBackingSamples.push_back(sample.renderableTrailSurface
+                || sample.terrain == WorkoutGameTerrainKind::Berm);
         floorUnderFeatureSamples.push_back(
                 sample.terrain == WorkoutGameTerrainKind::Skinny);
         const double rightX = std::cos(sample.center.headingRadians);
@@ -417,6 +421,29 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
                 : WorkoutGame3DTerrainProfileSnapshot();
         if (layer == Layer::ForestFloor && !terrain.ready) {
             return {};
+        }
+        double trailBackingDropMeters = 0.0;
+        if (layer == Layer::Trail
+                && sample.terrain == WorkoutGameTerrainKind::Berm
+                && !sample.renderableTrailSurface
+                && sample.pieceIndex < course.pieces.size()) {
+            const WorkoutGameRoadPiece &piece =
+                    course.pieces[sample.pieceIndex];
+            const WorkoutGameBermGeometryProfile berm =
+                    WorkoutGameBermGeometry::profile(piece.difficulty);
+            const double local = distance
+                    - piece.geometryAnchorDistanceMeters;
+            const double progress = std::clamp(
+                    (local - berm.startMeters)
+                        / (berm.endMeters - berm.startMeters),
+                    0.0, 1.0);
+            const double socketEnvelope = std::pow(
+                    std::sin(Pi * progress), 2.0);
+            const double bankDepth = 2.0 / 3.0
+                    * sample.center.halfWidthMeters
+                    * std::tan(std::abs(sample.bermBankRadians));
+            trailBackingDropMeters = bankDepth
+                    + 0.04 * socketEnvelope;
         }
         for (int vertex = 0; vertex < verticesPerSample; ++vertex) {
             const bool trailVertex = layer == Layer::Trail;
@@ -438,6 +465,7 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
             const double elevation = trailVertex
                     ? sample.visualGroundElevationMeters()
                         - (technicalDatum ? sample.surfaceOffsetMeters : 0.0)
+                        - trailBackingDropMeters
                         + 0.015
                     : terrain.vertices[std::size_t(vertex)].elevationMeters;
             const int previousVertex = std::max(0, vertex - 1);
@@ -497,8 +525,8 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
         if (index > 0 && (layer != Layer::Trail
                 || (rideableSamples[std::size_t(index - 1)]
                     && rideableSamples[std::size_t(index)]
-                    && renderableTrailSamples[std::size_t(index - 1)]
-                    && renderableTrailSamples[std::size_t(index)]))) {
+                    && trailBackingSamples[std::size_t(index - 1)]
+                    && trailBackingSamples[std::size_t(index)]))) {
             const std::uint32_t base = std::uint32_t(
                     index * verticesPerSample);
             for (int strip = 0; strip < stripsPerSample; ++strip) {
@@ -648,9 +676,9 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
                         WorkoutGameRoadCourseBuilder::sampleVisual(course, distance);
                 if (!sample.ready) continue;
                 const double lateral = side * (
-                        (row == 0 ? 6.7 : 10.4)
+                        (row == 0 ? 4.8 : 8.4)
                         + double((random >> 16) & 255u) / 255.0
-                            * (row == 0 ? 1.8 : 3.0));
+                            * (row == 0 ? 1.5 : 2.6));
                 const WorkoutGame3DTerrainProfileSnapshot terrain =
                         WorkoutGame3DTerrainProfile::build(
                             sample, distance, course.seed);

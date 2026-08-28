@@ -10,8 +10,10 @@
 #include "WorkoutGame3DViewModel.h"
 #include "WorkoutGameBermGeometry.h"
 #include "WorkoutGameClimbGeometry.h"
+#include "WorkoutGameCourseDocument.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGame3DWindow.h"
+#include "WorkoutGameDistancePlayback.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
@@ -252,6 +254,38 @@ WorkoutGameCourse cameraMotionCourse()
     for (std::size_t index = 0; index < course.sections.size(); ++index) {
         course.sections[index].lengthMeters = lengths[index];
     }
+    return course;
+}
+
+WorkoutGameCourse longFlowingMtbCourse()
+{
+    WorkoutGameCourse course;
+    course.status = WorkoutGameCourseStatus::Ready;
+    course.seed = 4015825171u;
+    course.durationMs = 784200;
+
+    WorkoutGameSection climb;
+    climb.feature = WorkoutGameFeature::Climb;
+    climb.terrain = WorkoutGameTerrainKind::Climb;
+    climb.durationMs = 414000;
+    climb.targetWatts = 321.0;
+    climb.gradePercent = 7.8875;
+    climb.lengthMeters = 1502.7064;
+    climb.difficulty = 0.9775;
+    climb.visualVariant = 6u;
+
+    WorkoutGameSection descent;
+    descent.feature = WorkoutGameFeature::RecoveryDescent;
+    descent.terrain = WorkoutGameTerrainKind::Berm;
+    descent.startMs = climb.durationMs;
+    descent.durationMs = 370200;
+    descent.targetWatts = 151.0;
+    descent.gradePercent = -1.1431;
+    descent.lengthMeters = 2807.6772;
+    descent.difficulty = 0.1275;
+    descent.visualVariant = 6u;
+    descent.gravityAssisted = true;
+    course.sections = {climb, descent};
     return course;
 }
 
@@ -1341,7 +1375,7 @@ private slots:
              distance <= road.totalLengthMeters; distance += 0.5) {
             viewModel.setFrame(
                     frameAt(road, distance), 220.0, 220.0, 88, 150, 7);
-            QVERIFY(viewModel.trees().size() <= 10);
+            QVERIFY(viewModel.trees().size() <= 18);
             for (const QVariant &entry : viewModel.trees()) {
                 const QVariantMap tree = entry.toMap();
                 const double clearance = horizontalDistanceToSegment(
@@ -1360,6 +1394,30 @@ private slots:
         }
         QVERIFY2(inspectedTrees >= 1000,
                  "camera exclusion removed the forest instead of relocating it");
+    }
+
+    void nearForestFillsBothSidesOfTheSingletrack()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 42.0), 220.0, 220.0, 88, 150, 7);
+
+        QVERIFY2(viewModel.trees().size() >= 12,
+                 "the near forest still reads as sparse roadside props");
+        bool left = false;
+        bool right = false;
+        for (const QVariant &entry : viewModel.trees()) {
+            const double lateral = entry.toMap().value(
+                    QStringLiteral("lateral")).toDouble();
+            left = left || lateral < 0.0;
+            right = right || lateral > 0.0;
+        }
+        QVERIFY2(left && right,
+                 "the visible forest does not enclose both sides of the trail");
     }
 
     void treesAreAnchoredToGeneratedTerrain()
@@ -1548,6 +1606,221 @@ private slots:
                  qPrintable(QStringLiteral(
                          "camera yaw acceleration reached %1 rad/frame^2")
                          .arg(maximumYawAcceleration)));
+    }
+
+    void cameraRemainsSmoothThroughLongFlowingDescent()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, 250.0);
+
+        constexpr double FrameSeconds = 1.0 / 60.0;
+        constexpr double SpeedMetersPerSecond = 8.0;
+        constexpr int FrameCount = 2400;
+        const double descentStart = course.sections.front().lengthMeters;
+        double priorX = 0.0;
+        double priorY = 0.0;
+        double priorZ = 0.0;
+        double priorYaw = 0.0;
+        double priorYawStep = 0.0;
+        double maximumStep = 0.0;
+        double maximumYawStep = 0.0;
+        double maximumYawAcceleration = 0.0;
+
+        for (int frameIndex = 0; frameIndex < FrameCount; ++frameIndex) {
+            const double distance = descentStart + 12.0
+                    + double(frameIndex) * FrameSeconds
+                        * SpeedMetersPerSecond;
+            WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+            frame.simulation.workoutTimeMs = qint64(std::llround(
+                    double(frameIndex) * FrameSeconds * 1000.0));
+            viewModel.setFrame(frame, 151.0, 151.0, 82, 145, 7);
+            const double yaw = std::atan2(
+                    viewModel.cameraTargetX() - viewModel.cameraX(),
+                    viewModel.cameraTargetZ() - viewModel.cameraZ());
+            if (frameIndex > 0) {
+                maximumStep = std::max(maximumStep, std::sqrt(
+                        std::pow(viewModel.cameraX() - priorX, 2.0)
+                        + std::pow(viewModel.cameraY() - priorY, 2.0)
+                        + std::pow(viewModel.cameraZ() - priorZ, 2.0)));
+                const double yawStep = normalizedRadians(yaw - priorYaw);
+                maximumYawStep = std::max(
+                        maximumYawStep, std::abs(yawStep));
+                if (frameIndex > 1) {
+                    maximumYawAcceleration = std::max(
+                            maximumYawAcceleration,
+                            std::abs(normalizedRadians(
+                                    yawStep - priorYawStep)));
+                }
+                priorYawStep = yawStep;
+            }
+            priorX = viewModel.cameraX();
+            priorY = viewModel.cameraY();
+            priorZ = viewModel.cameraZ();
+            priorYaw = yaw;
+        }
+
+        QVERIFY2(maximumStep <= 0.30,
+                 qPrintable(QStringLiteral("camera step reached %1 m")
+                         .arg(maximumStep)));
+        QVERIFY2(maximumYawStep <= 0.035,
+                 qPrintable(QStringLiteral("camera yaw step reached %1 rad")
+                         .arg(maximumYawStep)));
+        QVERIFY2(maximumYawAcceleration <= 0.012,
+                 qPrintable(QStringLiteral(
+                         "camera yaw acceleration reached %1 rad/frame^2")
+                         .arg(maximumYawAcceleration)));
+    }
+
+    void longBermCourseKeepsVisibleGeometryChunkBounded()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, 250.0);
+        const double descentDistance = course.sections.front().lengthMeters
+                + 400.0;
+        viewModel.setFrame(
+                frameAt(road, descentDistance), 151.0, 151.0, 82, 145, 7);
+
+        QTRY_VERIFY_WITH_TIMEOUT(qobject_cast<WorkoutGame3DGeometry *>(
+                    viewModel.bermGeometry())->ready(), 3000);
+        auto *geometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.bermGeometry());
+        QVERIFY(geometry);
+        QVERIFY2(geometry->sampleCount() < 1600,
+                 "the entire course berm mesh is still resident");
+        QVERIFY2(geometry->triangleCount() < 18000,
+                 "visible berm geometry exceeds the frame budget");
+    }
+
+    void exportsConfiguredCourseAuditFrames()
+    {
+        const QString documentPath = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_3D_COURSE_DOCUMENT");
+        const QString outputDirectory = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_3D_COURSE_AUDIT_DIR");
+        if (documentPath.isEmpty() || outputDirectory.isEmpty()) {
+            QSKIP("Set the course document and audit directory to export frames");
+        }
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+
+        QFile file(documentPath);
+        QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(file.errorString()));
+        WorkoutGameCourseDocument document;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                         file.readAll(), document),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        const WorkoutGameCourse course =
+                WorkoutGameDistancePlayback::visualCourse(document.course);
+        QCOMPARE(course.status, WorkoutGameCourseStatus::Ready);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, document.ftpWatts);
+        QVERIFY(road.ready);
+        QVERIFY(QDir().mkpath(outputDirectory));
+
+        std::size_t longestClimb = course.sections.size();
+        std::size_t longestRecovery = course.sections.size();
+        double climbLength = 0.0;
+        double recoveryLength = 0.0;
+        for (std::size_t index = 0; index < course.sections.size(); ++index) {
+            const WorkoutGameSection &section = course.sections[index];
+            if (section.terrain == WorkoutGameTerrainKind::Climb
+                    && section.lengthMeters > climbLength) {
+                longestClimb = index;
+                climbLength = section.lengthMeters;
+            }
+            const bool recovery = section.feature
+                        == WorkoutGameFeature::RecoveryDescent
+                    || section.feature == WorkoutGameFeature::CooldownDescent;
+            if (recovery && section.lengthMeters > recoveryLength) {
+                longestRecovery = index;
+                recoveryLength = section.lengthMeters;
+            }
+        }
+        QVERIFY2(longestClimb < road.timeline.size(),
+                 "configured course lacks a climbing audit section");
+        QVERIFY2(longestRecovery < road.timeline.size(),
+                 "configured course lacks a recovery audit section");
+        const WorkoutGameRoadTimelineSection &climb =
+                road.timeline[longestClimb];
+        const WorkoutGameRoadTimelineSection &recovery =
+                road.timeline[longestRecovery];
+        const double recoverySpan = recovery.endDistanceMeters
+                - recovery.startDistanceMeters;
+        std::vector<double> distances = {
+            std::min(60.0, road.totalLengthMeters * 0.1),
+            (climb.startDistanceMeters + climb.endDistanceMeters) * 0.5,
+            recovery.startDistanceMeters + recoverySpan * 0.08,
+            recovery.startDistanceMeters + recoverySpan * 0.25,
+            recovery.startDistanceMeters + recoverySpan * 0.50,
+            recovery.startDistanceMeters + recoverySpan * 0.78
+        };
+        const QString requestedDistances = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_3D_COURSE_AUDIT_DISTANCES");
+        if (!requestedDistances.isEmpty()) {
+            distances.clear();
+            const QStringList values = requestedDistances.split(
+                    QLatin1Char(','), Qt::SkipEmptyParts);
+            for (const QString &value : values) {
+                bool ok = false;
+                const double distance = value.trimmed().toDouble(&ok);
+                QVERIFY2(ok && distance >= 0.0
+                                && distance <= road.totalLengthMeters,
+                         qPrintable(QStringLiteral(
+                             "invalid audit distance: %1").arg(value)));
+                distances.push_back(distance);
+            }
+            QVERIFY(!distances.empty());
+        }
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.resize(1280, 720);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        window.setCourse(course, document.ftpWatts);
+        auto *auditViewModel = qobject_cast<WorkoutGame3DViewModel *>(
+                window.rootContext()->contextProperty(
+                    QStringLiteral("workoutGame3D")).value<QObject *>());
+        QObject *bermModel = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("bermGeometryModel"));
+        QVERIFY(auditViewModel);
+        QVERIFY(bermModel);
+        for (std::size_t index = 0; index < distances.size(); ++index) {
+            WorkoutGameVisualSnapshot frame = frameAt(road, distances[index]);
+            frame.simulation.workoutTimeMs = qint64(index) * 1000;
+            window.setFrame(frame, 220.0, 220.0, 86, 148, 7);
+            QTest::qWait(index == 0u ? 700 : 350);
+            frame.simulation.workoutTimeMs += 16;
+            window.setFrame(frame, 220.0, 220.0, 86, 148, 7);
+            QTest::qWait(150);
+            QCOMPARE(bermModel->property("geometry").value<QObject *>(),
+                     auditViewModel->bermGeometry());
+            if (frame.world.terrain == WorkoutGameTerrainKind::Berm) {
+                auto *geometry = qobject_cast<WorkoutGame3DGeometry *>(
+                        auditViewModel->bermGeometry());
+                QVERIFY(geometry);
+                QVERIFY(geometry->ready());
+                QVERIFY(geometry->sampleCount() > 0);
+            }
+            const QImage rendered = window.grabWindow();
+            QVERIFY(!rendered.isNull());
+            QVERIFY2(sampledColorCount(rendered) > 35,
+                     "configured course scene appears blank");
+            const QString output = QDir(outputDirectory).filePath(
+                    QStringLiteral("course-%1-%2m.png")
+                        .arg(index + 1, 2, 10, QLatin1Char('0'))
+                        .arg(qRound(distances[index])));
+            QVERIFY2(rendered.save(output), qPrintable(output));
+        }
     }
 
     void cameraPunctuationIsBoundedAndDoesNotMoveTheCameraRoot()

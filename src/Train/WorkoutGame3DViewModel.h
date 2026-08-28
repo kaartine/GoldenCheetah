@@ -31,7 +31,8 @@ class WorkoutGame3DViewModel : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QObject *trailGeometry READ trailGeometry CONSTANT)
-    Q_PROPERTY(QObject *bermGeometry READ bermGeometry CONSTANT)
+    Q_PROPERTY(QObject *bermGeometry READ bermGeometry
+               NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *bypassGeometry READ bypassGeometry CONSTANT)
     Q_PROPERTY(QObject *climbGeometry READ climbGeometry
                NOTIFY floorGeometryChanged)
@@ -162,7 +163,10 @@ public:
     void setGeneratorState(const QString &state);
 
     QObject *trailGeometry() const { return trail.get(); }
-    QObject *bermGeometry() const { return berm.get(); }
+    QObject *bermGeometry() const
+    {
+        return bermBuffers[std::size_t(activeFloorBuffer)].get();
+    }
     QObject *bypassGeometry() const { return bypass.get(); }
     QObject *climbGeometry() const
     {
@@ -334,9 +338,9 @@ private:
     void updateCameraPose(double distanceMeters, double lateralMeters);
 
     std::unique_ptr<WorkoutGame3DGeometry> trail;
-    std::unique_ptr<WorkoutGame3DGeometry> berm;
     std::unique_ptr<WorkoutGame3DGeometry> bypass;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
+    std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> bermBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2>
             forestDressingBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> climbBuffers;

@@ -119,18 +119,19 @@ double trailReliefOffset(
     const double phase = double((piece.sourceSectionIndex * 37u
             + std::size_t(std::llround(piece.startDistanceMeters))) % 101u)
             / 101.0 * 2.0 * Pi;
-    double amplitude = (0.68 + 0.58 * piece.difficulty)
+    double amplitude = (0.95 + 0.85 * piece.difficulty)
             * piece.reliefScale;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Climb:
-        return 0.0;
+        amplitude *= 0.78;
+        break;
     case WorkoutGameTerrainKind::Skinny:
-        amplitude *= 0.35;
+        amplitude *= 0.48;
         break;
     case WorkoutGameTerrainKind::Roots:
     case WorkoutGameTerrainKind::RockGarden:
     case WorkoutGameTerrainKind::Rollers:
-        amplitude *= 0.50;
+        amplitude *= 0.62;
         break;
     default:
         break;
@@ -260,14 +261,52 @@ double estimatedLength(
     return std::clamp(seconds * speed, 24.0, 1200.0);
 }
 
-int boundedPieceCount(double lengthMeters, int maximum)
+int boundedPieceCount(
+        double lengthMeters,
+        double targetLengthMeters,
+        int maximum)
 {
     if (!std::isfinite(lengthMeters) || lengthMeters <= 0.0
-            || maximum <= 1) {
+            || !std::isfinite(targetLengthMeters)
+            || targetLengthMeters <= 0.0 || maximum <= 1) {
         return 1;
     }
-    const double requested = std::ceil(lengthMeters / 90.0);
+    const double requested = std::ceil(
+            lengthMeters / targetLengthMeters);
     return int(std::clamp(requested, 1.0, double(maximum)));
+}
+
+bool isRecoverySection(const WorkoutGameSection &section)
+{
+    return section.feature == WorkoutGameFeature::RecoveryDescent
+            || section.feature == WorkoutGameFeature::CooldownDescent;
+}
+
+double flowingTurnFactor(
+        const WorkoutGameSection &section,
+        std::size_t pieceIndex)
+{
+    static constexpr double Factors[] = {
+        0.82, 1.08, 0.82, 1.08, 0.92, 1.14, 0.92, 1.14
+    };
+    const std::size_t phase = std::size_t(section.visualVariant / 2u)
+            % std::size(Factors);
+    return Factors[(pieceIndex + phase) % std::size(Factors)];
+}
+
+double flowingTurnDirection(
+        const WorkoutGameSection &section,
+        std::size_t pieceIndex)
+{
+    static constexpr double Directions[] = {
+        -1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0, -1.0
+    };
+    const std::size_t phase = std::size_t(section.visualVariant / 2u)
+            % std::size(Directions);
+    const double mirror = (section.visualVariant & 1u) == 0u
+            ? 1.0 : -1.0;
+    return mirror * Directions[
+            (pieceIndex + phase) % std::size(Directions)];
 }
 
 double pieceTurn(
@@ -277,30 +316,39 @@ double pieceTurn(
     if (section.terrain == WorkoutGameTerrainKind::Berm) {
         const WorkoutGameBermGeometryProfile profile =
                 WorkoutGameBermGeometry::profile(section.difficulty);
-        const bool left = ((section.visualVariant + pieceIndex) & 1u) == 0u;
-        return left ? -profile.turnMagnitudeRadians
-                    : profile.turnMagnitudeRadians;
+        if (!isRecoverySection(section)) {
+            const bool left = ((section.visualVariant + pieceIndex) & 1u)
+                    == 0u;
+            return left ? -profile.turnMagnitudeRadians
+                        : profile.turnMagnitudeRadians;
+        }
+        return flowingTurnDirection(section, pieceIndex)
+                * std::min(profile.turnMagnitudeRadians, 0.72)
+                * flowingTurnFactor(section, pieceIndex);
     }
     double amount = 0.0;
     switch (section.terrain) {
     case WorkoutGameTerrainKind::SmoothTrail:
-        amount = section.visualVariant == 0u ? 0.0 : 0.10;
+        amount = section.visualVariant == 0u ? 0.0 : 0.16;
         break;
-    case WorkoutGameTerrainKind::Rollers: amount = 0.16; break;
+    case WorkoutGameTerrainKind::Rollers: amount = 0.21; break;
     case WorkoutGameTerrainKind::Roots:
-    case WorkoutGameTerrainKind::RockGarden: amount = 0.12; break;
-    case WorkoutGameTerrainKind::Skinny: amount = 0.08; break;
+    case WorkoutGameTerrainKind::RockGarden: amount = 0.18; break;
+    case WorkoutGameTerrainKind::Skinny: amount = 0.13; break;
     case WorkoutGameTerrainKind::Climb:
-    case WorkoutGameTerrainKind::RockSlab: amount = 0.05; break;
+    case WorkoutGameTerrainKind::RockSlab: amount = 0.12; break;
     case WorkoutGameTerrainKind::BunnyHop:
-    case WorkoutGameTerrainKind::Drop:
     case WorkoutGameTerrainKind::LogOver:
-    case WorkoutGameTerrainKind::Tabletop: amount = 0.04; break;
+    case WorkoutGameTerrainKind::Tabletop: amount = 0.08; break;
+    case WorkoutGameTerrainKind::Drop:
+        amount = isRecoverySection(section) ? 0.25 : 0.08;
+        break;
     default: amount = 0.0; break;
     }
-    amount *= 0.65 + 0.7 * std::clamp(section.difficulty, 0.0, 1.0);
-    const bool left = ((section.visualVariant + pieceIndex) & 1u) == 0u;
-    return left ? -amount : amount;
+    amount *= 0.75 + 0.6 * std::clamp(
+            section.difficulty, 0.0, 1.0);
+    return flowingTurnDirection(section, pieceIndex)
+            * amount * flowingTurnFactor(section, pieceIndex);
 }
 
 WorkoutGameRoadAnimation animationFor(
@@ -503,7 +551,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 0.0, sectionLength - climbEntryLength - climbCrestLength);
         const int climbSustainedPieceCount = section.terrain
                     == WorkoutGameTerrainKind::Climb
-                ? boundedPieceCount(climbSustainedLength, 22)
+                ? boundedPieceCount(climbSustainedLength, 64.0, 22)
                 : 0;
         const double climbExitGrade = section.terrain
                     == WorkoutGameTerrainKind::Climb
@@ -517,11 +565,15 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     connector.gradePercent, climbExitGrade,
                     climbEntryLength, climbCrestLength)
                 : section.gradePercent;
+        const bool flowingRecovery = isRecoverySection(section);
         const int pieceCount = section.terrain == WorkoutGameTerrainKind::Berm
+                    && !flowingRecovery
                 ? 1
                 : section.terrain == WorkoutGameTerrainKind::Climb
                     ? climbSustainedPieceCount + 2
-                : boundedPieceCount(sectionLength, 24);
+                : flowingRecovery
+                    ? boundedPieceCount(sectionLength, 56.0, 64)
+                    : boundedPieceCount(sectionLength, 90.0, 24);
         const double pieceLength = sectionLength / double(pieceCount);
         const WorkoutGameFeatureChallengeProfile challenge =
                 WorkoutGameFeatureChallenge::profile(section);
@@ -717,10 +769,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     std::isfinite(section.reliefScale)
                         ? section.reliefScale : 1.0,
                     0.0, 2.5);
-            piece.geometryAnchorDistanceMeters =
-                    section.terrain == WorkoutGameTerrainKind::Berm
-                ? sectionStart + sectionLength * 0.5
-                : piece.startDistanceMeters + piece.lengthMeters * 0.5;
+            piece.geometryAnchorDistanceMeters = piece.startDistanceMeters
+                    + piece.lengthMeters * 0.5;
             piece.entry = connector;
             piece.exit = connector;
             piece.exit.halfWidthMeters = targetHalfWidth(section.terrain);

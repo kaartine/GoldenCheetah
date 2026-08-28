@@ -1653,6 +1653,113 @@ private slots:
                  "terrain relief is still visually too shallow");
     }
 
+    void longMtbSectionsBecomeCurvingRollingSingletrack()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 4015825171u;
+        course.durationMs = 784200;
+
+        WorkoutGameSection climb;
+        climb.feature = WorkoutGameFeature::Climb;
+        climb.terrain = WorkoutGameTerrainKind::Climb;
+        climb.durationMs = 414000;
+        climb.targetWatts = 321.0;
+        climb.gradePercent = 7.8875;
+        climb.lengthMeters = 1502.7064;
+        climb.difficulty = 0.9775;
+        climb.visualVariant = 6u;
+
+        WorkoutGameSection descent;
+        descent.feature = WorkoutGameFeature::RecoveryDescent;
+        descent.terrain = WorkoutGameTerrainKind::Berm;
+        descent.startMs = climb.durationMs;
+        descent.durationMs = 370200;
+        descent.targetWatts = 151.0;
+        descent.gradePercent = -1.1431;
+        descent.lengthMeters = 2807.6772;
+        descent.difficulty = 0.1275;
+        descent.visualVariant = 6u;
+        descent.gravityAssisted = true;
+        course.sections = {climb, descent};
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+        QVERIFY(road.ready);
+
+        std::vector<const WorkoutGameRoadPiece *> descentPieces;
+        double maximumPieceLength = 0.0;
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            maximumPieceLength = std::max(
+                    maximumPieceLength, piece.lengthMeters);
+            if (piece.sourceSectionIndex == 1u) {
+                descentPieces.push_back(&piece);
+            }
+        }
+        QVERIFY2(descentPieces.size() >= 32u,
+                 "the long descent is still represented by only a few turns");
+        QVERIFY2(maximumPieceLength <= 72.0,
+                 "long straight road pieces still dominate the route");
+
+        int directionChanges = 0;
+        int meaningfulTurns = 0;
+        double previousTurn = 0.0;
+        for (const WorkoutGameRoadPiece *piece : descentPieces) {
+            const WorkoutGameBermGeometryProfile profile =
+                    WorkoutGameBermGeometry::profile(piece->difficulty);
+            const WorkoutGameRoadSample entrySocket =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, piece->geometryAnchorDistanceMeters
+                            + profile.startMeters);
+            const WorkoutGameRoadSample exitSocket =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, piece->geometryAnchorDistanceMeters
+                            + profile.endMeters);
+            QVERIFY2(entrySocket.renderableTrailSurface,
+                     "berm entry socket leaves a longitudinal trail gap");
+            QVERIFY2(exitSocket.renderableTrailSurface,
+                     "berm exit socket leaves a longitudinal trail gap");
+            if (std::abs(piece->turnRadians) >= 0.16) {
+                ++meaningfulTurns;
+            }
+            if (previousTurn * piece->turnRadians < 0.0) {
+                ++directionChanges;
+            }
+            previousTurn = piece->turnRadians;
+        }
+        QVERIFY2(meaningfulTurns >= 24,
+                 "the descent still contains too few visible turns");
+        QVERIFY2(directionChanges >= 10,
+                 "the descent does not form a flowing sequence of bends");
+
+        double maximumClimbRelief = 0.0;
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            if (piece.sourceSectionIndex != 0u) continue;
+            const double start = piece.startDistanceMeters;
+            const double end = start + piece.lengthMeters;
+            const double startElevation =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, start).surfaceElevationMeters();
+            const double endElevation =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, end).surfaceElevationMeters();
+            for (int sampleIndex = 1; sampleIndex < 12; ++sampleIndex) {
+                const double progress = double(sampleIndex) / 12.0;
+                const double elevation =
+                        WorkoutGameRoadCourseBuilder::sample(
+                            road, start + progress * piece.lengthMeters)
+                            .surfaceElevationMeters();
+                const double baseline = startElevation
+                        + (endElevation - startElevation) * progress;
+                maximumClimbRelief = std::max(
+                        maximumClimbRelief,
+                        std::abs(elevation - baseline));
+            }
+        }
+        QVERIFY2(maximumClimbRelief >= 1.0,
+                 "climbing trail still looks like a constant-grade road");
+    }
+
     void jumpSurfaceOffsetIsAppliedExactlyOnce()
     {
         WorkoutGameCourse course;
