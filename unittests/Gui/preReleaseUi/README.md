@@ -137,3 +137,6 @@ outcome, readiness and route agree. Shift up and back down during the ride; the
 report also requires both transitions and rejects an immediate speed step. The
 report is written to
 `workout-game-trainer-summary.json`; logs contain no device names or addresses.
+The interactive runner owns the complete AppImage process group, continues
+copying the raw recording if the extraction launcher exits before `AppRun`, and
+cleans up the group on interruption or analyzer failure.

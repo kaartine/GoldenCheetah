@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 
@@ -20,6 +23,9 @@ UI = importlib.util.module_from_spec(UI_SPEC)
 assert UI_SPEC.loader is not None
 UI_SPEC.loader.exec_module(UI)
 RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui.sh")
+REAL_TRAINER_RUNNER_PATH = Path(__file__).with_name(
+    "run-real-trainer-acceptance.sh"
+)
 
 
 class AnalyzeWorkoutGameTest(unittest.TestCase):
@@ -29,6 +35,72 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         self.assertIn('setsid "${APP_ENV[@]}" "$IMAGE"', runner)
         self.assertIn('kill -TERM -- "-$APP_PGID"', runner)
         self.assertIn('kill -KILL -- "-$APP_PGID"', runner)
+
+    def test_real_trainer_runner_tracks_the_complete_appimage_process_group(self):
+        runner = REAL_TRAINER_RUNNER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('setsid "$IMAGE"', runner)
+        self.assertIn('while kill -0 -- "-$APP_PGID"', runner)
+        self.assertIn('kill -TERM -- "-$APP_PGID"', runner)
+        self.assertIn('kill -KILL -- "-$APP_PGID"', runner)
+
+    def test_real_trainer_runner_waits_for_orphaned_app_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "fake.AppImage"
+            artifacts = root / "artifacts"
+            image.write_text(textwrap.dedent("""\
+                #!/usr/bin/env bash
+                library=$1
+                records=$library/UiTestAthlete/records
+                recording=$records/fake.csv
+                (
+                    printf '%s\\n' \
+                        'secs,cad,hr,km,watts,slope,target,virtualgear' \
+                        >"$recording"
+                    for second in $(seq 1 24); do
+                        gear=6
+                        if [ "$second" -ge 9 ] && [ "$second" -le 16 ]; then
+                            gear=7
+                        fi
+                        road=$((second * 2))
+                        printf '%s,80,140,0.%03d,200,0,200,%s\\n' \
+                            "$second" "$road" "$gear" >>"$recording"
+                        printf '%s\\n' \
+                            "workout-game-3d-trace source_ms=$((second * 1000)) render_road_m=$road frame_ms=16 fps=60 p95_frame_ms=16 max_frame_ms=16 backwards=0 skipped_ticks=0 unexpected_airborne_frames=0 lateral_m=0 watts=200 target_watts=200 cadence=80 hr=140 gear=$gear speed_kph=$((20 + second)) action_id=1 feature_outcome=completed feature_terrain=roots route=main readiness=1"
+                        printf '%s\\n' \
+                            "workout-game-trainer-target mode=erg value=200 workout_pos=$((second * 1000)) devices=1"
+                        sleep 0.03
+                    done
+                ) &
+                exit 0
+                """), encoding="utf-8")
+            image.chmod(0o755)
+            environment = dict(os.environ)
+            environment["DISPLAY"] = ":test"
+
+            completed = subprocess.run(
+                [str(REAL_TRAINER_RUNNER_PATH), str(image), str(artifacts)],
+                env=environment,
+                text=True,
+                capture_output=True,
+                timeout=15.0,
+                check=False,
+            )
+
+            self.assertEqual(
+                completed.returncode,
+                0,
+                msg=completed.stdout + completed.stderr,
+            )
+            self.assertTrue((artifacts / "training-recording.csv").is_file())
+            summary = json.loads(
+                (artifacts / "workout-game-trainer-summary.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(summary["passed"])
+            self.assertGreaterEqual(summary["matched_recording_samples"], 5)
 
     def test_process_group_exists_checks_the_complete_app_group(self):
         with mock.patch.object(UI.os, "killpg") as killpg:

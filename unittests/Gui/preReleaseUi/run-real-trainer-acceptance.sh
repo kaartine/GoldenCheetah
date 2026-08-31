@@ -22,18 +22,37 @@ ARTIFACT_DIR=$2
     echo "DISPLAY is not set; run this from the target desktop session" >&2
     exit 2
 }
+command -v setsid >/dev/null || {
+    echo "Missing real-trainer test dependency: setsid" >&2
+    exit 2
+}
 
 mkdir -p -- "$ARTIFACT_DIR"
 ARTIFACT_DIR=$(cd -- "$ARTIFACT_DIR" && pwd -P)
 TEST_ROOT=$ARTIFACT_DIR/isolated-profile
 RECORDING_COPY=$ARTIFACT_DIR/training-recording.csv
 APP_PID=
+APP_PGID=
+
+stop_app_group()
+{
+    [ -n "$APP_PGID" ] || return
+    if kill -0 -- "-$APP_PGID" 2>/dev/null; then
+        kill -TERM -- "-$APP_PGID" 2>/dev/null
+        for unused in $(seq 1 30); do
+            kill -0 -- "-$APP_PGID" 2>/dev/null || break
+            sleep 0.1
+        done
+        kill -0 -- "-$APP_PGID" 2>/dev/null && \
+            kill -KILL -- "-$APP_PGID" 2>/dev/null
+    fi
+    [ -z "$APP_PID" ] || wait "$APP_PID" 2>/dev/null
+}
 
 cleanup()
 {
     set +e
-    [ -z "$APP_PID" ] || kill "$APP_PID" 2>/dev/null
-    [ -z "$APP_PID" ] || wait "$APP_PID" 2>/dev/null
+    stop_app_group
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -55,12 +74,25 @@ close GoldenCheetah when finished.
 No file under the normal athlete library is opened or modified.
 EOF
 
-"$IMAGE" "$TEST_ROOT/library" UiTestAthlete --debug \
+setsid "$IMAGE" "$TEST_ROOT/library" UiTestAthlete --debug \
     >"$ARTIFACT_DIR/application.log" 2>&1 &
 APP_PID=$!
+APP_PGID=$APP_PID
+APP_GROUP_READY=0
+for unused in $(seq 1 50); do
+    if kill -0 -- "-$APP_PGID" 2>/dev/null; then
+        APP_GROUP_READY=1
+        break
+    fi
+    sleep 0.02
+done
+[ "$APP_GROUP_READY" -eq 1 ] || {
+    echo "GoldenCheetah process group did not start" >&2
+    exit 1
+}
 
 RECORDS=$TEST_ROOT/library/UiTestAthlete/records
-while kill -0 "$APP_PID" 2>/dev/null; do
+while kill -0 -- "-$APP_PGID" 2>/dev/null; do
     newest=$(find "$RECORDS" -maxdepth 1 -type f -name '*.csv' \
         -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
     if [ -n "$newest" ]; then
@@ -74,6 +106,7 @@ wait "$APP_PID"
 APP_STATUS=$?
 set -e
 APP_PID=
+APP_PGID=
 [ "$APP_STATUS" -eq 0 ] || {
     echo "GoldenCheetah exited with status $APP_STATUS" >&2
     exit "$APP_STATUS"

@@ -1209,4 +1209,12 @@ and both successful and deliberately invalid locked-desktop/Xvfb overload runs
 left no AppRun, QtWebEngine or Xvfb process. Runs made after GNOME reported
 `LockedHint=yes` are excluded from renderer acceptance evidence.
 
+The interactive real-trainer runner now uses the same process-group ownership
+instead of treating the short-lived AppImage extraction launcher as the
+application lifetime. Its regression fixture deliberately exits a fake
+launcher while an orphan-shaped child continues writing 24 telemetry samples;
+the runner waits for the child, preserves the CSV and passes recording, target,
+two-shift and feature-outcome reconciliation. The physical ride remains open,
+but its evidence collector no longer has this premature-exit failure mode.
+
 The build is not a release candidate while any P0 task remains open.
