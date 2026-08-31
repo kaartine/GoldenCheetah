@@ -670,7 +670,15 @@ class Suite:
         return failures
 
 
-def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
+def process_group_exists(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
     artifacts.mkdir(parents=True, exist_ok=True)
     suite = None
     try:
@@ -998,12 +1006,10 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                     )
                 )
             except Exception:
-                os.kill(app_pid, signal.SIGTERM)
+                os.killpg(app_pgid, signal.SIGTERM)
             deadline = time.monotonic() + 8.0
             while time.monotonic() < deadline:
-                try:
-                    os.kill(app_pid, 0)
-                except ProcessLookupError:
+                if not process_group_exists(app_pgid):
                     return
                 time.sleep(0.1)
             raise UiFailure("GoldenCheetah did not exit after Quit")

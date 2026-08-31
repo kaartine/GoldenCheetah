@@ -19,9 +19,29 @@ UI_SPEC = importlib.util.spec_from_file_location("pre_release_ui", UI_MODULE_PAT
 UI = importlib.util.module_from_spec(UI_SPEC)
 assert UI_SPEC.loader is not None
 UI_SPEC.loader.exec_module(UI)
+RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui.sh")
 
 
 class AnalyzeWorkoutGameTest(unittest.TestCase):
+    def test_ui_runner_owns_and_cleans_the_appimage_process_group(self):
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('setsid "${APP_ENV[@]}" "$IMAGE"', runner)
+        self.assertIn('kill -TERM -- "-$APP_PGID"', runner)
+        self.assertIn('kill -KILL -- "-$APP_PGID"', runner)
+
+    def test_process_group_exists_checks_the_complete_app_group(self):
+        with mock.patch.object(UI.os, "killpg") as killpg:
+            self.assertTrue(UI.process_group_exists(1234))
+
+        killpg.assert_called_once_with(1234, 0)
+
+    def test_process_group_exists_handles_a_finished_app_group(self):
+        with mock.patch.object(
+            UI.os, "killpg", side_effect=ProcessLookupError
+        ):
+            self.assertFalse(UI.process_group_exists(1234))
+
     def test_native_quick_3d_canvas_uses_trace_for_motion_gate(self):
         self.assertFalse(
             UI.canvas_requires_pixel_motion("Workout game 3D canvas")
@@ -733,6 +753,64 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         self.assertEqual(summary["maximum_trainer_target_delta"], 150.0)
         self.assertEqual(summary["p95_trainer_target_delta"], 0.0)
         self.assertEqual(failures, [])
+
+    def test_acceptance_aligns_recording_samples_across_erg_transitions(self):
+        trace = [
+            {
+                "source_ms": source_ms,
+                "watts": watts,
+                "cadence": 85.0,
+                "hr": 140.0,
+                "gear": 6.0,
+                "target_watts": target,
+            }
+            for source_ms, watts, target in (
+                (6850.0, 170.0, 158.0),
+                (7050.0, 380.0, 347.0),
+                (8050.0, 380.0, 347.0),
+                (10850.0, 375.0, 347.0),
+                (11050.0, 165.0, 158.0),
+                (12050.0, 165.0, 158.0),
+            )
+        ]
+        recording = [
+            {
+                "secs": seconds,
+                "cad": 85.0,
+                "hr": 140.0,
+                "km": seconds * 0.005,
+                "watts": watts,
+                "slope": 0.0,
+                "target": target,
+                "virtualgear": 6.0,
+            }
+            for seconds, watts, target in (
+                (7.0, 170.0, 158.0),
+                (8.0, 380.0, 347.0),
+                (11.0, 375.0, 347.0),
+                (12.0, 165.0, 158.0),
+            )
+        ]
+        targets = [
+            {
+                "mode": "erg",
+                "value": value,
+                "workout_pos": position,
+                "devices": 1.0,
+            }
+            for position, value in (
+                (6872.0, 347.0),
+                (7871.0, 347.0),
+                (10870.0, 158.0),
+                (11868.0, 158.0),
+            )
+        ]
+
+        summary = ANALYZER.reconcile_acceptance(trace, targets, recording)
+
+        self.assertEqual(summary["matched_recording_samples"], 4)
+        self.assertEqual(summary["maximum_power_delta_watts"], 0.0)
+        self.assertEqual(summary["maximum_trainer_target_delta"], 0.0)
 
     def test_erg_target_is_aligned_by_workout_time(self):
         recording = [{

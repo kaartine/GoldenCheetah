@@ -23,6 +23,9 @@ FIELD = re.compile(r"([a-z][a-z0-9_]*)=([^\s]+)")
 RECORDING_COLUMNS = (
     "secs", "cad", "hr", "km", "watts", "slope", "target", "virtualgear",
 )
+TRACE_ALIGNMENT_WINDOW_MS = 750.0
+ERG_RECORDING_LATENCY_MS = 1250.0
+TARGET_MATCH_TOLERANCE = 0.5
 
 TraceValue = float | str
 TraceSample = dict[str, TraceValue]
@@ -155,6 +158,60 @@ def nearest_by(
     ))]
 
 
+def trace_for_recording(
+    samples: list[TraceSample],
+    times: list[float],
+    row: dict[str, float],
+) -> TraceSample | None:
+    position = row["secs"] * 1000.0
+    first = bisect.bisect_left(times, position - TRACE_ALIGNMENT_WINDOW_MS)
+    last = bisect.bisect_right(times, position + TRACE_ALIGNMENT_WINDOW_MS)
+    candidates = samples[first:last]
+    if not candidates:
+        return None
+
+    matching_target = [
+        sample for sample in candidates
+        if (target := numeric(sample, "target_watts")) is not None
+        and abs(target - row["target"]) <= TARGET_MATCH_TOLERANCE
+    ]
+    usable = matching_target or candidates
+    return min(
+        usable,
+        key=lambda sample: abs((numeric(sample, "source_ms") or 0.0) - position),
+    )
+
+
+def trainer_target_delta(
+    target: TraceSample,
+    recording: list[dict[str, float]],
+    recording_times: list[float],
+    recording_distances: list[float],
+) -> float | None:
+    mode = target.get("mode")
+    position = numeric(target, "workout_pos")
+    value = numeric(target, "value")
+    if mode not in ("erg", "slope") or position is None or value is None:
+        return None
+
+    positions = recording_times if mode == "erg" else recording_distances
+    expected_name = "target" if mode == "erg" else "slope"
+    if mode == "erg":
+        first = bisect.bisect_left(
+            positions, position - ERG_RECORDING_LATENCY_MS
+        )
+        last = bisect.bisect_right(
+            positions, position + ERG_RECORDING_LATENCY_MS
+        )
+        candidates = recording[first:last]
+    else:
+        nearest = nearest_by(recording, positions, position)
+        candidates = [nearest] if nearest is not None else []
+    if not candidates:
+        return None
+    return min(abs(value - row[expected_name]) for row in candidates)
+
+
 def reconcile_acceptance(
     trace: list[TraceSample],
     trainer_targets: list[TraceSample],
@@ -180,11 +237,13 @@ def reconcile_acceptance(
     gear_mismatches = 0
     matched_recordings = 0
     for row in recording_in_trace_window:
-        sample = nearest_by(timed_trace, trace_times, row["secs"] * 1000.0)
+        sample = trace_for_recording(timed_trace, trace_times, row)
         if sample is None:
             continue
         source_ms = numeric(sample, "source_ms")
-        if source_ms is None or abs(source_ms - row["secs"] * 1000.0) > 750.0:
+        if (source_ms is None
+                or abs(source_ms - row["secs"] * 1000.0)
+                > TRACE_ALIGNMENT_WINDOW_MS):
             continue
         values = {
             "watts": numeric(sample, "watts"),
@@ -212,11 +271,11 @@ def reconcile_acceptance(
         if mode not in ("erg", "slope") or position is None or value is None:
             continue
         trainer_targets_with_devices += int(devices is not None and devices > 0)
-        positions = recording_times if mode == "erg" else recording_distances
-        row = nearest_by(recording, positions, position)
-        if row is not None:
-            expected = row["target"] if mode == "erg" else row["slope"]
-            trainer_target_deltas.append(abs(value - expected))
+        delta = trainer_target_delta(
+            target, recording, recording_times, recording_distances
+        )
+        if delta is not None:
+            trainer_target_deltas.append(delta)
 
     gear_changes = 0
     gear_change_speed_steps = []

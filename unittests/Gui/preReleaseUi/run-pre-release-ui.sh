@@ -15,7 +15,7 @@ ARTIFACT_DIR=${2:-$PWD/ui-test-artifacts}
     exit 2
 }
 
-REQUIRED_COMMANDS=(dbus-run-session gdbus python3)
+REQUIRED_COMMANDS=(dbus-run-session gdbus python3 setsid)
 if [ -z "${GC_UI_EXISTING_DISPLAY:-}" ]; then
     REQUIRED_COMMANDS+=(Xvfb)
 fi
@@ -40,17 +40,32 @@ ARTIFACT_DIR=$(cd -- "$ARTIFACT_DIR" && pwd -P)
 TEST_ROOT=$(mktemp -d)
 DISPLAY_NUMBER=
 APP_PID=
+APP_PGID=
 XVFB_PID=
 VIDEO_PID=
+
+stop_app_group()
+{
+    [ -n "$APP_PGID" ] || return
+    if kill -0 -- "-$APP_PGID" 2>/dev/null; then
+        kill -TERM -- "-$APP_PGID" 2>/dev/null
+        for unused in $(seq 1 30); do
+            kill -0 -- "-$APP_PGID" 2>/dev/null || break
+            sleep 0.1
+        done
+        kill -0 -- "-$APP_PGID" 2>/dev/null && \
+            kill -KILL -- "-$APP_PGID" 2>/dev/null
+    fi
+    [ -z "$APP_PID" ] || wait "$APP_PID" 2>/dev/null
+}
 
 cleanup()
 {
     set +e
     [ -z "$VIDEO_PID" ] || kill -INT "$VIDEO_PID" 2>/dev/null
-    [ -z "$APP_PID" ] || kill "$APP_PID" 2>/dev/null
+    stop_app_group
     [ -z "$XVFB_PID" ] || kill "$XVFB_PID" 2>/dev/null
     [ -z "$VIDEO_PID" ] || wait "$VIDEO_PID" 2>/dev/null
-    [ -z "$APP_PID" ] || wait "$APP_PID" 2>/dev/null
     [ -z "$XVFB_PID" ] || wait "$XVFB_PID" 2>/dev/null
     rm -rf -- "$TEST_ROOT"
 }
@@ -165,13 +180,14 @@ if [ "${GC_UI_RECORD_VIDEO:-0}" = 1 ] && command -v ffmpeg >/dev/null; then
     VIDEO_PID=$!
 fi
 
-"${APP_ENV[@]}" "$IMAGE" "$TEST_ROOT/library" UiTestAthlete --debug \
+setsid "${APP_ENV[@]}" "$IMAGE" "$TEST_ROOT/library" UiTestAthlete --debug \
     >"$ARTIFACT_DIR/application.log" 2>&1 &
 APP_PID=$!
+APP_PGID=$APP_PID
 
 set +e
 python3 "$SCRIPT_DIR/pre_release_ui.py" exercise \
-    "$TEST_ROOT" "$ARTIFACT_DIR" "$APP_PID"
+    "$TEST_ROOT" "$ARTIFACT_DIR" "$APP_PGID"
 STATUS=$?
 set -e
 
@@ -208,10 +224,10 @@ fi
 
 if [ "$STATUS" -eq 0 ]; then
     for unused in $(seq 1 50); do
-        ! kill -0 "$APP_PID" 2>/dev/null && break
+        ! kill -0 -- "-$APP_PGID" 2>/dev/null && break
         sleep 0.1
     done
-    if kill -0 "$APP_PID" 2>/dev/null; then
+    if kill -0 -- "-$APP_PGID" 2>/dev/null; then
         echo "GoldenCheetah did not exit after the UI shutdown request" >&2
         STATUS=1
     fi

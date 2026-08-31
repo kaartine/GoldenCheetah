@@ -1180,4 +1180,33 @@ The packaging regression suite also passed in full from clean repository head
 commits change release tooling, tests and documentation only, so the promoted
 application binary remains the reproducible `127af78` artifact above.
 
+**REL-05 refresh (`f3bbb2a`, 2026-08-31):** the current local and remote stable
+paths resolve to the same 3D route-density release AppImage with SHA-256
+`69b40bf6917408517d92eacc3a8c3fb749d7c055f6db9f973071f0038f20f4c9`.
+On the rebooted remote target, PRIME offload selected the NVIDIA RTX A3000
+Laptop GPU with driver 580.173.02; the application reported NVIDIA OpenGL 4.6,
+Qt used its threaded OpenGL render loop, and `nvidia-smi pmon` observed the
+`AppRun` graphics process. The isolated trainer-evidence UI run completed all
+10 workflows. Its 110-sample trace advanced 168.842 m at 154.044 median FPS,
+with 8 ms observed p95/p99 frame intervals, no backward frame, skipped tick or
+unexpected airtime, and a maximum progressive gear-change speed step of
+0.317 km/h.
+
+The run exposed a test-analyzer clock-phase error rather than an application
+telemetry error: integer-second CSV samples can precede a nearby trace and ERG
+dispatch timer by roughly 100 ms at both edges of a target interval. Bounded
+target-state matching now reconciles only trace samples within 750 ms and ERG
+recording evidence within 1.25 seconds. Reanalysis matched all 24 recording
+samples with 6 W maximum and 5 W p95 power disagreement and 0 W dispatched
+target disagreement. A regression covers both rising and falling target edges
+while existing persistent-disagreement tests remain active.
+
+A subsequent run also exposed that the AppImage extraction launcher could exit
+before its `AppRun` child, leaving an isolated test process behind. The runner
+now owns and monitors a dedicated process group and applies bounded TERM/KILL
+cleanup to the whole group. The 10/10 QPainter UI chain passed with this runner,
+and both successful and deliberately invalid locked-desktop/Xvfb overload runs
+left no AppRun, QtWebEngine or Xvfb process. Runs made after GNOME reported
+`LockedHint=yes` are excluded from renderer acceptance evidence.
+
 The build is not a release candidate while any P0 task remains open.

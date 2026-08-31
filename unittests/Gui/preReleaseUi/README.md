@@ -66,6 +66,11 @@ To exercise the target desktop GPU instead of Xvfb, set
 `GC_UI_EXISTING_DISPLAY` to an accessible display such as `:1`, set the matching
 `XAUTHORITY`, and enable `GC_UI_USE_HARDWARE_GL=1`. The application remains on
 the isolated athlete library, but its test window is visible on that desktop.
+The desktop must remain unlocked for the complete run; a screen lock hides the
+window and removes its visible controls from AT-SPI. The runner starts the
+AppImage in an owned process group and terminates that complete group on every
+success, failure and signal path, including launchers that leave `AppRun`
+children behind.
 Trainer-acceptance runs on an existing display use trace validation instead of
 root-window screenshots because compositors may deny root pixel readback.
 
