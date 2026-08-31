@@ -1045,6 +1045,28 @@ CI debt rather than being treated as a passing gate.
 - [x] `REL-05` Publish a test AppImage to the stable local/remote release path.
 - [ ] `REL-06` Remove the legacy renderer only after all acceptance gates pass.
 
+**REL-06 retirement inventory:** the legacy game renderer is the complete
+Painter/OpenGL/Scene Graph fallback chain, not every use of `QPainter` in the
+application. Once `CAM-01`, `VS-04`, `PHY-03` and `REL-04` pass, retire
+`WorkoutGameCanvas`, `WorkoutGameOpenGLCanvas`,
+`WorkoutGameSceneGraphWindow` and `WorkoutGameRendererPolicy` (headers and
+implementations). Remove their entries from `src/src.pro`, remove their three
+dedicated unit-test projects from `unittests/unittests.pro` and
+`unittests/ci-required-tests.txt`, and delete the corresponding test
+directories. Simplify `WorkoutGameWindow` to own only `WorkoutGame3DWindow`,
+remove `GC_WORKOUT_GAME_3D`, `GC_WORKOUT_GAME_FORCE_PAINTER` and all fallback
+slots, and surface an explicit unavailable-renderer state instead of silently
+changing gameplay presentation.
+
+Retirement must preserve QPainter-based nonlegacy code, including the Quick 3D
+HUD image, direct diagnostic capture, workout course preview and unrelated
+GoldenCheetah charts. Before checking `REL-06`, rerun the full core/Quick 3D,
+course conversion, simulation, recording, Bluetooth and packaged UI inventory;
+change the pre-release matrix to a single Quick 3D path plus the existing
+offscreen event-loop smoke. A repository search must find no references to the
+four retired classes or either renderer-selection environment variable, and a
+fresh AppImage must pass on both Intel and NVIDIA without a fallback renderer.
+
 **REL-01 evidence (2026-08-26):** the controlled remote Linux shadow build
 reconciled all 168 eligible projects from the required-test inventory. The
 release run completed 164 QtTest suites with 5,632 passing cases after
