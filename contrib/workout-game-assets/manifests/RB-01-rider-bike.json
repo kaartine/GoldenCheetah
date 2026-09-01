@@ -7,9 +7,9 @@
     "provider": "GoldenCheetah",
     "author": "GoldenCheetah contributors",
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_rider_bike.py",
-    "retrievedAt": "2026-08-26",
+    "retrievedAt": "2026-09-01",
     "originalFileName": "generate_rider_bike.py",
-    "originalSha256": "c0bd4127af40bcad5a2a66fc098ea84fe555a1d8e6aae6fae60109c38220a8af",
+    "originalSha256": "e62165496be22008616e6cfa2af4eb48cdcfc0ebaa00c858ac82603443d1cd38",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_rider_bike.py"
@@ -35,12 +35,12 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_rider_bike.py",
       "purpose": "source",
-      "sha256": "c0bd4127af40bcad5a2a66fc098ea84fe555a1d8e6aae6fae60109c38220a8af"
+      "sha256": "e62165496be22008616e6cfa2af4eb48cdcfc0ebaa00c858ac82603443d1cd38"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_RiderBike.glb",
       "purpose": "intermediate",
-      "sha256": "22a342ae4ac46c743fe95b90f94ec9450721100d594e9781df33be02bc926d69"
+      "sha256": "c0de27607d96dab54460151c397c651c1abf839d4a35040070798fb866e0cc35"
     },
     {
       "path": "src/Train/qml/WorkoutGameRiderBike.qml",
@@ -50,32 +50,32 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "5434de59bc12f10449681bd5f533018a8e76075e17306f81654d300a23f635fa"
+      "sha256": "00ecdcb872a69898065cbffaf256e5ecebdaf723fd643950d64fc40244220bcb"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "4038803759b1b62988fc909c519495a243bea85f1b352e30a053778c8c553ec0"
+      "sha256": "8b483c975ec9000fa2b8cee16dd914bd95fd90bbe9ee807862480e607f8bc835"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Swingarm_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "6645ef786ca7109896f54d0bdb68d1573acc7cd5dc5c0cd88809c182ee40af78"
+      "sha256": "4721cf3cca11c3c84eb4519d6b3b3f7b1fca42fec2b2618e5f1a72c74cffd144"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Fork_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "cc20a8303308235f59a84049ff9df81f87329e9f21e0a5716661d3de2fe47d14"
+      "sha256": "5570a16440950abd7c2a73f8cfb4c9763c37934e7c75067dbc7e7c6599416bc6"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_RearShock_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "15647a3915e5e702a229b5a89acb47721547ac21b8ed474dcc477a45eaa455af"
+      "sha256": "34444236ddc28f240993b10eb1480b42fddff8abc6ae88f1d08c2d19859b223f"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "727bd2753078c6533a0f6cd4256a3d29f1c19282622b9b8fd2a2d0cacd5f8bba"
+      "sha256": "0934d25639cd954826a6e9c0b66131c9bacd40dac79e30dff1b5ac89573b2cac"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Head_LOD0_mesh.mesh",
@@ -85,17 +85,17 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "872c113fa4f7aa81b039f8cfac0da8c576cb68674e7795cc528e96e698bc7dce"
+      "sha256": "e8727b0f1d165c6e398367202c950cc51d8b050a702614ccd4c8684195648d4e"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Limb_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "8123f26360dd75d6d1e4769812cb00baf8b98082ac7e5e99ec5076df0245bca9"
+      "sha256": "a144857d5fcf9f1d618150d741897e2009b1325b7d2459c0df097f230e3d6532"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "a687447f6d620aebcb709950e0b6340eced51716578ea3302ddbfcf614a22a79"
+      "sha256": "6d201719a9f8d971b1cb2aaa79ff1b02f74435c69ceaa994629273311644cabd"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Shadow_LOD0_mesh.mesh",
@@ -105,7 +105,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Torso_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "8adaeeccaccf45b1da4db9c317ffcd8aab920db4f582ea357e632c7a672e2224"
+      "sha256": "4c701a6443decb87cd18f515d813bd745d728b820b245900ba7a7cdfc1aaab7a"
     },
     {
       "path": "src/Resources/images/workout-game-surface-rider.png",
@@ -133,8 +133,8 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 58820,
-    "trianglesLod0": 756,
+    "glbBytes": 60952,
+    "trianglesLod0": 768,
     "materials": 6,
     "textureBytes": 0,
     "nodes": [
@@ -163,7 +163,7 @@
     "allowedExtensions": [],
     "boundsMeters": {
       "minimum": [-0.41999998688697815, -0.14000000059604645, -0.8233000040054321],
-      "maximum": [0.41999998688697815, 1.0555884838104248, 1.2263000011444092]
+      "maximum": [0.41999998688697815, 1.059000015258789, 1.2263000011444092]
     },
     "budgets": {
       "maxGlbBytes": 65536,
@@ -178,7 +178,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
-    "reviewedAt": "2026-08-26",
-    "notes": "Approved project-authored low-poly rider and full-suspension 29er bicycle asset. Public Pole Voima K2 dimensions inform wheelbase, chainstay, head angle and suspension travel only; no Pole model surfaces, logos or textures are copied. Runtime poses are snapshot-driven and intentionally use no baked GLB animation or root motion."
+    "reviewedAt": "2026-09-01",
+    "notes": "Approved project-authored low-poly rider and full-suspension 29er e-bike asset. Public Pole Voima K2 dimensions and service packaging inform wheelbase, chainstay, head angle, suspension travel, deep battery/down-tube mass, compact mid-drive envelope and long linked swingarm only. All angular frame, motor, linkage, fork, hub, rotor and spoke surfaces are generic authored silhouettes; no Pole model surfaces, logos, CAD or textures are copied. Runtime poses are snapshot-driven and intentionally use no baked GLB animation or root motion."
   }
 }

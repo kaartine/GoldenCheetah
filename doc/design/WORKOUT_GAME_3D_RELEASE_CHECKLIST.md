@@ -58,6 +58,32 @@ area, near-plane intersections, camera displacement and yaw acceleration.
 **Done when:** no catalog/video frame is substantially blocked by vegetation,
 terrain or a late-streamed floor chunk.
 
+### `CAM-03` Present the bicycle without interrupting gameplay
+
+- [x] Hold a readable side view briefly when a ride starts.
+- [x] Return smoothly to the fixed chase camera before normal gameplay.
+- [x] Enter the side view only after sustained zero-power, zero-cadence idle.
+- [x] Yield immediately to feature-critical and airborne states.
+
+**Implementation:** a Qt-independent presentation controller owns the opening,
+idle and return timing. The opening holds for one second and blends to chase
+over two seconds. Idle presentation starts only after four seconds below 20 W
+and at or below 3 RPM, blends over 1.8 seconds and returns over 1.2 seconds as
+soon as pedalling resumes. Side placement samples the generated terrain under
+the camera and expands the tree exclusion corridor without changing trainer,
+simulation or recording timing.
+
+**Tests:** deterministic state transitions cover short-stop filtering,
+pedalling resume, feature and airborne cancellation. Course sweeps retain
+camera terrain clearance, bounded motion and the fixed chase composition. An
+opt-in X11/Quick 3D test exports matched opening, chase and idle frames, checks
+the 41/47-degree side/chase fields of view and rejects blank or unchanged
+captures.
+
+**Done when:** the complete bicycle is readable at ride start and sustained
+idle, normal riding never looks sideways, and camera presentation cannot delay
+or modify training control or recording.
+
 ### `RND-01` Keep rendering independent and bounded
 
 - [x] Confirm immutable newest-frame publication remains capacity one.
@@ -254,25 +280,30 @@ camera distance and the bicycle never appears to travel sideways.
 **Current evidence:** the project-authored `RB-01` source produces separate
 frame, 29-inch wheels, crank, torso, head, helmet, limb and contact-shadow
 meshes with named axle, crank, steering, pelvis, camera and shadow pivots. Its
-`0.7366 m` wheel diameter, `1.16 m` wheelbase, 636 triangles and six source
-materials are manifest-validated. Two clean Blender 4.0.2 exports and two Qt
-Balsam 6.8.3 conversions are byte-identical. Runtime wheel rotation follows
-distance, while crank and articulated leg transforms follow pedal cycles;
-standing, walking, terrain pump, root pitch/roll and ground-fixed airborne
-shadow use the existing authoritative ViewModel values. The asset-policy suite
-rejects final rider QML containing built-in cube, cylinder, cone or sphere
-meshes. Every authored rider mesh now exports one normalized UV channel. Bike,
-jersey, shorts and helmet use the shared low-contrast rider pixel tile while
-retaining their high-contrast palette; minification is mipmapped and the
-airborne shadow remains fixed to the terrain. Asset tests require
-`TEXCOORD_0` on every GLB primitive and runtime tests verify all four materials
-bind the packaged texture. The ViewModel selects pedal, coast, preload, air,
-land, absorb, lean or bypass directly from each authoritative world/feature
-snapshot. QML applies bounded 120 ms body and crank blends without changing
-the rider root. One test drives all eight states, verifies pose bounds and
-exact root/physics agreement, and renders a distinct 960 by 540 image for each
-state. The catalog contact sheet SHA-256 is
-`3f03a981a6a7d276ba89211ca74f2d441665329cc2a65fed14c987d9fe3479dc`.
+`0.7366 m` wheel diameter, `1.313 m` wheelbase, `0.455 m` chainstay,
+`63.5`-degree head angle, `0.190 m` travel, 768 triangles and six source
+materials are manifest-validated. Public Pole Voima K2 geometry and component
+packaging inform the dimensions, deep battery/down-tube mass, compact
+mid-drive envelope and long linked swingarm. All surfaces remain original
+low-poly project geometry without Pole logos, CAD, textures or copied mesh
+surfaces. Two clean Blender 4.0.2 exports and two Qt Balsam 6.8.3 conversions
+are byte-identical. Runtime wheel rotation follows distance, while crank and
+articulated leg transforms follow pedal cycles; standing, walking, terrain
+pump, root pitch/roll and ground-fixed airborne shadow use the existing
+authoritative ViewModel values. The asset-policy suite rejects final rider QML
+containing built-in cube, cylinder, cone or sphere meshes. Every authored rider
+mesh exports one normalized UV channel. Bike, jersey, shorts and helmet use the
+shared low-contrast rider pixel tile while retaining their high-contrast
+palette; minification is mipmapped and the airborne shadow remains fixed to
+the terrain. Asset tests require `TEXCOORD_0` on every GLB primitive and
+runtime tests verify all four materials bind the packaged texture. The
+ViewModel selects pedal, coast, preload, air, land, absorb, lean or bypass
+directly from each authoritative world/feature snapshot. QML applies bounded
+120 ms body and crank blends without changing the rider root. Tests drive all
+eight states, verify pose bounds and exact root/physics agreement. A matched
+1280 by 720 X11/Quick 3D side-presentation review shows the complete bicycle
+at opening and sustained idle; the final opening-frame SHA-256 is
+`013bad4fe5bee04a9c9edb98a5105a6db7851aff4803258bbb3c3c8c043344a2`.
 
 ### `VS-04` Validate the vertical slice end to end
 

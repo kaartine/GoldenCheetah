@@ -42,13 +42,18 @@ ring. None of the generators downloads or embeds external assets.
   `0.455 m` chainstay and separately articulated main frame, swingarm, fork and
   rear shock. These dimensions use Pole Voima K2's public geometry table as a
   reference without copying branded surfaces, graphics or source assets.
+- The project-authored side silhouette uses a deep integrated 750 Wh-class
+  battery/down tube, compact mid-drive housing, long twin-beam swingarm, upper
+  linkage and rocker, long single-crown fork, hubs, brake rotors and sparse
+  low-poly spokes. These are generic visual cues rather than copied Pole
+  surfaces or CAD.
 - Rear axle, front axle, crank, steering, pelvis, camera-target and shadow
   pivots are named in the GLB. The runtime QML uses those same measured values.
 - Main frame, swingarm, fork, rear shock, wheels, crank, torso, head, helmet,
   reusable limb and contact-shadow meshes are separate. Runtime wheel rotation
   follows distance, suspension follows the physics snapshot, and crank and leg
   motion follow the authoritative pedal-cycle value.
-- The complete source asset has 636 triangles, six opaque flat-color materials,
+- The complete source asset has 768 triangles, six opaque flat-color materials,
   no texture payload and no external source. The runtime component adds only a
   bounded translucent contact-shadow material.
 - Blender validates topology, applied transforms, dimensions, pivots and the

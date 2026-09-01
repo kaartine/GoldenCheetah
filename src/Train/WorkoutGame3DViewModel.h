@@ -11,6 +11,7 @@
 #define _GC_WorkoutGame3DViewModel_h
 
 #include "WorkoutGame3DChunkBuilder.h"
+#include "WorkoutGame3DCameraPresentation.h"
 #include "WorkoutGame3DGeometry.h"
 #include "WorkoutGameDiagnostics.h"
 #include "WorkoutGameEngine.h"
@@ -126,6 +127,10 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(QVariantList features READ features NOTIFY courseChanged)
     Q_PROPERTY(QVariantList trees READ trees NOTIFY treesChanged)
     Q_PROPERTY(QString cameraComposition READ cameraComposition CONSTANT)
+    Q_PROPERTY(QString cameraPresentation READ cameraPresentation
+               NOTIFY sceneChanged)
+    Q_PROPERTY(double cameraPresentationBlend READ cameraPresentationBlend
+               NOTIFY sceneChanged)
     Q_PROPERTY(bool extendedRenderStatsEnabled
                READ extendedRenderStatsEnabled CONSTANT)
     Q_PROPERTY(double cameraBackMeters READ cameraBackMeters CONSTANT)
@@ -294,6 +299,11 @@ public:
     QVariantList features() const { return courseFeatures; }
     QVariantList trees() const { return visibleTrees; }
     QString cameraComposition() const { return currentCameraComposition; }
+    QString cameraPresentation() const;
+    double cameraPresentationBlend() const
+    {
+        return cameraPresentationSnapshot.sideBlend;
+    }
     bool extendedRenderStatsEnabled() const
     {
         return qEnvironmentVariableIntValue(
@@ -363,6 +373,7 @@ private:
     int requestedFloorBucket = std::numeric_limits<int>::min();
     int featureBucket = std::numeric_limits<int>::min();
     int treeBucket = std::numeric_limits<int>::min();
+    int treePresentationBucket = std::numeric_limits<int>::min();
     double riderPositionX = 0.0;
     double riderPositionY = 0.0;
     double riderPositionZ = 0.0;
@@ -415,6 +426,8 @@ private:
     QString currentFeatureName;
     QString currentFeatureActionText;
     QString currentCameraComposition = QStringLiteral("medium-centre");
+    WorkoutGame3DCameraPresentation cameraPresentationController;
+    WorkoutGame3DCameraPresentationSnapshot cameraPresentationSnapshot;
     double cameraBackDistanceMeters = 8.2;
     double cameraSideDistanceMeters = 0.0;
     double cameraHeightDistanceMeters = 3.2;

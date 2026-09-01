@@ -913,9 +913,9 @@ SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/Computraine
            Train/TrainerDayAPIQuery.cpp Train/TrainerDayAPIDialog.cpp Train/ElevationChartWindow.cpp
 
 HEADERS += Train/WorkoutGameClimbGeometry.h Train/WorkoutGameRiderAnimation.h Train/WorkoutGameRiderVisual.h Train/WorkoutGameRootGeometry.h Train/WorkoutGameRockGardenGeometry.h Train/WorkoutGameRockSlabGeometry.h Train/WorkoutGameSkinnyGeometry.h Train/WorkoutGameTabletopGeometry.h
-HEADERS += Train/WorkoutGame3DChunkBuilder.h Train/WorkoutGame3DFeatureAsset.h Train/WorkoutGame3DGeometry.h Train/WorkoutGame3DTerrainProfile.h Train/WorkoutGame3DViewModel.h \
+HEADERS += Train/WorkoutGame3DChunkBuilder.h Train/WorkoutGame3DCameraPresentation.h Train/WorkoutGame3DFeatureAsset.h Train/WorkoutGame3DGeometry.h Train/WorkoutGame3DTerrainProfile.h Train/WorkoutGame3DViewModel.h \
            Train/WorkoutGame3DWindow.h
-SOURCES += Train/WorkoutGame3DChunkBuilder.cpp Train/WorkoutGame3DFeatureAsset.cpp Train/WorkoutGame3DGeometry.cpp Train/WorkoutGame3DTerrainProfile.cpp Train/WorkoutGame3DViewModel.cpp \
+SOURCES += Train/WorkoutGame3DChunkBuilder.cpp Train/WorkoutGame3DCameraPresentation.cpp Train/WorkoutGame3DFeatureAsset.cpp Train/WorkoutGame3DGeometry.cpp Train/WorkoutGame3DTerrainProfile.cpp Train/WorkoutGame3DViewModel.cpp \
            Train/WorkoutGame3DWindow.cpp
 
 SOURCES += Train/TrainBottom.cpp Train/TrainDB.cpp Train/TrainSidebar.cpp \

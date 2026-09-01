@@ -531,7 +531,8 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 "fps=61.2 render_road_m=18.5 target_watts=220 "
                 "lateral_m=0.2 unexpected_airborne_frames=0 "
                 "feature_phase=recovery feature_outcome=completed "
-                "route=main feature_geometry=jump\n",
+                "route=main camera_presentation=idle-side "
+                "camera_side_blend=0.75 feature_geometry=jump\n",
                 encoding="utf-8",
             )
 
@@ -544,6 +545,8 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertEqual(samples[0]["feature_phase"], "recovery")
             self.assertEqual(samples[0]["feature_outcome"], "completed")
             self.assertEqual(samples[0]["route"], "main")
+            self.assertEqual(samples[0]["camera_presentation"], "idle-side")
+            self.assertEqual(samples[0]["camera_side_blend"], 0.75)
 
     def test_malformed_numeric_trace_field_does_not_break_analysis(self):
         samples = [{

@@ -394,6 +394,10 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
                 << viewModel->cameraTargetX() << ','
                 << viewModel->cameraTargetY() << ','
                 << viewModel->cameraTargetZ()
+           << " camera_presentation="
+                << viewModel->cameraPresentation()
+           << " camera_side_blend="
+                << viewModel->cameraPresentationBlend()
            << " rider_asset=RB-01"
            << " surface_asset=TR-08"
            << " near_environment=EN-01"

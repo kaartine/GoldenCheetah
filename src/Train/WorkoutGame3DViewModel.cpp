@@ -166,6 +166,7 @@ void WorkoutGame3DViewModel::setCourse(
     requestedFloorBucket = std::numeric_limits<int>::min();
     featureBucket = std::numeric_limits<int>::min();
     treeBucket = std::numeric_limits<int>::min();
+    treePresentationBucket = std::numeric_limits<int>::min();
     visibleTrees.clear();
     currentFeatureHud = {};
     currentFeatureName.clear();
@@ -192,6 +193,8 @@ void WorkoutGame3DViewModel::setCourse(
     rockCompressionInitialized = false;
     slabCompressionInitialized = false;
     lastRiderPoseTimeMs = -1;
+    cameraPresentationController.reset();
+    cameraPresentationSnapshot = {};
     rebuildFloor(0.0, true);
     sceneReady = roadCourse.ready && trail->ready()
             && floorBuffers[std::size_t(activeFloorBuffer)]->ready();
@@ -302,6 +305,16 @@ void WorkoutGame3DViewModel::setFrame(
     riderPositionY = visualGround + authoritativeAir;
     riderPositionZ = sample.center.zMeters + lateral * rightZ;
     riderHeadingDegrees = sample.center.headingRadians * 180.0 / Pi;
+    const bool featureCritical = frame.feature.ready
+            && frame.feature.phase != WorkoutGameFeaturePhase::None
+            && frame.feature.phase != WorkoutGameFeaturePhase::Recovery;
+    cameraPresentationSnapshot = cameraPresentationController.update({
+        frame.simulation.workoutTimeMs,
+        currentWatts,
+        double(currentCadenceRpm),
+        featureCritical,
+        frame.world.rider.airborne
+    });
     updateCameraPose(distanceMeters, lateral);
     riderPitchDegrees = finiteOrZero(frame.world.rider.pitchDegrees);
     double targetRiderRollDegrees =
@@ -723,9 +736,63 @@ void WorkoutGame3DViewModel::updateCameraPose(
 
     const WorkoutGameRoadSample riderSample =
             WorkoutGameRoadCourseBuilder::sample(roadCourse, distanceMeters);
+    const auto applyPresentationCamera =
+            [this, &riderSample, distanceMeters, lateralMeters]() {
+        if (!riderSample.ready
+                || cameraPresentationSnapshot.sideBlend <= 0.0) {
+            return;
+        }
+        constexpr double SideDistanceMeters = 4.4;
+        constexpr double SideBackMeters = 0.8;
+        constexpr double SideHeightMeters = 2.65;
+        constexpr double SideTargetHeightMeters = 0.88;
+        constexpr double SideTargetAheadMeters = 0.12;
+        const double forwardX = std::sin(
+                riderSample.center.headingRadians);
+        const double forwardZ = std::cos(
+                riderSample.center.headingRadians);
+        const double rightX = std::cos(
+                riderSample.center.headingRadians);
+        const double rightZ = -std::sin(
+                riderSample.center.headingRadians);
+        const double sideCameraX = riderPositionX
+                - SideDistanceMeters * rightX
+                - SideBackMeters * forwardX;
+        const double sideCameraZ = riderPositionZ
+                - SideDistanceMeters * rightZ
+                - SideBackMeters * forwardZ;
+        double sideGroundY = cameraGroundY;
+        const WorkoutGame3DTerrainProfileSnapshot terrain =
+                WorkoutGame3DTerrainProfile::build(
+                    riderSample, distanceMeters, roadCourse.seed);
+        if (terrain.ready) {
+            sideGroundY = std::max(
+                    sideGroundY,
+                    WorkoutGame3DTerrainProfile::elevationAtLateral(
+                        terrain, lateralMeters - SideDistanceMeters));
+        }
+        const double sideCameraY = sideGroundY + SideHeightMeters;
+        const double sideTargetX = riderPositionX
+                + SideTargetAheadMeters * forwardX;
+        const double sideTargetZ = riderPositionZ
+                + SideTargetAheadMeters * forwardZ;
+        const double sideTargetY = riderPositionY + SideTargetHeightMeters;
+        const double blend = std::clamp(
+                cameraPresentationSnapshot.sideBlend, 0.0, 1.0);
+        cameraPositionX += (sideCameraX - cameraPositionX) * blend;
+        cameraPositionY += (sideCameraY - cameraPositionY) * blend;
+        cameraPositionZ += (sideCameraZ - cameraPositionZ) * blend;
+        cameraTargetPositionX +=
+                (sideTargetX - cameraTargetPositionX) * blend;
+        cameraTargetPositionY +=
+                (sideTargetY - cameraTargetPositionY) * blend;
+        cameraTargetPositionZ +=
+                (sideTargetZ - cameraTargetPositionZ) * blend;
+    };
     if (!riderSample.ready
             || riderSample.terrain != WorkoutGameTerrainKind::Berm
             || riderSample.pieceIndex >= roadCourse.pieces.size()) {
+        applyPresentationCamera();
         return;
     }
     const WorkoutGameRoadPiece &piece =
@@ -734,7 +801,10 @@ void WorkoutGame3DViewModel::updateCameraPose(
             WorkoutGameBermGeometry::profile(piece.difficulty);
     const double local = distanceMeters
             - piece.geometryAnchorDistanceMeters;
-    if (local <= berm.startMeters || local >= berm.endMeters) return;
+    if (local <= berm.startMeters || local >= berm.endMeters) {
+        applyPresentationCamera();
+        return;
+    }
     const double progress = std::clamp(
             (local - berm.startMeters) / (berm.endMeters - berm.startMeters),
             0.0, 1.0);
@@ -763,7 +833,10 @@ void WorkoutGame3DViewModel::updateCameraPose(
                 std::min(std::max(roadCourse.totalLengthMeters,
                                   roadCourse.visualLengthMeters),
                     distanceMeters + BermCameraLookAheadMeters));
-    if (!bermTarget.ready) return;
+    if (!bermTarget.ready) {
+        applyPresentationCamera();
+        return;
+    }
     const double targetRightX = std::cos(
             bermTarget.center.headingRadians);
     const double targetRightZ = -std::sin(
@@ -780,6 +853,22 @@ void WorkoutGame3DViewModel::updateCameraPose(
     cameraTargetPositionX += (chaseTargetX - cameraTargetPositionX) * blend;
     cameraTargetPositionY += (chaseTargetY - cameraTargetPositionY) * blend;
     cameraTargetPositionZ += (chaseTargetZ - cameraTargetPositionZ) * blend;
+    applyPresentationCamera();
+}
+
+QString WorkoutGame3DViewModel::cameraPresentation() const
+{
+    switch (cameraPresentationSnapshot.mode) {
+    case WorkoutGame3DCameraPresentationMode::OpeningSide:
+        return QStringLiteral("opening-side");
+    case WorkoutGame3DCameraPresentationMode::IdleSide:
+        return QStringLiteral("idle-side");
+    case WorkoutGame3DCameraPresentationMode::ReturningToChase:
+        return QStringLiteral("returning-to-chase");
+    case WorkoutGame3DCameraPresentationMode::Chase:
+        return QStringLiteral("chase");
+    }
+    return QStringLiteral("chase");
 }
 
 void WorkoutGame3DViewModel::setTelemetry(
@@ -1128,8 +1217,17 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
 {
     if (!roadCourse.ready) return;
     const int bucket = int(std::floor(distanceMeters / TreeSpacingMeters));
-    if (bucket == treeBucket) return;
+    const bool sidePresentation =
+            cameraPresentationSnapshot.sideBlend > 0.0;
+    const int presentationBucket = sidePresentation
+            ? int(std::floor(distanceMeters))
+            : std::numeric_limits<int>::min();
+    if (bucket == treeBucket
+            && presentationBucket == treePresentationBucket) {
+        return;
+    }
     treeBucket = bucket;
+    treePresentationBucket = presentationBucket;
     visibleTrees.clear();
     for (int offset = -3; offset <= 15; ++offset) {
         const int slot = bucket + offset;
@@ -1167,8 +1265,9 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
             const double treeY =
                     WorkoutGame3DTerrainProfile::elevationAtLateral(
                         terrain, lateral);
-            const double requiredClearance =
-                    crownRadius + CameraCorridorClearanceMeters;
+            const double requiredClearance = crownRadius
+                    + CameraCorridorClearanceMeters
+                    + (sidePresentation ? 1.05 : 0.0);
             if (horizontalDistanceToSegmentSquared(
                         treeX, treeZ,
                         cameraPositionX, cameraPositionZ,

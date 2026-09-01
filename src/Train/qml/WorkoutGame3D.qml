@@ -21,7 +21,7 @@ Item {
             workoutGame3D.riderY - workoutGame3D.riderAirHeight,
             workoutGame3D.riderZ))
     }
-    readonly property real cameraFieldOfView:
+    readonly property real chaseCameraFieldOfView:
         workoutGame3D.riderPoseState === "preload" ? 46.35
         : workoutGame3D.riderPoseState === "air"
           ? 47 + Math.min(1.3,
@@ -29,6 +29,8 @@ Item {
         : workoutGame3D.riderPoseState === "land"
           ? 47 + workoutGame3D.landingImpact * 1.1
         : 47
+    readonly property real cameraFieldOfView: chaseCameraFieldOfView
+        - 6 * workoutGame3D.cameraPresentationBlend
 
     function featureAccent(state) {
         if (state === 4) return "#ef7849"
