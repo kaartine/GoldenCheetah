@@ -1,5 +1,9 @@
 # Workout Game 3D Release Checklist
 
+Detailed observations from interactive development rides are tracked in
+`WORKOUT_GAME_3D_LIVE_BACKLOG.md`. Its open release-scope items must not be
+lost when the broader gates below are updated.
+
 ## Purpose
 
 This is the master delivery checklist derived from
@@ -66,7 +70,7 @@ terrain or a late-streamed floor chunk.
 - [x] Yield immediately to feature-critical and airborne states.
 
 **Implementation:** a Qt-independent presentation controller owns the opening,
-idle and return timing. The opening holds for one second and blends to chase
+idle and return timing. The opening holds for three seconds and blends to chase
 over two seconds. Idle presentation starts only after four seconds below 20 W
 and at or below 3 RPM, blends over 1.8 seconds and returns over 1.2 seconds as
 soon as pedalling resumes. Side placement samples the generated terrain under
@@ -107,14 +111,17 @@ produces plain immutable byte buffers; only the GUI thread updates the inactive
 Quick 3D geometry and atomically exposes it through the existing double buffer.
 Its queued GUI wakeup is separately coalesced to one callback.
 
-Resident terrain remains limited to 15 m behind and 130 m ahead. Visible trees
-are capped at ten, particles remain absent, and the ViewModel publishes the
-actual custom-mesh triangle count. An opt-in Qt Quick 3D extended-statistics
-test renders the combined asset/technical-terrain budget on real X11/OpenGL and
-rejects more than 30,000 custom triangles or 50 actual draw calls. Capacity,
-replacement, cancellation and shutdown pass eight focused tests normally,
-under ASan/UBSan and under TSan. The unchanged geometry contract passes all 27
-tests normally and under ASan/UBSan. The complete Quick 3D suite retains the
+Resident terrain remains limited to 15 m behind and 130 m ahead. Detailed
+foreground trees are capped at 18, particles remain absent, and the ViewModel
+publishes the actual custom-mesh triangle count. An opt-in Qt Quick 3D
+extended-statistics test renders the combined asset/technical-terrain budget
+on real X11/OpenGL and
+rejects more than 30,000 custom triangles or 80 actual draw calls. The limit
+covers the fixed scene plus two draw calls for each of the 18 trunk-and-crown
+trees; forest-floor dressing remains one batch. Capacity, replacement,
+cancellation and shutdown pass eight focused tests normally,
+under ASan/UBSan and under TSan. The expanded geometry contract passes all 31
+focused tests normally. The complete Quick 3D suite retains the
 pixel-level clear-color hole checks.
 
 ## P0 Asset Pipeline
@@ -910,7 +917,7 @@ resident window's six-metre rear and ten-metre forward edge bands with a
 bounded 320 ms presentation transition. The complete set is 192 triangles,
 contains no external content, reproduces byte for byte through Blender and
 Balsam, passes manifest and primitive-rejection tests, and remains inside the
-existing ten-tree/50-draw-call runtime budgets.
+current 18-tree/80-draw-call runtime budgets.
 
 **ENV-01 evidence:** `EN-01` supplies three deterministic conifer silhouettes,
 the resident near-terrain profile supplies bounded cross-slope and forest-floor
@@ -1032,7 +1039,7 @@ and encoded motion for camera compositions, all eleven features, rider action
 states, environment motion and landing/success feedback from deterministic
 snapshots. Production rendering exposes custom-mesh triangle counts and Qt
 Quick 3D extended draw-call statistics; the all-feature budget course rejects
-more than 30,000 visible custom triangles or 50 actual draw calls and passes
+more than 30,000 visible custom triangles or 80 actual draw calls and passes
 normally and under ASan/UBSan.
 
 **DIA-01/DIA-02 evidence:** the shared frame counter uses completed

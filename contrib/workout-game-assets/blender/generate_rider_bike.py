@@ -57,6 +57,9 @@ ROCKER_PIVOT = (0.0, 0.755, -0.075)
 SHOCK_UPPER = (0.0, 0.90, -0.17)
 MOTOR_REFERENCE_RADIUS_M = 0.105
 MOTOR_HALF_WIDTH_M = 0.110
+CRANK_LENGTH_M = 0.160
+PEDAL_CONTACT_X_M = 0.130
+PEDAL_PLATFORM_LENGTH_M = 0.120
 DOWN_TUBE_HALF_WIDTH_M = 0.078
 DOWN_TUBE_PROFILE = (
     (0.325, -0.055),
@@ -100,7 +103,7 @@ UPPER_SWINGARM_PROFILE = (
     (0.710, -0.235),
     (0.400, -0.495),
 )
-MAX_GLB_BYTES = 192 * 1024
+MAX_GLB_BYTES = 200 * 1024
 MAX_TRIANGLES = 3600
 PIVOT_LOCATIONS = {
     "PIVOT_REAR_AXLE": REAR_AXLE,
@@ -576,9 +579,48 @@ def crank_mesh():
     faces = []
     append_tube(vertices, faces, (-0.18, CRANK[1], CRANK[2]),
                 (0.18, CRANK[1], CRANK[2]), 0.015, sides=4)
-    append_tube(vertices, faces, (0.0, CRANK[1] - 0.16, CRANK[2]),
-                (0.0, CRANK[1] + 0.16, CRANK[2]), 0.012, sides=4)
+    append_tube(
+        vertices, faces,
+        (-PEDAL_CONTACT_X_M, CRANK[1], CRANK[2]),
+        (-PEDAL_CONTACT_X_M, CRANK[1] + CRANK_LENGTH_M, CRANK[2]),
+        0.014, sides=4,
+    )
+    append_tube(
+        vertices, faces,
+        (PEDAL_CONTACT_X_M, CRANK[1], CRANK[2]),
+        (PEDAL_CONTACT_X_M, CRANK[1] - CRANK_LENGTH_M, CRANK[2]),
+        0.014, sides=4,
+    )
     append_disc_ring(vertices, faces, CRANK, 0.095, 0.040, 0.085, segments=12)
+    platform_vertices, platform_faces = pedal_mesh()
+    for contact in (
+        (-PEDAL_CONTACT_X_M, CRANK[1] + CRANK_LENGTH_M, CRANK[2]),
+        (PEDAL_CONTACT_X_M, CRANK[1] - CRANK_LENGTH_M, CRANK[2]),
+    ):
+        base = len(vertices)
+        vertices.extend(
+            (x + contact[0], y + contact[1], z + contact[2])
+            for x, y, z in platform_vertices
+        )
+        faces.extend(tuple(base + index for index in face)
+                     for face in platform_faces)
+    return vertices, faces
+
+
+def pedal_mesh():
+    vertices = []
+    faces = []
+    append_side_prism(
+        vertices,
+        faces,
+        (
+            (-0.018, -PEDAL_PLATFORM_LENGTH_M * 0.5),
+            (0.018, -PEDAL_PLATFORM_LENGTH_M * 0.5),
+            (0.018, PEDAL_PLATFORM_LENGTH_M * 0.5),
+            (-0.018, PEDAL_PLATFORM_LENGTH_M * 0.5),
+        ),
+        0.050,
+    )
     return vertices, faces
 
 
@@ -873,8 +915,24 @@ def build_scene():
             {"tread_role": tread_role, "tire_model": tire_model},
         )
     vertices, faces = crank_mesh()
-    create_mesh(root, "GEO_Crank_LOD0", vertices, faces,
-                materials["MAT_Component_Black"])
+    create_mesh(
+        root, "GEO_Crank_LOD0", vertices, faces,
+        materials["MAT_Component_Black"],
+        {
+            "left_pedal_contact_m": (
+                -PEDAL_CONTACT_X_M,
+                CRANK[1] + CRANK_LENGTH_M,
+                CRANK[2],
+            ),
+            "right_pedal_contact_m": (
+                PEDAL_CONTACT_X_M,
+                CRANK[1] - CRANK_LENGTH_M,
+                CRANK[2],
+            ),
+            "crank_length_m": CRANK_LENGTH_M,
+            "pedal_platform_length_m": PEDAL_PLATFORM_LENGTH_M,
+        },
+    )
     vertices, faces = torso_mesh()
     create_mesh(root, "GEO_Torso_LOD0", vertices, faces,
                 materials["MAT_Rider_Cobalt"])
@@ -1018,6 +1076,18 @@ def self_check(root) -> tuple[int, int]:
             (0.052, HEAD_LOW[1], HEAD_LOW[2]),
         ),
         "GEO_RearShock_LOD0": (ROCKER_PIVOT, SHOCK_UPPER),
+        "GEO_Crank_LOD0": (
+            (-PEDAL_CONTACT_X_M,
+             CRANK[1] + CRANK_LENGTH_M, CRANK[2]),
+            (PEDAL_CONTACT_X_M,
+             CRANK[1] - CRANK_LENGTH_M, CRANK[2]),
+            (-PEDAL_CONTACT_X_M - 0.050,
+             CRANK[1] + CRANK_LENGTH_M - 0.018,
+             CRANK[2] - PEDAL_PLATFORM_LENGTH_M * 0.5),
+            (PEDAL_CONTACT_X_M + 0.050,
+             CRANK[1] - CRANK_LENGTH_M + 0.018,
+             CRANK[2] + PEDAL_PLATFORM_LENGTH_M * 0.5),
+        ),
         "GEO_RearWheel_LOD0": (
             (0.075, REAR_AXLE[1], REAR_AXLE[2]),
         ),

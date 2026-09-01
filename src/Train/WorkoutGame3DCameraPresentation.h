@@ -39,7 +39,7 @@ struct WorkoutGame3DCameraPresentationSnapshot
 class WorkoutGame3DCameraPresentation
 {
 public:
-    static constexpr std::int64_t OpeningHoldMs = 1000;
+    static constexpr std::int64_t OpeningHoldMs = 3000;
     static constexpr std::int64_t OpeningTransitionMs = 2000;
     static constexpr std::int64_t IdleDelayMs = 4000;
     static constexpr std::int64_t IdleTransitionMs = 1800;

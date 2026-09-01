@@ -437,7 +437,9 @@ private slots:
         const WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(huge, 200.0);
         QVERIFY(road.ready);
-        QVERIFY(road.pieces.size() <= 24u);
+        // The sustained climb is capped at 4096 pieces, with one entry and
+        // one crest-transition piece around it.
+        QVERIFY(road.pieces.size() <= 4098u);
     }
 
     void skinnyProfileHasRaisedDeckSocketsAndDeterministicBalance()
@@ -1760,6 +1762,170 @@ private slots:
                  "climbing trail still looks like a constant-grade road");
     }
 
+    void longOrdinaryTrailContainsDeterministicCornerSequence()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 0x4d544231u;
+        course.durationMs = 300000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 1200.0;
+        section.targetWatts = 185.0;
+        section.difficulty = 0.72;
+        section.visualVariant = 5u;
+        course.sections = {section};
+
+        const WorkoutGameRoadCourse first =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const WorkoutGameRoadCourse second =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(first.ready);
+        QCOMPARE(first.pieces.size(), second.pieces.size());
+
+        int ambientTurns = 0;
+        int sharpTurns = 0;
+        int directionChanges = 0;
+        double priorAmbientTurn = 0.0;
+        double maximumPieceLength = 0.0;
+        for (std::size_t index = 0; index < first.pieces.size(); ++index) {
+            const WorkoutGameRoadPiece &piece = first.pieces[index];
+            const WorkoutGameRoadPiece &repeat = second.pieces[index];
+            QCOMPARE(piece.terrain, repeat.terrain);
+            QCOMPARE(piece.turnRadians, repeat.turnRadians);
+            QCOMPARE(piece.terrain, WorkoutGameTerrainKind::SmoothTrail);
+            QVERIFY(std::abs(piece.turnRadians) <= 1.48 + 1.0e-9);
+            maximumPieceLength = std::max(
+                    maximumPieceLength, piece.lengthMeters);
+            if (std::abs(piece.turnRadians) < 0.50) continue;
+            ++ambientTurns;
+            if (std::abs(piece.turnRadians) >= 1.20) ++sharpTurns;
+            if (priorAmbientTurn * piece.turnRadians < 0.0) {
+                ++directionChanges;
+            }
+            priorAmbientTurn = piece.turnRadians;
+            QVERIFY(!piece.challenge.enabled);
+        }
+
+        QVERIFY2(maximumPieceLength <= 48.0,
+                 "ordinary route pieces are still long enough to read straight");
+        QVERIFY2(ambientTurns >= 5,
+                 "ordinary trail does not contain enough ambient turns");
+        QVERIFY2(sharpTurns >= 2,
+                 "ordinary trail never approaches a 90-degree corner");
+        QVERIFY2(directionChanges >= 2,
+                 "ambient turns do not alternate into a flowing route");
+    }
+
+    void multiKilometreSectionsRetainBoundedPieceLengths()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 0x4d544232u;
+        course.durationMs = 1800000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 20000.0;
+        section.targetWatts = 180.0;
+        section.difficulty = 0.8;
+        section.visualVariant = 3u;
+        course.sections = {section};
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+        QVERIFY(road.pieces.size() > 400u);
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            QVERIFY(piece.lengthMeters <= 48.0 + 1.0e-9);
+            QVERIFY(std::abs(piece.turnRadians) <= 1.48 + 1.0e-9);
+            QCOMPARE(piece.terrain, WorkoutGameTerrainKind::SmoothTrail);
+        }
+    }
+
+    void convertedLongTechnicalAndClimbSectionsUseFeatureTilesAndSwitchbacks()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 4015825171u;
+
+        WorkoutGameSection skinny;
+        skinny.feature = WorkoutGameFeature::Trail;
+        skinny.terrain = WorkoutGameTerrainKind::Skinny;
+        skinny.durationMs = 138000;
+        skinny.lengthMeters = 926.146;
+        skinny.targetWatts = 194.0;
+        skinny.difficulty = 0.345;
+        skinny.visualVariant = 4u;
+        skinny.challengeCount = 1;
+
+        WorkoutGameSection climb;
+        climb.feature = WorkoutGameFeature::Climb;
+        climb.terrain = WorkoutGameTerrainKind::Climb;
+        climb.startMs = skinny.durationMs;
+        climb.durationMs = 414000;
+        climb.lengthMeters = 1502.706;
+        climb.targetWatts = 321.0;
+        climb.gradePercent = 7.8875;
+        climb.difficulty = 0.9775;
+        climb.visualVariant = 6u;
+        climb.challengeCount = 1;
+
+        WorkoutGameSection descent;
+        descent.feature = WorkoutGameFeature::RecoveryDescent;
+        descent.terrain = WorkoutGameTerrainKind::Berm;
+        descent.startMs = climb.startMs + climb.durationMs;
+        descent.durationMs = 370200;
+        descent.lengthMeters = 2807.677;
+        descent.targetWatts = 151.0;
+        descent.gradePercent = -1.1431;
+        descent.difficulty = 0.1275;
+        descent.visualVariant = 6u;
+        descent.gravityAssisted = true;
+        course.durationMs = descent.startMs + descent.durationMs;
+        course.sections = {skinny, climb, descent};
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+        QVERIFY(road.ready);
+        int skinnyChallenges = 0;
+        int skinnyAmbientTurns = 0;
+        int climbAmbientTurns = 0;
+        int descentSharpTurns = 0;
+        double maximumSkinnyPiece = 0.0;
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            if (piece.sourceSectionIndex == 0u) {
+                maximumSkinnyPiece = std::max(
+                        maximumSkinnyPiece, piece.lengthMeters);
+                if (piece.challenge.enabled) {
+                    ++skinnyChallenges;
+                    QCOMPARE(piece.terrain,
+                             WorkoutGameTerrainKind::Skinny);
+                } else if (std::abs(piece.turnRadians) >= 0.50) {
+                    ++skinnyAmbientTurns;
+                }
+                QCOMPARE(piece.terrain, WorkoutGameTerrainKind::Skinny);
+            } else if (piece.sourceSectionIndex == 1u) {
+                QCOMPARE(piece.terrain, WorkoutGameTerrainKind::Climb);
+                if (std::abs(piece.turnRadians) >= 0.50) {
+                    ++climbAmbientTurns;
+                    QVERIFY(!piece.challenge.enabled);
+                }
+            } else if (piece.sourceSectionIndex == 2u
+                    && std::abs(piece.turnRadians) >= 1.20) {
+                ++descentSharpTurns;
+            }
+        }
+        QCOMPARE(skinnyChallenges, 1);
+        QVERIFY(skinnyAmbientTurns >= 3);
+        QVERIFY(climbAmbientTurns >= 3);
+        QVERIFY(descentSharpTurns >= 4);
+        QVERIFY(maximumSkinnyPiece <= 90.0);
+    }
+
     void jumpSurfaceOffsetIsAppliedExactlyOnce()
     {
         WorkoutGameCourse course;
@@ -1951,6 +2117,7 @@ private slots:
             piece.challenge.enabled = false;
         }
         WorkoutGameRoadPiece &challengePiece = selected.pieces.front();
+        challengePiece.terrain = WorkoutGameTerrainKind::Tabletop;
         challengePiece.challenge = challenge;
         challengePiece.challenge.enabled = true;
         const double boundary = challengePiece.startDistanceMeters

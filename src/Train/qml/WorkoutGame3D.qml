@@ -31,6 +31,20 @@ Item {
         : 47
     readonly property real cameraFieldOfView: chaseCameraFieldOfView
         - 6 * workoutGame3D.cameraPresentationBlend
+    readonly property var riderWheelFrustumScreenPoints: {
+        // Keep the projection binding dependent on every camera input.
+        const cameraState = workoutGame3D.cameraX + workoutGame3D.cameraY
+            + workoutGame3D.cameraZ + workoutGame3D.cameraTargetX
+            + workoutGame3D.cameraTargetY + workoutGame3D.cameraTargetZ
+            + root.cameraFieldOfView + workoutGame3D.riderX
+            + workoutGame3D.riderY + workoutGame3D.riderZ
+            + workoutGame3D.riderPitch + workoutGame3D.riderYaw
+            + workoutGame3D.riderRoll
+        if (!Number.isFinite(cameraState)) return []
+        return rider.wheelFrustumScenePoints().map(function(point) {
+            return gameView.mapFrom3DScene(point)
+        })
+    }
 
     function featureAccent(state) {
         if (state === 4) return "#ef7849"
@@ -425,7 +439,8 @@ Item {
                 workoutGame3D.frontSuspensionCompression
             walking: workoutGame3D.riderWalking
             poseState: workoutGame3D.riderPoseState
-            riderPitch: workoutGame3D.riderPitch
+            // Box2D and Qt Quick 3D use opposite signs for nose-up pitch.
+            riderPitch: -workoutGame3D.riderPitch
             riderYaw: workoutGame3D.riderYaw
             riderRoll: workoutGame3D.riderRoll
         }

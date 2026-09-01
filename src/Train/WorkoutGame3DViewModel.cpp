@@ -316,7 +316,8 @@ void WorkoutGame3DViewModel::setFrame(
         frame.world.rider.airborne
     });
     updateCameraPose(distanceMeters, lateral);
-    riderPitchDegrees = finiteOrZero(frame.world.rider.pitchDegrees);
+    riderPitchDegrees = std::clamp(
+            finiteOrZero(frame.world.rider.pitchDegrees), -35.0, 35.0);
     double targetRiderRollDegrees =
             finiteOrZero(frame.world.rider.rollDegrees);
     if (frame.world.terrain == WorkoutGameTerrainKind::Berm
@@ -808,7 +809,8 @@ void WorkoutGame3DViewModel::updateCameraPose(
     const double progress = std::clamp(
             (local - berm.startMeters) / (berm.endMeters - berm.startMeters),
             0.0, 1.0);
-    const double blend = std::pow(std::sin(Pi * progress), 2.0);
+    const double blend = 0.72
+            * std::pow(std::sin(Pi * progress), 2.0);
     constexpr double BermCameraBackMeters = 6.2;
     constexpr double BermCameraLookAheadMeters = 2.5;
     const double riderForwardX = std::sin(

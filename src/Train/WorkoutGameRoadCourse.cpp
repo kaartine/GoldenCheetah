@@ -25,6 +25,7 @@
 namespace {
 
 constexpr int IntegrationSteps = 48;
+constexpr int MaximumRoadPiecesPerSection = 4096;
 constexpr double Pi = 3.14159265358979323846;
 constexpr double VisualRunoutMeters = 90.0;
 
@@ -322,9 +323,14 @@ double pieceTurn(
             return left ? -profile.turnMagnitudeRadians
                         : profile.turnMagnitudeRadians;
         }
+        const bool sharpTurn = (pieceIndex
+                + std::size_t(section.visualVariant & 7u)) % 5u == 2u;
+        const double magnitude = sharpTurn
+                ? std::clamp(profile.turnMagnitudeRadians, 1.30, 1.48)
+                : std::min(profile.turnMagnitudeRadians, 0.72);
         return flowingTurnDirection(section, pieceIndex)
-                * std::min(profile.turnMagnitudeRadians, 0.72)
-                * flowingTurnFactor(section, pieceIndex);
+                * std::min(1.48,
+                    magnitude * flowingTurnFactor(section, pieceIndex));
     }
     double amount = 0.0;
     switch (section.terrain) {
@@ -349,6 +355,29 @@ double pieceTurn(
             section.difficulty, 0.0, 1.0);
     return flowingTurnDirection(section, pieceIndex)
             * amount * flowingTurnFactor(section, pieceIndex);
+}
+
+bool useAmbientTurn(
+        const WorkoutGameSection &section,
+        int pieceIndex,
+        int pieceCount)
+{
+    if (section.terrain == WorkoutGameTerrainKind::Berm
+            || pieceCount < 5 || pieceIndex <= 0
+            || pieceIndex + 1 >= pieceCount) {
+        return false;
+    }
+    return (pieceIndex + int(section.visualVariant & 1u)) % 2 == 1;
+}
+
+double ambientTurn(
+        const WorkoutGameSection &section,
+        std::size_t pieceIndex)
+{
+    const WorkoutGameBermGeometryProfile profile =
+            WorkoutGameBermGeometry::profile(section.difficulty);
+    return flowingTurnDirection(section, pieceIndex)
+            * std::min(profile.turnMagnitudeRadians, 1.48);
 }
 
 WorkoutGameRoadAnimation animationFor(
@@ -551,7 +580,9 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 0.0, sectionLength - climbEntryLength - climbCrestLength);
         const int climbSustainedPieceCount = section.terrain
                     == WorkoutGameTerrainKind::Climb
-                ? boundedPieceCount(climbSustainedLength, 64.0, 22)
+                ? boundedPieceCount(
+                    climbSustainedLength, 64.0,
+                    MaximumRoadPiecesPerSection)
                 : 0;
         const double climbExitGrade = section.terrain
                     == WorkoutGameTerrainKind::Climb
@@ -572,8 +603,16 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 : section.terrain == WorkoutGameTerrainKind::Climb
                     ? climbSustainedPieceCount + 2
                 : flowingRecovery
-                    ? boundedPieceCount(sectionLength, 56.0, 64)
-                    : boundedPieceCount(sectionLength, 90.0, 24);
+                    ? boundedPieceCount(
+                        sectionLength, 56.0,
+                        MaximumRoadPiecesPerSection)
+                : section.terrain == WorkoutGameTerrainKind::SmoothTrail
+                    ? boundedPieceCount(
+                        sectionLength, 48.0,
+                        MaximumRoadPiecesPerSection)
+                    : boundedPieceCount(
+                        sectionLength, 90.0,
+                        MaximumRoadPiecesPerSection);
         const double pieceLength = sectionLength / double(pieceCount);
         const WorkoutGameFeatureChallengeProfile challenge =
                 WorkoutGameFeatureChallenge::profile(section);
@@ -757,13 +796,32 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         : climbSustainedLength
                             / double(climbSustainedPieceCount))
                     : pieceLength;
+            const double pieceStart = result.totalLengthMeters;
+            const double pieceEnd = pieceStart + currentPieceLength;
+            const bool ownsChallenge = challenge.enabled
+                    && featureFitsSection
+                    && obstacleDistance >= pieceStart
+                    && (obstacleDistance < pieceEnd
+                        || (part + 1 == pieceCount
+                            && obstacleDistance <= pieceEnd));
+            const bool nearChallenge = challenge.enabled
+                    && featureFitsSection
+                    && pieceEnd >= std::min(
+                        challengeDistance, obstacleDistance) - 24.0
+                    && pieceStart <= std::max(
+                        challengeDistance, obstacleDistance) + 32.0;
+            const bool ambientCurve = !ownsChallenge
+                    && !nearChallenge
+                    && useAmbientTurn(section, part, pieceCount);
+
             WorkoutGameRoadPiece piece;
             piece.sourceSectionIndex = sectionIndex;
             piece.terrain = section.terrain;
-            piece.startDistanceMeters = result.totalLengthMeters;
+            piece.startDistanceMeters = pieceStart;
             piece.lengthMeters = currentPieceLength;
-            piece.turnRadians = pieceTurn(
-                    section, std::size_t(part));
+            piece.turnRadians = ambientCurve
+                    ? ambientTurn(section, std::size_t(part))
+                    : pieceTurn(section, std::size_t(part));
             piece.difficulty = std::clamp(section.difficulty, 0.0, 1.0);
             piece.reliefScale = std::clamp(
                     std::isfinite(section.reliefScale)
@@ -792,16 +850,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             }
             piece.exit = connectorAt(piece, 1.0);
 
-            const double pieceEnd = piece.startDistanceMeters
-                    + piece.lengthMeters;
-            const bool ownsChallenge = challenge.enabled
-                    && featureFitsSection
-                    && obstacleDistance >= piece.startDistanceMeters
-                    && (obstacleDistance < pieceEnd
-                        || (part + 1 == pieceCount
-                            && obstacleDistance <= pieceEnd));
             piece.animation = animationFor(
-                    section.terrain, piece.turnRadians, ownsChallenge);
+                    piece.terrain, piece.turnRadians, ownsChallenge);
             if (ownsChallenge) {
                 piece.challenge.enabled = true;
                 piece.challenge.profile = challenge;

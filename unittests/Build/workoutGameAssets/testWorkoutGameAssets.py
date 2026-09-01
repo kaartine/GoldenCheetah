@@ -365,6 +365,11 @@ class TestWorkoutGameAssets(unittest.TestCase):
             nodes["GEO_RearWheel_LOD0"]["extras"]["tread_role"],
             "rear-braking",
         )
+        crank_extras = nodes["GEO_Crank_LOD0"]["extras"]
+        self.assertEqual(crank_extras["left_pedal_contact_m"], [-0.13, 0.5375, 0.0])
+        self.assertEqual(crank_extras["right_pedal_contact_m"], [0.13, 0.2175, 0.0])
+        self.assertAlmostEqual(crank_extras["crank_length_m"], 0.16, places=5)
+        self.assertGreaterEqual(crank_extras["pedal_platform_length_m"], 0.10)
         self.assertLessEqual(manifest["technical"]["trianglesLod0"], 3600)
         self.assertEqual(manifest["review"]["status"], "approved")
         self.assertEqual(manifest["review"]["trademarkStatus"], "clear")

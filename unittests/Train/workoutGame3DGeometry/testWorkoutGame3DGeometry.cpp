@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 namespace {
 
@@ -181,6 +182,24 @@ WorkoutGameRoadCourse climbCourse()
     section.lengthMeters = 80.0;
     section.targetWatts = 230.0;
     section.gradePercent = 9.0;
+    section.difficulty = 0.65;
+    section.challengeCount = 1;
+    source.sections = {section};
+    return WorkoutGameRoadCourseBuilder::build(source, 200.0);
+}
+
+WorkoutGameRoadCourse tabletopCourse()
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 1301u;
+    source.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::SprintJump;
+    section.terrain = WorkoutGameTerrainKind::Tabletop;
+    section.durationMs = source.durationMs;
+    section.lengthMeters = 90.0;
+    section.targetWatts = 240.0;
     section.difficulty = 0.65;
     section.challengeCount = 1;
     source.sections = {section};
@@ -747,8 +766,8 @@ private slots:
 
         QVERIFY(first.ready);
         QVERIFY(first.sampleCount >= 80);
-        QVERIFY(first.triangleCount() >= first.sampleCount * 8);
-        QVERIFY(first.triangleCount() <= 2400);
+        QVERIFY(first.triangleCount() >= first.sampleCount * 4);
+        QVERIFY(first.triangleCount() <= 5200);
         QVERIFY(first.boundsMin.x() < -6.0f);
         QVERIFY(first.boundsMax.x() > 6.0f);
         QVERIFY(first.boundsMax.y() - first.boundsMin.y() > 4.0f);
@@ -757,6 +776,191 @@ private slots:
         QCOMPARE(first.sampleCount, second.sampleCount);
         QCOMPARE(first.vertexData, second.vertexData);
         QCOMPARE(first.indexData, second.indexData);
+    }
+
+    void forestDressingIncludesRocksStumpsAndShrubsInTheSameBatch()
+    {
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    straightCourse(160.0, 5.0), 0.0, 145.0);
+        QVERIFY(dressing.ready);
+
+        const auto hasColor = [&dressing](float red, float green, float blue) {
+            const int vertexCount = dressing.vertexData.size()
+                    / int(12 * sizeof(float));
+            for (int vertex = 0; vertex < vertexCount; ++vertex) {
+                if (std::abs(vertexFloat(
+                            dressing.vertexData, 12 * int(sizeof(float)),
+                            vertex, 24) - red) < 0.002f
+                        && std::abs(vertexFloat(
+                            dressing.vertexData, 12 * int(sizeof(float)),
+                            vertex, 28) - green) < 0.002f
+                        && std::abs(vertexFloat(
+                            dressing.vertexData, 12 * int(sizeof(float)),
+                            vertex, 32) - blue) < 0.002f) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        QVERIFY2(hasColor(0.34f, 0.35f, 0.31f),
+                 "forest batch has no decorative rocks");
+        QVERIFY2(hasColor(0.29f, 0.17f, 0.08f),
+                 "forest batch has no cut or broken stumps");
+        QVERIFY2(hasColor(0.09f, 0.29f, 0.12f),
+                 "forest batch has no shrub clusters");
+        QVERIFY2(dressing.triangleCount() <= 5200,
+                 "forest variety exceeds the bounded batch budget");
+    }
+
+    void forestPropsStayOutsideFeatureAndBypassCorridor()
+    {
+        const WorkoutGameRoadCourse course = tabletopCourse();
+        const auto challenge = std::find_if(
+                course.pieces.cbegin(), course.pieces.cend(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.challenge.enabled;
+                });
+        QVERIFY(challenge != course.pieces.cend());
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    course, 0.0, course.totalLengthMeters);
+        QVERIFY(dressing.ready);
+
+        const double protectedStart = std::min(
+                challenge->challenge.prepareDistanceMeters,
+                challenge->challenge.bypassStartDistanceMeters);
+        const double protectedEnd = std::max(
+                challenge->challenge.bypassEndDistanceMeters,
+                challenge->challenge.obstacleDistanceMeters);
+        int propVertices = 0;
+        const int stride = 12 * int(sizeof(float));
+        const int vertexCount = dressing.vertexData.size() / stride;
+        for (int vertex = 0; vertex < vertexCount; ++vertex) {
+            const float red = vertexFloat(
+                    dressing.vertexData, stride, vertex, 24);
+            const float green = vertexFloat(
+                    dressing.vertexData, stride, vertex, 28);
+            const float blue = vertexFloat(
+                    dressing.vertexData, stride, vertex, 32);
+            const bool prop =
+                    (std::abs(red - 0.34f) < 0.002f
+                     && std::abs(green - 0.35f) < 0.002f
+                     && std::abs(blue - 0.31f) < 0.002f)
+                    || (std::abs(red - 0.29f) < 0.002f
+                        && std::abs(green - 0.17f) < 0.002f
+                        && std::abs(blue - 0.08f) < 0.002f)
+                    || (std::abs(red - 0.09f) < 0.002f
+                        && std::abs(green - 0.29f) < 0.002f
+                        && std::abs(blue - 0.12f) < 0.002f);
+            if (!prop) continue;
+            ++propVertices;
+            const double distance = vertexFloat(
+                    dressing.vertexData, stride, vertex, 8);
+            QVERIFY2(distance < protectedStart || distance > protectedEnd,
+                     "forest prop entered the feature or bypass corridor");
+        }
+        QVERIFY(propVertices > 0);
+    }
+
+    void forestPropsStayOutsideRollableFeatureGeometry()
+    {
+        const auto featureSpan = [](WorkoutGameTerrainKind terrain,
+                                    double difficulty) {
+            switch (terrain) {
+            case WorkoutGameTerrainKind::Roots: {
+                const auto profile = WorkoutGameRootGeometry::profile(
+                        difficulty);
+                return std::pair<double, double>{
+                    profile.startMeters, profile.endMeters};
+            }
+            case WorkoutGameTerrainKind::RockGarden: {
+                const auto profile = WorkoutGameRockGardenGeometry::profile(
+                        difficulty);
+                return std::pair<double, double>{
+                    profile.startMeters, profile.endMeters};
+            }
+            case WorkoutGameTerrainKind::RockSlab: {
+                const auto profile = WorkoutGameRockSlabGeometry::profile(
+                        difficulty);
+                return std::pair<double, double>{
+                    profile.startMeters, profile.endMeters};
+            }
+            case WorkoutGameTerrainKind::Skinny: {
+                const auto profile = WorkoutGameSkinnyGeometry::profile(
+                        difficulty);
+                return std::pair<double, double>{
+                    profile.startMeters, profile.endMeters};
+            }
+            default:
+                return std::pair<double, double>{0.0, 0.0};
+            }
+        };
+        const auto isPropColor = [](float red, float green, float blue) {
+            return (std::abs(red - 0.34f) < 0.002f
+                    && std::abs(green - 0.35f) < 0.002f
+                    && std::abs(blue - 0.31f) < 0.002f)
+                    || (std::abs(red - 0.29f) < 0.002f
+                        && std::abs(green - 0.17f) < 0.002f
+                        && std::abs(blue - 0.08f) < 0.002f)
+                    || (std::abs(red - 0.09f) < 0.002f
+                        && std::abs(green - 0.29f) < 0.002f
+                        && std::abs(blue - 0.12f) < 0.002f);
+        };
+
+        for (const WorkoutGameTerrainKind terrain : {
+                 WorkoutGameTerrainKind::Roots,
+                 WorkoutGameTerrainKind::RockGarden,
+                 WorkoutGameTerrainKind::RockSlab,
+                 WorkoutGameTerrainKind::Skinny}) {
+            WorkoutGameRoadCourse course = straightCourse(120.0);
+            WorkoutGameRoadPiece &piece = course.pieces.front();
+            piece.terrain = terrain;
+            piece.difficulty = 0.65;
+            piece.geometryAnchorDistanceMeters = 50.0;
+            piece.challenge.enabled = true;
+            piece.challenge.prepareDistanceMeters = 40.0;
+            piece.challenge.bypassStartDistanceMeters = 45.0;
+            piece.challenge.bypassEndDistanceMeters = 45.0;
+            piece.challenge.obstacleDistanceMeters = 50.0;
+            const auto [featureStart, featureEnd] = featureSpan(
+                    terrain, piece.difficulty);
+            const double protectedStart = std::min(
+                    piece.challenge.prepareDistanceMeters,
+                    piece.challenge.obstacleDistanceMeters + featureStart)
+                    - 2.0;
+            const double protectedEnd = std::max(
+                    piece.challenge.bypassEndDistanceMeters,
+                    piece.challenge.obstacleDistanceMeters + featureEnd)
+                    + 2.0;
+
+            const WorkoutGame3DMeshData dressing =
+                    WorkoutGame3DGeometry::buildMeshData(
+                        WorkoutGame3DGeometry::Layer::ForestDressing,
+                        course, 0.0, course.totalLengthMeters);
+            QVERIFY(dressing.ready);
+            int propVertices = 0;
+            const int stride = 12 * int(sizeof(float));
+            const int vertexCount = dressing.vertexData.size() / stride;
+            for (int vertex = 0; vertex < vertexCount; ++vertex) {
+                const float red = vertexFloat(
+                        dressing.vertexData, stride, vertex, 24);
+                const float green = vertexFloat(
+                        dressing.vertexData, stride, vertex, 28);
+                const float blue = vertexFloat(
+                        dressing.vertexData, stride, vertex, 32);
+                if (!isPropColor(red, green, blue)) continue;
+                ++propVertices;
+                const double distance = vertexFloat(
+                        dressing.vertexData, stride, vertex, 8);
+                QVERIFY2(distance < protectedStart || distance > protectedEnd,
+                         "forest prop entered rollable feature geometry");
+            }
+            QVERIFY(propVertices > 0);
+        }
     }
 
     void risingCourseExpandsVerticalBounds()

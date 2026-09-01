@@ -30,6 +30,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -40,6 +41,71 @@ constexpr double BypassHalfWidthMeters = 0.38;
 constexpr double BypassEdgeWidthMeters = 0.08;
 constexpr double ForestDressingSpacingMeters = 3.0;
 constexpr double Pi = 3.14159265358979323846;
+
+std::pair<double, double> challengeGeometrySpan(
+        const WorkoutGameRoadPiece &piece)
+{
+    switch (piece.terrain) {
+    case WorkoutGameTerrainKind::Roots: {
+        const auto profile = WorkoutGameRootGeometry::profile(piece.difficulty);
+        return {profile.startMeters, profile.endMeters};
+    }
+    case WorkoutGameTerrainKind::RockGarden: {
+        const auto profile = WorkoutGameRockGardenGeometry::profile(
+                piece.difficulty);
+        return {profile.startMeters, profile.endMeters};
+    }
+    case WorkoutGameTerrainKind::RockSlab: {
+        const auto profile = WorkoutGameRockSlabGeometry::profile(
+                piece.difficulty);
+        return {profile.startMeters, profile.endMeters};
+    }
+    case WorkoutGameTerrainKind::Skinny: {
+        const auto profile = WorkoutGameSkinnyGeometry::profile(
+                piece.difficulty);
+        return {profile.startMeters, profile.endMeters};
+    }
+    case WorkoutGameTerrainKind::Climb: {
+        const auto profile = WorkoutGameClimbGeometry::profile(piece.difficulty);
+        return {profile.startMeters, profile.endMeters};
+    }
+    case WorkoutGameTerrainKind::Berm: {
+        const auto profile = WorkoutGameBermGeometry::profile(piece.difficulty);
+        return {profile.startMeters, profile.endMeters};
+    }
+    default: {
+        const auto profile = WorkoutGameFeatureGeometry::profile(
+                piece.terrain, piece.difficulty);
+        return profile.ready
+                ? std::pair<double, double>{
+                    profile.startMeters, profile.endMeters}
+                : std::pair<double, double>{0.0, 0.0};
+    }
+    }
+}
+
+bool overlapsChallengeCorridor(
+        const WorkoutGameRoadCourse &course,
+        double distanceMeters)
+{
+    constexpr double DressingClearanceMeters = 2.0;
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled) continue;
+        const auto [featureStart, featureEnd] = challengeGeometrySpan(piece);
+        const double start = std::min({
+                piece.challenge.prepareDistanceMeters,
+                piece.challenge.bypassStartDistanceMeters,
+                piece.challenge.obstacleDistanceMeters + featureStart})
+                - DressingClearanceMeters;
+        const double end = std::max({
+                piece.challenge.bypassEndDistanceMeters,
+                piece.challenge.obstacleDistanceMeters,
+                piece.challenge.obstacleDistanceMeters + featureEnd})
+                + DressingClearanceMeters;
+        if (distanceMeters >= start && distanceMeters <= end) return true;
+    }
+    return false;
+}
 
 struct Vertex
 {
@@ -563,6 +629,8 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
     constexpr int RowsPerSide = 2;
     constexpr int VerticesPerTree = 20;
     constexpr int TrianglesPerTree = 8;
+    constexpr int MaximumVerticesPerProp = 18;
+    constexpr int MaximumTrianglesPerProp = 18;
     constexpr double EdgeInsetMeters = 1.5;
     const int firstSlot = int(std::ceil(
             (startDistanceMeters + EdgeInsetMeters)
@@ -587,6 +655,7 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
             std::numeric_limits<float>::lowest(),
             std::numeric_limits<float>::lowest());
     int treeCount = 0;
+    int propCount = 0;
 
     const auto appendVertex = [&](double x, double y, double z,
                                   const QVector3D &normal,
@@ -655,6 +724,109 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
                      z, normal, crownColor);
         indices.insert(indices.end(), {upper, upper + 1u, upper + 2u});
     };
+    const auto appendRock = [&](double x, double y, double z,
+                                double rightX, double rightZ,
+                                double forwardX, double forwardZ,
+                                double scale) {
+        const TerrainColor rockColor{0.34f, 0.35f, 0.31f};
+        const QVector3D up(0.0f, 1.0f, 0.0f);
+        const double halfRight = 0.34 * scale;
+        const double halfForward = 0.28 * scale;
+        const std::uint32_t base = std::uint32_t(vertices.size());
+        for (const auto &corner : std::array<std::array<double, 2>, 4>{
+                 std::array<double, 2>{-1.0, -1.0},
+                 std::array<double, 2>{1.0, -1.0},
+                 std::array<double, 2>{1.0, 1.0},
+                 std::array<double, 2>{-1.0, 1.0}}) {
+            appendVertex(
+                x + corner[0] * halfRight * rightX
+                    + corner[1] * halfForward * forwardX,
+                y,
+                z + corner[0] * halfRight * rightZ
+                    + corner[1] * halfForward * forwardZ,
+                up, rockColor);
+        }
+        appendVertex(x - 0.06 * scale * rightX,
+                     y + 0.34 * scale,
+                     z - 0.06 * scale * rightZ,
+                     up, rockColor);
+        indices.insert(indices.end(), {
+            base, base + 1u, base + 4u,
+            base + 1u, base + 2u, base + 4u,
+            base + 2u, base + 3u, base + 4u,
+            base + 3u, base, base + 4u,
+            base, base + 3u, base + 2u,
+            base, base + 2u, base + 1u
+        });
+    };
+    const auto appendStump = [&](double x, double y, double z,
+                                 double scale) {
+        const TerrainColor stumpColor{0.29f, 0.17f, 0.08f};
+        constexpr int Sides = 6;
+        const double radius = 0.22 * scale;
+        const double height = 0.42 * scale;
+        const std::uint32_t base = std::uint32_t(vertices.size());
+        for (int ring = 0; ring < 2; ++ring) {
+            for (int side = 0; side < Sides; ++side) {
+                const double angle = 2.0 * Pi * double(side) / double(Sides);
+                const QVector3D normal(float(std::cos(angle)), 0.0f,
+                                       float(std::sin(angle)));
+                appendVertex(x + radius * std::cos(angle),
+                             y + double(ring) * height,
+                             z + radius * std::sin(angle),
+                             normal, stumpColor);
+            }
+        }
+        const std::uint32_t top = std::uint32_t(vertices.size());
+        appendVertex(x, y + height, z, QVector3D(0.0f, 1.0f, 0.0f),
+                     stumpColor);
+        for (int side = 0; side < Sides; ++side) {
+            const std::uint32_t next = std::uint32_t((side + 1) % Sides);
+            const std::uint32_t lower = base + std::uint32_t(side);
+            const std::uint32_t upper = lower + Sides;
+            indices.insert(indices.end(), {
+                lower, base + next, upper + next,
+                lower, upper + next, upper,
+                upper, upper + next, top
+            });
+        }
+    };
+    const auto appendShrub = [&](double x, double y, double z,
+                                 double rightX, double rightZ,
+                                 double forwardX, double forwardZ,
+                                 double scale) {
+        const TerrainColor shrubColor{0.09f, 0.29f, 0.12f};
+        const auto appendShrubCard = [&](double axisX, double axisZ) {
+            QVector3D normal(float(-axisZ), 0.0f, float(axisX));
+            normal.normalize();
+            const double halfWidth = 0.46 * scale;
+            const double height = 0.72 * scale;
+            const std::uint32_t base = std::uint32_t(vertices.size());
+            appendVertex(x - axisX * halfWidth, y,
+                         z - axisZ * halfWidth, normal, shrubColor);
+            appendVertex(x + axisX * halfWidth, y,
+                         z + axisZ * halfWidth, normal, shrubColor);
+            appendVertex(x + axisX * halfWidth * 0.55, y + height * 0.66,
+                         z + axisZ * halfWidth * 0.55, normal, shrubColor);
+            appendVertex(x, y + height, z, normal, shrubColor);
+            appendVertex(x - axisX * halfWidth * 0.55, y + height * 0.66,
+                         z - axisZ * halfWidth * 0.55, normal, shrubColor);
+            indices.insert(indices.end(), {
+                base, base + 1u, base + 2u,
+                base, base + 2u, base + 3u,
+                base, base + 3u, base + 4u
+            });
+        };
+        appendShrubCard(rightX, rightZ);
+        appendShrubCard(forwardX, forwardZ);
+    };
+
+    vertices.reserve(vertices.capacity()
+            + std::size_t(maximumTrees / RowsPerSide)
+                * MaximumVerticesPerProp);
+    indices.reserve(indices.capacity()
+            + std::size_t(maximumTrees / RowsPerSide)
+                * MaximumTrianglesPerProp * 3u);
 
     for (int slot = firstSlot; slot <= lastSlot; ++slot) {
         for (int sideIndex = 0; sideIndex < 2; ++sideIndex) {
@@ -705,11 +877,67 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
                 appendCard(x, y, z, forwardX, forwardZ, scale,
                            trunkColor, crownColor);
                 ++treeCount;
+
+                if (row != 0) continue;
+                const std::uint32_t propRandom = forestHash(
+                        random ^ 0xa24baed5u);
+                const double propLateral = side * (
+                        1.65 + double((propRandom >> 8) & 255u) / 255.0
+                            * 1.65);
+                const double propDistance = std::clamp(
+                        distance
+                            + (double(propRandom & 255u) / 255.0 - 0.5)
+                                * 2.1,
+                        startDistanceMeters + EdgeInsetMeters,
+                        endDistanceMeters - EdgeInsetMeters);
+                if (overlapsChallengeCorridor(course, propDistance)) continue;
+                const WorkoutGameRoadSample propSample =
+                        WorkoutGameRoadCourseBuilder::sampleVisual(
+                            course, propDistance);
+                if (!propSample.ready) continue;
+                const WorkoutGame3DTerrainProfileSnapshot propTerrain =
+                        WorkoutGame3DTerrainProfile::build(
+                            propSample, propDistance, course.seed);
+                if (!propTerrain.ready) continue;
+                const double propRightX =
+                        std::cos(propSample.center.headingRadians);
+                const double propRightZ =
+                        -std::sin(propSample.center.headingRadians);
+                const double propForwardX =
+                        std::sin(propSample.center.headingRadians);
+                const double propForwardZ =
+                        std::cos(propSample.center.headingRadians);
+                const double propX = propSample.center.xMeters
+                        + propLateral * propRightX;
+                const double propZ = propSample.center.zMeters
+                        + propLateral * propRightZ;
+                const double propY =
+                        WorkoutGame3DTerrainProfile::elevationAtLateral(
+                            propTerrain, propLateral);
+                const double propScale = 0.72
+                        + double((propRandom >> 16) & 255u) / 255.0 * 0.56;
+                switch ((propRandom >> 24) % 3u) {
+                case 0u:
+                    appendRock(propX, propY - 0.04 * propScale, propZ,
+                               propRightX, propRightZ,
+                               propForwardX, propForwardZ, propScale);
+                    break;
+                case 1u:
+                    appendStump(propX, propY, propZ, propScale);
+                    break;
+                default:
+                    appendShrub(propX, propY, propZ,
+                                propRightX, propRightZ,
+                                propForwardX, propForwardZ, propScale);
+                    break;
+                }
+                ++propCount;
             }
         }
     }
 
-    return meshData(vertices, indices, boundsMin, boundsMax, treeCount);
+    return meshData(vertices, indices, boundsMin, boundsMax,
+                    treeCount + propCount);
 }
 
 WorkoutGame3DMeshData WorkoutGame3DGeometry::buildClimbs(

@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_rider_bike.py",
     "retrievedAt": "2026-09-01",
     "originalFileName": "generate_rider_bike.py",
-    "originalSha256": "860d4fca4e6c036e4378caba70652993b6f9f41f029c1fce9f78d5f907682ded",
+    "originalSha256": "e01f44a66ef75f58c362c171c4f899fbad56f2facdaa90cad39618546b41a3bc",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_rider_bike.py"
@@ -35,17 +35,17 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_rider_bike.py",
       "purpose": "source",
-      "sha256": "860d4fca4e6c036e4378caba70652993b6f9f41f029c1fce9f78d5f907682ded"
+      "sha256": "e01f44a66ef75f58c362c171c4f899fbad56f2facdaa90cad39618546b41a3bc"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_RiderBike.glb",
       "purpose": "intermediate",
-      "sha256": "6a9490cdde78ee6216ba30ac81185544a49cadac96056ae9fc4b15f90bee6357"
+      "sha256": "eb889bfcddf0cd8005ea9754630c9414a9915632b40852b4686fdf21e27ad82e"
     },
     {
       "path": "src/Train/qml/WorkoutGameRiderBike.qml",
       "purpose": "runtime",
-      "sha256": "809e3870c30ba3ceee880404cc148f4eac5eb3f018ee70a3c8db6e3eab8c00a7"
+      "sha256": "54f9ca234e7d31f970a99d4dfa8a44d85b5a087c6a4e3d68b904d3697e703fb2"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_BikeComponents_LOD0_mesh.mesh",
@@ -55,7 +55,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "e86030f67300819d87142a4e2ea9d218350b7029c57049e23391efc24e7881f2"
+      "sha256": "0731f0e33c721231c1ad1794ab1f0be4ec27f1e0f103648ccc694508b97fe056"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Eyewear_LOD0_mesh.mesh",
@@ -158,8 +158,8 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 195376,
-    "trianglesLod0": 2796,
+    "glbBytes": 198136,
+    "trianglesLod0": 2836,
     "materials": 8,
     "textureBytes": 0,
     "nodes": [
@@ -196,7 +196,7 @@
       "maximum": [0.41999998688697815, 1.1005884408950806, 1.2354999780654907]
     },
     "budgets": {
-      "maxGlbBytes": 196608,
+      "maxGlbBytes": 204800,
       "maxTrianglesLod0": 3600,
       "maxMaterials": 8,
       "maxTextureBytes": 1024

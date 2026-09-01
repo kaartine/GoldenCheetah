@@ -56,6 +56,9 @@ Node {
     Behavior on actionForward { NumberAnimation { duration: 120 } }
     Behavior on coastBlend { NumberAnimation { duration: 120 } }
 
+    readonly property real crankRenderAngle:
+        pedalAngle * (1 - coastBlend) + 90 * coastBlend
+    readonly property real crankRadians: crankRenderAngle * Math.PI / 180
     readonly property real pedalStroke: Math.sin(crankRadians)
     readonly property real effortSway: pedalStroke * pedalEffort
                                   * (0.012 + 0.024 * standingBlend)
@@ -72,19 +75,35 @@ Node {
                                   + actionForward
     readonly property real pelvisY: bodyY - 0.15
     readonly property real pelvisZ: bodyZ - 0.09
-    readonly property real crankRadians: pedalAngle * Math.PI / 180
+
+    function wheelFrustumScenePoints() {
+        return [
+            articulatedRider.mapPositionToScene(
+                Qt.vector3d(0, 2 * wheelRadius, rearAxleZ)),
+            articulatedRider.mapPositionToScene(
+                Qt.vector3d(0, 0, rearAxleZ)),
+            articulatedRider.mapPositionToScene(
+                Qt.vector3d(0, wheelRadius, rearAxleZ + wheelRadius)),
+            articulatedRider.mapPositionToScene(
+                Qt.vector3d(0, wheelRadius, rearAxleZ - wheelRadius)),
+            articulatedRider.mapPositionToScene(
+                Qt.vector3d(0, 2 * wheelRadius, frontAxleZ)),
+            articulatedRider.mapPositionToScene(
+                Qt.vector3d(0, 0, frontAxleZ)),
+            articulatedRider.mapPositionToScene(
+                Qt.vector3d(0, wheelRadius, frontAxleZ + wheelRadius)),
+            articulatedRider.mapPositionToScene(
+                Qt.vector3d(0, wheelRadius, frontAxleZ - wheelRadius))
+        ]
+    }
     readonly property vector3d leftPedal: Qt.vector3d(
         -0.13,
-        (crankY + 0.16 * Math.cos(crankRadians)) * (1 - coastBlend)
-            + crankY * coastBlend,
-        (crankZ + 0.16 * Math.sin(crankRadians)) * (1 - coastBlend)
-            + (crankZ + 0.16) * coastBlend)
+        crankY + 0.16 * Math.cos(crankRadians),
+        crankZ + 0.16 * Math.sin(crankRadians))
     readonly property vector3d rightPedal: Qt.vector3d(
         0.13,
-        (crankY - 0.16 * Math.cos(crankRadians)) * (1 - coastBlend)
-            + crankY * coastBlend,
-        (crankZ - 0.16 * Math.sin(crankRadians)) * (1 - coastBlend)
-            + (crankZ - 0.16) * coastBlend)
+        crankY - 0.16 * Math.cos(crankRadians),
+        crankZ - 0.16 * Math.sin(crankRadians))
     readonly property vector3d leftHip: Qt.vector3d(
         bodyX - 0.12, pelvisY, pelvisZ)
     readonly property vector3d rightHip: Qt.vector3d(
@@ -313,7 +332,7 @@ Node {
             Node {
                 objectName: "crankPivot"
                 position: Qt.vector3d(0, root.crankY, root.crankZ)
-                eulerRotation.x: root.pedalAngle
+                eulerRotation.x: root.crankRenderAngle
                 Model {
                     source: "assets/meshes/geo_Crank_LOD0_mesh.mesh"
                     position: Qt.vector3d(0, -root.crankY, -root.crankZ)
@@ -321,6 +340,16 @@ Node {
                     castsShadows: false
                     receivesShadows: false
                 }
+            }
+
+            Node {
+                objectName: "leftPedalContact"
+                position: root.leftPedal
+            }
+
+            Node {
+                objectName: "rightPedalContact"
+                position: root.rightPedal
             }
 
             Node {

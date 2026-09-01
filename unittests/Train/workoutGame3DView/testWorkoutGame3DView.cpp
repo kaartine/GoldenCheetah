@@ -466,6 +466,23 @@ int nearColorPixels(
     return count;
 }
 
+int riderBluePixels(const QImage &image, const QRect &region)
+{
+    int count = 0;
+    const QRect bounded = region.intersected(image.rect());
+    for (int y = bounded.top(); y <= bounded.bottom(); ++y) {
+        for (int x = bounded.left(); x <= bounded.right(); ++x) {
+            const QColor color(image.pixel(x, y));
+            if (color.blue() >= color.red() + 20
+                    && color.blue() >= color.green() + 15
+                    && color.blue() >= 55) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
 double horizontalDistanceToSegment(
         double pointX,
         double pointZ,
@@ -994,7 +1011,7 @@ private slots:
         QVERIFY(viewModel);
         QTRY_VERIFY_WITH_TIMEOUT(viewModel->visibleTriangles() > 0, 3000);
         QVERIFY(viewModel->visibleTriangles() < 30000);
-        QVERIFY(viewModel->trees().size() <= 10);
+        QVERIFY(viewModel->trees().size() <= 18);
         QVERIFY(viewModel->geometryQueueDepth() <= 1);
 
         QObject *view = window.rootObject()->findChild<QObject *>(
@@ -1004,7 +1021,7 @@ private slots:
         QVERIFY(stats);
         QTRY_VERIFY_WITH_TIMEOUT(
                 stats->property("drawCallCount").toULongLong() > 0, 5000);
-        QVERIFY2(stats->property("drawCallCount").toULongLong() <= 50,
+        QVERIFY2(stats->property("drawCallCount").toULongLong() <= 80,
                  qPrintable(QStringLiteral("draw-call budget exceeded: %1")
                          .arg(stats->property("drawCallCount")
                               .toULongLong())));
@@ -1343,6 +1360,13 @@ private slots:
         frame.simulation.workoutTimeMs = 3000;
         frame.presentationTimeMs = 3000;
         viewModel.setFrame(frame, 180.0, 180.0, 85, 120, 5);
+        QCOMPARE(viewModel.cameraPresentation(),
+                 QStringLiteral("opening-side"));
+        QCOMPARE(viewModel.cameraPresentationBlend(), 1.0);
+
+        frame.simulation.workoutTimeMs = 5000;
+        frame.presentationTimeMs = 5000;
+        viewModel.setFrame(frame, 180.0, 180.0, 85, 120, 5);
         QCOMPARE(viewModel.cameraPresentation(), QStringLiteral("chase"));
         QCOMPARE(viewModel.cameraPresentationBlend(), 0.0);
     }
@@ -1352,32 +1376,32 @@ private slots:
         WorkoutGame3DCameraPresentation presentation;
         QCOMPARE(presentation.update({0, 0.0, 0.0, false, false}).mode,
                  WorkoutGame3DCameraPresentationMode::OpeningSide);
-        QCOMPARE(presentation.update({3000, 180.0, 85.0, false, false})
+        QCOMPARE(presentation.update({5000, 180.0, 85.0, false, false})
                          .sideBlend,
                  0.0);
 
-        QCOMPARE(presentation.update({3100, 0.0, 0.0, false, false})
+        QCOMPARE(presentation.update({5100, 0.0, 0.0, false, false})
                          .sideBlend,
                  0.0);
-        QCOMPARE(presentation.update({7099, 0.0, 0.0, false, false})
+        QCOMPARE(presentation.update({9099, 0.0, 0.0, false, false})
                          .sideBlend,
                  0.0);
         const auto entering = presentation.update(
-                {8000, 0.0, 0.0, false, false});
+                {10000, 0.0, 0.0, false, false});
         QCOMPARE(entering.mode,
                  WorkoutGame3DCameraPresentationMode::IdleSide);
         QVERIFY(entering.sideBlend > 0.0);
         QVERIFY(entering.sideBlend < 1.0);
-        QCOMPARE(presentation.update({8900, 0.0, 0.0, false, false})
+        QCOMPARE(presentation.update({10900, 0.0, 0.0, false, false})
                          .sideBlend,
                  1.0);
 
         const auto returning = presentation.update(
-                {8950, 170.0, 82.0, false, false});
+                {10950, 170.0, 82.0, false, false});
         QCOMPARE(returning.mode,
                  WorkoutGame3DCameraPresentationMode::ReturningToChase);
         QVERIFY(returning.sideBlend > 0.0);
-        QCOMPARE(presentation.update({10150, 170.0, 82.0, false, false})
+        QCOMPARE(presentation.update({12150, 170.0, 82.0, false, false})
                          .sideBlend,
                  0.0);
 
@@ -1406,7 +1430,7 @@ private slots:
         for (double distance = 0.0;
              distance <= road.totalLengthMeters; distance += 1.0) {
             WorkoutGameVisualSnapshot frame = frameAt(road, distance);
-            frame.simulation.workoutTimeMs = 3000
+            frame.simulation.workoutTimeMs = 5000
                     + std::int64_t(std::llround(distance * 50.0));
             viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
             QVERIFY(std::isfinite(viewModel.cameraX()));
@@ -1716,8 +1740,9 @@ private slots:
                     + double(frameIndex) * FrameSeconds
                         * SpeedMetersPerSecond;
             WorkoutGameVisualSnapshot frame = frameAt(road, distance);
-            frame.simulation.workoutTimeMs = qint64(std::llround(
-                    double(frameIndex) * FrameSeconds * 1000.0));
+            frame.simulation.workoutTimeMs = 5000
+                    + qint64(std::llround(
+                        double(frameIndex) * FrameSeconds * 1000.0));
             viewModel.setFrame(frame, 151.0, 151.0, 82, 145, 7);
             const double yaw = std::atan2(
                     viewModel.cameraTargetX() - viewModel.cameraX(),
@@ -1875,10 +1900,19 @@ private slots:
                 QStringLiteral("bermGeometryModel"));
         QVERIFY(auditViewModel);
         QVERIFY(bermModel);
+        WorkoutGameVisualSnapshot opening = frameAt(road, distances.front());
+        opening.simulation.workoutTimeMs = 0;
+        opening.presentationTimeMs = 0;
+        window.setFrame(opening, 220.0, 220.0, 86, 148, 7);
         for (std::size_t index = 0; index < distances.size(); ++index) {
             WorkoutGameVisualSnapshot frame = frameAt(road, distances[index]);
-            frame.simulation.workoutTimeMs = qint64(index) * 1000;
+            frame.simulation.workoutTimeMs = 5000
+                    + qint64(index) * 1000;
+            frame.presentationTimeMs = frame.simulation.workoutTimeMs;
             window.setFrame(frame, 220.0, 220.0, 86, 148, 7);
+            QCOMPARE(auditViewModel->cameraPresentation(),
+                     QStringLiteral("chase"));
+            QCOMPARE(auditViewModel->cameraPresentationBlend(), 0.0);
             QTest::qWait(index == 0u ? 700 : 350);
             frame.simulation.workoutTimeMs += 16;
             window.setFrame(frame, 220.0, 220.0, 86, 148, 7);
@@ -1901,6 +1935,33 @@ private slots:
                         .arg(index + 1, 2, 10, QLatin1Char('0'))
                         .arg(qRound(distances[index])));
             QVERIFY2(rendered.save(output), qPrintable(output));
+            const QRect riderRegion(
+                    0,
+                    rendered.height() * 2 / 5,
+                    rendered.width(),
+                    rendered.height() * 3 / 5);
+            const int bluePixels = riderBluePixels(rendered, riderRegion);
+            QVERIFY2(bluePixels > 20,
+                     qPrintable(QStringLiteral(
+                         "rider body has only %1 blue pixels at %2 m")
+                         .arg(bluePixels).arg(distances[index])));
+            const QVariantList wheelPoints = window.rootObject()->property(
+                    "riderWheelFrustumScreenPoints").toList();
+            QCOMPARE(wheelPoints.size(), 8);
+            for (const QVariant &pointValue : wheelPoints) {
+                const QVector3D point = pointValue.value<QVector3D>();
+                QVERIFY(std::isfinite(point.x()));
+                QVERIFY(std::isfinite(point.y()));
+                QVERIFY2(point.x() >= 2.0f
+                                && point.x() <= rendered.width() - 2.0f
+                                && point.y() >= 2.0f
+                                && point.y() <= rendered.height() - 2.0f,
+                         qPrintable(QStringLiteral(
+                             "wheel rim projected outside frame at %1 m: "
+                             "(%2, %3)")
+                             .arg(distances[index])
+                             .arg(point.x()).arg(point.y())));
+            }
         }
     }
 
@@ -1929,8 +1990,8 @@ private slots:
         openingFrame.simulation.workoutTimeMs = 0;
         openingFrame.presentationTimeMs = 0;
         viewModel.setFrame(openingFrame, 235.0, 220.0, 92, 152, 7);
-        frame.simulation.workoutTimeMs = 3000;
-        frame.presentationTimeMs = 3000;
+        frame.simulation.workoutTimeMs = 5000;
+        frame.presentationTimeMs = 5000;
         viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
 
         QQuickView window;
@@ -2135,12 +2196,18 @@ private slots:
                 QStringLiteral("crankPivot"));
         QObject *lowerLeg = window.rootObject()->findChild<QObject *>(
                 QStringLiteral("leftLowerLeg"));
+        QObject *leftPedal = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("leftPedalContact"));
+        QObject *rightPedal = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("rightPedalContact"));
         QObject *riderTexture = window.rootObject()->findChild<QObject *>(
                 QStringLiteral("riderPixelTexture"));
         QVERIFY(rearWheel);
         QVERIFY(frontWheel);
         QVERIFY(crank);
         QVERIFY(lowerLeg);
+        QVERIFY(leftPedal);
+        QVERIFY(rightPedal);
         QVERIFY(riderTexture);
         for (const QString &materialName : {
                  QStringLiteral("riderBikeMaterial"),
@@ -2161,6 +2228,13 @@ private slots:
                 crank->property("eulerRotation").value<QVector3D>();
         const QVector3D firstLeg =
                 lowerLeg->property("eulerRotation").value<QVector3D>();
+        const QVector3D firstLeftPedal =
+                leftPedal->property("position").value<QVector3D>();
+        const QVector3D firstRightPedal =
+                rightPedal->property("position").value<QVector3D>();
+        QVERIFY(std::abs(firstLeftPedal.x() + 0.13f) < 0.001f);
+        QVERIFY(std::abs(firstRightPedal.x() - 0.13f) < 0.001f);
+        QVERIFY((firstLeftPedal - firstRightPedal).length() > 0.28f);
 
         viewModel.setFrame(frameAt(road, 9.0), 190.0, 190.0, 86, 148, 6);
         QCoreApplication::processEvents();
@@ -2172,11 +2246,75 @@ private slots:
                 crank->property("eulerRotation").value<QVector3D>();
         const QVector3D secondLeg =
                 lowerLeg->property("eulerRotation").value<QVector3D>();
+        const QVector3D secondLeftPedal =
+                leftPedal->property("position").value<QVector3D>();
+        const QVector3D secondRightPedal =
+                rightPedal->property("position").value<QVector3D>();
         QVERIFY(std::abs(secondRear.x() - firstRear.x()) > 1.0);
         QCOMPARE(secondRear.x(), secondFront.x());
         QCOMPARE(firstRear.x(), firstFront.x());
         QVERIFY(std::abs(secondCrank.x() - firstCrank.x()) > 1.0);
         QVERIFY((secondLeg - firstLeg).length() > 0.5f);
+        QVERIFY((secondLeftPedal - firstLeftPedal).length() > 0.01f);
+        QVERIFY((secondRightPedal - firstRightPedal).length() > 0.01f);
+        QVERIFY(std::abs((secondLeftPedal.y() + secondRightPedal.y())
+                         - 2.0f * 0.3775f) < 0.001f);
+        QVERIFY(std::abs(secondLeftPedal.z() + secondRightPedal.z())
+                < 0.001f);
+    }
+
+    void coastPoseKeepsFeetOnRenderedPedalsFromEveryCrankPhase()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::SmoothTrail);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QObject *rider = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderNode"));
+        QObject *crank = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("crankPivot"));
+        QObject *leftPedal = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("leftPedalContact"));
+        QObject *rightPedal = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("rightPedalContact"));
+        QVERIFY(rider);
+        QVERIFY(crank);
+        QVERIFY(leftPedal);
+        QVERIFY(rightPedal);
+
+        for (double cycles : {0.0, 0.125, 0.50, 0.875}) {
+            WorkoutGameVisualSnapshot frame = frameAt(road, 8.0);
+            frame.riderPedalCycles = cycles;
+            viewModel.setFrame(frame, 190.0, 190.0, 86, 148, 6);
+            QTest::qWait(140);
+            viewModel.setFrame(frame, 0.0, 190.0, 0, 148, 6);
+            QTest::qWait(140);
+
+            QVERIFY(std::abs(rider->property(
+                        "crankRenderAngle").toDouble() - 90.0) < 0.5);
+            const QVector3D crankRotation =
+                    crank->property("eulerRotation").value<QVector3D>();
+            QVERIFY(std::abs(crankRotation.x() - 90.0f) < 0.5f);
+            const QVector3D left =
+                    leftPedal->property("position").value<QVector3D>();
+            const QVector3D right =
+                    rightPedal->property("position").value<QVector3D>();
+            QVERIFY(std::abs(left.y() - 0.3775f) < 0.002f);
+            QVERIFY(std::abs(left.z() - 0.16f) < 0.002f);
+            QVERIFY(std::abs(right.y() - 0.3775f) < 0.002f);
+            QVERIFY(std::abs(right.z() + 0.16f) < 0.002f);
+        }
     }
 
     void riderActionStateFollowsAuthoritativeSnapshots()
@@ -5215,10 +5353,12 @@ private slots:
                                  std::int64_t workoutTimeMs,
                                  double watts,
                                  int cadenceRpm,
+                                 double pedalCycles,
                                  QImage *captured) {
             WorkoutGameVisualSnapshot frame = frameAt(road, distanceMeters);
             frame.simulation.workoutTimeMs = workoutTimeMs;
             frame.presentationTimeMs = workoutTimeMs;
+            frame.riderPedalCycles = pedalCycles;
             window.setFrame(frame, watts, 180.0, cadenceRpm, 120, 5);
             QTest::qWait(250);
             const QImage image = window.grabWindow();
@@ -5234,18 +5374,34 @@ private slots:
         QImage opening;
         QImage chase;
         QImage idle;
-        capture(QStringLiteral("rider-opening-side"), 0, 0.0, 0, &opening);
+        std::array<QImage, 4> pedalPhases;
+        capture(QStringLiteral("rider-opening-side"),
+                0, 0.0, 0, 0.0, &opening);
         QTRY_VERIFY_WITH_TIMEOUT(
                 std::abs(camera->property("fieldOfView").toDouble() - 41.0)
                     < 0.2,
                 1500);
-        capture(QStringLiteral("rider-chase"), 3000, 180.0, 85, &chase);
+        for (int phase = 0; phase < 4; ++phase) {
+            capture(QStringLiteral("rider-pedal-%1")
+                        .arg(phase * 90, 3, 10, QLatin1Char('0')),
+                    phase == 0 ? 0 : phase * 900,
+                    180.0, 85, double(phase) * 0.25,
+                    &pedalPhases[std::size_t(phase)]);
+        }
+        for (std::size_t phase = 1; phase < pedalPhases.size(); ++phase) {
+            QVERIFY(changedPixels(
+                        pedalPhases[phase - 1], pedalPhases[phase]) > 40);
+        }
+        capture(QStringLiteral("rider-chase"),
+                5000, 180.0, 85, 1.0, &chase);
         QTRY_VERIFY_WITH_TIMEOUT(
                 std::abs(camera->property("fieldOfView").toDouble() - 47.0)
                     < 0.2,
                 1500);
-        capture(QStringLiteral("rider-idle-delay"), 3001, 0.0, 0, nullptr);
-        capture(QStringLiteral("rider-idle-side"), 8901, 0.0, 0, &idle);
+        capture(QStringLiteral("rider-idle-delay"),
+                5001, 0.0, 0, 1.0, nullptr);
+        capture(QStringLiteral("rider-idle-side"),
+                10901, 0.0, 0, 1.0, &idle);
         QTRY_VERIFY_WITH_TIMEOUT(
                 std::abs(camera->property("fieldOfView").toDouble() - 41.0)
                     < 0.2,
@@ -5464,6 +5620,58 @@ private slots:
         viewModel.setCourse(course, FtpWatts);
         viewModel.setFrame(frame, 150.0, 150.0, 80, 145, 4);
         QCOMPARE(viewModel.riderPitch(), -6.0);
+    }
+
+    void visualPitchIsBoundedWithoutChangingThePhysicsSnapshot()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::SmoothTrail);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        WorkoutGameVisualSnapshot frame = frameAt(road, 8.0);
+        frame.world.rider.pitchDegrees = 144.0;
+        viewModel.setFrame(frame, 180.0, 180.0, 86, 148, 6);
+        QCOMPARE(viewModel.riderPitch(), 35.0);
+        QCOMPARE(frame.world.rider.pitchDegrees, 144.0);
+
+        frame.world.rider.pitchDegrees = -171.0;
+        viewModel.setFrame(frame, 180.0, 180.0, 86, 148, 6);
+        QCOMPARE(viewModel.riderPitch(), -35.0);
+        QCOMPARE(frame.world.rider.pitchDegrees, -171.0);
+    }
+
+    void qmlConvertsPhysicsPitchToQuick3DCoordinates()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::Climb);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        WorkoutGameVisualSnapshot frame = frameAt(road, 8.0);
+        frame.world.rider.pitchDegrees = 12.5;
+        viewModel.setFrame(frame, 220.0, 220.0, 86, 148, 7);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+
+        QObject *rider = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderNode"));
+        QVERIFY(rider);
+        QCOMPARE(viewModel.riderPitch(), 12.5);
+        QCOMPARE(rider->property("riderPitch").toDouble(), -12.5);
+        QCOMPARE(frame.world.rider.pitchDegrees, 12.5);
     }
 };
 

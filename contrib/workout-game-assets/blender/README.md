@@ -65,7 +65,9 @@ ring. None of the generators downloads or embeds external assets.
   limb and contact-shadow meshes are separate. Runtime wheel rotation
   follows distance, suspension follows the physics snapshot, and crank and leg
   motion follow the authoritative pedal-cycle value.
-- The complete source asset has 2,796 triangles, eight opaque flat-color materials,
+- The crank mesh includes both pedal platforms, so feet, crank arms and pedals
+  share one authoritative phase without adding per-pedal draw calls.
+- The complete source asset has 2,836 triangles, eight opaque flat-color materials,
   no texture payload and no external source. The runtime component adds only a
   bounded translucent contact-shadow material.
 - Blender validates topology, applied transforms, dimensions, pivots and the
