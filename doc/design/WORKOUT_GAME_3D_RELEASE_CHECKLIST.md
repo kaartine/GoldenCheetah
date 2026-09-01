@@ -1239,4 +1239,16 @@ the runner waits for the child, preserves the CSV and passes recording, target,
 two-shift and feature-outcome reconciliation. The physical ride remains open,
 but its evidence collector no longer has this premature-exit failure mode.
 
+An unlocked-desktop NVIDIA rerun on 2026-09-01 passed all 10 isolated UI
+workflows with the exact stable `f3bbb2a` AppImage. The application identified
+the NVIDIA RTX A3000/580.173.02 OpenGL 4.6 renderer and Qt's threaded render
+loop. Its 101-sample Quick 3D trace advanced 155.715 m at 162.089 median FPS;
+observed p95/p99 frame intervals were 7/8 ms and the reported p95 was 6.801 ms.
+All 22 recording samples matched, with 4 W p95 power disagreement, 0 W target
+disagreement, one tolerated asynchronous gear sample and two observed gear
+changes whose maximum immediate speed step was 0.936 km/h. The run recorded no
+backward frame, trace regression, skipped simulation tick, inconsistent
+feature decision or unexpected airtime. Process-name inspection after runner
+cleanup found no AppRun, QtWebEngine or Xvfb process.
+
 The build is not a release candidate while any P0 task remains open.
