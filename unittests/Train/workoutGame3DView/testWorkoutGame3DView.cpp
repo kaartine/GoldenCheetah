@@ -1283,40 +1283,20 @@ private slots:
                  "rendering blocked a recording deadline");
     }
 
-    void cameraCompositionDefaultsToCentreAndSupportsAuditVariants()
+    void cameraCompositionIsTheApprovedMediumCentreView()
     {
         const ScopedEnvironmentVariable restore(
                 "GC_WORKOUT_GAME_3D_CAMERA");
 
-        qunsetenv("GC_WORKOUT_GAME_3D_CAMERA");
-        {
-            WorkoutGame3DViewModel medium;
-            QCOMPARE(medium.cameraComposition(),
-                     QStringLiteral("medium-centre"));
-            QCOMPARE(medium.cameraSideMeters(), 0.0);
-            QCOMPARE(medium.cameraBackMeters(), 8.2);
-            QCOMPARE(medium.cameraHeightMeters(), 3.2);
-            QCOMPARE(medium.cameraLookAheadMeters(), 12.0);
-        }
-
         qputenv("GC_WORKOUT_GAME_3D_CAMERA", "low-centre");
-        {
-            WorkoutGame3DViewModel low;
-            QCOMPARE(low.cameraComposition(), QStringLiteral("low-centre"));
-            QCOMPARE(low.cameraSideMeters(), 0.0);
-            QCOMPARE(low.cameraBackMeters(), 7.4);
-            QCOMPARE(low.cameraHeightMeters(), 2.55);
-            QCOMPARE(low.cameraTargetHeightMeters(), 0.75);
-        }
-
-        qputenv("GC_WORKOUT_GAME_3D_CAMERA", "shoulder");
-        {
-            WorkoutGame3DViewModel shoulder;
-            QCOMPARE(shoulder.cameraComposition(), QStringLiteral("shoulder"));
-            QVERIFY(shoulder.cameraSideMeters() > 0.0);
-            QVERIFY(shoulder.cameraSideMeters() < 0.68);
-        }
-
+        WorkoutGame3DViewModel viewModel;
+        QCOMPARE(viewModel.cameraComposition(),
+                 QStringLiteral("medium-centre"));
+        QCOMPARE(viewModel.cameraSideMeters(), 0.0);
+        QCOMPARE(viewModel.cameraBackMeters(), 8.2);
+        QCOMPARE(viewModel.cameraHeightMeters(), 3.2);
+        QCOMPARE(viewModel.cameraLookAheadMeters(), 12.0);
+        QCOMPARE(viewModel.cameraTargetHeightMeters(), 0.85);
     }
 
     void cameraFollowsRoadAndMaintainsTerrainClearance()
@@ -5060,7 +5040,7 @@ private slots:
         }
     }
 
-    void exportsCameraCompositionCatalog()
+    void exportsApprovedCameraCompositionStill()
     {
         if (!hasInteractiveGraphicsPlatform()) {
             QSKIP("Quick 3D rendering requires an interactive GPU platform");
@@ -5072,51 +5052,31 @@ private slots:
                     QStringLiteral("workout-game-3d-camera-catalog"))
                 : QString::fromLocal8Bit(requestedOutput);
         QVERIFY(QDir().mkpath(outputDirectory));
-        const ScopedEnvironmentVariable restore(
-                "GC_WORKOUT_GAME_3D_CAMERA");
         const WorkoutGameCourse course = sampleCourse();
         const WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
         QVERIFY(road.ready);
         const WorkoutGameVisualSnapshot frame = frameAt(
                 road, tabletopApproachDistance(road));
-        const std::array<QByteArray, 3> compositions = {{
-            QByteArrayLiteral("low-centre"),
-            QByteArrayLiteral("medium-centre"),
-            QByteArrayLiteral("shoulder")
-        }};
-        QImage prior;
-
-        for (const QByteArray &composition : compositions) {
-            qputenv("GC_WORKOUT_GAME_3D_CAMERA", composition);
-            WorkoutGame3DWindow window(true);
-            QVERIFY(window.rendererAvailable());
-            window.setCourse(course, FtpWatts);
-            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-            window.resize(1280, 720);
-            window.show();
-            QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
-            QTest::qWait(350);
-            const QImage rendered = window.grabWindow();
-            QVERIFY(!rendered.isNull());
-            QCOMPARE(rendered.size(), QSize(1280, 720));
-            QVERIFY(sampledColorCount(rendered) > 35);
-            if (!prior.isNull()) {
-                QVERIFY2(changedPixels(prior, rendered) > 500,
-                         qPrintable(QStringLiteral(
-                             "camera composition %1 is not visually distinct")
-                             .arg(QString::fromLatin1(composition))));
-            }
-            const QString output = QDir(outputDirectory).filePath(
-                    QStringLiteral("camera-%1.png")
-                        .arg(QString::fromLatin1(composition)));
-            QVERIFY2(rendered.save(output), qPrintable(output));
-            prior = rendered;
-        }
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.setCourse(course, FtpWatts);
+        window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        window.resize(1280, 720);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTest::qWait(350);
+        const QImage rendered = window.grabWindow();
+        QVERIFY(!rendered.isNull());
+        QCOMPARE(rendered.size(), QSize(1280, 720));
+        QVERIFY(sampledColorCount(rendered) > 35);
+        const QString output = QDir(outputDirectory).filePath(
+                QStringLiteral("camera-medium-centre.png"));
+        QVERIFY2(rendered.save(output), qPrintable(output));
 
     }
 
-    void exportsCameraCompositionMotionFrames()
+    void exportsApprovedCameraMotionFrames()
     {
         const QByteArray requestedOutput =
                 qgetenv("GC_WORKOUT_GAME_3D_CAMERA_VIDEO_DIR");
@@ -5134,8 +5094,6 @@ private slots:
         const QString outputDirectory =
                 QString::fromLocal8Bit(requestedOutput);
         QVERIFY(QDir().mkpath(outputDirectory));
-        const ScopedEnvironmentVariable restore(
-                "GC_WORKOUT_GAME_3D_CAMERA");
         const WorkoutGameCourse course = cameraMotionCourse();
         const WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
@@ -5145,75 +5103,63 @@ private slots:
         const double endDistance = road.totalLengthMeters - 2.0;
         const double speedKph = (endDistance - startDistance)
                 / (double(frameCount - 1) / double(frameRate)) * 3.6;
-        const std::array<QByteArray, 3> compositions = {{
-            QByteArrayLiteral("low-centre"),
-            QByteArrayLiteral("medium-centre"),
-            QByteArrayLiteral("shoulder")
-        }};
-
-        for (const QByteArray &composition : compositions) {
-            qputenv("GC_WORKOUT_GAME_3D_CAMERA", composition);
-            const QString compositionDirectory = QDir(outputDirectory).filePath(
-                    QString::fromLatin1(composition));
-            QVERIFY(QDir().mkpath(compositionDirectory));
-            QDir frames(compositionDirectory);
-            for (const QString &stale : frames.entryList(
-                    {QStringLiteral("frame-*.png")}, QDir::Files)) {
-                QVERIFY(frames.remove(stale));
-            }
-
-            WorkoutGame3DWindow window(true);
-            QVERIFY(window.rendererAvailable());
-            window.setCourse(course, FtpWatts);
-            window.resize(width, height);
-            window.show();
-            QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
-            QImage prior;
-            int visiblyChangedFrames = 0;
-
-            for (int frameIndex = 0;
-                 frameIndex < frameCount; ++frameIndex) {
-                const double progress = double(frameIndex)
-                        / double(frameCount - 1);
-                const double distance = startDistance
-                        + (endDistance - startDistance) * progress;
-                WorkoutGameVisualSnapshot frame = frameAt(road, distance);
-                frame.simulation.workoutTimeMs = std::int64_t(std::llround(
-                        1000.0 * double(frameIndex) / double(frameRate)));
-                frame.simulation.speedKph = speedKph;
-                window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-                QTest::qWait(4);
-
-                const QImage rendered = window.grabWindow();
-                QVERIFY(!rendered.isNull());
-                QCOMPARE(rendered.size(), QSize(width, height));
-                QVERIFY2(sampledColorCount(rendered) > 35,
-                         "camera motion frame is blank or nearly monochrome");
-                if (!prior.isNull()
-                        && changedPixels(prior, rendered) > 40) {
-                    ++visiblyChangedFrames;
-                }
-                prior = rendered;
-
-                const QString output = frames.filePath(
-                        QStringLiteral("frame-%1.png")
-                            .arg(frameIndex, 4, 10, QLatin1Char('0')));
-                QImageWriter writer(output, "png");
-                writer.setCompression(1);
-                QVERIFY2(writer.write(rendered),
-                         qPrintable(writer.errorString()));
-            }
-
-            QCOMPARE(frames.entryList(
-                    {QStringLiteral("frame-*.png")}, QDir::Files).size(),
-                     frameCount);
-            QVERIFY2(visiblyChangedFrames > frameCount * 9 / 10,
-                     qPrintable(QStringLiteral(
-                         "%1 camera moved in only %2 of %3 transitions")
-                         .arg(QString::fromLatin1(composition))
-                         .arg(visiblyChangedFrames)
-                         .arg(frameCount - 1)));
+        const QString compositionDirectory = QDir(outputDirectory).filePath(
+                QStringLiteral("medium-centre"));
+        QVERIFY(QDir().mkpath(compositionDirectory));
+        QDir frames(compositionDirectory);
+        for (const QString &stale : frames.entryList(
+                {QStringLiteral("frame-*.png")}, QDir::Files)) {
+            QVERIFY(frames.remove(stale));
         }
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.setCourse(course, FtpWatts);
+        window.resize(width, height);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QImage prior;
+        int visiblyChangedFrames = 0;
+
+        for (int frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
+            const double progress = double(frameIndex)
+                    / double(frameCount - 1);
+            const double distance = startDistance
+                    + (endDistance - startDistance) * progress;
+            WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+            frame.simulation.workoutTimeMs = std::int64_t(std::llround(
+                    1000.0 * double(frameIndex) / double(frameRate)));
+            frame.simulation.speedKph = speedKph;
+            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+            QTest::qWait(4);
+
+            const QImage rendered = window.grabWindow();
+            QVERIFY(!rendered.isNull());
+            QCOMPARE(rendered.size(), QSize(width, height));
+            QVERIFY2(sampledColorCount(rendered) > 35,
+                     "camera motion frame is blank or nearly monochrome");
+            if (!prior.isNull() && changedPixels(prior, rendered) > 40) {
+                ++visiblyChangedFrames;
+            }
+            prior = rendered;
+
+            const QString output = frames.filePath(
+                    QStringLiteral("frame-%1.png")
+                        .arg(frameIndex, 4, 10, QLatin1Char('0')));
+            QImageWriter writer(output, "png");
+            writer.setCompression(1);
+            QVERIFY2(writer.write(rendered),
+                     qPrintable(writer.errorString()));
+        }
+
+        QCOMPARE(frames.entryList(
+                {QStringLiteral("frame-*.png")}, QDir::Files).size(),
+                 frameCount);
+        QVERIFY2(visiblyChangedFrames > frameCount * 9 / 10,
+                 qPrintable(QStringLiteral(
+                     "medium-centre camera moved in only %1 of %2 transitions")
+                     .arg(visiblyChangedFrames)
+                     .arg(frameCount - 1)));
     }
 
     void jumpLiftRemainsVisibleAgainstGroundCamera()

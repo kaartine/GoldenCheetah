@@ -414,7 +414,7 @@ private:
     WorkoutGameFeatureHudSnapshot currentFeatureHud;
     QString currentFeatureName;
     QString currentFeatureActionText;
-    QString currentCameraComposition;
+    QString currentCameraComposition = QStringLiteral("medium-centre");
     double cameraBackDistanceMeters = 8.2;
     double cameraSideDistanceMeters = 0.0;
     double cameraHeightDistanceMeters = 3.2;

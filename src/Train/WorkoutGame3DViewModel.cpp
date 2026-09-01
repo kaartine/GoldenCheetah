@@ -129,20 +129,6 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
         buffer = std::make_unique<WorkoutGame3DGeometry>(
                 WorkoutGame3DGeometry::Layer::Skinny);
     }
-    const QByteArray requested = qgetenv("GC_WORKOUT_GAME_3D_CAMERA")
-            .trimmed().toLower();
-    if (requested == "low-centre") {
-        currentCameraComposition = QStringLiteral("low-centre");
-        cameraBackDistanceMeters = 7.4;
-        cameraHeightDistanceMeters = 2.55;
-        cameraLookAheadDistanceMeters = 11.0;
-        cameraTargetHeightDistanceMeters = 0.75;
-    } else if (requested == "shoulder") {
-        currentCameraComposition = QStringLiteral("shoulder");
-        cameraSideDistanceMeters = 0.65;
-    } else {
-        currentCameraComposition = QStringLiteral("medium-centre");
-    }
     chunkBuilder.setCompletionCallback(
             [this]() { scheduleReadyFloorChunk(); });
 }

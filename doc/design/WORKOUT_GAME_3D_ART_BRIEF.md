@@ -39,7 +39,7 @@ real OpenGL still and motion review.
 - Trail width remains 1.36 m and its edges are continuously socketed.
 - Terrain and trees use authored asymmetric silhouettes and terrain-anchored
   bases. Repetition must be broken without unbounded object counts.
-- The provisional medium-centre camera keeps the rider low and central while
+- The approved medium-centre camera keeps the rider low and central while
   showing the next 25-40 m. Vegetation must respect its exclusion corridor.
 - Fog, particles and shadows must remain restrained and bounded. They may add
   depth or event punctuation but may not hide feature anatomy or HUD cues.

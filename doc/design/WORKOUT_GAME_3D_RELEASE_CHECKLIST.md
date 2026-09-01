@@ -32,11 +32,11 @@ visual-readability task.
 - [x] Implement low-centre, medium-centre and slight-shoulder audit modes.
 - [x] Render matched still images from the same rider and course state.
 - [x] Record matched motion videos with terrain turns, climb, tabletop and drop.
-- [ ] Select the baseline with user review; `medium-centre` is provisional.
+- [x] Select `medium-centre` as the baseline with user review.
 
 **Implementation:** camera position and target use the authoritative road
-sample. The ordinary default has no large lateral offset. Keep all candidates
-available only until selection.
+sample. The fixed production view has no lateral offset. The temporary audit
+variants were retired after user selection on 2026-09-01.
 
 **Tests:** verify composition parameters, nonblank captures, visually distinct
 catalog images, monotonic camera movement and bounded camera-to-rider distance.
@@ -156,8 +156,8 @@ sphere as a final visible rider, feature or hero-environment object.
   over the same deterministic 102 m course. Each capture contains 360 frames
   at 960 by 540 and the test rejects blank output or fewer than 90 percent
   visibly changing frame transitions. The encoded 30 FPS videos are exactly
-  12 seconds long; `medium-centre` remains the provisional baseline pending
-  user review.
+  12 seconds long. User review selected `medium-centre` on 2026-09-01; a
+  regression test now rejects the former environment-variable overrides.
 - [x] Camera position and target now sample the authoritative road behind and
   ahead of the rider instead of projecting both from one instantaneous yaw.
   The existing presentation smoother remains the single timing authority.
@@ -1160,7 +1160,7 @@ FPS with a 9.124 ms reported p95 and 12 ms maximum frame interval, zero
 backward frames, zero skipped simulation ticks and zero unexpected airborne
 frames. Local and remote stable paths resolve to this verified artifact and
 both release stores retain `aeef5e1` as the previous generation. The real
-trainer ride and explicit camera choice remain open acceptance gates.
+trainer ride remains an open acceptance gate.
 
 The exact promoted AppImage also passed the non-production Data Generator
 rehearsal of the real-trainer evidence chain. All 56 recording samples matched
@@ -1250,5 +1250,15 @@ changes whose maximum immediate speed step was 0.936 km/h. The run recorded no
 backward frame, trace regression, skipped simulation tick, inconsistent
 feature decision or unexpected airtime. Process-name inspection after runner
 cleanup found no AppRun, QtWebEngine or Xvfb process.
+
+User review on 2026-09-01 selected the medium-centre camera. A test-first
+regression now proves that the former `GC_WORKOUT_GAME_3D_CAMERA` override can
+no longer change the fixed 8.2 m back, 3.2 m high, centred production view.
+The focused test first failed against the audit-mode implementation and passed
+after its removal. The complete offscreen ViewModel suite passes 50 cases with
+32 interactive-only skips, and the acceptance analyzer passes all 48 Python
+cases. A fresh X11/OpenGL capture from the changed test binary is nonblank at
+1280 by 720 and has SHA-256
+`1e127ac3b4036f08bc5fcc663fa2a802bd5f913ba83259e716a267914152ff5b`.
 
 The build is not a release candidate while any P0 task remains open.
