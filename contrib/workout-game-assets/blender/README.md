@@ -38,7 +38,7 @@ ring. None of the generators downloads or embeds external assets.
 
 ## Rider-bike contract
 
-- The bicycle has a `0.7366 m` outside wheel diameter, `1.313 m` wheelbase,
+- The bicycle has a `0.755 m` outside wheel diameter, `1.313 m` wheelbase,
   `0.455 m` chainstay and separately articulated main frame, swingarm, fork and
   rear shock. These dimensions use Pole Voima K2's public geometry table as a
   reference without copying branded surfaces, graphics or source assets.
@@ -46,18 +46,30 @@ ring. None of the generators downloads or embeds external assets.
   battery/down tube, compact mid-drive housing, long twin-beam swingarm, upper
   linkage and rocker, long single-crown fork, hubs, brake rotors and sparse
   low-poly spokes. These are generic visual cues rather than copied Pole
-  surfaces or CAD.
+  surfaces or CAD. The independently authored gold frame, black motor and
+  component group preserve the Voima K2's readable packaging at the normal
+  game-camera distance without reproducing logos or proprietary surfaces.
+- The `29 x 2.5` black tires have a `0.0635 m` casing width and distinct
+  low-poly front-grip and rear-braking tread roles. They are based on the
+  publicly listed Maxxis Assegai and Minion DHR II fitment but contain no
+  copied tread mesh, sidewall text or trademark artwork.
+- The stylized fictional rider has a generic low-poly face, dark beard,
+  wraparound eyewear, blue-white riding clothes and a clearly separate
+  white-black open-face enduro helmet with a dark visor. The model is not
+  authored as a likeness of a named person and contains no portrait texture,
+  face scan or source photograph pixels.
 - Rear axle, front axle, crank, steering, pelvis, camera-target and shadow
   pivots are named in the GLB. The runtime QML uses those same measured values.
-- Main frame, swingarm, fork, rear shock, wheels, crank, torso, head, helmet,
-  reusable limb and contact-shadow meshes are separate. Runtime wheel rotation
+- Main frame, components, swingarm, fork, rear shock, wheels, crank, torso,
+  jersey accents, head, beard, eyewear, helmet shell, helmet accents, reusable
+  limb and contact-shadow meshes are separate. Runtime wheel rotation
   follows distance, suspension follows the physics snapshot, and crank and leg
   motion follow the authoritative pedal-cycle value.
-- The complete source asset has 768 triangles, six opaque flat-color materials,
+- The complete source asset has 2,796 triangles, eight opaque flat-color materials,
   no texture payload and no external source. The runtime component adds only a
   bounded translucent contact-shadow material.
 - Blender validates topology, applied transforms, dimensions, pivots and the
-  1,400-triangle budget before export. Asset-policy tests additionally reject
+  3,600-triangle budget before export. Asset-policy tests additionally reject
   built-in Quick 3D primitives in the final rider component.
 
 ## Drop contract

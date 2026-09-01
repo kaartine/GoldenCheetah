@@ -310,6 +310,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         assets.validate_glb_document(document, size, manifest)
 
         nodes = {node["name"]: node for node in document["nodes"]}
+        root_extras = nodes["ROOT_RiderBike"]["extras"]
         required_pivots = {
             "PIVOT_REAR_AXLE",
             "PIVOT_FRONT_AXLE",
@@ -320,6 +321,9 @@ class TestWorkoutGameAssets(unittest.TestCase):
             "PIVOT_SHADOW",
         }
         self.assertTrue(required_pivots.issubset(nodes))
+        self.assertIn("GEO_HairBeard_LOD0", nodes)
+        self.assertIn("GEO_Eyewear_LOD0", nodes)
+        self.assertIn("GEO_HelmetAccent_LOD0", nodes)
         self.assertAlmostEqual(
             nodes["PIVOT_FRONT_AXLE"]["translation"][2]
             - nodes["PIVOT_REAR_AXLE"]["translation"][2],
@@ -333,9 +337,41 @@ class TestWorkoutGameAssets(unittest.TestCase):
             places=5,
         )
         self.assertAlmostEqual(
-            nodes["PIVOT_REAR_AXLE"]["translation"][1], 0.3683, places=4
+            nodes["PIVOT_REAR_AXLE"]["translation"][1], 0.3775, places=4
         )
-        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 1400)
+        self.assertAlmostEqual(
+            nodes["PIVOT_CRANK"]["translation"][1]
+            - nodes["PIVOT_REAR_AXLE"]["translation"][1],
+            0.0,
+            places=5,
+        )
+        self.assertEqual(root_extras["reference_model"], "Pole Voima K2")
+        self.assertEqual(
+            root_extras["rider_reference"],
+            "fictional project-authored rider; no specific likeness",
+        )
+        self.assertEqual(root_extras["front_tire"], "Maxxis Assegai DD 29x2.5")
+        self.assertEqual(root_extras["rear_tire"], "Maxxis Minion DHR II DD 29x2.5")
+        self.assertEqual(
+            root_extras["helmet_reference"],
+            "black-white open-face enduro helmet with visor",
+        )
+        self.assertAlmostEqual(root_extras["tire_width_m"], 0.0635, places=4)
+        self.assertEqual(
+            nodes["GEO_FrontWheel_LOD0"]["extras"]["tread_role"],
+            "front-grip",
+        )
+        self.assertEqual(
+            nodes["GEO_RearWheel_LOD0"]["extras"]["tread_role"],
+            "rear-braking",
+        )
+        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 3600)
+        self.assertEqual(manifest["review"]["status"], "approved")
+        self.assertEqual(manifest["review"]["trademarkStatus"], "clear")
+        self.assertEqual(manifest["review"]["personReleaseStatus"], "not-applicable")
+        self.assertEqual(manifest["review"]["propertyReleaseStatus"], "not-applicable")
+        self.assertIn("No endorsement", manifest["review"]["notes"])
+        self.assertNotIn("Leo Kokkonen", json.dumps(manifest))
         for mesh in document["meshes"]:
             for primitive in mesh["primitives"]:
                 self.assertIn("TEXCOORD_0", primitive["attributes"])
@@ -349,6 +385,8 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertGreaterEqual(
             runtime_qml.count("baseColorMap: riderPixelTexture"), 4
         )
+        self.assertIn('baseColor: "#2f68b2"', runtime_qml)
+        self.assertIn('baseColor: "#d7dad8"', runtime_qml)
 
     def test_conifer_set_has_varied_bounded_project_authored_silhouettes(self) -> None:
         document, size = assets.read_glb(CONIFER_GLB_PATH)

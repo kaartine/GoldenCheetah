@@ -278,16 +278,22 @@ contact, no root motion, animation bounds and catalog/video captures.
 camera distance and the bicycle never appears to travel sideways.
 
 **Current evidence:** the project-authored `RB-01` source produces separate
-frame, 29-inch wheels, crank, torso, head, helmet, limb and contact-shadow
-meshes with named axle, crank, steering, pelvis, camera and shadow pivots. Its
-`0.7366 m` wheel diameter, `1.313 m` wheelbase, `0.455 m` chainstay,
-`63.5`-degree head angle, `0.190 m` travel, 768 triangles and six source
+frame, components, 29-inch wheels with distinct front/rear tread, crank,
+torso, jersey accents, generic head, beard, eyewear, helmet shell, dark visor,
+limb and contact-shadow meshes with named axle, crank, steering, pelvis,
+camera and shadow pivots. Its
+`0.755 m` wheel diameter, `1.313 m` wheelbase, `0.455 m` chainstay,
+`63.5`-degree head angle, `0.190 m` travel, 2,796 triangles and eight source
 materials are manifest-validated. Public Pole Voima K2 geometry and component
 packaging inform the dimensions, deep battery/down-tube mass, compact
 mid-drive envelope and long linked swingarm. All surfaces remain original
 low-poly project geometry without Pole logos, CAD, textures or copied mesh
-surfaces. Two clean Blender 4.0.2 exports and two Qt Balsam 6.8.3 conversions
-are byte-identical. Runtime wheel rotation follows distance, while crank and
+surfaces. The rider is deliberately fictional: a generic low-poly face,
+blue-white clothing and no named-person metadata replace the earlier likeness
+direction. Its white-black open-face helmet and dark visor remain readable at
+the gameplay camera distance. Two clean Blender 4.0.2 exports and two Qt
+Balsam 6.8.3 conversions are byte-identical. Runtime wheel rotation follows
+distance, while crank and
 articulated leg transforms follow pedal cycles; standing, walking, terrain
 pump, root pitch/roll and ground-fixed airborne shadow use the existing
 authoritative ViewModel values. The asset-policy suite rejects final rider QML
@@ -301,9 +307,12 @@ ViewModel selects pedal, coast, preload, air, land, absorb, lean or bypass
 directly from each authoritative world/feature snapshot. QML applies bounded
 120 ms body and crank blends without changing the rider root. Tests drive all
 eight states, verify pose bounds and exact root/physics agreement. A matched
-1280 by 720 X11/Quick 3D side-presentation review shows the complete bicycle
-at opening and sustained idle; the final opening-frame SHA-256 is
-`013bad4fe5bee04a9c9edb98a5105a6db7851aff4803258bbb3c3c8c043344a2`.
+1280 by 720 X11/Quick 3D side-presentation review shows the complete bicycle,
+large black treaded tires and helmet at opening and sustained idle. An
+independent visual review passed fictional separation, helmet readability,
+Voima-like but independently authored packaging, tire readability and game
+camera quality. The final opening-frame SHA-256 is
+`4270f51e4adb75d423c04cd57e339e35554f0842c1706ebdffa5e56f246e194c`.
 
 ### `VS-04` Validate the vertical slice end to end
 

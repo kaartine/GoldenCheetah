@@ -19,12 +19,14 @@ Node {
     required property real riderYaw
     required property real riderRoll
 
-    readonly property real wheelRadius: 0.3683
+    readonly property real wheelRadius: 0.3775
     readonly property real wheelbase: 1.313
     readonly property real rearAxleZ: -0.455
     readonly property real frontAxleZ: 0.858
-    readonly property real crankY: 0.45
+    readonly property real crankY: 0.3775
     readonly property real crankZ: 0
+    readonly property real steerY: 1.085
+    readonly property real steerZ: 0.465
     readonly property real wheelAngle:
         -distanceMeters / (2 * Math.PI * wheelRadius) * 360
     property real actionHeight: poseState === "preload" ? -0.09
@@ -126,10 +128,10 @@ Node {
     PrincipledMaterial {
         id: bikeMaterial
         objectName: "riderBikeMaterial"
-        baseColor: "#e6a51b"
+        baseColor: "#b88935"
         baseColorMap: riderPixelTexture
-        metalness: 0.15
-        roughness: 0.62
+        metalness: 0.68
+        roughness: 0.34
     }
     PrincipledMaterial {
         id: tireMaterial
@@ -137,9 +139,16 @@ Node {
         roughness: 0.92
     }
     PrincipledMaterial {
+        id: componentMaterial
+        objectName: "riderComponentMaterial"
+        baseColor: "#111719"
+        metalness: 0.28
+        roughness: 0.58
+    }
+    PrincipledMaterial {
         id: jerseyMaterial
         objectName: "riderJerseyMaterial"
-        baseColor: "#d7322d"
+        baseColor: "#2f68b2"
         baseColorMap: riderPixelTexture
         roughness: 0.84
     }
@@ -158,9 +167,16 @@ Node {
     PrincipledMaterial {
         id: helmetMaterial
         objectName: "riderHelmetMaterial"
-        baseColor: "#ffc229"
+        baseColor: "#d7dad8"
         baseColorMap: riderPixelTexture
-        roughness: 0.72
+        roughness: 0.54
+    }
+    PrincipledMaterial {
+        id: riderDarkMaterial
+        objectName: "riderDarkMaterial"
+        baseColor: "#171c1e"
+        baseColorMap: riderPixelTexture
+        roughness: 0.82
     }
     PrincipledMaterial {
         id: shadowMaterial
@@ -258,7 +274,7 @@ Node {
                 source: "assets/meshes/geo_Fork_LOD0_mesh.mesh"
                 position: Qt.vector3d(
                     0, -root.wheelRadius, -root.frontAxleZ)
-                materials: bikeMaterial
+                materials: componentMaterial
                 castsShadows: false
                 receivesShadows: false
             }
@@ -282,7 +298,14 @@ Node {
                 source: "assets/meshes/geo_RearShock_LOD0_mesh.mesh"
                 scale: Qt.vector3d(
                     1, Math.max(0.72, 1 - root.rearTravel * 1.8), 1)
-                materials: bikeMaterial
+                materials: componentMaterial
+                castsShadows: false
+                receivesShadows: false
+            }
+
+            Model {
+                source: "assets/meshes/geo_BikeComponents_LOD0_mesh.mesh"
+                materials: componentMaterial
                 castsShadows: false
                 receivesShadows: false
             }
@@ -294,7 +317,7 @@ Node {
                 Model {
                     source: "assets/meshes/geo_Crank_LOD0_mesh.mesh"
                     position: Qt.vector3d(0, -root.crankY, -root.crankZ)
-                    materials: bikeMaterial
+                    materials: componentMaterial
                     castsShadows: false
                     receivesShadows: false
                 }
@@ -317,6 +340,13 @@ Node {
                     receivesShadows: false
                 }
                 Model {
+                    source: "assets/meshes/geo_JerseyAccent_LOD0_mesh.mesh"
+                    position: Qt.vector3d(0, -0.15, -0.09)
+                    materials: helmetMaterial
+                    castsShadows: false
+                    receivesShadows: false
+                }
+                Model {
                     source: "assets/meshes/geo_Torso_LOD0_mesh.mesh"
                     position: Qt.vector3d(0, -0.11, -0.19)
                     scale: Qt.vector3d(0.72, 0.70, 0.60)
@@ -333,9 +363,28 @@ Node {
                         receivesShadows: false
                     }
                     Model {
+                        source: "assets/meshes/geo_HairBeard_LOD0_mesh.mesh"
+                        materials: riderDarkMaterial
+                        castsShadows: false
+                        receivesShadows: false
+                    }
+                    Model {
+                        source: "assets/meshes/geo_Eyewear_LOD0_mesh.mesh"
+                        materials: componentMaterial
+                        castsShadows: false
+                        receivesShadows: false
+                    }
+                    Model {
                         source: "assets/meshes/geo_Helmet_LOD0_mesh.mesh"
                         y: 0.045
                         materials: helmetMaterial
+                        castsShadows: false
+                        receivesShadows: false
+                    }
+                    Model {
+                        source: "assets/meshes/geo_HelmetAccent_LOD0_mesh.mesh"
+                        y: 0.045
+                        materials: riderDarkMaterial
                         castsShadows: false
                         receivesShadows: false
                     }
@@ -353,7 +402,7 @@ Node {
                 from: root.leftKnee
                 to: root.leftPedal
                 thickness: 0.62
-                segmentMaterial: skinMaterial
+                segmentMaterial: shortsMaterial
             }
             LimbSegment {
                 from: root.rightHip
@@ -364,7 +413,7 @@ Node {
                 from: root.rightKnee
                 to: root.rightPedal
                 thickness: 0.62
-                segmentMaterial: skinMaterial
+                segmentMaterial: shortsMaterial
             }
 
             LimbSegment {
@@ -377,9 +426,9 @@ Node {
             LimbSegment {
                 from: Qt.vector3d(root.bodyX - 0.25,
                                   root.bodyY + 0.07, root.bodyZ + 0.16)
-                to: Qt.vector3d(-0.30, 1.04, 0.39)
+                to: Qt.vector3d(-0.30, root.steerY, root.steerZ)
                 thickness: 0.52
-                segmentMaterial: skinMaterial
+                segmentMaterial: jerseyMaterial
             }
             LimbSegment {
                 from: Qt.vector3d(root.bodyX + 0.19,
@@ -391,9 +440,9 @@ Node {
             LimbSegment {
                 from: Qt.vector3d(root.bodyX + 0.25,
                                   root.bodyY + 0.07, root.bodyZ + 0.16)
-                to: Qt.vector3d(0.30, 1.04, 0.39)
+                to: Qt.vector3d(0.30, root.steerY, root.steerZ)
                 thickness: 0.52
-                segmentMaterial: skinMaterial
+                segmentMaterial: jerseyMaterial
             }
         }
     }
