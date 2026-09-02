@@ -92,7 +92,9 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     trail(std::make_unique<WorkoutGame3DGeometry>(
             WorkoutGame3DGeometry::Layer::Trail)),
     bypass(std::make_unique<WorkoutGame3DGeometry>(
-            WorkoutGame3DGeometry::Layer::Bypass))
+            WorkoutGame3DGeometry::Layer::Bypass)),
+    gapJump(std::make_unique<WorkoutGame3DGeometry>(
+            WorkoutGame3DGeometry::Layer::GapJump))
 {
     for (std::unique_ptr<WorkoutGame3DGeometry> &buffer : floorBuffers) {
         buffer = std::make_unique<WorkoutGame3DGeometry>(
@@ -162,6 +164,7 @@ void WorkoutGame3DViewModel::setCourse(
     rebuildPowerProfile(course);
     trail->setCourse(roadCourse);
     bypass->setCourse(roadCourse);
+    gapJump->setCourse(roadCourse);
     floorBucket = std::numeric_limits<int>::min();
     requestedFloorBucket = std::numeric_limits<int>::min();
     featureBucket = std::numeric_limits<int>::min();
@@ -1014,6 +1017,7 @@ QString WorkoutGame3DViewModel::terrainText(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::LogOver: return tr("Log over");
     case WorkoutGameTerrainKind::Tabletop: return tr("Tabletop");
     case WorkoutGameTerrainKind::RockSlab: return tr("Rock slab");
+    case WorkoutGameTerrainKind::GapJump: return tr("Gap jump");
     }
     return tr("Trail");
 }
@@ -1254,7 +1258,8 @@ void WorkoutGame3DViewModel::updateVisibleTriangleCount()
     const std::size_t active = std::size_t(activeFloorBuffer);
     int triangles = trail->triangleCount()
             + bermBuffers[active]->triangleCount()
-            + bypass->triangleCount();
+            + bypass->triangleCount()
+            + gapJump->triangleCount();
     triangles += floorBuffers[active]->triangleCount();
     triangles += rootBuffers[active]->triangleCount();
     triangles += climbBuffers[active]->triangleCount();

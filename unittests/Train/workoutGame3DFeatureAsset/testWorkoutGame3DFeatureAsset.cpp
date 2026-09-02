@@ -80,6 +80,17 @@ private slots:
         QVERIFY(!asset.ready);
     }
 
+    void leavesGapJumpSurfaceToTheProceduralRoadGeometry()
+    {
+        const WorkoutGameRoadCourse course = courseWith(
+                WorkoutGameTerrainKind::GapJump, 0.5);
+        const WorkoutGameRoadPiece &piece = challengePiece(course);
+        QVERIFY(piece.gapJump.enabled);
+        const WorkoutGame3DFeatureAssetSnapshot asset =
+                WorkoutGame3DFeatureAsset::place(course, piece);
+        QVERIFY(!asset.ready);
+    }
+
     void placesLogSocketTileAroundThePhysicalObstacle()
     {
         const WorkoutGameRoadCourse course = courseWith(

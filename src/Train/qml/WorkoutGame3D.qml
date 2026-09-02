@@ -220,6 +220,22 @@ Item {
         }
 
         Model {
+            objectName: "gapJumpGeometryModel"
+            geometry: workoutGame3D.gapJumpGeometry
+            materials: PrincipledMaterial {
+                baseColor: "white"
+                baseColorMap: dirtSurfaceTexture
+                metalness: 0
+                roughness: 0.96
+                vertexColorsEnabled: true
+                lighting: PrincipledMaterial.FragmentLighting
+                cullMode: Material.NoCulling
+            }
+            castsShadows: false
+            receivesShadows: false
+        }
+
+        Model {
             objectName: "climbGeometryModel"
             geometry: workoutGame3D.climbGeometry
             materials: PrincipledMaterial {

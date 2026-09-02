@@ -10,6 +10,7 @@ SOURCES += testWorkoutGame3DGeometry.cpp \
            ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
            ../../../src/Train/WorkoutGameFeatureChallenge.cpp
+SOURCES += ../../../src/Train/WorkoutGameGapJumpGeometry.cpp
 
 HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGameClimbGeometry.h \
@@ -18,6 +19,7 @@ HEADERS += ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGameRoadCourse.h \
            ../../../src/Train/WorkoutGameFeatureCatalog.h \
            ../../../src/Train/WorkoutGameFeatureGeometry.h \
+           ../../../src/Train/WorkoutGameGapJumpGeometry.h \
           ../../../src/Train/WorkoutGameRootGeometry.h \
           ../../../src/Train/WorkoutGameRockGardenGeometry.h \
           ../../../src/Train/WorkoutGameRockSlabGeometry.h \

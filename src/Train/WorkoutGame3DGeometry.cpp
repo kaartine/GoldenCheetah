@@ -13,6 +13,7 @@
 #include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
@@ -196,6 +197,16 @@ void appendFeatureSamples(
     };
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
         if (!piece.challenge.enabled) continue;
+        if (piece.gapJump.enabled) {
+            append(piece.gapJump.splitStartDistanceMeters);
+            append(piece.gapJump.lines.front().takeoffDistanceMeters);
+            for (const WorkoutGameRoadGapJumpLine &line
+                    : piece.gapJump.lines) {
+                append(line.landingDistanceMeters);
+            }
+            append(piece.gapJump.mergeEndDistanceMeters);
+            continue;
+        }
         if (piece.terrain == WorkoutGameTerrainKind::RockSlab) {
             const WorkoutGameRockSlabGeometryProfile slab =
                     WorkoutGameRockSlabGeometry::profile(
@@ -388,6 +399,9 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
         return buildForestDressing(
                 course, startDistanceMeters, endDistanceMeters);
     }
+    if (layer == Layer::GapJump) {
+        return buildGapJumps(course, startDistanceMeters, endDistanceMeters);
+    }
     if (layer == Layer::Roots) {
         return buildRoots(course, startDistanceMeters, endDistanceMeters);
     }
@@ -473,20 +487,55 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
         renderableTrailSamples.push_back(sample.renderableTrailSurface);
         trailBackingSamples.push_back(sample.renderableTrailSurface
                 || sample.terrain == WorkoutGameTerrainKind::Berm);
+        const WorkoutGameRoadGapJumpGate *activeGapJump = nullptr;
+        for (const WorkoutGameRoadPiece &piece : course.pieces) {
+            if (!piece.gapJump.enabled) continue;
+            if (distance >= piece.gapJump.splitStartDistanceMeters
+                    && distance <= piece.gapJump.mergeEndDistanceMeters) {
+                activeGapJump = &piece.gapJump;
+                break;
+            }
+        }
         floorUnderFeatureSamples.push_back(
-                sample.terrain == WorkoutGameTerrainKind::Skinny);
+                sample.terrain == WorkoutGameTerrainKind::Skinny
+                || activeGapJump != nullptr);
         const double rightX = std::cos(sample.center.headingRadians);
         const double rightZ = -std::sin(sample.center.headingRadians);
         const TerrainColor color = layer == Layer::Trail
                 ? colorFor(sample.terrain)
                 : TerrainColor{0.20f, 0.32f, 0.17f};
-        const WorkoutGame3DTerrainProfileSnapshot terrain =
+        WorkoutGame3DTerrainProfileSnapshot terrain =
                 layer == Layer::ForestFloor
                 ? WorkoutGame3DTerrainProfile::build(
                     sample, distance, course.seed)
                 : WorkoutGame3DTerrainProfileSnapshot();
         if (layer == Layer::ForestFloor && !terrain.ready) {
             return {};
+        }
+        if (layer == Layer::ForestFloor && activeGapJump != nullptr) {
+            double pitDepth = 0.0;
+            for (const WorkoutGameRoadGapJumpLine &line
+                    : activeGapJump->lines) {
+                if (distance < line.takeoffDistanceMeters
+                        || distance > line.landingDistanceMeters) {
+                    continue;
+                }
+                const double progress = std::clamp(
+                        (distance - line.takeoffDistanceMeters)
+                            / std::max(0.01, line.gapLengthMeters),
+                        0.0, 1.0);
+                pitDepth = std::max(
+                        pitDepth, 1.10 * std::sin(Pi * progress));
+            }
+            if (pitDepth > 0.0) {
+                for (std::size_t vertex = 1u;
+                        vertex + 1u < terrain.vertices.size(); ++vertex) {
+                    terrain.vertices[vertex].elevationMeters -= pitDepth;
+                    terrain.vertices[vertex].red = 0.28f;
+                    terrain.vertices[vertex].green = 0.20f;
+                    terrain.vertices[vertex].blue = 0.12f;
+                }
+            }
         }
         double trailBackingDropMeters = 0.0;
         if (layer == Layer::Trail
@@ -2162,6 +2211,299 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildBerms(
     if (vertices.empty() || indices.empty()) return {};
     return meshData(
             vertices, indices, boundsMin, boundsMax, totalSamples);
+}
+
+WorkoutGame3DMeshData WorkoutGame3DGeometry::buildGapJumps(
+        const WorkoutGameRoadCourse &course,
+        double startDistanceMeters,
+        double endDistanceMeters)
+{
+    constexpr int VerticesPerRow = 4;
+    constexpr double SampleSpacingMeters = 0.30;
+    constexpr double RecoveryBeforeMergeMeters = 6.0;
+    constexpr double TreadHalfWidthMeters = 0.58;
+
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    QVector3D boundsMin(
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max());
+    QVector3D boundsMax(
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest());
+    int totalRows = 0;
+
+    const auto eased = [](double value) {
+        const double t = std::clamp(value, 0.0, 1.0);
+        const double cubed = t * t * t;
+        return cubed * (t * (t * 6.0 - 15.0) + 10.0);
+    };
+    const auto updateBounds = [&boundsMin, &boundsMax](
+            float x, float y, float z) {
+        boundsMin.setX(std::min(boundsMin.x(), x));
+        boundsMin.setY(std::min(boundsMin.y(), y));
+        boundsMin.setZ(std::min(boundsMin.z(), z));
+        boundsMax.setX(std::max(boundsMax.x(), x));
+        boundsMax.setY(std::max(boundsMax.y(), y));
+        boundsMax.setZ(std::max(boundsMax.z(), z));
+    };
+
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.gapJump.enabled) continue;
+        const WorkoutGameRoadGapJumpGate &gate = piece.gapJump;
+        const double buildStart = std::max(
+                startDistanceMeters, gate.splitStartDistanceMeters);
+        const double buildEnd = std::min(
+                endDistanceMeters, gate.mergeEndDistanceMeters);
+        if (buildEnd <= buildStart) continue;
+
+        const double commonHalfWidth = std::max(
+                0.01, piece.entry.halfWidthMeters);
+        const double entryLaneHalfWidth = commonHalfWidth;
+        const double latestLanding = gate.lines.back().landingDistanceMeters;
+        const double mergeStart = latestLanding
+                + RecoveryBeforeMergeMeters;
+
+        for (std::size_t lineIndex = 0;
+                lineIndex < gate.lines.size(); ++lineIndex) {
+            const WorkoutGameRoadGapJumpLine &line = gate.lines[lineIndex];
+            const double takeoffRunMeters = 3.0
+                    + 0.8 * double(lineIndex);
+            const double landingRunMeters = 4.8
+                    + 0.8 * double(lineIndex);
+            const double fanEnd = line.takeoffDistanceMeters
+                    - takeoffRunMeters;
+            const double landingEnd = line.landingDistanceMeters
+                    + landingRunMeters;
+            const double entryLaneCenter = 0.0;
+            const double landingHalfWidth = 0.76
+                    + 0.08 * double(lineIndex);
+
+            std::vector<double> rows;
+            const auto appendRow = [&](double distance) {
+                if (distance < buildStart - 1e-9
+                        || distance > buildEnd + 1e-9
+                        || (distance > line.takeoffDistanceMeters + 1e-9
+                            && distance
+                                < line.landingDistanceMeters - 1e-9)) {
+                    return;
+                }
+                rows.push_back(std::clamp(
+                        distance, buildStart, buildEnd));
+            };
+            const int uniformCount = std::max(
+                    2, int(std::ceil((buildEnd - buildStart)
+                                    / SampleSpacingMeters)) + 1);
+            for (int row = 0; row < uniformCount; ++row) {
+                appendRow(row + 1 == uniformCount
+                        ? buildEnd
+                        : buildStart + (buildEnd - buildStart)
+                            * double(row) / double(uniformCount - 1));
+            }
+            appendRow(gate.splitStartDistanceMeters);
+            for (int sample = 1; sample < 5; ++sample) {
+                appendRow(gate.splitStartDistanceMeters
+                        + (line.takeoffDistanceMeters
+                            - gate.splitStartDistanceMeters)
+                            * double(sample) / 5.0);
+            }
+            appendRow(fanEnd);
+            appendRow(line.takeoffDistanceMeters);
+            appendRow(line.landingDistanceMeters);
+            appendRow(landingEnd);
+            appendRow(mergeStart);
+            appendRow(gate.mergeEndDistanceMeters);
+            std::sort(rows.begin(), rows.end());
+            rows.erase(std::unique(
+                    rows.begin(), rows.end(),
+                    [](double left, double right) {
+                        return std::abs(left - right) < 1e-6;
+                    }), rows.end());
+            if (rows.size() < 2u) continue;
+
+            const auto lineCenterAt = [&](double distance) {
+                if (distance <= line.takeoffDistanceMeters) {
+                    const double blend = eased(
+                            (distance - gate.splitStartDistanceMeters)
+                            / std::max(0.01,
+                                line.takeoffDistanceMeters
+                                    - gate.splitStartDistanceMeters));
+                    return entryLaneCenter
+                            + (line.lateralMeters - entryLaneCenter) * blend;
+                }
+                if (distance <= mergeStart) return line.lateralMeters;
+                const double blend = eased(
+                        (distance - mergeStart)
+                        / std::max(0.01,
+                            gate.mergeEndDistanceMeters - mergeStart));
+                return line.lateralMeters
+                        + (entryLaneCenter - line.lateralMeters) * blend;
+            };
+            const auto halfWidthAt = [&](double distance) {
+                if (distance <= line.takeoffDistanceMeters) {
+                    const double blend = eased(
+                            (distance - gate.splitStartDistanceMeters)
+                            / std::max(0.01,
+                                line.takeoffDistanceMeters
+                                    - gate.splitStartDistanceMeters));
+                    return entryLaneHalfWidth
+                            + (TreadHalfWidthMeters - entryLaneHalfWidth)
+                                * blend;
+                }
+                if (distance <= landingEnd) return landingHalfWidth;
+                if (distance <= mergeStart) {
+                    const double blend = eased(
+                            (distance - landingEnd)
+                            / std::max(0.01, mergeStart - landingEnd));
+                    return landingHalfWidth
+                            + (TreadHalfWidthMeters - landingHalfWidth)
+                                * blend;
+                }
+                const double blend = eased(
+                        (distance - mergeStart)
+                        / std::max(0.01,
+                            gate.mergeEndDistanceMeters - mergeStart));
+                return TreadHalfWidthMeters
+                        + (entryLaneHalfWidth - TreadHalfWidthMeters) * blend;
+            };
+            const auto featureHeightAt = [&](double distance) {
+                if (distance <= line.takeoffDistanceMeters) {
+                    const double t = std::clamp(
+                            (distance - fanEnd) / takeoffRunMeters,
+                            0.0, 1.0);
+                    return line.lipHeightMeters * t * t;
+                }
+                if (distance < line.landingDistanceMeters) {
+                    return 0.0;
+                }
+                const double landingHeight = std::max(
+                        0.18, line.lipHeightMeters
+                            - line.landingDropMeters);
+                const double t = std::clamp(
+                        (distance - line.landingDistanceMeters)
+                            / landingRunMeters,
+                        0.0, 1.0);
+                return landingHeight * (1.0 - t) * (1.0 - t);
+            };
+            const auto featureGradeAt = [&](double distance) {
+                if (distance >= fanEnd
+                        && distance <= line.takeoffDistanceMeters) {
+                    const double t = std::clamp(
+                            (distance - fanEnd) / takeoffRunMeters,
+                            0.0, 1.0);
+                    return 2.0 * line.lipHeightMeters * t
+                            / takeoffRunMeters;
+                }
+                if (distance >= line.landingDistanceMeters
+                        && distance <= landingEnd) {
+                    const double landingHeight = std::max(
+                            0.18, line.lipHeightMeters
+                                - line.landingDropMeters);
+                    const double t = std::clamp(
+                            (distance - line.landingDistanceMeters)
+                                / landingRunMeters,
+                            0.0, 1.0);
+                    return -2.0 * landingHeight * (1.0 - t)
+                            / landingRunMeters;
+                }
+                return 0.0;
+            };
+
+            const std::uint32_t lineVertexStart =
+                    std::uint32_t(vertices.size());
+            for (std::size_t rowIndex = 0;
+                    rowIndex < rows.size(); ++rowIndex) {
+                const double distance = rows[rowIndex];
+                const WorkoutGameRoadSample road =
+                        WorkoutGameRoadCourseBuilder::sampleVisual(
+                            course, distance);
+                if (!road.ready) return {};
+                const double center = lineCenterAt(distance);
+                const double halfWidth = halfWidthAt(distance);
+                const double socketEnvelope = std::pow(
+                        std::sin(Pi * std::clamp(
+                            (distance - gate.splitStartDistanceMeters)
+                            / std::max(0.01,
+                                gate.mergeEndDistanceMeters
+                                    - gate.splitStartDistanceMeters),
+                            0.0, 1.0)), 2.0);
+                const double shoulderWidth = 0.40 * socketEnvelope;
+                const std::array<double, VerticesPerRow> laterals = {{
+                    center - halfWidth - shoulderWidth,
+                    center - halfWidth,
+                    center + halfWidth,
+                    center + halfWidth + shoulderWidth
+                }};
+                const double rightX = std::cos(
+                        road.center.headingRadians);
+                const double rightZ = -std::sin(
+                        road.center.headingRadians);
+                const double grade = road.center.gradePercent / 100.0
+                        + featureGradeAt(distance);
+                const QVector3D forward(
+                        float(std::sin(road.center.headingRadians)),
+                        float(grade),
+                        float(std::cos(road.center.headingRadians)));
+                const QVector3D right(
+                        float(rightX), 0.0f, float(rightZ));
+                QVector3D normal = QVector3D::crossProduct(forward, right);
+                normal.normalize();
+                for (int column = 0; column < VerticesPerRow; ++column) {
+                    const bool tread = column == 1 || column == 2;
+                    const double shoulderDrop = tread ? 0.0
+                            : 0.18 + 0.10 * socketEnvelope;
+                    const double lateral = laterals[std::size_t(column)];
+                    const float x = float(road.center.xMeters
+                            + lateral * rightX);
+                    const float y = float(
+                            road.visualGroundElevationMeters()
+                            + featureHeightAt(distance)
+                            - shoulderDrop + 0.018);
+                    const float z = float(road.center.zMeters
+                            + lateral * rightZ);
+                    const float shade = tread
+                            ? (column == 1 ? 0.96f : 1.0f) : 0.76f;
+                    vertices.push_back({
+                        x, y, z,
+                        normal.x(), normal.y(), normal.z(),
+                        0.57f * shade, 0.36f * shade,
+                        0.20f * shade, 1.0f,
+                        float(column) / float(VerticesPerRow - 1),
+                        float(distance * 0.22)
+                    });
+                    updateBounds(x, y, z);
+                }
+
+                if (rowIndex == 0u) continue;
+                const double previousDistance = rows[rowIndex - 1u];
+                if (previousDistance
+                            <= line.takeoffDistanceMeters + 1e-9
+                        && distance
+                            >= line.landingDistanceMeters - 1e-9) {
+                    continue;
+                }
+                const std::uint32_t base = lineVertexStart
+                        + std::uint32_t(rowIndex * VerticesPerRow);
+                for (std::uint32_t strip = 0;
+                        strip < VerticesPerRow - 1; ++strip) {
+                    indices.insert(indices.end(), {
+                        base - VerticesPerRow + strip,
+                        base + strip,
+                        base - VerticesPerRow + strip + 1u,
+                        base - VerticesPerRow + strip + 1u,
+                        base + strip,
+                        base + strip + 1u
+                    });
+                }
+            }
+            totalRows += int(rows.size());
+        }
+    }
+
+    return meshData(
+            vertices, indices, boundsMin, boundsMax, totalRows);
 }
 
 WorkoutGame3DMeshData WorkoutGame3DGeometry::buildBypasses(

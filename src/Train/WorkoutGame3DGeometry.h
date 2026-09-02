@@ -43,6 +43,7 @@ public:
         Climb,
         ForestDressing,
         ForestFloor,
+        GapJump,
         RockGarden,
         RockSlab,
         Roots,
@@ -86,6 +87,10 @@ private:
             double startDistanceMeters,
             double endDistanceMeters);
     static WorkoutGame3DMeshData buildForestDressing(
+            const WorkoutGameRoadCourse &course,
+            double startDistanceMeters,
+            double endDistanceMeters);
+    static WorkoutGame3DMeshData buildGapJumps(
             const WorkoutGameRoadCourse &course,
             double startDistanceMeters,
             double endDistanceMeters);

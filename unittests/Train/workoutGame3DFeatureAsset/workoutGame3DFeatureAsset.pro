@@ -6,11 +6,13 @@ TARGET = testWorkoutGame3DFeatureAsset
 SOURCES = testWorkoutGame3DFeatureAsset.cpp \
           ../../../src/Train/WorkoutGame3DFeatureAsset.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
-          ../../../src/Train/WorkoutGameFeatureChallenge.cpp
+          ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp
 
 HEADERS = ../../../src/Train/WorkoutGame3DFeatureAsset.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameFeatureGeometry.h \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.h \
           ../../../src/Train/WorkoutGameTabletopGeometry.h
 
 include(../../unittests.pri)

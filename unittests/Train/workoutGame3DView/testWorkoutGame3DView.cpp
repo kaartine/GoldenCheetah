@@ -5770,6 +5770,56 @@ private slots:
         QCOMPARE(rider->property("riderPitch").toDouble(), -12.5);
         QCOMPARE(frame.world.rider.pitchDegrees, 12.5);
     }
+
+    void gapJumpGeometryIsExposedToTheQuick3DScene()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 1701u;
+        course.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::GapJump;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 120.0;
+        section.targetWatts = 260.0;
+        section.difficulty = 0.5;
+        section.challengeCount = 1;
+        course.sections = {section};
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto gate = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.gapJump.enabled;
+                });
+        QVERIFY(gate != road.pieces.end());
+        const double reviewDistance = std::max(
+                0.0, gate->gapJump.splitStartDistanceMeters - 5.0);
+        viewModel.setFrame(
+                frameAt(road, reviewDistance), 260.0, 260.0, 92, 154, 8);
+        auto *geometry = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.gapJumpGeometry());
+        QVERIFY(geometry);
+        QVERIFY(geometry->ready());
+        QVERIFY(geometry->triangleCount() >= 180);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QObject *model = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("gapJumpGeometryModel"));
+        QVERIFY(model);
+        QCOMPARE(model->property("geometry").value<QObject *>(),
+                 viewModel.gapJumpGeometry());
+    }
 };
 
 QTEST_MAIN(TestWorkoutGame3DView)

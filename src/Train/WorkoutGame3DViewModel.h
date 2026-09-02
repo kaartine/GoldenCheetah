@@ -35,6 +35,7 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(QObject *bermGeometry READ bermGeometry
                NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *bypassGeometry READ bypassGeometry CONSTANT)
+    Q_PROPERTY(QObject *gapJumpGeometry READ gapJumpGeometry CONSTANT)
     Q_PROPERTY(QObject *climbGeometry READ climbGeometry
                NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *rootsGeometry READ rootsGeometry
@@ -173,6 +174,7 @@ public:
         return bermBuffers[std::size_t(activeFloorBuffer)].get();
     }
     QObject *bypassGeometry() const { return bypass.get(); }
+    QObject *gapJumpGeometry() const { return gapJump.get(); }
     QObject *climbGeometry() const
     {
         return climbBuffers[std::size_t(activeFloorBuffer)].get();
@@ -350,6 +352,7 @@ private:
 
     std::unique_ptr<WorkoutGame3DGeometry> trail;
     std::unique_ptr<WorkoutGame3DGeometry> bypass;
+    std::unique_ptr<WorkoutGame3DGeometry> gapJump;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> bermBuffers;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2>

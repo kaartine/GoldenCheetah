@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGame3DGeometry.h"
+#include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameRootGeometry.h"
@@ -206,6 +207,24 @@ WorkoutGameRoadCourse tabletopCourse()
     return WorkoutGameRoadCourseBuilder::build(source, 200.0);
 }
 
+WorkoutGameRoadCourse gapJumpCourse()
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 1701u;
+    source.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::SprintJump;
+    section.terrain = WorkoutGameTerrainKind::GapJump;
+    section.durationMs = source.durationMs;
+    section.lengthMeters = 120.0;
+    section.targetWatts = 260.0;
+    section.difficulty = 0.5;
+    section.challengeCount = 1;
+    source.sections = {section};
+    return WorkoutGameRoadCourseBuilder::build(source, 200.0);
+}
+
 }
 
 class TestWorkoutGame3DGeometry : public QObject
@@ -213,6 +232,355 @@ class TestWorkoutGame3DGeometry : public QObject
     Q_OBJECT
 
 private slots:
+    void gapJumpBuildsThreeOpenLinesWithoutTrailBridges()
+    {
+        const WorkoutGameRoadCourse course = gapJumpCourse();
+        QVERIFY(course.ready);
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.gapJump.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+
+        WorkoutGame3DGeometry gapJump(
+                WorkoutGame3DGeometry::Layer::GapJump);
+        WorkoutGame3DGeometry trail(
+                WorkoutGame3DGeometry::Layer::Trail);
+        WorkoutGame3DGeometry floor(
+                WorkoutGame3DGeometry::Layer::ForestFloor);
+        gapJump.setCourse(course);
+        trail.setCourse(course);
+        floor.setCourse(course);
+        QVERIFY(gapJump.ready());
+        QVERIFY(floor.ready());
+        QVERIFY(gapJump.sampleCount() >= 120);
+        QVERIFY(gapJump.triangleCount() >= 180);
+
+        const int vertexCount = gapJump.vertexData().size()
+                / gapJump.stride();
+        std::array<std::vector<int>, 3> lineRows;
+        std::size_t parsedLine = 0u;
+        double previousDistance = -1.0;
+        for (int row = 0; row < vertexCount / 4; ++row) {
+            const double distance = vertexFloat(
+                    gapJump.vertexData(), gapJump.stride(), row * 4, 44)
+                    / 0.22;
+            if (row > 0 && distance < previousDistance - 0.1) {
+                ++parsedLine;
+            }
+            QVERIFY(parsedLine < lineRows.size());
+            lineRows[parsedLine].push_back(row);
+            previousDistance = distance;
+        }
+        QCOMPARE(parsedLine, std::size_t(2));
+
+        const auto vertexLateral = [&gapJump, &course](int vertex) {
+            const double distance = vertexFloat(
+                    gapJump.vertexData(), gapJump.stride(), vertex, 44) / 0.22;
+            const WorkoutGameRoadSample road =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        course, distance);
+            const double x = vertexFloat(
+                    gapJump.vertexData(), gapJump.stride(), vertex, 0);
+            const double z = vertexFloat(
+                    gapJump.vertexData(), gapJump.stride(), vertex, 8);
+            const double rightX = std::cos(road.center.headingRadians);
+            const double rightZ = -std::sin(road.center.headingRadians);
+            return (x - road.center.xMeters) * rightX
+                    + (z - road.center.zMeters) * rightZ;
+        };
+        const auto rowCenter = [&vertexLateral](int row) {
+            const double left = vertexLateral(row * 4 + 1);
+            const double right = vertexLateral(row * 4 + 2);
+            return (left + right) * 0.5;
+        };
+        const auto rowHalfWidth = [&vertexLateral](int row) {
+            const double left = vertexLateral(row * 4 + 1);
+            const double right = vertexLateral(row * 4 + 2);
+            return (right - left) * 0.5;
+        };
+        for (const WorkoutGameRoadGapJumpLine &line : piece->gapJump.lines) {
+            const std::size_t lineIndex = std::size_t(
+                    &line - piece->gapJump.lines.data());
+            QVERIFY(!lineRows[lineIndex].empty());
+            const int firstRow = lineRows[lineIndex].front();
+            const int lastRow = lineRows[lineIndex].back();
+            QVERIFY(std::abs(rowCenter(firstRow)) < 0.001);
+            QVERIFY(std::abs(rowHalfWidth(firstRow) - 0.68) < 0.001);
+            QVERIFY(std::abs(rowCenter(lastRow)) < 0.001);
+            QVERIFY(std::abs(rowHalfWidth(lastRow) - 0.68) < 0.001);
+
+            std::array<bool, 6> foundFanSamples{};
+            bool foundLip = false;
+            bool foundLanding = false;
+            for (const int row : lineRows[lineIndex]) {
+                const double distance = vertexFloat(
+                        gapJump.vertexData(), gapJump.stride(), row * 4, 44)
+                        / 0.22;
+                for (std::size_t sample = 0;
+                        sample < foundFanSamples.size(); ++sample) {
+                    const double progress = double(sample)
+                            / double(foundFanSamples.size() - 1u);
+                    const double expectedDistance =
+                            piece->gapJump.splitStartDistanceMeters
+                            + (line.takeoffDistanceMeters
+                                - piece->gapJump.splitStartDistanceMeters)
+                                * progress;
+                    if (std::abs(distance - expectedDistance) < 0.01) {
+                        const double p3 = progress * progress * progress;
+                        const double smoother = p3
+                                * (progress * (progress * 6.0 - 15.0)
+                                    + 10.0);
+                        QVERIFY(std::abs(rowCenter(row)
+                                - line.lateralMeters * smoother) < 0.01);
+                        foundFanSamples[sample] = true;
+                    }
+                }
+                if (std::abs(distance
+                        - line.takeoffDistanceMeters) < 0.01) {
+                    QVERIFY(std::abs(rowCenter(row)
+                            - line.lateralMeters) < 0.01);
+                    foundLip = true;
+                }
+                if (std::abs(distance
+                        - line.landingDistanceMeters) < 0.01) {
+                    QVERIFY(std::abs(rowCenter(row)
+                            - line.lateralMeters) < 0.01);
+                    foundLanding = true;
+                }
+            }
+            for (const bool found : foundFanSamples) {
+                QVERIFY2(found,
+                         "gap line lacks a runtime-aligned fan-out sample");
+            }
+            QVERIFY2(foundLip, "gap line has no recognizable takeoff row");
+            QVERIFY2(foundLanding, "gap line has no distinct landing row");
+
+            const int indexCount = gapJump.indexData().size()
+                    / int(sizeof(quint32));
+            for (int index = 0; index + 2 < indexCount; index += 3) {
+                double minimumDistance =
+                        std::numeric_limits<double>::infinity();
+                double maximumDistance =
+                        -std::numeric_limits<double>::infinity();
+                double meanLateral = 0.0;
+                for (int corner = 0; corner < 3; ++corner) {
+                    const int vertex = int(indexValue(
+                            gapJump.indexData(), index + corner));
+                    meanLateral += vertexLateral(vertex) / 3.0;
+                    const double distance = vertexFloat(
+                            gapJump.vertexData(), gapJump.stride(), vertex, 44)
+                            / 0.22;
+                    minimumDistance = std::min(minimumDistance, distance);
+                    maximumDistance = std::max(maximumDistance, distance);
+                }
+                if (std::abs(meanLateral - line.lateralMeters) < 0.9) {
+                    QVERIFY2(!(minimumDistance
+                                <= line.takeoffDistanceMeters + 0.01
+                               && maximumDistance
+                                >= line.landingDistanceMeters - 0.01),
+                             "gap-jump triangle bridges open tread");
+                }
+            }
+        }
+
+        const int trailIndexCount = trail.indexData().size()
+                / int(sizeof(quint32));
+        for (int index = 0; index + 2 < trailIndexCount; index += 3) {
+            double minimumDistance =
+                    std::numeric_limits<double>::infinity();
+            double maximumDistance =
+                    -std::numeric_limits<double>::infinity();
+            for (int corner = 0; corner < 3; ++corner) {
+                const int vertex = int(indexValue(
+                        trail.indexData(), index + corner));
+                const double distance = vertexFloat(
+                        trail.vertexData(), trail.stride(), vertex, 44) / 0.22;
+                minimumDistance = std::min(minimumDistance, distance);
+                maximumDistance = std::max(maximumDistance, distance);
+            }
+            QVERIFY2(maximumDistance
+                        <= piece->gapJump.splitStartDistanceMeters + 0.01
+                        || minimumDistance
+                        >= piece->gapJump.mergeEndDistanceMeters - 0.01,
+                     "ordinary trail intrudes into the gap-jump gate");
+        }
+
+        const double firstTakeoff =
+                piece->gapJump.lines.front().takeoffDistanceMeters;
+        const double lastLanding =
+                piece->gapJump.lines.back().landingDistanceMeters;
+        const int floorIndexCount = floor.indexData().size()
+                / int(sizeof(quint32));
+        bool foundGroundBelowGap = false;
+        for (int index = 0; index + 2 < floorIndexCount; index += 3) {
+            double minimumDistance =
+                    std::numeric_limits<double>::infinity();
+            double maximumDistance =
+                    -std::numeric_limits<double>::infinity();
+            for (int corner = 0; corner < 3; ++corner) {
+                const int vertex = int(indexValue(
+                        floor.indexData(), index + corner));
+                const double distance = vertexFloat(
+                        floor.vertexData(), floor.stride(), vertex, 44) / 0.22;
+                minimumDistance = std::min(minimumDistance, distance);
+                maximumDistance = std::max(maximumDistance, distance);
+            }
+            if (maximumDistance > firstTakeoff + 0.05
+                    && minimumDistance < lastLanding - 0.05) {
+                foundGroundBelowGap = true;
+            }
+        }
+        QVERIFY2(foundGroundBelowGap,
+                 "gap jump needs recessed ground below the missing tread");
+
+        for (const WorkoutGameRoadGapJumpLine &line : piece->gapJump.lines) {
+            const double midpoint = (line.takeoffDistanceMeters
+                    + line.landingDistanceMeters) * 0.5;
+            int nearestRow = -1;
+            double nearestDistanceError =
+                    std::numeric_limits<double>::infinity();
+            double rowDistance = 0.0;
+            for (int row = 0; row < floor.sampleCount(); ++row) {
+                const double distance = vertexFloat(
+                        floor.vertexData(), floor.stride(), row * 8, 44) / 0.22;
+                const double error = std::abs(distance - midpoint);
+                if (error < nearestDistanceError) {
+                    nearestDistanceError = error;
+                    nearestRow = row;
+                    rowDistance = distance;
+                }
+            }
+            QVERIFY(nearestRow >= 0);
+            QVERIFY(nearestDistanceError < 0.5);
+            const WorkoutGameRoadSample road =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        course, rowDistance);
+            QVERIFY(road.ready);
+            std::array<double, 8> lateral{};
+            std::array<double, 8> elevation{};
+            for (int vertex = 0; vertex < 8; ++vertex) {
+                const int absoluteVertex = nearestRow * 8 + vertex;
+                const double x = vertexFloat(
+                        floor.vertexData(), floor.stride(), absoluteVertex, 0);
+                const double z = vertexFloat(
+                        floor.vertexData(), floor.stride(), absoluteVertex, 8);
+                lateral[std::size_t(vertex)] =
+                        (x - road.center.xMeters)
+                            * std::cos(road.center.headingRadians)
+                        + (z - road.center.zMeters)
+                            * -std::sin(road.center.headingRadians);
+                elevation[std::size_t(vertex)] = vertexFloat(
+                        floor.vertexData(), floor.stride(), absoluteVertex, 4);
+            }
+            double pitElevation = elevation.back();
+            for (std::size_t vertex = 1u;
+                    vertex < lateral.size(); ++vertex) {
+                if (line.lateralMeters <= lateral[vertex]) {
+                    const double ratio = std::clamp(
+                            (line.lateralMeters - lateral[vertex - 1u])
+                                / (lateral[vertex]
+                                    - lateral[vertex - 1u]),
+                            0.0, 1.0);
+                    pitElevation = elevation[vertex - 1u]
+                            + (elevation[vertex]
+                                - elevation[vertex - 1u]) * ratio;
+                    break;
+                }
+            }
+            QVERIFY2(pitElevation
+                        < road.visualGroundElevationMeters() - 0.20,
+                     "forest floor forms a tread-height bridge below a gap");
+        }
+    }
+
+    void gapJumpPreservesCommonSocketAndSeparateGroundedBypass()
+    {
+        const WorkoutGameRoadCourse course = gapJumpCourse();
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.gapJump.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+
+        WorkoutGame3DGeometry gapJump(
+                WorkoutGame3DGeometry::Layer::GapJump);
+        WorkoutGame3DGeometry bypass(
+                WorkoutGame3DGeometry::Layer::Bypass);
+        gapJump.setCourse(course);
+        bypass.setCourse(course);
+        QVERIFY(gapJump.ready());
+        QVERIFY(bypass.ready());
+
+        float minimumEntryX = std::numeric_limits<float>::infinity();
+        float maximumEntryX = -std::numeric_limits<float>::infinity();
+        float minimumExitX = std::numeric_limits<float>::infinity();
+        float maximumExitX = -std::numeric_limits<float>::infinity();
+        const int vertexCount = gapJump.vertexData().size()
+                / gapJump.stride();
+        const auto localLateral = [&gapJump, &course](int vertex) {
+            const double distance = vertexFloat(
+                    gapJump.vertexData(), gapJump.stride(), vertex, 44) / 0.22;
+            const WorkoutGameRoadSample road =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        course, distance);
+            const double x = vertexFloat(
+                    gapJump.vertexData(), gapJump.stride(), vertex, 0);
+            const double z = vertexFloat(
+                    gapJump.vertexData(), gapJump.stride(), vertex, 8);
+            return (x - road.center.xMeters)
+                        * std::cos(road.center.headingRadians)
+                    + (z - road.center.zMeters)
+                        * -std::sin(road.center.headingRadians);
+        };
+        for (int vertex = 0; vertex < vertexCount; ++vertex) {
+            const float x = float(localLateral(vertex));
+            const double distance = vertexFloat(
+                    gapJump.vertexData(), gapJump.stride(), vertex, 44) / 0.22;
+            if (std::abs(distance
+                    - piece->gapJump.splitStartDistanceMeters) < 0.01) {
+                minimumEntryX = std::min(minimumEntryX, x);
+                maximumEntryX = std::max(maximumEntryX, x);
+            }
+            if (std::abs(distance
+                    - piece->gapJump.mergeEndDistanceMeters) < 0.01) {
+                minimumExitX = std::min(minimumExitX, x);
+                maximumExitX = std::max(maximumExitX, x);
+            }
+        }
+        QVERIFY(std::abs(minimumEntryX + 0.68f) < 0.01f);
+        QVERIFY(std::abs(maximumEntryX - 0.68f) < 0.01f);
+        QVERIFY(std::abs(minimumExitX + 0.68f) < 0.01f);
+        QVERIFY(std::abs(maximumExitX - 0.68f) < 0.01f);
+
+        double maximumBypassOffset = 0.0;
+        for (int row = 0; row < bypass.sampleCount(); ++row) {
+            const int base = row * 4;
+            const double distance = vertexFloat(
+                    bypass.vertexData(), bypass.stride(), base, 44) / 0.22;
+            const WorkoutGameRoadSample road =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        course, distance);
+            const auto bypassLateral = [&bypass, &road](int vertex) {
+                const double x = vertexFloat(
+                        bypass.vertexData(), bypass.stride(), vertex, 0);
+                const double z = vertexFloat(
+                        bypass.vertexData(), bypass.stride(), vertex, 8);
+                return (x - road.center.xMeters)
+                            * std::cos(road.center.headingRadians)
+                        + (z - road.center.zMeters)
+                            * -std::sin(road.center.headingRadians);
+            };
+            const double left = bypassLateral(base + 1);
+            const double right = bypassLateral(base + 2);
+            maximumBypassOffset = std::max(
+                    maximumBypassOffset, std::abs((left + right) * 0.5));
+        }
+        QVERIFY(maximumBypassOffset > 4.4);
+    }
+
     void climbBuildsMergedEmbeddedStepsWithinBudget()
     {
         const WorkoutGameRoadCourse course = climbCourse();
