@@ -927,7 +927,7 @@ private slots:
                     straightCourse(160.0), 0.0, 145.0);
         QVERIFY(dressing.ready);
 
-        constexpr float CameraCorridorHalfWidthMeters = 6.0f;
+        constexpr float CameraCorridorHalfWidthMeters = 9.0f;
         const int stride = 12 * int(sizeof(float));
         const int vertexCount = dressing.vertexData.size() / stride;
         int trunkVertices = 0;

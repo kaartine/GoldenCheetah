@@ -632,7 +632,7 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
     constexpr int MaximumVerticesPerProp = 18;
     constexpr int MaximumTrianglesPerProp = 18;
     constexpr double EdgeInsetMeters = 1.5;
-    constexpr double CameraCorridorHalfWidthMeters = 6.0;
+    constexpr double CameraCorridorHalfWidthMeters = 9.0;
     const int firstSlot = int(std::floor(
             (startDistanceMeters + EdgeInsetMeters)
             / ForestDressingSpacingMeters)) - 1;
@@ -918,8 +918,9 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
                 const double lateral = side * (row == 0
                         ? CameraCorridorHalfWidthMeters + 1.20 * scale
                             + double((random >> 16) & 255u) / 255.0 * 1.2
-                        : 8.4 + double((random >> 16) & 255u) / 255.0
-                            * 2.6);
+                        : CameraCorridorHalfWidthMeters + 4.0
+                            + double((random >> 16) & 255u) / 255.0
+                                * 2.6);
                 const float shade = float((random >> 24) & 3u) * 0.018f;
                 const TerrainColor trunkColor{0.22f, 0.13f, 0.07f};
                 const TerrainColor crownColor{
