@@ -2263,6 +2263,73 @@ private slots:
                 < 0.001f);
     }
 
+    void riderReadabilitySourceUsesScopedLightingWithoutEmission()
+    {
+        QFile sceneSource(QStringLiteral(":/qml/WorkoutGame3D.qml"));
+        QVERIFY(sceneSource.open(QIODevice::ReadOnly));
+        const QByteArray sceneQml = sceneSource.readAll();
+        QVERIFY(sceneQml.contains(
+                "objectName: \"riderReadabilityLight\""));
+        QVERIFY(sceneQml.contains("scope: rider"));
+
+        QFile riderSource(QStringLiteral(":/qml/WorkoutGameRiderBike.qml"));
+        QVERIFY(riderSource.open(QIODevice::ReadOnly));
+        const QByteArray riderQml = riderSource.readAll();
+        QVERIFY(!riderQml.contains("emissiveFactor"));
+        QVERIFY(!riderQml.contains("emissiveMap"));
+    }
+
+    void riderReadabilityMaterialsAndScopedLightInstantiate()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::SmoothTrail);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 8.0), 190.0, 190.0, 86, 148, 6);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QCoreApplication::processEvents();
+
+        QObject *rider = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderNode"));
+        QObject *readabilityLight = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderReadabilityLight"));
+        QVERIFY(rider);
+        QVERIFY(readabilityLight);
+        QCOMPARE(readabilityLight->property("scope").value<QObject *>(), rider);
+        QCOMPARE(readabilityLight->property("castsShadow").toBool(), false);
+        const double brightness =
+                readabilityLight->property("brightness").toDouble();
+        QVERIFY(brightness >= 0.5);
+        QVERIFY(brightness <= 0.75);
+
+        const std::array<std::pair<const char *, QColor>, 4> materials = {{
+            {"riderTireMaterial", QColor(QStringLiteral("#252c2e"))},
+            {"riderComponentMaterial", QColor(QStringLiteral("#293235"))},
+            {"riderShortsMaterial", QColor(QStringLiteral("#303a3e"))},
+            {"riderDarkMaterial", QColor(QStringLiteral("#2b3437"))}
+        }};
+        for (const auto &[name, expectedColor] : materials) {
+            QObject *material = window.rootObject()->findChild<QObject *>(
+                    QString::fromLatin1(name));
+            QVERIFY2(material, name);
+            const QColor color = material->property("baseColor").value<QColor>();
+            QCOMPARE(color, expectedColor);
+            QVERIFY(color.lightnessF() < 0.30);
+            QVERIFY(color.lightnessF() > 0.12);
+        }
+    }
+
     void coastPoseKeepsFeetOnRenderedPedalsFromEveryCrankPhase()
     {
         const WorkoutGameCourse course = catalogCourse(

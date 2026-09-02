@@ -444,6 +444,16 @@ Item {
             riderYaw: workoutGame3D.riderYaw
             riderRoll: workoutGame3D.riderRoll
         }
+
+        DirectionalLight {
+            objectName: "riderReadabilityLight"
+            scope: rider
+            eulerRotation: Qt.vector3d(-34, 148, 0)
+            color: "#d9e2de"
+            ambientColor: "#35413d"
+            brightness: 0.62
+            castsShadow: false
+        }
     }
 
     WorkoutGameLandingDust {

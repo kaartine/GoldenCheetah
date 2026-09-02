@@ -154,15 +154,16 @@ Node {
     }
     PrincipledMaterial {
         id: tireMaterial
-        baseColor: "#151a1b"
+        objectName: "riderTireMaterial"
+        baseColor: "#252c2e"
         roughness: 0.92
     }
     PrincipledMaterial {
         id: componentMaterial
         objectName: "riderComponentMaterial"
-        baseColor: "#111719"
+        baseColor: "#293235"
         metalness: 0.28
-        roughness: 0.58
+        roughness: 0.52
     }
     PrincipledMaterial {
         id: jerseyMaterial
@@ -174,7 +175,7 @@ Node {
     PrincipledMaterial {
         id: shortsMaterial
         objectName: "riderShortsMaterial"
-        baseColor: "#20272b"
+        baseColor: "#303a3e"
         baseColorMap: riderPixelTexture
         roughness: 0.90
     }
@@ -193,7 +194,7 @@ Node {
     PrincipledMaterial {
         id: riderDarkMaterial
         objectName: "riderDarkMaterial"
-        baseColor: "#171c1e"
+        baseColor: "#2b3437"
         baseColorMap: riderPixelTexture
         roughness: 0.82
     }
