@@ -33,6 +33,8 @@ TEST_ROOT=$ARTIFACT_DIR/isolated-profile
 RECORDING_COPY=$ARTIFACT_DIR/training-recording.csv
 APP_PID=
 APP_PGID=
+CANVAS_OBSERVER_PID=
+CANVAS_NAME_FILE=$ARTIFACT_DIR/renderer-canvas-name.txt
 
 stop_app_group()
 {
@@ -53,6 +55,8 @@ cleanup()
 {
     set +e
     stop_app_group
+    [ -z "$CANVAS_OBSERVER_PID" ] || kill "$CANVAS_OBSERVER_PID" 2>/dev/null
+    [ -z "$CANVAS_OBSERVER_PID" ] || wait "$CANVAS_OBSERVER_PID" 2>/dev/null
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -64,7 +68,10 @@ export XDG_CACHE_HOME=$HOME/.cache
 export APPIMAGE_EXTRACT_AND_RUN=${APPIMAGE_EXTRACT_AND_RUN:-1}
 export GC_WORKOUT_GAME_TRACE=1
 export GC_WORKOUT_GAME_DIAGNOSTICS=${GC_WORKOUT_GAME_DIAGNOSTICS:-1}
-export GC_WORKOUT_GAME_3D=${GC_WORKOUT_GAME_3D:-1}
+export GC_WORKOUT_GAME_3D=1
+export QT_ACCESSIBILITY=1
+export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+export GC_UI_RENDERER_CANVAS_EVIDENCE_FILE=$CANVAS_NAME_FILE
 
 cat <<'EOF'
 An isolated GoldenCheetah profile will open. Add or select the real trainer,
@@ -90,6 +97,10 @@ done
     echo "GoldenCheetah process group did not start" >&2
     exit 1
 }
+python3 "$SCRIPT_DIR/pre_release_ui.py" observe-canvas \
+    "$CANVAS_NAME_FILE" "$APP_PGID" \
+    >"$ARTIFACT_DIR/canvas-observer.log" 2>&1 &
+CANVAS_OBSERVER_PID=$!
 
 RECORDS=$TEST_ROOT/library/UiTestAthlete/records
 while kill -0 -- "-$APP_PGID" 2>/dev/null; do
@@ -107,6 +118,8 @@ APP_STATUS=$?
 set -e
 APP_PID=
 APP_PGID=
+wait "$CANVAS_OBSERVER_PID" 2>/dev/null || true
+CANVAS_OBSERVER_PID=
 [ "$APP_STATUS" -eq 0 ] || {
     echo "GoldenCheetah exited with status $APP_STATUS" >&2
     exit "$APP_STATUS"
@@ -116,17 +129,18 @@ APP_PGID=
     exit 1
 }
 
-TRACE_LOG=$ARTIFACT_DIR/application.log
-if [ -f "$TEST_ROOT/library/goldencheetah.log" ] && \
-    grep -q 'workout-game-3d-trace ' "$TEST_ROOT/library/goldencheetah.log"; then
+if [ -f "$TEST_ROOT/library/goldencheetah.log" ]; then
     cp -f -- "$TEST_ROOT/library/goldencheetah.log" \
         "$ARTIFACT_DIR/goldencheetah.log"
-    TRACE_LOG=$ARTIFACT_DIR/goldencheetah.log
 fi
 
 python3 "$SCRIPT_DIR/analyze_workout_game.py" \
-    "$TRACE_LOG" \
+    "$ARTIFACT_DIR/application.log" \
     --recording "$RECORDING_COPY" \
-    --json "$ARTIFACT_DIR/workout-game-trainer-summary.json"
+    --json "$ARTIFACT_DIR/workout-game-trainer-summary.json" \
+    --require-quick3d-evidence \
+    --renderer-evidence-json "$ARTIFACT_DIR/renderer-evidence.json" \
+    --accessible-canvas-name-file "$CANVAS_NAME_FILE" \
+    --appimage "$IMAGE"
 
 echo "Trainer acceptance passed: $ARTIFACT_DIR/workout-game-trainer-summary.json"

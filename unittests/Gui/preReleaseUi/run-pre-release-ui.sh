@@ -152,8 +152,24 @@ fi
 export QTWEBENGINE_DISABLE_SANDBOX=1
 export APPIMAGE_EXTRACT_AND_RUN=1
 export GC_WORKOUT_GAME_FORCE_PAINTER=${GC_WORKOUT_GAME_FORCE_PAINTER:-1}
-if [ "${GC_UI_VALIDATE_TRAINER_ACCEPTANCE:-0}" = 1 ]; then
-    export GC_WORKOUT_GAME_3D=${GC_WORKOUT_GAME_3D:-1}
+if [ -n "${GC_UI_REQUIRE_QUICK3D_EVIDENCE+x}" ]; then
+    REQUIRE_QUICK3D_EVIDENCE=$GC_UI_REQUIRE_QUICK3D_EVIDENCE
+elif [ "${GC_UI_VALIDATE_TRAINER_ACCEPTANCE:-0}" = 1 ] || \
+    [ "${GC_WORKOUT_GAME_3D:-0}" = 1 ]; then
+    REQUIRE_QUICK3D_EVIDENCE=1
+else
+    REQUIRE_QUICK3D_EVIDENCE=0
+fi
+case "$REQUIRE_QUICK3D_EVIDENCE" in
+    0|1) ;;
+    *)
+        echo "GC_UI_REQUIRE_QUICK3D_EVIDENCE must be 0 or 1" >&2
+        exit 2
+        ;;
+esac
+if [ "$REQUIRE_QUICK3D_EVIDENCE" = 1 ]; then
+    export GC_WORKOUT_GAME_3D=1
+    export GC_WORKOUT_GAME_TRACE=1
 fi
 
 APP_ENV=()
@@ -198,7 +214,8 @@ fi
 
 if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
     TRACE_LOG=$ARTIFACT_DIR/application.log
-    if [ -f "$ARTIFACT_DIR/goldencheetah.log" ] && \
+    if [ "$REQUIRE_QUICK3D_EVIDENCE" = 0 ] && \
+        [ -f "$ARTIFACT_DIR/goldencheetah.log" ] && \
         grep -Eq 'workout-game(-3d)?-trace ' \
             "$ARTIFACT_DIR/goldencheetah.log"; then
         TRACE_LOG=$ARTIFACT_DIR/goldencheetah.log
@@ -207,6 +224,15 @@ if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
         "$TRACE_LOG"
         --json "$ARTIFACT_DIR/workout-game-summary.json"
     )
+    if [ "$REQUIRE_QUICK3D_EVIDENCE" = 1 ]; then
+        ANALYZER_ARGS+=(
+            --require-quick3d-evidence
+            --renderer-evidence-json "$ARTIFACT_DIR/renderer-evidence.json"
+            --accessible-canvas-name-file \
+                "$TEST_ROOT/renderer-canvas-name.txt"
+            --appimage "$IMAGE"
+        )
+    fi
     if [ "${GC_UI_VALIDATE_TRAINER_ACCEPTANCE:-0}" = 1 ]; then
         RECORDING=$ARTIFACT_DIR/game-training-recording.csv
         if [ ! -s "$RECORDING" ]; then
@@ -220,6 +246,17 @@ if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
         python3 "$SCRIPT_DIR/analyze_workout_game.py" \
             "${ANALYZER_ARGS[@]}" || STATUS=$?
     fi
+fi
+
+if [ "$STATUS" -ne 0 ] && [ "$REQUIRE_QUICK3D_EVIDENCE" = 1 ] && \
+    [ ! -f "$ARTIFACT_DIR/renderer-evidence.json" ]; then
+    python3 "$SCRIPT_DIR/analyze_workout_game.py" \
+        "$ARTIFACT_DIR/application.log" \
+        --require-quick3d-evidence \
+        --renderer-evidence-json "$ARTIFACT_DIR/renderer-evidence.json" \
+        --accessible-canvas-name-file "$TEST_ROOT/renderer-canvas-name.txt" \
+        --appimage "$IMAGE" \
+        --renderer-evidence-only >/dev/null 2>&1 || true
 fi
 
 if [ "$STATUS" -eq 0 ]; then

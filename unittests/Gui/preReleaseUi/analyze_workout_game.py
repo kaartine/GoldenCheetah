@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import csv
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -18,6 +19,15 @@ TRACE_MARKERS = (
     "workout-game-trace ",
     "workout-game-3d-trace ",
 )
+QUICK3D_RENDERER = "Qt Quick 3D"
+QUICK3D_SELECTION = "Workout Game renderer selection: Qt Quick 3D"
+RENDERER_SELECTION = "Workout Game renderer selection:"
+QUICK3D_FALLBACK = "Workout Game renderer fallback: Qt Quick 3D -> SceneGraph"
+QUICK3D_TRACE_MARKER = "workout-game-3d-trace "
+LEGACY_TRACE_MARKER = "workout-game-trace "
+QUICK3D_CANVAS = "Workout game 3D canvas"
+SOURCE_SUFFIX = re.compile(r"\([^()\r\n]+:\d+\)")
+SHA256 = re.compile(r"[0-9a-f]{64}")
 TRAINER_TARGET_MARKER = "workout-game-trainer-target "
 FIELD = re.compile(r"([a-z][a-z0-9_]*)=([^\s]+)")
 RECORDING_COLUMNS = (
@@ -29,6 +39,154 @@ TARGET_MATCH_TOLERANCE = 0.5
 
 TraceValue = float | str
 TraceSample = dict[str, TraceValue]
+
+
+def has_exact_qt_message(line: str, message: str) -> bool:
+    offset = line.find(message)
+    if offset < 0:
+        return False
+    suffix = line[offset + len(message):].strip()
+    return not suffix or SOURCE_SUFFIX.fullmatch(suffix) is not None
+
+
+def selected_renderer(line: str) -> str | None:
+    offset = line.find(RENDERER_SELECTION)
+    if offset < 0:
+        return None
+    value = line[offset + len(RENDERER_SELECTION):].strip()
+    if not value:
+        return None
+    if value.startswith(QUICK3D_RENDERER) and has_exact_qt_message(
+        line, QUICK3D_SELECTION
+    ):
+        return QUICK3D_RENDERER
+    return value.split()[0]
+
+
+def latest_renderer_session(lines: list[str]) -> tuple[list[str], str]:
+    selections = [
+        (index, renderer)
+        for index, line in enumerate(lines)
+        if (renderer := selected_renderer(line)) is not None
+    ]
+    session_start, renderer = selections[-1] if selections else (len(lines), "")
+    return lines[session_start:], renderer
+
+
+def appimage_sha256(path: Path | None) -> str:
+    if path is None or not path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return ""
+    return digest.hexdigest()
+
+
+def renderer_evidence(
+    log: Path,
+    requested_renderer: str,
+    accessible_canvas_name: str,
+    image: Path | None,
+) -> dict[str, object]:
+    try:
+        lines = log.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except OSError:
+        lines = []
+    session_lines, renderer = latest_renderer_session(lines)
+    quick3d_traces = sum(
+        QUICK3D_TRACE_MARKER in line for line in session_lines
+    )
+    legacy_traces = sum(LEGACY_TRACE_MARKER in line for line in session_lines)
+    fallback = any(
+        has_exact_qt_message(line, QUICK3D_FALLBACK)
+        for line in session_lines
+    )
+    digest = appimage_sha256(image)
+    evidence: dict[str, object] = {
+        "requested_renderer": requested_renderer,
+        "selected_renderer": renderer,
+        "trace_marker": (
+            QUICK3D_TRACE_MARKER.strip() if quick3d_traces else ""
+        ),
+        "quick3d_trace_samples": quick3d_traces,
+        "legacy_trace_samples": legacy_traces,
+        "accessible_canvas_name": accessible_canvas_name,
+        "fallback_detected": fallback,
+        "appimage_sha256": digest,
+    }
+    failures = validate_renderer_evidence(evidence)
+    evidence["passed"] = not failures
+    evidence["failures"] = failures
+    return evidence
+
+
+def validate_renderer_evidence(evidence: object) -> list[str]:
+    if not isinstance(evidence, dict):
+        return ["renderer evidence is not a JSON object"]
+    required = {
+        "requested_renderer": str,
+        "selected_renderer": str,
+        "trace_marker": str,
+        "quick3d_trace_samples": int,
+        "legacy_trace_samples": int,
+        "accessible_canvas_name": str,
+        "fallback_detected": bool,
+        "appimage_sha256": str,
+    }
+    failures = []
+    for name, expected_type in required.items():
+        value = evidence.get(name)
+        if type(value) is not expected_type:
+            failures.append(f"renderer evidence has invalid {name}")
+    if failures:
+        return failures
+    if evidence["requested_renderer"] != QUICK3D_RENDERER:
+        failures.append("Qt Quick 3D was not explicitly requested")
+    if evidence["selected_renderer"] != QUICK3D_RENDERER:
+        failures.append("exact Qt Quick 3D renderer selection is missing")
+    if evidence["trace_marker"] != QUICK3D_TRACE_MARKER.strip():
+        failures.append("Qt Quick 3D trace marker is missing")
+    if evidence["quick3d_trace_samples"] < 1:
+        failures.append("Qt Quick 3D trace contains no samples")
+    if evidence["accessible_canvas_name"] != QUICK3D_CANVAS:
+        failures.append("Qt Quick 3D accessible canvas was not observed")
+    if evidence["fallback_detected"]:
+        failures.append("Qt Quick 3D fell back to SceneGraph")
+    if not SHA256.fullmatch(evidence["appimage_sha256"]):
+        failures.append("AppImage SHA-256 is missing or malformed")
+    return failures
+
+
+def load_renderer_evidence(
+    path: Path,
+) -> tuple[dict[str, object] | None, list[str]]:
+    try:
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return None, [f"renderer evidence cannot be read: {error}"]
+    failures = validate_renderer_evidence(evidence)
+    if isinstance(evidence, dict):
+        if evidence.get("passed") is not True:
+            failures.append("renderer evidence is not marked passed")
+        stored_failures = evidence.get("failures")
+        if stored_failures != []:
+            failures.append("renderer evidence contains failures")
+        return evidence, failures
+    return None, failures
+
+
+def write_renderer_evidence(path: Path, evidence: dict[str, object]) -> None:
+    rendered = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+    temporary = path.with_name(path.name + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary.write_text(rendered, encoding="utf-8")
+    temporary.replace(path)
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -49,13 +207,20 @@ def parse_fields(text: str) -> TraceSample:
     return fields
 
 
-def parse_trace(path: Path) -> list[TraceSample]:
+def parse_trace(
+    path: Path, quick3d_session: bool = False
+) -> list[TraceSample]:
     samples = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    markers = TRACE_MARKERS
+    if quick3d_session:
+        lines, unused = latest_renderer_session(lines)
+        markers = (QUICK3D_TRACE_MARKER,)
+    for line in lines:
         match = next(
             (
                 (line.find(marker), marker)
-                for marker in TRACE_MARKERS
+                for marker in markers
                 if line.find(marker) >= 0
             ),
             None,
@@ -70,15 +235,21 @@ def parse_trace(path: Path) -> list[TraceSample]:
 
 
 def parse_trainer_targets(
-    path: Path, within_trace: bool = False
+    path: Path,
+    within_trace: bool = False,
+    quick3d_session: bool = False,
 ) -> list[TraceSample]:
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    trace_markers = TRACE_MARKERS
+    if quick3d_session:
+        lines, unused = latest_renderer_session(lines)
+        trace_markers = (QUICK3D_TRACE_MARKER,)
     first_trace = 0
     last_trace = len(lines) - 1
     if within_trace:
         trace_lines = [
             index for index, line in enumerate(lines)
-            if any(marker in line for marker in TRACE_MARKERS)
+            if any(marker in line for marker in trace_markers)
         ]
         if not trace_lines:
             return []
@@ -506,6 +677,11 @@ def main() -> int:
     parser.add_argument("log", type=Path)
     parser.add_argument("--json", type=Path)
     parser.add_argument("--recording", type=Path)
+    parser.add_argument("--require-quick3d-evidence", action="store_true")
+    parser.add_argument("--renderer-evidence-json", type=Path)
+    parser.add_argument("--accessible-canvas-name-file", type=Path)
+    parser.add_argument("--appimage", type=Path)
+    parser.add_argument("--renderer-evidence-only", action="store_true")
     parser.add_argument("--minimum-samples", type=int, default=8)
     parser.add_argument("--minimum-fps", type=float, default=25.0)
     parser.add_argument("--maximum-p95-ms", type=float, default=45.0)
@@ -538,7 +714,47 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    trace = parse_trace(args.log)
+    if args.renderer_evidence_only and not args.require_quick3d_evidence:
+        parser.error(
+            "--renderer-evidence-only requires --require-quick3d-evidence"
+        )
+    if args.require_quick3d_evidence:
+        if args.renderer_evidence_json is None:
+            parser.error(
+                "--require-quick3d-evidence requires --renderer-evidence-json"
+            )
+        canvas_name = ""
+        try:
+            if args.accessible_canvas_name_file is not None:
+                canvas_name = args.accessible_canvas_name_file.read_text(
+                    encoding="utf-8"
+                ).strip()
+        except OSError:
+            pass
+        evidence = renderer_evidence(
+            args.log,
+            QUICK3D_RENDERER,
+            canvas_name,
+            args.appimage,
+        )
+        try:
+            write_renderer_evidence(args.renderer_evidence_json, evidence)
+            unused, evidence_failures = load_renderer_evidence(
+                args.renderer_evidence_json
+            )
+        except OSError as error:
+            print(f"Cannot write renderer evidence: {error}", file=sys.stderr)
+            return 1
+        if evidence_failures:
+            print(json.dumps(evidence, indent=2, sort_keys=True))
+            return 1
+        if args.renderer_evidence_only:
+            print(json.dumps(evidence, indent=2, sort_keys=True))
+            return 0
+
+    trace = parse_trace(
+        args.log, quick3d_session=args.require_quick3d_evidence
+    )
     summary = analyze(trace)
     failures = validate(
         summary,
@@ -555,7 +771,11 @@ def main() -> int:
     if args.recording:
         acceptance = reconcile_acceptance(
             trace,
-            parse_trainer_targets(args.log, within_trace=True),
+            parse_trainer_targets(
+                args.log,
+                within_trace=True,
+                quick3d_session=args.require_quick3d_evidence,
+            ),
             parse_recording(args.recording),
         )
         summary.update(acceptance)

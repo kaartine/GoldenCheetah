@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -26,15 +29,208 @@ RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui.sh")
 REAL_TRAINER_RUNNER_PATH = Path(__file__).with_name(
     "run-real-trainer-acceptance.sh"
 )
+MATRIX_RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui-matrix.sh")
 
 
 class AnalyzeWorkoutGameTest(unittest.TestCase):
+    def renderer_evidence(self, log_text, canvas_name="Workout game 3D canvas"):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        log = root / "application.log"
+        image = root / "GoldenCheetah.AppImage"
+        log.write_text(log_text, encoding="utf-8")
+        image.write_bytes(b"test AppImage")
+        return ANALYZER.renderer_evidence(
+            log, "Qt Quick 3D", canvas_name, image
+        )
+
+    def test_valid_quick3d_renderer_evidence_passes(self):
+        evidence = self.renderer_evidence(
+            "[info] Workout Game renderer selection: SceneGraph reason=default\n"
+            "[info] Workout Game renderer selection: Qt Quick 3D\n"
+            "[debug] workout-game-3d-trace frame=1 fps=60\n"
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["selected_renderer"], "Qt Quick 3D")
+        self.assertEqual(evidence["quick3d_trace_samples"], 1)
+        self.assertEqual(evidence["failures"], [])
+
+    def test_known_quick3d_mislabel_rejects_scenegraph_only_evidence(self):
+        evidence = self.renderer_evidence(
+            "[info] artifact=gc-ui-cc84c34-final-long quick3d-acceptance\n"
+            "[info] Workout Game renderer selection: SceneGraph "
+            "reason=default platform=xcb OpenGL=4\n"
+            "[debug] workout-game-trace frame=1 fps=60\n"
+        )
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["selected_renderer"], "SceneGraph")
+        self.assertEqual(evidence["quick3d_trace_samples"], 0)
+        self.assertEqual(evidence["legacy_trace_samples"], 1)
+
+    def test_quick3d_renderer_evidence_rejects_later_fallback(self):
+        evidence = self.renderer_evidence(
+            "Workout Game renderer selection: Qt Quick 3D\n"
+            "workout-game-3d-trace frame=1 fps=60\n"
+            "Workout Game renderer fallback: Qt Quick 3D -> SceneGraph\n"
+        )
+
+        self.assertFalse(evidence["passed"])
+        self.assertTrue(evidence["fallback_detected"])
+        self.assertTrue(any("fell back" in item for item in evidence["failures"]))
+
+    def test_quick3d_trace_without_exact_selection_fails(self):
+        evidence = self.renderer_evidence(
+            "Workout Game renderer selection: Qt Quick 3D reason=requested\n"
+            "workout-game-3d-trace frame=1 fps=60\n"
+        )
+
+        self.assertFalse(evidence["passed"])
+        self.assertNotEqual(evidence["selected_renderer"], "Qt Quick 3D")
+
+    def test_exact_quick3d_selection_without_trace_fails(self):
+        evidence = self.renderer_evidence(
+            "Workout Game renderer selection: Qt Quick 3D (unknown:0)\n"
+        )
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["selected_renderer"], "Qt Quick 3D")
+        self.assertTrue(
+            any("no samples" in item for item in evidence["failures"])
+        )
+
+    def test_renderer_evidence_does_not_borrow_from_an_earlier_session(self):
+        evidence = self.renderer_evidence(
+            "Workout Game renderer selection: Qt Quick 3D\n"
+            "workout-game-3d-trace frame=1 fps=60\n"
+            "Workout Game renderer selection: SceneGraph reason=default\n"
+            "workout-game-trace frame=1 fps=60\n"
+        )
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["selected_renderer"], "SceneGraph")
+        self.assertEqual(evidence["quick3d_trace_samples"], 0)
+        self.assertEqual(evidence["legacy_trace_samples"], 1)
+
+    def test_quick3d_analysis_reads_only_the_latest_renderer_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "application.log"
+            log.write_text(
+                "Workout Game renderer selection: SceneGraph reason=default\n"
+                "workout-game-trace frame=900 fps=10\n"
+                "Workout Game renderer selection: Qt Quick 3D\n"
+                "workout-game-3d-trace frame=1 fps=60\n",
+                encoding="utf-8",
+            )
+
+            samples = ANALYZER.parse_trace(log, quick3d_session=True)
+
+            self.assertEqual(samples, [{"frame": 1.0, "fps": 60.0}])
+
+    def test_renderer_evidence_rejects_wrong_accessible_canvas(self):
+        evidence = self.renderer_evidence(
+            "Workout Game renderer selection: Qt Quick 3D\n"
+            "workout-game-3d-trace frame=1 fps=60\n",
+            canvas_name="Workout game canvas",
+        )
+
+        self.assertFalse(evidence["passed"])
+        self.assertTrue(
+            any("accessible canvas" in item for item in evidence["failures"])
+        )
+
+    def test_missing_and_malformed_renderer_evidence_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "missing.json"
+            malformed = root / "malformed.json"
+            malformed.write_text("{not json", encoding="utf-8")
+
+            self.assertTrue(ANALYZER.load_renderer_evidence(missing)[1])
+            self.assertTrue(ANALYZER.load_renderer_evidence(malformed)[1])
+            self.assertTrue(ANALYZER.validate_renderer_evidence({}))
+
+    def test_renderer_evidence_json_round_trips_only_when_passed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "renderer-evidence.json"
+            evidence = self.renderer_evidence(
+                "Workout Game renderer selection: Qt Quick 3D\n"
+                "workout-game-3d-trace frame=1 fps=60\n"
+            )
+
+            ANALYZER.write_renderer_evidence(output, evidence)
+            loaded, failures = ANALYZER.load_renderer_evidence(output)
+
+            self.assertEqual(loaded, evidence)
+            self.assertEqual(failures, [])
+
+    def test_failed_renderer_guard_stops_before_performance_analysis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "application.log"
+            image = root / "GoldenCheetah.AppImage"
+            canvas = root / "canvas.txt"
+            output = root / "renderer-evidence.json"
+            log.write_text(
+                "Workout Game renderer selection: SceneGraph reason=default\n"
+                "workout-game-trace frame=1 fps=60\n",
+                encoding="utf-8",
+            )
+            image.write_bytes(b"image")
+            canvas.write_text("Workout game 3D canvas\n", encoding="utf-8")
+            arguments = [
+                "analyze_workout_game.py",
+                str(log),
+                "--require-quick3d-evidence",
+                "--renderer-evidence-json",
+                str(output),
+                "--accessible-canvas-name-file",
+                str(canvas),
+                "--appimage",
+                str(image),
+            ]
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                with mock.patch.object(
+                    sys, "argv", arguments
+                ), mock.patch.object(
+                    ANALYZER,
+                    "parse_trace",
+                    side_effect=AssertionError(
+                        "performance analysis must not run"
+                    ),
+                ):
+                    status = ANALYZER.main()
+
+            self.assertEqual(status, 1)
+            self.assertFalse(json.loads(output.read_text())["passed"])
+
     def test_ui_runner_owns_and_cleans_the_appimage_process_group(self):
         runner = RUNNER_PATH.read_text(encoding="utf-8")
 
         self.assertIn('setsid "${APP_ENV[@]}" "$IMAGE"', runner)
         self.assertIn('kill -TERM -- "-$APP_PGID"', runner)
         self.assertIn('kill -KILL -- "-$APP_PGID"', runner)
+
+    def test_ui_runner_enables_guard_only_for_explicit_quick3d_acceptance(self):
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+        matrix = MATRIX_RUNNER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("GC_UI_REQUIRE_QUICK3D_EVIDENCE", runner)
+        self.assertIn("--require-quick3d-evidence", runner)
+        self.assertEqual(
+            matrix.count("GC_UI_REQUIRE_QUICK3D_EVIDENCE=0"), 2
+        )
+        self.assertEqual(matrix.count("GC_WORKOUT_GAME_3D=0"), 2)
+
+    def test_real_trainer_acceptance_requires_renderer_evidence(self):
+        runner = REAL_TRAINER_RUNNER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("--require-quick3d-evidence", runner)
+        self.assertIn("renderer-evidence.json", runner)
+        self.assertIn("observe-canvas", runner)
 
     def test_real_trainer_runner_tracks_the_complete_appimage_process_group(self):
         runner = REAL_TRAINER_RUNNER_PATH.read_text(encoding="utf-8")
@@ -54,6 +250,9 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 library=$1
                 records=$library/UiTestAthlete/records
                 recording=$records/fake.csv
+                printf '%s\n' 'Workout Game renderer selection: Qt Quick 3D'
+                printf '%s\n' 'Workout game 3D canvas' \
+                    >"$GC_UI_RENDERER_CANVAS_EVIDENCE_FILE"
                 (
                     printf '%s\\n' \
                         'secs,cad,hr,km,watts,slope,target,virtualgear' \
@@ -101,6 +300,13 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             )
             self.assertTrue(summary["passed"])
             self.assertGreaterEqual(summary["matched_recording_samples"], 5)
+            renderer = json.loads(
+                (artifacts / "renderer-evidence.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(renderer["passed"])
+            self.assertEqual(renderer["selected_renderer"], "Qt Quick 3D")
 
     def test_process_group_exists_checks_the_complete_app_group(self):
         with mock.patch.object(UI.os, "killpg") as killpg:
@@ -365,6 +571,20 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "must be 0 or 1"):
                 UI.validate_trainer_acceptance_from_environment()
+
+    def test_renderer_canvas_name_is_recorded_for_the_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            destination = UI.record_renderer_canvas_name(
+                root, "Workout game 3D canvas"
+            )
+
+            self.assertEqual(destination, root / "renderer-canvas-name.txt")
+            self.assertEqual(
+                destination.read_text(encoding="utf-8"),
+                "Workout game 3D canvas\n",
+            )
 
     def test_game_recording_is_preserved_in_artifact_directory(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -18,6 +18,7 @@ WORKOUT_GAME_CANVAS_NAMES = (
     "Workout game canvas",
     "Workout game 3D canvas",
 )
+RENDERER_CANVAS_NAME_FILE = "renderer-canvas-name.txt"
 GENERATOR_MODES = {
     "follow-target",
     "on-target",
@@ -97,6 +98,12 @@ def preserve_game_recording(source: Path, artifacts: Path) -> Path:
     destination = artifacts / "game-training-recording.csv"
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+    return destination
+
+
+def record_renderer_canvas_name(root: Path, accessible_name: str) -> Path:
+    destination = root / RENDERER_CANVAS_NAME_FILE
+    write_text(destination, accessible_name + "\n")
     return destination
 
 
@@ -678,6 +685,33 @@ def process_group_exists(pgid: int) -> bool:
         return False
 
 
+def observe_renderer_canvas(output: Path, app_pgid: int) -> int:
+    import pyatspi
+
+    def nodes(node):
+        yield node
+        try:
+            children = list(node)
+        except Exception:
+            return
+        for child in children:
+            yield from nodes(child)
+
+    while process_group_exists(app_pgid):
+        desktop = pyatspi.Registry.getDesktop(0)
+        for node in nodes(desktop):
+            try:
+                name = node.name or ""
+                showing = node.getState().contains(pyatspi.STATE_SHOWING)
+            except Exception:
+                continue
+            if name in WORKOUT_GAME_CANVAS_NAMES and showing:
+                write_text(output, name + "\n")
+                return 0
+        time.sleep(0.2)
+    return 1
+
+
 def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
     artifacts.mkdir(parents=True, exist_ok=True)
     suite = None
@@ -870,6 +904,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 canvas = driver.find_named_any(
                     WORKOUT_GAME_CANVAS_NAMES, showing=True
                 )
+                record_renderer_canvas_name(root, driver.name(canvas))
                 if validate_trainer_acceptance:
                     delays = trainer_acceptance_shift_delays(
                         game_run_seconds_from_environment()
@@ -1045,7 +1080,10 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
 
 def main() -> int:
     if len(sys.argv) < 3:
-        print("Usage: pre_release_ui.py prepare ROOT | exercise ROOT ARTIFACTS PID")
+        print(
+            "Usage: pre_release_ui.py prepare ROOT | "
+            "exercise ROOT ARTIFACTS PID | observe-canvas OUTPUT PID"
+        )
         return 2
     command = sys.argv[1]
     if command == "prepare" and len(sys.argv) == 3:
@@ -1056,6 +1094,10 @@ def main() -> int:
             Path(sys.argv[2]).resolve(),
             Path(sys.argv[3]).resolve(),
             int(sys.argv[4]),
+        )
+    if command == "observe-canvas" and len(sys.argv) == 4:
+        return observe_renderer_canvas(
+            Path(sys.argv[2]).resolve(), int(sys.argv[3])
         )
     return 2
 
