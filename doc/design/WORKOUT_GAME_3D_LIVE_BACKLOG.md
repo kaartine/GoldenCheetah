@@ -8,6 +8,9 @@ focused regression test, rendered evidence and interactive test have all been
 recorded. The release checklist remains the release gate; this file preserves
 the more detailed rider observations that lead to those gates.
 
+Detailed art direction, visual defects and the environment-element inventory
+are maintained in `WORKOUT_GAME_3D_VISUAL_BACKLOG.md`.
+
 Status values are `open`, `in progress`, `verified` and `deferred`.
 
 ## Route And Terrain
