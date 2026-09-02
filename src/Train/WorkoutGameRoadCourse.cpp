@@ -124,20 +124,31 @@ double trailReliefOffset(
             * piece.reliefScale;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Climb:
-        amplitude *= 0.78;
+        // The sustained grade already supplies the large visible landform.
+        // Keep local relief low enough for continuous wheel contact.
+        amplitude *= 0.54;
         break;
     case WorkoutGameTerrainKind::Skinny:
         amplitude *= 0.48;
         break;
     case WorkoutGameTerrainKind::Roots:
-    case WorkoutGameTerrainKind::RockGarden:
         amplitude *= 0.62;
+        break;
+    case WorkoutGameTerrainKind::RockGarden:
+        // The main line gets its texture from the authored stone profile;
+        // broad relief must not make the safe line equally rough.
+        amplitude = 0.0;
         break;
     case WorkoutGameTerrainKind::Rollers:
         // Keep the broad trail relief subordinate to the three authored
         // roller crests so their silhouette remains readable from the chase
         // camera.
         amplitude *= 0.42;
+        break;
+    case WorkoutGameTerrainKind::RockSlab:
+        // Avoid stacking broad undulation on the slab's authored tyre-contact
+        // profile; the surrounding forest floor still carries full relief.
+        amplitude *= 0.65;
         break;
     default:
         break;
@@ -618,6 +629,10 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 : section.terrain == WorkoutGameTerrainKind::Rollers
                     ? boundedPieceCount(
                         sectionLength, 30.0,
+                        MaximumRoadPiecesPerSection)
+                : section.terrain == WorkoutGameTerrainKind::Skinny
+                    ? boundedPieceCount(
+                        sectionLength, 48.0,
                         MaximumRoadPiecesPerSection)
                     : boundedPieceCount(
                         sectionLength, 42.0,
