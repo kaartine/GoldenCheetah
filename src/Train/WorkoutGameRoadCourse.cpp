@@ -13,6 +13,7 @@
 #include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
@@ -100,6 +101,8 @@ double featureSurfaceOffset(
     case WorkoutGameTerrainKind::Drop:
         return WorkoutGameFeatureGeometry::profile(
                 piece.terrain, piece.difficulty).surfaceOffset(local);
+    case WorkoutGameTerrainKind::GapJump:
+        // The authored branch meshes own the three different jump profiles.
         break;
     default:
         break;
@@ -150,6 +153,10 @@ double trailReliefOffset(
         // profile; the surrounding forest floor still carries full relief.
         amplitude *= 0.65;
         break;
+    case WorkoutGameTerrainKind::GapJump:
+        // Keep the common sockets calm while the authored lines add relief.
+        amplitude *= 0.18;
+        break;
     default:
         break;
     }
@@ -166,6 +173,10 @@ double targetHalfWidth(WorkoutGameTerrainKind terrain)
     if (terrain == WorkoutGameTerrainKind::Tabletop) {
         return WorkoutGameTabletopGeometry::profile(
                 0.0).socketHalfWidthMeters;
+    }
+    if (terrain == WorkoutGameTerrainKind::GapJump) {
+        return WorkoutGameGapJumpGeometry::canonicalProfile()
+                .socketHalfWidthMeters;
     }
     return 0.68 * WorkoutGameFeatureCatalog::definition(
             terrain).trailWidthScale;
@@ -185,6 +196,7 @@ double featureClearanceHalfWidth(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::Berm: return 1.4;
     case WorkoutGameTerrainKind::Tabletop: return 1.10;
     case WorkoutGameTerrainKind::RockSlab: return 1.42;
+    case WorkoutGameTerrainKind::GapJump: return 5.60;
     case WorkoutGameTerrainKind::SmoothTrail: return 0.68;
     }
     return 1.4;
@@ -259,7 +271,29 @@ bool rideableSurfaceAt(
                 - piece.challenge.obstacleDistanceMeters;
         if (!profile.surfacePresent(local)) return false;
     }
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.gapJump.enabled) continue;
+        const WorkoutGameRoadGapJumpLine &line = piece.gapJump.lines[1];
+        if (distanceMeters > line.takeoffDistanceMeters
+                && distanceMeters < line.landingDistanceMeters) {
+            return false;
+        }
+    }
     return true;
+}
+
+const WorkoutGameRoadGapJumpGate *gapJumpGateAt(
+        const WorkoutGameRoadCourse &course,
+        double distanceMeters)
+{
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (piece.gapJump.enabled
+                && distanceMeters >= piece.gapJump.splitStartDistanceMeters
+                && distanceMeters < piece.gapJump.mergeEndDistanceMeters) {
+            return &piece.gapJump;
+        }
+    }
+    return nullptr;
 }
 
 double estimatedLength(
@@ -362,6 +396,7 @@ double pieceTurn(
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
     case WorkoutGameTerrainKind::Tabletop: amount = 0.08; break;
+    case WorkoutGameTerrainKind::GapJump: amount = 0.04; break;
     case WorkoutGameTerrainKind::Drop:
         amount = isRecoverySection(section) ? 0.25 : 0.08;
         break;
@@ -406,6 +441,7 @@ WorkoutGameRoadAnimation animationFor(
         case WorkoutGameTerrainKind::BunnyHop:
         case WorkoutGameTerrainKind::LogOver:
         case WorkoutGameTerrainKind::Tabletop:
+        case WorkoutGameTerrainKind::GapJump:
             return WorkoutGameRoadAnimation::Jump;
         case WorkoutGameTerrainKind::Drop:
             return WorkoutGameRoadAnimation::Drop;
@@ -656,6 +692,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
         case WorkoutGameTerrainKind::BunnyHop:
         case WorkoutGameTerrainKind::LogOver:
         case WorkoutGameTerrainKind::Tabletop:
+        case WorkoutGameTerrainKind::GapJump:
         case WorkoutGameTerrainKind::Drop:
             obstacleDistance = std::min(
                     sectionStart + sectionLength * 0.80,
@@ -716,6 +753,24 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                             + tabletop.bypassExitRunoutMeters);
                 featureFitsSection = requiredEnd
                         <= sectionStart + sectionLength + 1e-9;
+            }
+        } else if (section.terrain == WorkoutGameTerrainKind::GapJump) {
+            const WorkoutGameGapJumpGeometryProfile gap =
+                    WorkoutGameGapJumpGeometry::profile(section.difficulty);
+            const double maximumGap = gap.ready
+                    ? gap.lines.back().gapLengthMeters : 0.0;
+            const double recoveryMeters = 6.0;
+            const double minimumTakeoff = sectionStart
+                    + gap.prepareLeadMeters;
+            const double maximumTakeoff = sectionStart + sectionLength
+                    - maximumGap - recoveryMeters - gap.mergeLengthMeters;
+            featureFitsSection = gap.ready
+                    && maximumTakeoff >= minimumTakeoff;
+            if (featureFitsSection) {
+                obstacleDistance = std::clamp(
+                        challengeDistance + 7.0,
+                        minimumTakeoff, maximumTakeoff);
+                challengeDistance = obstacleDistance - gap.lockLeadMeters;
             }
         }
         if (challenge.enabled
@@ -831,7 +886,10 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             const bool nearChallenge = challenge.enabled
                     && featureFitsSection
                     && pieceEnd >= std::min(
-                        challengeDistance, obstacleDistance) - 24.0
+                        challengeDistance, obstacleDistance)
+                        - (section.terrain
+                                == WorkoutGameTerrainKind::GapJump
+                            ? 16.0 : 24.0)
                     && pieceStart <= std::max(
                         challengeDistance, obstacleDistance) + 32.0;
             const bool ambientCurve = !ownsChallenge
@@ -890,6 +948,10 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         challengeDistance
                             - WorkoutGameTabletopGeometry::profile(
                                 piece.difficulty).splitLeadMeters)
+                    : section.terrain == WorkoutGameTerrainKind::GapJump
+                    ? obstacleDistance
+                        - WorkoutGameGapJumpGeometry::profile(
+                            piece.difficulty).prepareLeadMeters
                     : section.terrain == WorkoutGameTerrainKind::Roots
                             || section.terrain
                                 == WorkoutGameTerrainKind::RockGarden
@@ -909,8 +971,47 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 piece.challenge.decisionDistanceMeters = challengeDistance;
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;
                 piece.geometryAnchorDistanceMeters = obstacleDistance;
+                if (section.terrain == WorkoutGameTerrainKind::GapJump) {
+                    const WorkoutGameGapJumpGeometryProfile gap =
+                            WorkoutGameGapJumpGeometry::profile(
+                                piece.difficulty);
+                    piece.gapJump.enabled = gap.ready;
+                    piece.gapJump.prepareDistanceMeters = obstacleDistance
+                            - gap.prepareLeadMeters;
+                    piece.gapJump.lockDistanceMeters = obstacleDistance
+                            - gap.lockLeadMeters;
+                    piece.gapJump.splitStartDistanceMeters = obstacleDistance
+                            - gap.splitLengthMeters;
+                    const double recoveryMeters = 6.0;
+                    piece.gapJump.mergeEndDistanceMeters = obstacleDistance
+                            + gap.lines.back().gapLengthMeters
+                            + recoveryMeters + gap.mergeLengthMeters;
+                    for (std::size_t index = 0;
+                            index < gap.lines.size(); ++index) {
+                        const WorkoutGameGapJumpLineDefinition &sourceLine =
+                                gap.lines[index];
+                        WorkoutGameRoadGapJumpLine &line =
+                                piece.gapJump.lines[index];
+                        line.id = sourceLine.id;
+                        line.takeoffDistanceMeters = obstacleDistance;
+                        line.landingDistanceMeters = obstacleDistance
+                                + sourceLine.gapLengthMeters;
+                        line.lateralMeters = sourceLine.lateralMeters;
+                        line.gapLengthMeters = sourceLine.gapLengthMeters;
+                        line.minimumSpeedMetersPerSecond =
+                                sourceLine.coldThresholdMetersPerSecond;
+                        line.nominalFlightSeconds =
+                                sourceLine.nominalFlightSeconds;
+                        line.lipHeightMeters = sourceLine.lipHeightMeters;
+                        line.landingDropMeters =
+                                sourceLine.landingDropMeters;
+                    }
+                }
                 const double featureEnd = obstacleDistance
-                        + (section.terrain
+                        + (section.terrain == WorkoutGameTerrainKind::GapJump
+                            ? piece.gapJump.mergeEndDistanceMeters
+                                - obstacleDistance
+                            : section.terrain
                                     == WorkoutGameTerrainKind::RockSlab
                             ? WorkoutGameRockSlabGeometry::profile(
                                 piece.difficulty).endMeters
@@ -953,6 +1054,14 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                                 tabletop.minimumBypassLengthMeters;
                         bypassExitRunoutMeters =
                                 tabletop.bypassExitRunoutMeters;
+                    } else if (section.terrain
+                            == WorkoutGameTerrainKind::GapJump) {
+                        piece.challenge.bypassStartDistanceMeters =
+                                piece.gapJump.splitStartDistanceMeters;
+                        minimumBypassLengthMeters =
+                                piece.gapJump.mergeEndDistanceMeters
+                                - piece.gapJump.splitStartDistanceMeters;
+                        bypassExitRunoutMeters = 0.0;
                     }
                     piece.challenge.bypassEndDistanceMeters = std::min(
                             sectionStart + sectionLength,
@@ -963,8 +1072,11 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     const double bypassClearance =
                             featureClearanceHalfWidth(section.terrain)
                             + 0.35 + 0.38 + 0.25;
-                    piece.challenge.bypassLateralMeters =
-                            (sectionIndex & 1u) == 0u
+                    piece.challenge.bypassLateralMeters = section.terrain
+                            == WorkoutGameTerrainKind::GapJump
+                        ? WorkoutGameGapJumpGeometry::profile(
+                            piece.difficulty).bypassLateralMeters
+                        : (sectionIndex & 1u) == 0u
                             ? -bypassClearance : bypassClearance;
                 }
                 piece.challenge.profile.measurementStartProgress =
@@ -1103,6 +1215,9 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
         result.center.halfWidthMeters = skinny.halfWidthMeters(local);
         result.renderableTrailSurface = local <= skinny.activeStartMeters
                 || local >= skinny.activeEndMeters;
+    }
+    if (gapJumpGateAt(course, distance) != nullptr) {
+        result.renderableTrailSurface = false;
     }
     const double reliefOffset = trailReliefOffset(piece, distance);
     result.center.elevationMeters += reliefOffset

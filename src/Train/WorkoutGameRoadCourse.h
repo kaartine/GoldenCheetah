@@ -12,7 +12,9 @@
 
 #include "WorkoutGameCourse.h"
 #include "WorkoutGameFeatureChallenge.h"
+#include "WorkoutGameGapJumpGeometry.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -52,6 +54,29 @@ struct WorkoutGameRoadChallengeGate
     WorkoutGameFeatureChallengeProfile profile;
 };
 
+struct WorkoutGameRoadGapJumpLine
+{
+    WorkoutGameGapJumpLine id = WorkoutGameGapJumpLine::None;
+    double takeoffDistanceMeters = 0.0;
+    double landingDistanceMeters = 0.0;
+    double lateralMeters = 0.0;
+    double gapLengthMeters = 0.0;
+    double minimumSpeedMetersPerSecond = 0.0;
+    double nominalFlightSeconds = 0.0;
+    double lipHeightMeters = 0.0;
+    double landingDropMeters = 0.0;
+};
+
+struct WorkoutGameRoadGapJumpGate
+{
+    bool enabled = false;
+    double prepareDistanceMeters = 0.0;
+    double lockDistanceMeters = 0.0;
+    double splitStartDistanceMeters = 0.0;
+    double mergeEndDistanceMeters = 0.0;
+    std::array<WorkoutGameRoadGapJumpLine, 3> lines{};
+};
+
 struct WorkoutGameRoadPiece
 {
     std::size_t sourceSectionIndex = 0;
@@ -67,6 +92,7 @@ struct WorkoutGameRoadPiece
     WorkoutGameRoadConnector entry;
     WorkoutGameRoadConnector exit;
     WorkoutGameRoadChallengeGate challenge;
+    WorkoutGameRoadGapJumpGate gapJump;
 };
 
 struct WorkoutGameRoadTimelineSection

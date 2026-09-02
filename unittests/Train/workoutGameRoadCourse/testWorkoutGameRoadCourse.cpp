@@ -12,6 +12,7 @@
 #include "Train/WorkoutGameClimbGeometry.h"
 #include "Train/WorkoutGameRoadProjection.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
+#include "Train/WorkoutGameGapJumpGeometry.h"
 #include "Train/WorkoutGameHorizon.h"
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
@@ -89,6 +90,94 @@ class TestWorkoutGameRoadCourse : public QObject
     Q_OBJECT
 
 private slots:
+    void gapJumpCompilesThreeSpeedMatchedLinesAndGroundedBypass()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 1701u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::GapJump;
+        section.durationMs = source.durationMs;
+        section.lengthMeters = 120.0;
+        section.targetWatts = 260.0;
+        section.difficulty = 0.5;
+        section.challengeCount = 1;
+        source.sections = {section};
+
+        const WorkoutGameRoadCourse course =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        QVERIFY(course.ready);
+        const auto found = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.gapJump.enabled;
+                });
+        QVERIFY(found != course.pieces.end());
+        const WorkoutGameRoadPiece &piece = *found;
+        const WorkoutGameGapJumpGeometryProfile profile =
+                WorkoutGameGapJumpGeometry::canonicalProfile();
+        QVERIFY(profile.ready);
+        QCOMPARE(piece.entry.halfWidthMeters, 0.68);
+        QCOMPARE(piece.exit.halfWidthMeters, 0.68);
+        QCOMPARE(piece.gapJump.prepareDistanceMeters,
+                 piece.gapJump.lines[0].takeoffDistanceMeters
+                    - profile.prepareLeadMeters);
+        QCOMPARE(piece.gapJump.lockDistanceMeters,
+                 piece.gapJump.lines[0].takeoffDistanceMeters
+                    - profile.lockLeadMeters);
+        QCOMPARE(piece.gapJump.splitStartDistanceMeters,
+                 piece.gapJump.lines[0].takeoffDistanceMeters
+                    - profile.splitLengthMeters);
+        QVERIFY(piece.gapJump.mergeEndDistanceMeters
+                > piece.gapJump.lines[2].landingDistanceMeters + 4.0);
+
+        for (std::size_t index = 0; index < profile.lines.size(); ++index) {
+            const WorkoutGameRoadGapJumpLine &line =
+                    piece.gapJump.lines[index];
+            QCOMPARE(line.id, profile.lines[index].id);
+            QCOMPARE(line.lateralMeters, profile.lines[index].lateralMeters);
+            QCOMPARE(line.gapLengthMeters,
+                     profile.lines[index].gapLengthMeters);
+            QCOMPARE(line.landingDistanceMeters
+                        - line.takeoffDistanceMeters,
+                     line.gapLengthMeters);
+            QCOMPARE(line.nominalFlightSeconds,
+                     profile.lines[index].nominalFlightSeconds);
+            if (index > 0) {
+                QVERIFY(line.gapLengthMeters
+                        > piece.gapJump.lines[index - 1].gapLengthMeters);
+            }
+        }
+
+        QCOMPARE(piece.challenge.bypassStartDistanceMeters,
+                 piece.gapJump.splitStartDistanceMeters);
+        QCOMPARE(piece.challenge.bypassEndDistanceMeters,
+                 piece.gapJump.mergeEndDistanceMeters);
+        QCOMPARE(piece.challenge.bypassLateralMeters,
+                 profile.bypassLateralMeters);
+
+        const double takeoff = piece.gapJump.lines[1].takeoffDistanceMeters;
+        const double landing = piece.gapJump.lines[1].landingDistanceMeters;
+        const WorkoutGameRoadSample before =
+                WorkoutGameRoadCourseBuilder::sample(
+                    course, piece.gapJump.splitStartDistanceMeters - 0.05);
+        const WorkoutGameRoadSample fan =
+                WorkoutGameRoadCourseBuilder::sample(
+                    course, piece.gapJump.splitStartDistanceMeters + 0.05);
+        const WorkoutGameRoadSample gap =
+                WorkoutGameRoadCourseBuilder::sample(
+                    course, (takeoff + landing) * 0.5);
+        const WorkoutGameRoadSample after =
+                WorkoutGameRoadCourseBuilder::sample(
+                    course, piece.gapJump.mergeEndDistanceMeters + 0.05);
+        QVERIFY(before.renderableTrailSurface);
+        QVERIFY(!fan.renderableTrailSurface);
+        QVERIFY(!gap.rideableSurface);
+        QVERIFY(after.renderableTrailSurface);
+    }
+
     void tabletopGeometryIsCanonicalAndDeterministic()
     {
         const auto profile = WorkoutGameTabletopGeometry::profile(0.7);
