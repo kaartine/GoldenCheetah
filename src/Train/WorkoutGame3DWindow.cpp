@@ -74,6 +74,7 @@ const char *terrainName(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::LogOver: return "log-over";
     case WorkoutGameTerrainKind::Tabletop: return "tabletop";
     case WorkoutGameTerrainKind::RockSlab: return "rock-slab";
+    case WorkoutGameTerrainKind::GapJump: return "gap-jump";
     }
     return "smooth-trail";
 }

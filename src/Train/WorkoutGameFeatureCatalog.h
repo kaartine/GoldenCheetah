@@ -67,6 +67,8 @@ public:
             return {WorkoutGameTrailPropKind::TabletopMarker, 16.0, 1.08, true, true};
         case WorkoutGameTerrainKind::RockSlab:
             return {WorkoutGameTrailPropKind::Slab, 8.0, 1.04, true, false};
+        case WorkoutGameTerrainKind::GapJump:
+            return {WorkoutGameTrailPropKind::TabletopMarker, 18.0, 1.08, true, true};
         }
         return {};
     }

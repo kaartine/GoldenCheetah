@@ -40,6 +40,7 @@ private slots:
             WorkoutGameTerrainKind::Roots,
             WorkoutGameTerrainKind::RockGarden,
             WorkoutGameTerrainKind::Tabletop,
+            WorkoutGameTerrainKind::GapJump,
             WorkoutGameTerrainKind::Drop,
             WorkoutGameTerrainKind::Rollers,
             WorkoutGameTerrainKind::Climb,
@@ -48,13 +49,36 @@ private slots:
             WorkoutGameTerrainKind::RockSlab
         };
         QCOMPARE(challenged, expected);
-        QCOMPARE(course.durationMs, std::int64_t(109500));
+        QCOMPARE(course.durationMs, std::int64_t(122500));
         QCOMPARE(course.sections.back().terrain,
                  WorkoutGameTerrainKind::SmoothTrail);
-        QCOMPARE(course.sections.back().startMs, std::int64_t(104500));
+        QCOMPARE(course.sections.back().startMs, std::int64_t(117500));
         QCOMPARE(course.sections.back().durationMs, std::int64_t(5000));
         QCOMPARE(course.sections.back().lengthMeters, 30.0);
         QCOMPARE(course.sections.back().targetWatts, 110.0);
+    }
+
+    void courseContainsOneRepresentativeGapJump()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const auto first = std::find_if(
+                course.sections.begin(), course.sections.end(),
+                [](const WorkoutGameSection &section) {
+                    return section.terrain == WorkoutGameTerrainKind::GapJump;
+                });
+        QVERIFY(first != course.sections.end());
+        QCOMPARE(std::count_if(
+                    course.sections.begin(), course.sections.end(),
+                    [](const WorkoutGameSection &section) {
+                        return section.terrain
+                                == WorkoutGameTerrainKind::GapJump;
+                    }), 1);
+        QCOMPARE(first->feature, WorkoutGameFeature::SprintJump);
+        QCOMPARE(first->challengeCount, 1);
+        QVERIFY(first->targetWatts >= 200.0);
+        QVERIFY(first->lengthMeters >= 84.0);
+        QCOMPARE((first - 1)->terrain, WorkoutGameTerrainKind::SmoothTrail);
+        QCOMPARE((first + 1)->terrain, WorkoutGameTerrainKind::SmoothTrail);
     }
 
     void bermSequenceAlternatesDirectionAngleAndRollingRelief()

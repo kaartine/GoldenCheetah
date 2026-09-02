@@ -66,6 +66,8 @@ private slots:
                          WorkoutGameChallengeCue::Jump},
                 Expected{WorkoutGameTerrainKind::Tabletop,
                          WorkoutGameChallengeCue::Jump},
+                Expected{WorkoutGameTerrainKind::GapJump,
+                         WorkoutGameChallengeCue::Jump},
                 Expected{WorkoutGameTerrainKind::RockSlab,
                          WorkoutGameChallengeCue::CarrySpeed}}) {
             WorkoutGameSection section;
@@ -88,6 +90,24 @@ private slots:
             QVERIFY(profile.decisionProgress <= 1.0);
             QVERIFY(profile.bonusPoints > 0u);
         }
+    }
+
+    void gapJumpUsesTheVisibleJumpEffortProfile()
+    {
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::GapJump;
+        section.challengeCount = 1;
+        section.difficulty = 0.5;
+
+        const WorkoutGameFeatureChallengeProfile profile =
+                WorkoutGameFeatureChallenge::profile(section);
+        QVERIFY(profile.enabled);
+        QCOMPARE(profile.cue, WorkoutGameChallengeCue::Jump);
+        QCOMPARE(profile.measurementStartProgress, 0.62);
+        QCOMPARE(profile.decisionProgress, 0.72);
+        QCOMPARE(profile.minimumEffortRatio, 1.0);
+        QVERIFY(profile.bonusPoints > 0u);
     }
 
     void difficultyAndChallengeCountScaleBonusNotPowerThreshold()

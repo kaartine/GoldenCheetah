@@ -55,6 +55,7 @@ WorkoutGameFeatureChallengeProfile baseProfile(
     case WorkoutGameTerrainKind::Berm:
         return {};
     case WorkoutGameTerrainKind::Tabletop:
+    case WorkoutGameTerrainKind::GapJump:
         return {true, Cue::Jump, 0.62, 0.72,
                 1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::RockSlab:

@@ -67,6 +67,8 @@ TerrainPalette terrainPalette(WorkoutGameTerrainKind terrain)
         return {{123, 76, 45}, {217, 153, 75}, {73, 45, 29}};
     case WorkoutGameTerrainKind::Tabletop:
         return {{148, 91, 47}, {235, 185, 88}, {83, 70, 44}};
+    case WorkoutGameTerrainKind::GapJump:
+        return {{143, 83, 42}, {240, 198, 104}, {176, 65, 46}};
     case WorkoutGameTerrainKind::RockSlab:
         return {{101, 94, 82}, {188, 176, 145}, {55, 60, 58}};
     case WorkoutGameTerrainKind::SmoothTrail:
@@ -308,6 +310,7 @@ QString WorkoutGameCanvas::terrainName(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::LogOver: return tr("LOG OVER");
     case WorkoutGameTerrainKind::Tabletop: return tr("TABLETOP");
     case WorkoutGameTerrainKind::RockSlab: return tr("ROCK SLAB");
+    case WorkoutGameTerrainKind::GapJump: return tr("GAP JUMP");
     }
     return QString();
 }

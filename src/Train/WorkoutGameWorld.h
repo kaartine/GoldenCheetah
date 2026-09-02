@@ -30,7 +30,8 @@ enum class WorkoutGameTerrainKind
     Berm,
     LogOver,
     Tabletop,
-    RockSlab
+    RockSlab,
+    GapJump
 };
 
 struct WorkoutGameVehiclePose

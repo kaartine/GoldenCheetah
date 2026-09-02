@@ -11,6 +11,7 @@
 
 #include <QTest>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -164,6 +165,57 @@ private slots:
             QCOMPARE(first.course.sections[index].gradePercent,
                      second.course.sections[index].gradePercent);
         }
+    }
+
+    void gapJumpIsLimitedToRideFirstPreset()
+    {
+        WorkoutGameCourseConversionRequest request;
+        request.intervals = sampleWorkout();
+        request.ftpWatts = 190.0;
+
+        bool found = false;
+        for (std::uint32_t seed = 1u; seed <= 256u && !found; ++seed) {
+            request.seed = seed;
+            request.preset = WorkoutGameCoursePreset::RideFirst;
+            const WorkoutGameCourseConversionResult rideFirst =
+                    WorkoutGameCourseConverter::convert(request);
+            const bool hasGap = std::any_of(
+                    rideFirst.course.sections.begin(),
+                    rideFirst.course.sections.end(),
+                    [](const WorkoutGameDistanceCourseSection &section) {
+                        return section.terrain
+                                == WorkoutGameTerrainKind::GapJump;
+                    });
+            if (!hasGap) continue;
+
+            request.preset = WorkoutGameCoursePreset::WorkoutFirst;
+            const WorkoutGameCourseConversionResult workoutFirst =
+                    WorkoutGameCourseConverter::convert(request);
+            request.preset = WorkoutGameCoursePreset::Balanced;
+            const WorkoutGameCourseConversionResult balanced =
+                    WorkoutGameCourseConverter::convert(request);
+            for (const WorkoutGameDistanceCourseSection &section
+                    : workoutFirst.course.sections) {
+                QVERIFY(section.terrain != WorkoutGameTerrainKind::GapJump);
+            }
+            for (const WorkoutGameDistanceCourseSection &section
+                    : balanced.course.sections) {
+                QVERIFY(section.terrain != WorkoutGameTerrainKind::GapJump);
+            }
+
+            request.preset = WorkoutGameCoursePreset::RideFirst;
+            const WorkoutGameCourseConversionResult repeated =
+                    WorkoutGameCourseConverter::convert(request);
+            QCOMPARE(repeated.course.sections.size(),
+                     rideFirst.course.sections.size());
+            for (std::size_t index = 0;
+                    index < rideFirst.course.sections.size(); ++index) {
+                QCOMPARE(repeated.course.sections[index].terrain,
+                         rideFirst.course.sections[index].terrain);
+            }
+            found = true;
+        }
+        QVERIFY(found);
     }
 };
 

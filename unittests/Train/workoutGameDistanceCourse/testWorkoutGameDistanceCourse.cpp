@@ -152,6 +152,49 @@ private slots:
                     == WorkoutGameTerrainKind::Tabletop);
     }
 
+    void onlyHighTechnicalitySelectsGapJumpDeterministically()
+    {
+        const std::vector<WorkoutGameInterval> workout = {
+            {0, 60000, 120.0, 120.0},
+            {60000, 30000, 250.0, 250.0},
+            {90000, 60000, 110.0, 110.0}
+        };
+        WorkoutGameDistanceCourseGenerationParameters parameters;
+
+        parameters.technicality = 0.15;
+        const WorkoutGameDistanceCourse workoutFirst =
+                WorkoutGameDistanceCourseBuilder::build(
+                    workout, 190.0, parameters, 2u);
+        parameters.technicality = 0.55;
+        const WorkoutGameDistanceCourse balanced =
+                WorkoutGameDistanceCourseBuilder::build(
+                    workout, 190.0, parameters, 2u);
+        parameters.technicality = 0.95;
+        const WorkoutGameDistanceCourse rideFirst =
+                WorkoutGameDistanceCourseBuilder::build(
+                    workout, 190.0, parameters, 2u);
+        const WorkoutGameDistanceCourse repeated =
+                WorkoutGameDistanceCourseBuilder::build(
+                    workout, 190.0, parameters, 2u);
+
+        QCOMPARE(workoutFirst.sections[1].feature,
+                 WorkoutGameFeature::SprintJump);
+        QCOMPARE(balanced.sections[1].feature,
+                 WorkoutGameFeature::SprintJump);
+        QCOMPARE(rideFirst.sections[1].feature,
+                 WorkoutGameFeature::SprintJump);
+        QVERIFY(workoutFirst.sections[1].terrain
+                != WorkoutGameTerrainKind::GapJump);
+        QVERIFY(balanced.sections[1].terrain
+                != WorkoutGameTerrainKind::GapJump);
+        QCOMPARE(rideFirst.sections[1].terrain,
+                 WorkoutGameTerrainKind::GapJump);
+        QCOMPARE(repeated.sections[1].terrain,
+                 rideFirst.sections[1].terrain);
+        QCOMPARE(repeated.sections[1].visualVariant,
+                 rideFirst.sections[1].visualVariant);
+    }
+
     void targetPowerReplaysCloseToNominalDuration()
     {
         const WorkoutGameDistanceCourseGenerationParameters parameters;

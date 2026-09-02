@@ -40,6 +40,7 @@ WorkoutGameFeature featureForTerrain(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
     case WorkoutGameTerrainKind::Tabletop:
+    case WorkoutGameTerrainKind::GapJump:
         return WorkoutGameFeature::SprintJump;
     case WorkoutGameTerrainKind::Drop:
         return WorkoutGameFeature::RecoveryDescent;
@@ -58,7 +59,8 @@ WorkoutGameSection featureSection(
     WorkoutGameSection section;
     section.feature = featureForTerrain(terrain);
     section.terrain = terrain;
-    section.durationMs = terrain == WorkoutGameTerrainKind::Tabletop
+    section.durationMs = (terrain == WorkoutGameTerrainKind::Tabletop
+            || terrain == WorkoutGameTerrainKind::GapJump)
             ? TabletopDurationMs
             : terrain == WorkoutGameTerrainKind::Drop
             ? DropDurationMs
@@ -66,7 +68,8 @@ WorkoutGameSection featureSection(
             ? SkinnyDurationMs
             : terrain == WorkoutGameTerrainKind::Berm
             ? BermDurationMs : FeatureDurationMs;
-    section.lengthMeters = terrain == WorkoutGameTerrainKind::Tabletop
+    section.lengthMeters = (terrain == WorkoutGameTerrainKind::Tabletop
+            || terrain == WorkoutGameTerrainKind::GapJump)
             ? TabletopLengthMeters
             : terrain == WorkoutGameTerrainKind::Drop
             ? DropLengthMeters
@@ -161,6 +164,8 @@ WorkoutGameCourse WorkoutGameFeatureLab::course(
                        ftpWatts * 0.95, 2.0, 0.62, 3u),
         featureSection(WorkoutGameTerrainKind::Tabletop,
                        ftpWatts * 1.15, -1.0, 0.68, 4u),
+        featureSection(WorkoutGameTerrainKind::GapJump,
+                       ftpWatts * 1.18, -1.0, 0.72, 10u),
         featureSection(WorkoutGameTerrainKind::Drop,
                        ftpWatts * 0.55, -6.0, 0.58, 5u),
         featureSection(WorkoutGameTerrainKind::Rollers,

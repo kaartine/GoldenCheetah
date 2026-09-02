@@ -67,9 +67,17 @@ void applyTechnicalPalette(
         if (isRecoveryFeature(section.feature)) {
             section.terrain = WorkoutGameTerrainKind::Berm;
         } else if (section.feature == WorkoutGameFeature::SprintJump) {
-            section.terrain = section.visualVariant % 2u == 0u
-                    ? WorkoutGameTerrainKind::LogOver
-                    : WorkoutGameTerrainKind::Tabletop;
+            switch (section.visualVariant % 3u) {
+            case 0u:
+                section.terrain = WorkoutGameTerrainKind::LogOver;
+                break;
+            case 1u:
+                section.terrain = WorkoutGameTerrainKind::Tabletop;
+                break;
+            default:
+                section.terrain = WorkoutGameTerrainKind::GapJump;
+                break;
+            }
         } else if (section.feature == WorkoutGameFeature::Trail
                 || section.feature == WorkoutGameFeature::FlowTrail) {
             switch (section.visualVariant % 3u) {

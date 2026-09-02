@@ -63,7 +63,8 @@ private slots:
                 WorkoutGameTerrainKind::Berm,
                 WorkoutGameTerrainKind::LogOver,
                 WorkoutGameTerrainKind::Tabletop,
-                WorkoutGameTerrainKind::RockSlab}) {
+                WorkoutGameTerrainKind::RockSlab,
+                WorkoutGameTerrainKind::GapJump}) {
             const WorkoutGameTerrainDefinition definition =
                     WorkoutGameFeatureCatalog::definition(terrain);
             QVERIFY(definition.propSpacingMeters > 0.0);
@@ -73,6 +74,12 @@ private slots:
                     WorkoutGameTerrainKind::LogOver).jumpable);
         QVERIFY(WorkoutGameFeatureCatalog::definition(
                     WorkoutGameTerrainKind::Tabletop).jumpable);
+        const WorkoutGameTerrainDefinition gapJump =
+                WorkoutGameFeatureCatalog::definition(
+                    WorkoutGameTerrainKind::GapJump);
+        QVERIFY(gapJump.technical);
+        QVERIFY(gapJump.jumpable);
+        QCOMPARE(gapJump.prop, WorkoutGameTrailPropKind::TabletopMarker);
         QVERIFY(!WorkoutGameFeatureCatalog::definition(
                     WorkoutGameTerrainKind::RockSlab).jumpable);
     }
@@ -170,7 +177,8 @@ private slots:
             {WorkoutGameTerrainKind::Berm, WorkoutGameTrailPropKind::BermMarker},
             {WorkoutGameTerrainKind::LogOver, WorkoutGameTrailPropKind::Log},
             {WorkoutGameTerrainKind::Tabletop, WorkoutGameTrailPropKind::TabletopMarker},
-            {WorkoutGameTerrainKind::RockSlab, WorkoutGameTrailPropKind::Slab}
+            {WorkoutGameTerrainKind::RockSlab, WorkoutGameTrailPropKind::Slab},
+            {WorkoutGameTerrainKind::GapJump, WorkoutGameTrailPropKind::TabletopMarker}
         };
 
         for (const auto &entry : cases) {

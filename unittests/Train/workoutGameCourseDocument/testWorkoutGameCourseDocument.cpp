@@ -116,7 +116,8 @@ private slots:
         for (WorkoutGameTerrainKind terrain : {
                 WorkoutGameTerrainKind::LogOver,
                 WorkoutGameTerrainKind::Tabletop,
-                WorkoutGameTerrainKind::RockSlab}) {
+                WorkoutGameTerrainKind::RockSlab,
+                WorkoutGameTerrainKind::GapJump}) {
             WorkoutGameCourseDocument source = sampleDocument();
             source.course.sections[0].terrain = terrain;
             WorkoutGameCourseDocument decoded;
@@ -124,6 +125,76 @@ private slots:
                         WorkoutGameCourseDocumentCodec::encode(source), decoded),
                      WorkoutGameCourseDocumentStatus::Ready);
             QCOMPARE(decoded.course.sections[0].terrain, terrain);
+        }
+    }
+
+    void terrainEnumValuesRemainStableAndGapJumpAppends()
+    {
+        QCOMPARE(int(WorkoutGameTerrainKind::SmoothTrail), 0);
+        QCOMPARE(int(WorkoutGameTerrainKind::Roots), 1);
+        QCOMPARE(int(WorkoutGameTerrainKind::Rollers), 2);
+        QCOMPARE(int(WorkoutGameTerrainKind::Climb), 3);
+        QCOMPARE(int(WorkoutGameTerrainKind::RockGarden), 4);
+        QCOMPARE(int(WorkoutGameTerrainKind::BunnyHop), 5);
+        QCOMPARE(int(WorkoutGameTerrainKind::Drop), 6);
+        QCOMPARE(int(WorkoutGameTerrainKind::Skinny), 7);
+        QCOMPARE(int(WorkoutGameTerrainKind::Berm), 8);
+        QCOMPARE(int(WorkoutGameTerrainKind::LogOver), 9);
+        QCOMPARE(int(WorkoutGameTerrainKind::Tabletop), 10);
+        QCOMPARE(int(WorkoutGameTerrainKind::RockSlab), 11);
+        QCOMPARE(int(WorkoutGameTerrainKind::GapJump), 12);
+    }
+
+    void gapJumpRoundTripsWithoutChangingSchemaAndUsesSpecificCrsCue()
+    {
+        WorkoutGameCourseDocument source = sampleDocument();
+        source.course.sections[0].feature = WorkoutGameFeature::SprintJump;
+        source.course.sections[0].terrain = WorkoutGameTerrainKind::GapJump;
+
+        const QByteArray encoded = WorkoutGameCourseDocumentCodec::encode(source);
+        QVERIFY(encoded.contains("\"terrain\":\"gap-jump\""));
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.schemaVersion, 1);
+        QCOMPARE(decoded.course.sections[0].feature,
+                 WorkoutGameFeature::SprintJump);
+        QCOMPARE(decoded.course.sections[0].terrain,
+                 WorkoutGameTerrainKind::GapJump);
+
+        const QByteArray crs = WorkoutGameCourseCrsExporter::encode(decoded);
+        QVERIFY(crs.contains("Gap jump"));
+    }
+
+    void existingVersionOneTerrainDocumentsRemainCanonical()
+    {
+        for (WorkoutGameTerrainKind terrain : {
+                WorkoutGameTerrainKind::SmoothTrail,
+                WorkoutGameTerrainKind::Roots,
+                WorkoutGameTerrainKind::Rollers,
+                WorkoutGameTerrainKind::Climb,
+                WorkoutGameTerrainKind::RockGarden,
+                WorkoutGameTerrainKind::BunnyHop,
+                WorkoutGameTerrainKind::Drop,
+                WorkoutGameTerrainKind::Skinny,
+                WorkoutGameTerrainKind::Berm,
+                WorkoutGameTerrainKind::LogOver,
+                WorkoutGameTerrainKind::Tabletop,
+                WorkoutGameTerrainKind::RockSlab}) {
+            WorkoutGameCourseDocument source = sampleDocument();
+            source.course.sections[0].terrain = terrain;
+            const QByteArray versionOne =
+                    WorkoutGameCourseDocumentCodec::encode(source);
+            QVERIFY(!versionOne.contains("gap-jump"));
+
+            WorkoutGameCourseDocument decoded;
+            QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                        versionOne, decoded),
+                     WorkoutGameCourseDocumentStatus::Ready);
+            QCOMPARE(decoded.schemaVersion, 1);
+            QCOMPARE(decoded.course.sections[0].terrain, terrain);
+            QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded),
+                     versionOne);
         }
     }
 

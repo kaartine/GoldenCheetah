@@ -31,6 +31,13 @@ QString featureLabel(WorkoutGameFeature feature)
     return {};
 }
 
+QString sectionLabel(const WorkoutGameDistanceCourseSection &section)
+{
+    return section.terrain == WorkoutGameTerrainKind::GapJump
+            ? QStringLiteral("Gap jump")
+            : featureLabel(section.feature);
+}
+
 QString segmentLine(const WorkoutGameDistanceCourseSection &section)
 {
     return QStringLiteral("%1 %2 0.0\n")
@@ -45,7 +52,7 @@ QString cueLine(const WorkoutGameDistanceCourseSection &section)
     return QStringLiteral("%1 Target %2 W - %3 8\n")
             .arg(section.startDistanceMeters / 1000.0, 0, 'f', 6)
             .arg(targetWatts)
-            .arg(featureLabel(section.feature));
+            .arg(sectionLabel(section));
 }
 
 }
@@ -76,7 +83,7 @@ QByteArray WorkoutGameCourseCrsExporter::encode(
                 document.course.sections[index];
         if (index > 0) {
             output += QStringLiteral("LAP %1\n").arg(
-                    featureLabel(section.feature));
+                    sectionLabel(section));
         }
         output += segmentLine(section);
     }

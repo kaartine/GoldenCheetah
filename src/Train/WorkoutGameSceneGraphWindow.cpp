@@ -296,6 +296,7 @@ QColor roadColor(WorkoutGameTerrainKind terrain, bool alternate)
     case WorkoutGameTerrainKind::Skinny: base = QColor(104, 72, 38); break;
     case WorkoutGameTerrainKind::Roots: base = QColor(77, 58, 37); break;
     case WorkoutGameTerrainKind::Climb: base = QColor(91, 66, 42); break;
+    case WorkoutGameTerrainKind::GapJump: base = QColor(112, 68, 38); break;
     default: base = QColor(89, 65, 40); break;
     }
     return alternate ? base.lighter(108) : base.darker(106);
@@ -1116,6 +1117,8 @@ void WorkoutGameSceneGraphItem::rebuildHud()
             featureText = tr("TABLETOP"); break;
         case WorkoutGameTerrainKind::RockSlab:
             featureText = tr("ROCK SLAB"); break;
+        case WorkoutGameTerrainKind::GapJump:
+            featureText = tr("GAP JUMP"); break;
         case WorkoutGameTerrainKind::SmoothTrail:
             featureText = tr("TRAIL"); break;
         }
