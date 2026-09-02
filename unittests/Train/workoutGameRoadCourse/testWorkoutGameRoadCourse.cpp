@@ -124,6 +124,9 @@ private slots:
         QCOMPARE(piece.gapJump.prepareDistanceMeters,
                  piece.gapJump.lines[0].takeoffDistanceMeters
                     - profile.prepareLeadMeters);
+        QCOMPARE(piece.gapJump.launchWindowStartDistanceMeters,
+                 piece.gapJump.lines[0].takeoffDistanceMeters
+                    - profile.launchWindowLeadMeters);
         QCOMPARE(piece.gapJump.lockDistanceMeters,
                  piece.gapJump.lines[0].takeoffDistanceMeters
                     - profile.lockLeadMeters);

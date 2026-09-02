@@ -94,13 +94,25 @@ WorkoutGameGapJumpSelectionState WorkoutGameGapJumpSelector::lock(
         bool effortReady,
         bool telemetryFresh)
 {
+    return lock(actionId, state_.provisionalLine,
+                effortReady, telemetryFresh);
+}
+
+WorkoutGameGapJumpSelectionState WorkoutGameGapJumpSelector::lock(
+        std::uint64_t actionId,
+        WorkoutGameGapJumpLine requestedLine,
+        bool effortReady,
+        bool telemetryFresh)
+{
     if (state_.locked) return state_;
     state_.locked = true;
     state_.actionId = actionId;
-    state_.lockedLine = profile_.ready && initialized_ && effortReady
+    const bool validLine = requestedLine != WorkoutGameGapJumpLine::None
+            && WorkoutGameGapJumpGeometry::line(
+                    profile_, requestedLine) != nullptr;
+    state_.lockedLine = profile_.ready && validLine && effortReady
                     && telemetryFresh
-            ? state_.provisionalLine
-            : WorkoutGameGapJumpLine::None;
+                ? requestedLine : WorkoutGameGapJumpLine::None;
     state_.provisionalLine = state_.lockedLine;
     clearCandidate();
     return state_;

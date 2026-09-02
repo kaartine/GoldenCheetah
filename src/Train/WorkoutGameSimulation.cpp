@@ -129,6 +129,13 @@ void WorkoutGameSimulation::finalizeActiveSection()
         return;
     }
 
+    // Gap jumps are committed from their distance-based 10-3 m launch
+    // window. The generic section-progress assessment must not race it.
+    if (configuredCourse.sections[std::size_t(activeSection)].terrain
+            == WorkoutGameTerrainKind::GapJump) {
+        return;
+    }
+
     const WorkoutGameFeatureChallengeMetrics metrics = challengeMetrics();
     const WorkoutGameFeatureChallengeAssessment assessment =
             WorkoutGameFeatureChallenge::assess(activeChallenge, metrics);
@@ -139,12 +146,52 @@ void WorkoutGameSimulation::finalizeActiveSection()
     if (assessment.completed) scorePoints += activeChallenge.bonusPoints;
 }
 
+bool WorkoutGameSimulation::commitGapJumpOutcome(
+        int sectionIndex,
+        WorkoutGameFeatureOutcome outcome,
+        double readiness)
+{
+    if (sectionIndex != activeSection
+            || sectionIndex < 0
+            || sectionIndex >= int(configuredCourse.sections.size())
+            || configuredCourse.sections[std::size_t(sectionIndex)].terrain
+                != WorkoutGameTerrainKind::GapJump
+            || outcomes[std::size_t(sectionIndex)]
+                != WorkoutGameFeatureOutcome::Active
+            || (outcome != WorkoutGameFeatureOutcome::Completed
+                && outcome != WorkoutGameFeatureOutcome::Bypassed)) {
+        return false;
+    }
+
+    activeChallengeReadiness = std::clamp(
+            std::isfinite(readiness) ? readiness : 0.0, 0.0, 1.0);
+    outcomes[std::size_t(sectionIndex)] = outcome;
+    if (outcome == WorkoutGameFeatureOutcome::Completed) {
+        scorePoints += activeChallenge.bonusPoints;
+    }
+    return true;
+}
+
+std::uint64_t WorkoutGameSimulation::currentScore() const
+{
+    return std::uint64_t(std::max(0.0, std::floor(scorePoints)));
+}
+
 void WorkoutGameSimulation::moveToSection(int sectionIndex)
 {
     if (sectionIndex == activeSection) return;
 
     const int priorSection = activeSection;
     finalizeActiveSection();
+    if (priorSection >= 0
+            && priorSection < int(configuredCourse.sections.size())
+            && configuredCourse.sections[std::size_t(priorSection)].terrain
+                == WorkoutGameTerrainKind::GapJump
+            && outcomes[std::size_t(priorSection)]
+                == WorkoutGameFeatureOutcome::Active) {
+        outcomes[std::size_t(priorSection)] =
+                WorkoutGameFeatureOutcome::Bypassed;
+    }
     if (sectionIndex > priorSection + 1) {
         const int firstSkipped = std::max(0, priorSection + 1);
         for (int index = firstSkipped; index < sectionIndex; ++index) {
@@ -361,7 +408,7 @@ WorkoutGameSimulationSnapshot WorkoutGameSimulation::snapshot(
             0.0, 1.0);
     result.speedKph = currentSpeedKph;
     result.adherence = currentAdherence;
-    result.score = std::uint64_t(std::max(0.0, std::floor(scorePoints)));
+    result.score = currentScore();
     result.streakSeconds = double(streakMs) / 1000.0;
 
     if (activeSection > 0) {

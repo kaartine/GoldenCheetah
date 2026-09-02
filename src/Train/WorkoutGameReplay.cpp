@@ -168,8 +168,12 @@ void addFeature(
     hash.addEnum(feature.route);
     hash.addDouble(feature.visualDistanceMeters);
     hash.addDouble(feature.prepareDistanceMeters);
+    hash.addDouble(feature.launchWindowStartDistanceMeters);
     hash.addDouble(feature.decisionDistanceMeters);
     hash.addDouble(feature.obstacleDistanceMeters);
+    hash.addDouble(feature.physicalTakeoffDistanceMeters);
+    hash.addDouble(feature.actionStartDistanceMeters);
+    hash.addDouble(feature.actionEndDistanceMeters);
     hash.addDouble(feature.distanceToObstacleMeters);
     hash.addDouble(feature.readiness);
     hash.addDouble(feature.lateralOffsetMeters);
@@ -177,6 +181,20 @@ void addFeature(
     hash.addDouble(feature.pitchDegrees);
     hash.addDouble(feature.vibration);
     hash.addDouble(feature.landingImpact);
+    hash.addEnum(feature.provisionalGapLine);
+    hash.addEnum(feature.lockedGapLine);
+    hash.addEnum(feature.steeringGapLine);
+    hash.addDouble(feature.predictedApproachSpeedMetersPerSecond);
+    hash.addDouble(feature.launchRollingSpeedMetersPerSecond);
+    hash.addDouble(feature.launchBestSpeedMetersPerSecond);
+    hash.addInteger(feature.launchPowerHoldMilliseconds);
+    hash.addDouble(feature.selectedGapLengthMeters);
+    hash.addDouble(feature.flightDurationSeconds);
+    hash.addBool(feature.launchWindowActive);
+    hash.addBool(feature.launchSpeedReady);
+    hash.addBool(feature.launchPowerReady);
+    hash.addBool(feature.gapLineReachable);
+    hash.addBool(feature.gapLineLocked);
     hash.addInteger(feature.actionId);
     hash.addBool(feature.triggerJump);
 }

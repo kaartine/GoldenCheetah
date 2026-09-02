@@ -1162,11 +1162,13 @@ private slots:
         WorkoutGamePhysicsInput input;
         input.terrain = WorkoutGameTerrainKind::GapJump;
         input.desiredSpeedMetersPerSecond = 7.0;
-        input.courseSpeedMetersPerSecond = 7.0;
+        input.courseSpeedMetersPerSecond = 4.0;
+        input.gapJumpLaunchSpeedMetersPerSecond = 7.0;
+        input.difficulty = profile.difficulty;
         input.effortRatio = 1.0;
         input.jumpRequested = true;
-        input.featureActionId = 42u
-                | (std::uint64_t(WorkoutGameGapJumpLine::Long) << 8);
+        input.gapJumpLine = WorkoutGameGapJumpLine::Long;
+        input.featureActionId = 42u;
         physics.update(input);
 
         int takeoffMs = -1;
@@ -1187,6 +1189,15 @@ private slots:
         QVERIFY(landingMs > takeoffMs);
         QVERIFY(landingMs - takeoffMs
                 <= int(std::ceil(line->nominalFlightSeconds * 1000.0)) + 50);
+        const int expectedFlightMs = int(std::ceil(
+                line->gapLengthMeters / 7.0 * 1000.0));
+        QVERIFY2(std::abs((landingMs - takeoffMs) - expectedFlightMs) <= 100,
+                 qPrintable(QStringLiteral(
+                     "measured %1 ms, expected %2 ms (takeoff %3, landing %4)")
+                     .arg(landingMs - takeoffMs)
+                     .arg(expectedFlightMs)
+                     .arg(takeoffMs)
+                     .arg(landingMs)));
         QVERIFY(landingMs - takeoffMs <= 2000);
         QVERIFY(maximumAirHeight > 0.25);
         QVERIFY(maximumAirHeight <= 2.4);

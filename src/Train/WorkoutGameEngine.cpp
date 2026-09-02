@@ -87,10 +87,34 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
             input.authoritativeSpeedKph, MaximumSpeedKph);
     input.drivetrainSpeedLimitKph = finiteOptionalNonNegative(
             input.drivetrainSpeedLimitKph, MaximumSpeedKph);
-    const WorkoutGameSimulationSnapshot snapshot = simulation.update(input);
+    WorkoutGameSimulationSnapshot snapshot = simulation.update(input);
+    double featureTargetWatts = input.targetWatts;
+    if (featureTargetWatts <= 0.0
+            && snapshot.activeSection >= 0
+            && snapshot.activeSection < int(course.sections.size())) {
+        featureTargetWatts = std::max(
+                0.0,
+                course.sections[std::size_t(snapshot.activeSection)]
+                    .targetWatts);
+    }
     const WorkoutGameFeatureRuntimeSnapshot feature =
             featureRuntime.update(snapshot, input.actualWatts,
-                                  input.targetWatts);
+                                  featureTargetWatts);
+    if (feature.ready
+            && feature.terrain == WorkoutGameTerrainKind::GapJump
+            && feature.gapLineLocked
+            && (feature.outcome == WorkoutGameFeatureOutcome::Completed
+                || feature.outcome == WorkoutGameFeatureOutcome::Bypassed)) {
+        simulation.commitGapJumpOutcome(
+                snapshot.activeSection, feature.outcome, feature.readiness);
+        snapshot.featureOutcome = feature.outcome;
+        snapshot.route = feature.route;
+        snapshot.challengeReadiness = feature.readiness;
+        snapshot.challengeAssessment.readiness = feature.readiness;
+        snapshot.challengeAssessment.completed = feature.outcome
+                == WorkoutGameFeatureOutcome::Completed;
+        snapshot.score = simulation.currentScore();
+    }
     WorkoutGameWorldSnapshot world;
     WorkoutGameCameraSnapshot view;
     if (snapshot.ready
@@ -132,6 +156,10 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
         physicsInput.effortRatio = std::max(0.0, input.actualWatts) / target;
         physicsInput.paused = input.paused;
         physicsInput.jumpRequested = feature.triggerJump;
+        physicsInput.gapJumpLine = feature.lockedGapLine;
+        physicsInput.gapJumpLaunchSpeedMetersPerSecond =
+                feature.launchBestSpeedMetersPerSecond > 0.0
+                ? feature.launchBestSpeedMetersPerSecond : -1.0;
         physicsInput.forceGroundFollowing = feature.route
                 == WorkoutGameRoute::SafeBypass;
         physicsInput.followCourseSurface =

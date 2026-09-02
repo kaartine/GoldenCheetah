@@ -22,11 +22,15 @@
 #include "WorkoutGameTabletopGeometry.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace {
 
 constexpr double Pi = 3.14159265358979323846;
+constexpr double GapJumpMaximumLateralSpeedMetersPerSecond = 3.0;
+constexpr double GapJumpMaximumLateralAccelerationMetersPerSecondSquared = 9.0;
+constexpr double GapJumpReachabilityToleranceMeters = 0.18;
 
 double smoothStep(double value)
 {
@@ -99,15 +103,6 @@ double gapJumpLateralAt(
                 / std::max(0.01, mergeEndMeters - mergeStartMeters)));
 }
 
-std::uint64_t gapJumpActionId(
-        std::uint64_t baseActionId,
-        WorkoutGameGapJumpLine line)
-{
-    constexpr std::uint64_t LineMask = std::uint64_t(0x3) << 8;
-    return (baseActionId & ~LineMask)
-            | (std::uint64_t(line) << 8);
-}
-
 const WorkoutGameRoadGapJumpLine *gapJumpRoadLine(
         const WorkoutGameRoadGapJumpGate &gate,
         WorkoutGameGapJumpLine id)
@@ -117,6 +112,76 @@ const WorkoutGameRoadGapJumpLine *gapJumpRoadLine(
         if (line.id == id) return &line;
     }
     return nullptr;
+}
+
+void moveGapJumpLateral(
+        double targetMeters,
+        double elapsedSeconds,
+        double &positionMeters,
+        double &velocityMetersPerSecond);
+
+WorkoutGameGapJumpLine reachableGapJumpLine(
+        const WorkoutGameRoadGapJumpGate &gate,
+        WorkoutGameGapJumpLine requested,
+        double currentLateralMeters,
+        double currentLateralVelocityMetersPerSecond,
+        double remainingSeconds)
+{
+    if (requested == WorkoutGameGapJumpLine::None) {
+        return WorkoutGameGapJumpLine::None;
+    }
+    const int requestedRank = int(requested);
+    constexpr std::array<WorkoutGameGapJumpLine, 3> DescendingLines = {
+        WorkoutGameGapJumpLine::Long,
+        WorkoutGameGapJumpLine::Medium,
+        WorkoutGameGapJumpLine::Short
+    };
+    for (WorkoutGameGapJumpLine candidate : DescendingLines) {
+        if (int(candidate) > requestedRank) continue;
+        const WorkoutGameRoadGapJumpLine *line =
+                gapJumpRoadLine(gate, candidate);
+        if (!line) continue;
+        double projectedPosition = currentLateralMeters;
+        double projectedVelocity = currentLateralVelocityMetersPerSecond;
+        double timeRemaining = std::max(0.0, remainingSeconds);
+        while (timeRemaining > 1e-9) {
+            const double step = std::min(0.05, timeRemaining);
+            moveGapJumpLateral(line->lateralMeters, step,
+                               projectedPosition, projectedVelocity);
+            timeRemaining -= step;
+        }
+        if (std::abs(line->lateralMeters - projectedPosition)
+                <= GapJumpReachabilityToleranceMeters) {
+            return candidate;
+        }
+    }
+    return WorkoutGameGapJumpLine::None;
+}
+
+void moveGapJumpLateral(
+        double targetMeters,
+        double elapsedSeconds,
+        double &positionMeters,
+        double &velocityMetersPerSecond)
+{
+    const double dt = std::clamp(elapsedSeconds, 0.0, 0.10);
+    if (dt <= 0.0) return;
+    const double error = targetMeters - positionMeters;
+    const double targetVelocity = std::clamp(
+            error / dt,
+            -GapJumpMaximumLateralSpeedMetersPerSecond,
+            GapJumpMaximumLateralSpeedMetersPerSecond);
+    const double maximumVelocityChange =
+            GapJumpMaximumLateralAccelerationMetersPerSecondSquared * dt;
+    velocityMetersPerSecond += std::clamp(
+            targetVelocity - velocityMetersPerSecond,
+            -maximumVelocityChange, maximumVelocityChange);
+    double movement = velocityMetersPerSecond * dt;
+    if (std::abs(movement) >= std::abs(error)) {
+        movement = error;
+        velocityMetersPerSecond = 0.0;
+    }
+    positionMeters += movement;
 }
 
 double jumpHeight(WorkoutGameTerrainKind terrain)
@@ -337,7 +402,10 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                 || gapJumpState.baseActionId != baseActionId
                 || (gapJumpState.hasTimestamp
                     && simulation.workoutTimeMs
-                        < gapJumpState.lastWorkoutTimeMs);
+                        < gapJumpState.lastWorkoutTimeMs)
+                || (gapJumpState.hasVisualDistance
+                    && result.visualDistanceMeters + 0.01
+                        < gapJumpState.lastVisualDistanceMeters);
         if (newAction) {
             gapJumpState = GapJumpState();
             gapJumpState.sourceSectionIndex = featureSection;
@@ -345,75 +413,189 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             gapJumpState.selector = WorkoutGameGapJumpSelector(profile);
         }
 
-        const double predictedSpeed = simulation.challengeMeasurementActive
+        const double previewSpeed = simulation.challengeMeasurementActive
                 && std::isfinite(
                     simulation.challengeMetrics.averageSpeedKph)
                 && simulation.challengeMetrics.averageSpeedKph >= 0.0
             ? simulation.challengeMetrics.averageSpeedKph / 3.6
             : std::max(0.0, std::isfinite(simulation.speedKph)
                 ? simulation.speedKph / 3.6 : 0.0);
-        result.predictedApproachSpeedMetersPerSecond = predictedSpeed;
+        const double instantaneousSpeed = std::max(
+                0.0, std::isfinite(simulation.speedKph)
+                    ? simulation.speedKph / 3.6 : 0.0);
 
-        int elapsedMilliseconds = 50;
+        int elapsedMilliseconds = 0;
+        bool launchTimingContinuous = true;
         if (gapJumpState.hasTimestamp) {
+            const std::int64_t elapsed = simulation.workoutTimeMs
+                    - gapJumpState.lastWorkoutTimeMs;
+            launchTimingContinuous = elapsed >= 0 && elapsed <= 100;
             elapsedMilliseconds = int(std::clamp<std::int64_t>(
-                    simulation.workoutTimeMs
-                        - gapJumpState.lastWorkoutTimeMs,
-                    0, 2000));
+                    elapsed, 0, 2000));
         }
-        gapJumpState.lastWorkoutTimeMs = simulation.workoutTimeMs;
-        gapJumpState.hasTimestamp = true;
-        if (!gapJumpState.selector.state().locked
-                && elapsedMilliseconds > 0) {
-            for (int remaining = elapsedMilliseconds;
-                 remaining > 0; remaining -= 50) {
-                gapJumpState.selector.update(
-                        predictedSpeed, std::min(50, remaining));
-            }
-        }
-
         result.prepareDistanceMeters = gate.enabled
                 ? gate.prepareDistanceMeters
                 : piece->challenge.prepareDistanceMeters;
+        result.launchWindowStartDistanceMeters = gate.enabled
+                ? gate.launchWindowStartDistanceMeters
+                : result.obstacleDistanceMeters
+                    - profile.launchWindowLeadMeters;
         result.decisionDistanceMeters = gate.enabled
                 ? gate.lockDistanceMeters
                 : piece->challenge.decisionDistanceMeters;
         result.distanceToObstacleMeters = result.obstacleDistanceMeters
                 - result.visualDistanceMeters;
+        result.launchWindowActive = gate.enabled
+                && result.visualDistanceMeters
+                    >= result.launchWindowStartDistanceMeters
+                && result.visualDistanceMeters < result.decisionDistanceMeters;
+
+        if (!gapJumpState.selector.state().locked
+                && result.visualDistanceMeters
+                    < result.launchWindowStartDistanceMeters) {
+            if (!gapJumpState.hasTimestamp) {
+                gapJumpState.launchLine =
+                        WorkoutGameGapJumpSelector::coldSelection(
+                            profile, previewSpeed);
+            } else {
+                for (int remaining = elapsedMilliseconds;
+                     remaining > 0; remaining -= 50) {
+                    gapJumpState.selector.update(
+                            previewSpeed, std::min(50, remaining));
+                }
+                gapJumpState.launchLine =
+                        gapJumpState.selector.state().provisionalLine;
+            }
+        }
+
+        if (!gapJumpState.launchWindowStarted
+                && result.visualDistanceMeters
+                    >= result.launchWindowStartDistanceMeters) {
+            gapJumpState.launchWindow.reset();
+            gapJumpState.launchWindowStarted = true;
+        }
+        if (gapJumpState.launchWindowStarted
+                && !gapJumpState.selector.state().locked
+                && !launchTimingContinuous) {
+            gapJumpState.launchWindow.reset();
+        }
+        int launchSampleMilliseconds = 0;
+        if (!gapJumpState.selector.state().locked
+                && gapJumpState.launchWindowStarted
+                && launchTimingContinuous
+                && gapJumpState.hasTimestamp
+                && gapJumpState.hasVisualDistance
+                && elapsedMilliseconds > 0) {
+            if (gapJumpState.hasVisualDistance
+                    && result.visualDistanceMeters
+                        > gapJumpState.lastVisualDistanceMeters + 1e-9) {
+                const double travelled = result.visualDistanceMeters
+                        - gapJumpState.lastVisualDistanceMeters;
+                const double overlapStart = std::max(
+                        gapJumpState.lastVisualDistanceMeters,
+                        result.launchWindowStartDistanceMeters);
+                const double overlapEnd = std::min(
+                        result.visualDistanceMeters,
+                        result.decisionDistanceMeters);
+                const double overlap = std::max(0.0,
+                                                overlapEnd - overlapStart);
+                if (travelled <= 2.0) {
+                    launchSampleMilliseconds = int(std::lround(
+                            elapsedMilliseconds * overlap / travelled));
+                } else {
+                    gapJumpState.launchWindow.reset();
+                }
+            } else if (result.launchWindowActive) {
+                launchSampleMilliseconds = elapsedMilliseconds;
+            }
+        }
+        for (int remaining = launchSampleMilliseconds;
+             remaining > 0; remaining -= 50) {
+            gapJumpState.launchWindow.addSample(
+                    instantaneousSpeed, actualWatts, targetWatts,
+                    std::min(50, remaining));
+        }
+        const WorkoutGameGapJumpLaunchWindow::Metrics launchMetrics =
+                gapJumpState.launchWindow.metrics();
+        if (launchMetrics.hasFullSpeedWindow()) {
+            gapJumpState.launchLine =
+                    WorkoutGameGapJumpSelector::coldSelection(
+                        profile,
+                        launchMetrics
+                            .bestFullWindowSpeedAverageMetersPerSecond());
+        }
+        result.launchRollingSpeedMetersPerSecond =
+                launchMetrics.rollingSpeedAverageMetersPerSecond();
+        result.launchBestSpeedMetersPerSecond =
+                launchMetrics.bestFullWindowSpeedAverageMetersPerSecond();
+        result.launchPowerHoldMilliseconds =
+                launchMetrics.atOrAboveTargetPowerHoldMilliseconds();
+        result.launchSpeedReady = launchMetrics.hasFullSpeedWindow();
+        result.launchPowerReady =
+                result.launchPowerHoldMilliseconds
+                    >= profile.powerHoldMilliseconds;
+        const double speedReadiness = launchMetrics.hasFullSpeedWindow()
+                && gapJumpState.launchLine != WorkoutGameGapJumpLine::None
+            ? 1.0
+            : std::clamp(
+                double(launchMetrics.rollingSpeedDurationMilliseconds())
+                    / profile.speedWindowMilliseconds,
+                0.0, 1.0);
+        const double powerReadiness = std::clamp(
+                double(result.launchPowerHoldMilliseconds)
+                    / profile.powerHoldMilliseconds,
+                0.0, 1.0);
+        result.readiness = std::min(speedReadiness, powerReadiness);
+        result.predictedApproachSpeedMetersPerSecond =
+                launchMetrics.hasFullSpeedWindow()
+                    ? result.launchBestSpeedMetersPerSecond
+                    : launchMetrics.rollingSpeedDurationMilliseconds() > 0
+                        ? result.launchRollingSpeedMetersPerSecond
+                        : previewSpeed;
 
         if (!gapJumpState.selector.state().locked
                 && result.visualDistanceMeters
                     >= result.decisionDistanceMeters) {
-            const double measuredActual =
-                    simulation.challengeMeasurementActive
-                        ? simulation.challengeMetrics.averageActualWatts
-                        : actualWatts;
-            const double measuredTarget =
-                    simulation.challengeMeasurementActive
-                        ? simulation.challengeMetrics.averageTargetWatts
-                        : targetWatts;
-            const bool finiteTelemetry = std::isfinite(measuredActual)
-                    && std::isfinite(measuredTarget)
-                    && std::isfinite(predictedSpeed)
-                    && measuredActual >= 0.0
-                    && measuredTarget > 0.0;
-            const bool effortReady = finiteTelemetry
-                    && measuredActual >= measuredTarget;
-            const bool telemetryFresh = finiteTelemetry
-                    && (simulation.challengeMeasurementActive
-                        || actualWatts > 0.0);
+            const WorkoutGameGapJumpLine speedMatchedLine =
+                    launchMetrics.hasFullSpeedWindow()
+                    ? WorkoutGameGapJumpSelector::coldSelection(
+                        profile,
+                        launchMetrics
+                            .bestFullWindowSpeedAverageMetersPerSecond())
+                    : WorkoutGameGapJumpLine::None;
+            const double remainingSeconds = profile.lockLeadMeters
+                    / std::max(1.0,
+                        launchMetrics.hasFullSpeedWindow()
+                            ? launchMetrics
+                                .bestFullWindowSpeedAverageMetersPerSecond()
+                            : instantaneousSpeed);
+            const WorkoutGameGapJumpLine reachableLine =
+                    reachableGapJumpLine(
+                        gate, speedMatchedLine,
+                        gapJumpState.lateralOffsetMeters,
+                        gapJumpState.lateralVelocityMetersPerSecond,
+                        remainingSeconds);
+            result.gapLineReachable =
+                    reachableLine == speedMatchedLine;
+            gapJumpState.lineReachable = result.gapLineReachable;
             gapJumpState.selector.lock(
-                    baseActionId, effortReady && gate.enabled,
-                    telemetryFresh);
+                    baseActionId, reachableLine,
+                    result.launchPowerReady && gate.enabled,
+                    launchMetrics.telemetryValid());
         }
 
         const WorkoutGameGapJumpSelectionState selection =
                 gapJumpState.selector.state();
-        result.provisionalGapLine = selection.provisionalLine;
+        result.provisionalGapLine = selection.locked
+                ? selection.provisionalLine : gapJumpState.launchLine;
         result.lockedGapLine = selection.lockedLine;
         result.gapLineLocked = selection.locked;
+        if (selection.locked) {
+            result.gapLineReachable = gapJumpState.lineReachable;
+        }
         const WorkoutGameGapJumpLine activeLine = selection.locked
-                ? selection.lockedLine : selection.provisionalLine;
+                ? selection.lockedLine : gapJumpState.launchLine;
+        result.steeringGapLine = activeLine;
         const WorkoutGameRoadGapJumpLine *line =
                 gapJumpRoadLine(gate, activeLine);
         const bool bypassGap = selection.locked
@@ -421,6 +603,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         if (bypassGap) {
             result.route = WorkoutGameRoute::SafeBypass;
             result.outcome = WorkoutGameFeatureOutcome::Bypassed;
+            result.readiness = std::min(result.readiness, 0.999);
         } else {
             result.route = WorkoutGameRoute::MainLine;
             if (selection.locked) {
@@ -444,9 +627,13 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                 0.01, layout->endDistanceMeters - layout->startDistanceMeters);
         const double sectionSeconds = std::max(
                 0.001, double(layout->durationMs) / 1000.0);
-        const double courseSpeedMetersPerSecond = layout->durationMs > 0
+        const double timelineSpeedMetersPerSecond = layout->durationMs > 0
                 ? sectionLengthMeters / sectionSeconds
-                : std::max(0.1, predictedSpeed);
+                : result.predictedApproachSpeedMetersPerSecond;
+        const double courseSpeedMetersPerSecond =
+                result.launchBestSpeedMetersPerSecond > 0.0
+                    ? result.launchBestSpeedMetersPerSecond
+                    : std::max(0.1, timelineSpeedMetersPerSecond);
         result.flightDurationSeconds = line
                 ? std::clamp(
                     line->gapLengthMeters / courseSpeedMetersPerSecond,
@@ -460,19 +647,28 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         const double mergeStart = std::max(
                 actionEnd,
                 mergeEnd - profile.mergeLengthMeters);
-        const double lateral = bypassGap
+        const bool steeringBypass = activeLine
+                == WorkoutGameGapJumpLine::None;
+        const double lateral = bypassGap || steeringBypass
                 ? piece->challenge.bypassLateralMeters
                 : line ? line->lateralMeters : 0.0;
-        if (selection.locked) {
-            result.lateralOffsetMeters = gapJumpLateralAt(
-                    result.visualDistanceMeters,
-                    gate.enabled ? gate.splitStartDistanceMeters
-                                 : result.decisionDistanceMeters,
-                    profile.splitLengthMeters,
-                    mergeStart, mergeEnd, lateral);
-        }
-        result.actionId = gapJumpActionId(baseActionId,
-                                         selection.lockedLine);
+        const double targetLateral = gapJumpLateralAt(
+                result.visualDistanceMeters,
+                gate.enabled ? gate.splitStartDistanceMeters
+                             : result.launchWindowStartDistanceMeters,
+                profile.splitLengthMeters,
+                mergeStart, mergeEnd, lateral);
+        moveGapJumpLateral(
+                targetLateral,
+                double(elapsedMilliseconds) / 1000.0,
+                gapJumpState.lateralOffsetMeters,
+                gapJumpState.lateralVelocityMetersPerSecond);
+        result.lateralOffsetMeters = gapJumpState.lateralOffsetMeters;
+        result.actionId = baseActionId;
+        gapJumpState.lastWorkoutTimeMs = simulation.workoutTimeMs;
+        gapJumpState.hasTimestamp = true;
+        gapJumpState.lastVisualDistanceMeters = result.visualDistanceMeters;
+        gapJumpState.hasVisualDistance = true;
     } else if (piece->terrain == WorkoutGameTerrainKind::Climb) {
         const WorkoutGameClimbGeometryProfile climb =
                 WorkoutGameClimbGeometry::profile(piece->difficulty);

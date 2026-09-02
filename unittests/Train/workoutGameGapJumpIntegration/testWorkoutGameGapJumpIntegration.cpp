@@ -58,10 +58,15 @@ private slots:
         QVERIFY(WorkoutGameGapJumpGeometry::validate(profile));
         QVERIFY(near(profile.socketHalfWidthMeters, 0.68));
         QVERIFY(near(profile.prepareLeadMeters, 45.0));
-        QVERIFY(near(profile.lockLeadMeters, 32.0));
-        QVERIFY(near(profile.splitLengthMeters, 20.0));
+        QVERIFY(near(profile.splitLengthMeters, 12.0));
+        QVERIFY(near(profile.launchWindowLeadMeters, 10.0));
+        QVERIFY(near(profile.lockLeadMeters, 3.0));
         QVERIFY(near(profile.mergeLengthMeters, 18.0));
-        QVERIFY(profile.prepareLeadMeters > profile.lockLeadMeters);
+        QCOMPARE(profile.speedWindowMilliseconds, 500);
+        QCOMPARE(profile.powerHoldMilliseconds, 500);
+        QVERIFY(profile.prepareLeadMeters > profile.splitLengthMeters);
+        QVERIFY(profile.splitLengthMeters > profile.launchWindowLeadMeters);
+        QVERIFY(profile.launchWindowLeadMeters > profile.lockLeadMeters);
 
         const std::array<WorkoutGameGapJumpLine, 3> ids = {
             WorkoutGameGapJumpLine::Short,

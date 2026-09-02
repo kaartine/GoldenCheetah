@@ -37,6 +37,7 @@ struct WorkoutGameGapJumpGeometryProfile
     double difficulty = 0.0;
     double socketHalfWidthMeters = 0.0;
     double prepareLeadMeters = 0.0;
+    double launchWindowLeadMeters = 0.0;
     double lockLeadMeters = 0.0;
     double splitLengthMeters = 0.0;
     double mergeLengthMeters = 0.0;
@@ -45,6 +46,8 @@ struct WorkoutGameGapJumpGeometryProfile
     double featureEndMeters = 0.0;
     double hysteresisMetersPerSecond = 0.0;
     double maximumFlightSeconds = 0.0;
+    int speedWindowMilliseconds = 0;
+    int powerHoldMilliseconds = 0;
     std::array<WorkoutGameGapJumpLineDefinition, 3> lines{};
 };
 

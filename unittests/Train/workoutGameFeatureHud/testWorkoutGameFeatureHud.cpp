@@ -103,6 +103,36 @@ private slots:
         QCOMPARE(result.cadenceReadinessPercent, 80);
     }
 
+    void gapJumpSeparatesPreviewFromTheLaunchEffort()
+    {
+        WorkoutGameFeatureRuntimeSnapshot runtime = feature(
+                WorkoutGameFeaturePhase::Measure);
+        runtime.terrain = WorkoutGameTerrainKind::GapJump;
+        runtime.visualDistanceMeters = 60.0;
+        runtime.launchWindowStartDistanceMeters = 70.0;
+        runtime.decisionDistanceMeters = 77.0;
+        runtime.launchPowerHoldMilliseconds = 0;
+
+        auto result = WorkoutGameFeatureHud::build(
+                runtime, simulation(1.0, 1.0), 220.0);
+        QCOMPARE(result.state, WorkoutGameFeatureHudState::Prepare);
+        QCOMPARE(result.distanceKind,
+                 WorkoutGameFeatureHudDistanceKind::Launch);
+        QCOMPARE(result.distanceMeters, 10.0);
+        QCOMPARE(result.powerReadinessPercent, 0);
+
+        runtime.visualDistanceMeters = 72.0;
+        runtime.launchWindowActive = true;
+        runtime.launchPowerHoldMilliseconds = 250;
+        result = WorkoutGameFeatureHud::build(
+                runtime, simulation(1.0, 1.0), 220.0);
+        QCOMPARE(result.state, WorkoutGameFeatureHudState::Launch);
+        QCOMPARE(result.distanceKind,
+                 WorkoutGameFeatureHudDistanceKind::Decision);
+        QCOMPARE(result.distanceMeters, 5.0);
+        QCOMPARE(result.powerReadinessPercent, 50);
+    }
+
     void committedLineCountsDownToAction()
     {
         WorkoutGameFeatureRuntimeSnapshot runtime = feature(

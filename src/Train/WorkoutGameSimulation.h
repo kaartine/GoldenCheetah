@@ -76,6 +76,11 @@ public:
     void reset();
     WorkoutGameSimulationSnapshot update(
             const WorkoutGameSimulationInput &input);
+    bool commitGapJumpOutcome(
+            int sectionIndex,
+            WorkoutGameFeatureOutcome outcome,
+            double readiness);
+    std::uint64_t currentScore() const;
 
     const std::vector<WorkoutGameFeatureOutcome> &sectionOutcomes() const
     {

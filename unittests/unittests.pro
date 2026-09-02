@@ -156,6 +156,7 @@ exists(unittests.pri) {
 			   Train/workoutGameFeatureRuntime \
 			   Train/workoutGameGapJumpGeometry \
 			   Train/workoutGameGapJumpIntegration \
+			   Train/workoutGameGapJumpLaunchWindow \
 			   Train/workoutGameGapJumpSelector \
 			   Train/workoutGameRendererPolicy \
 			   Train/workoutGameReplay \

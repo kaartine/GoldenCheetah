@@ -10,6 +10,8 @@
 #ifndef _GC_WorkoutGameWorld_h
 #define _GC_WorkoutGameWorld_h
 
+#include "WorkoutGameGapJumpGeometry.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -91,6 +93,7 @@ struct WorkoutGamePhysicsInput
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
     double desiredSpeedMetersPerSecond = 0.0;
     double courseSpeedMetersPerSecond = -1.0;
+    double gapJumpLaunchSpeedMetersPerSecond = -1.0;
     double courseDistanceMeters = -1.0;
     double gradePercent = 0.0;
     double difficulty = 0.0;
@@ -99,6 +102,7 @@ struct WorkoutGamePhysicsInput
     bool jumpRequested = false;
     bool forceGroundFollowing = false;
     bool followCourseSurface = false;
+    WorkoutGameGapJumpLine gapJumpLine = WorkoutGameGapJumpLine::None;
     std::uint64_t featureActionId = 0;
 };
 

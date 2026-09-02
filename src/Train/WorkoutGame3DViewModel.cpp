@@ -637,7 +637,8 @@ void WorkoutGame3DViewModel::setFrame(
                 : frame.feature.provisionalGapLine;
         currentFeatureName = gapJumpFeatureText(
                 line,
-                frame.feature.predictedApproachSpeedMetersPerSecond);
+                frame.feature.predictedApproachSpeedMetersPerSecond,
+                frame.feature.gapLineLocked);
     }
     currentFeatureActionText = featureActionText(currentFeatureHud);
     rebuildFloor(currentDistanceMeters);
@@ -1033,7 +1034,8 @@ QString WorkoutGame3DViewModel::terrainText(WorkoutGameTerrainKind terrain)
 
 QString WorkoutGame3DViewModel::gapJumpFeatureText(
         WorkoutGameGapJumpLine line,
-        double predictedSpeedMetersPerSecond)
+        double predictedSpeedMetersPerSecond,
+        bool locked)
 {
     QString lineName;
     switch (line) {
@@ -1047,7 +1049,8 @@ QString WorkoutGame3DViewModel::gapJumpFeatureText(
         lineName = tr("LONG");
         break;
     case WorkoutGameGapJumpLine::None:
-        return tr("Gap jump - SAFE LINE");
+        return locked ? tr("Gap jump - SAFE LINE")
+                      : tr("Gap jump - BUILD SPEED");
     }
     const double speedKph = std::max(
             0.0, finiteOrZero(predictedSpeedMetersPerSecond) * 3.6);
@@ -1090,7 +1093,8 @@ QString WorkoutGame3DViewModel::featureActionText(
 {
     switch (hud.state) {
     case WorkoutGameFeatureHudState::Prepare:
-        return tr("Prepare");
+        return hud.terrain == WorkoutGameTerrainKind::GapJump
+                ? tr("Preview") : tr("Prepare");
     case WorkoutGameFeatureHudState::Measure:
         return hud.terrain == WorkoutGameTerrainKind::Skinny
                 ? tr("Hold target") : tr("Build power");
@@ -1106,6 +1110,8 @@ QString WorkoutGame3DViewModel::featureActionText(
         return tr("Safe line");
     case WorkoutGameFeatureHudState::NoBonus:
         return tr("No bonus");
+    case WorkoutGameFeatureHudState::Launch:
+        return tr("Accelerate");
     case WorkoutGameFeatureHudState::Hidden:
         break;
     }

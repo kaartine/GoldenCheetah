@@ -61,14 +61,17 @@ WorkoutGameGapJumpGeometryProfile WorkoutGameGapJumpGeometry::profile(
     result.difficulty = difficulty;
     result.socketHalfWidthMeters = 0.68;
     result.prepareLeadMeters = 45.0;
-    result.lockLeadMeters = 32.0;
-    result.splitLengthMeters = 20.0;
+    result.launchWindowLeadMeters = 10.0;
+    result.lockLeadMeters = 3.0;
+    result.splitLengthMeters = 12.0;
     result.mergeLengthMeters = 18.0;
     result.bypassLateralMeters = -4.6;
     result.featureStartMeters = 0.0;
     result.featureEndMeters = 36.0;
     result.hysteresisMetersPerSecond = 0.35;
     result.maximumFlightSeconds = HardMaximumFlightSeconds;
+    result.speedWindowMilliseconds = 500;
+    result.powerHoldMilliseconds = 500;
     result.lines = {{
         {WorkoutGameGapJumpLine::Short, -2.3, 1.8 * gapScale,
          4.0 * speedScale,
@@ -111,9 +114,12 @@ bool WorkoutGameGapJumpGeometry::validate(
             || profile.difficulty < 0.0 || profile.difficulty > 1.0
             || !finitePositive(profile.socketHalfWidthMeters)
             || !finitePositive(profile.prepareLeadMeters)
+            || !finitePositive(profile.launchWindowLeadMeters)
             || !finitePositive(profile.lockLeadMeters)
-            || profile.prepareLeadMeters <= profile.lockLeadMeters
             || !finitePositive(profile.splitLengthMeters)
+            || profile.prepareLeadMeters <= profile.splitLengthMeters
+            || profile.splitLengthMeters <= profile.launchWindowLeadMeters
+            || profile.launchWindowLeadMeters <= profile.lockLeadMeters
             || !finitePositive(profile.mergeLengthMeters)
             || !std::isfinite(profile.bypassLateralMeters)
             || !std::isfinite(profile.featureStartMeters)
@@ -121,7 +127,11 @@ bool WorkoutGameGapJumpGeometry::validate(
             || profile.featureEndMeters <= profile.featureStartMeters
             || !finitePositive(profile.hysteresisMetersPerSecond)
             || !finitePositive(profile.maximumFlightSeconds)
-            || profile.maximumFlightSeconds > HardMaximumFlightSeconds) {
+            || profile.maximumFlightSeconds > HardMaximumFlightSeconds
+            || profile.speedWindowMilliseconds <= 0
+            || profile.speedWindowMilliseconds > 2000
+            || profile.powerHoldMilliseconds <= 0
+            || profile.powerHoldMilliseconds > 2000) {
         return false;
     }
 

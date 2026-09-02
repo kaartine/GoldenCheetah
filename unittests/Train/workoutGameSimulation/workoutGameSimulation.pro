@@ -6,6 +6,7 @@ TARGET = testWorkoutGameSimulation
 SOURCES = testWorkoutGameSimulation.cpp \
           ../../../src/Train/WorkoutGameCourse.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameRoadPhysics.cpp \
           ../../../src/Train/VirtualDrivetrain.cpp \
@@ -13,6 +14,7 @@ SOURCES = testWorkoutGameSimulation.cpp \
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameFeatureChallenge.h \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameRoadPhysics.h \
           ../../../src/Train/VirtualDrivetrain.h \

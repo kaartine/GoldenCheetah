@@ -21,14 +21,16 @@ enum class WorkoutGameFeatureHudState
     ActNow,
     Complete,
     Bypass,
-    NoBonus
+    NoBonus,
+    Launch
 };
 
 enum class WorkoutGameFeatureHudDistanceKind
 {
     None,
     Decision,
-    Action
+    Action,
+    Launch
 };
 
 struct WorkoutGameFeatureHudSnapshot

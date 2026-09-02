@@ -11,6 +11,9 @@ SOURCES = testWorkoutGameReplay.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameFeatureLab.cpp \
           ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
+          ../../../src/Train/WorkoutGameGapJumpLaunchWindow.cpp \
+          ../../../src/Train/WorkoutGameGapJumpSelector.cpp \
           ../../../src/Train/WorkoutGameReplay.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp \
@@ -19,6 +22,9 @@ SOURCES = testWorkoutGameReplay.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
 
 HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.h \
+          ../../../src/Train/WorkoutGameGapJumpLaunchWindow.h \
+          ../../../src/Train/WorkoutGameGapJumpSelector.h \
           ../../../src/Train/WorkoutGameReplay.h
 
 BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)

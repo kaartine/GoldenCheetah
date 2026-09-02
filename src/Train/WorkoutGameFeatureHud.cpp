@@ -73,12 +73,27 @@ WorkoutGameFeatureHudSnapshot WorkoutGameFeatureHud::build(
                     - finiteNonNegative(feature.visualDistanceMeters));
         break;
     case WorkoutGameFeaturePhase::Measure:
-        result.state = WorkoutGameFeatureHudState::Measure;
-        result.distanceKind = WorkoutGameFeatureHudDistanceKind::Decision;
-        result.distanceMeters = std::max(
-                0.0,
-                finiteNonNegative(feature.decisionDistanceMeters)
-                    - finiteNonNegative(feature.visualDistanceMeters));
+        if (feature.terrain == WorkoutGameTerrainKind::GapJump
+                && !feature.launchWindowActive) {
+            result.state = WorkoutGameFeatureHudState::Prepare;
+            result.distanceKind = WorkoutGameFeatureHudDistanceKind::Launch;
+            result.distanceMeters = std::max(
+                    0.0,
+                    finiteNonNegative(
+                        feature.launchWindowStartDistanceMeters)
+                        - finiteNonNegative(feature.visualDistanceMeters));
+        } else {
+            result.state = feature.terrain
+                        == WorkoutGameTerrainKind::GapJump
+                    ? WorkoutGameFeatureHudState::Launch
+                    : WorkoutGameFeatureHudState::Measure;
+            result.distanceKind =
+                    WorkoutGameFeatureHudDistanceKind::Decision;
+            result.distanceMeters = std::max(
+                    0.0,
+                    finiteNonNegative(feature.decisionDistanceMeters)
+                        - finiteNonNegative(feature.visualDistanceMeters));
+        }
         break;
     case WorkoutGameFeaturePhase::Committed:
         result.state = WorkoutGameFeatureHudState::Committed;
@@ -118,8 +133,14 @@ WorkoutGameFeatureHudSnapshot WorkoutGameFeatureHud::build(
     if (result.powerRequired) {
         result.requiredPowerWatts = normalizedTarget * effortRatio;
     }
-    result.powerReadinessPercent = readinessPercent(
-            simulation.challengeAssessment.effortReadiness);
+    result.powerReadinessPercent = feature.terrain
+                == WorkoutGameTerrainKind::GapJump
+            ? readinessPercent(
+                double(feature.launchPowerHoldMilliseconds)
+                    / WorkoutGameGapJumpLaunchWindow::
+                        SpeedWindowDurationMilliseconds)
+            : readinessPercent(
+                simulation.challengeAssessment.effortReadiness);
 
     const double minimumCadence = simulation.challenge.minimumCadenceRpm;
     result.cadenceRequired = std::isfinite(minimumCadence)

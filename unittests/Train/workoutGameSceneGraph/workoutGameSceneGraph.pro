@@ -11,6 +11,7 @@ SOURCES = testWorkoutGameSceneGraph.cpp \
           ../../../src/Train/WorkoutGameFeaturePrompt.cpp \
           ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
           ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
+          ../../../src/Train/WorkoutGameGapJumpLaunchWindow.cpp \
           ../../../src/Train/WorkoutGameGapJumpSelector.cpp \
           ../../../src/Train/WorkoutGameHorizon.cpp \
           ../../../src/Train/WorkoutGameMesh.cpp \
@@ -32,6 +33,7 @@ HEADERS = ../../../src/Train/WorkoutGameFeatureChallenge.h \
           ../../../src/Train/WorkoutGameFeaturePrompt.h \
           ../../../src/Train/WorkoutGameFeatureRuntime.h \
           ../../../src/Train/WorkoutGameGapJumpGeometry.h \
+          ../../../src/Train/WorkoutGameGapJumpLaunchWindow.h \
           ../../../src/Train/WorkoutGameGapJumpSelector.h \
           ../../../src/Train/WorkoutGameHorizon.h \
           ../../../src/Train/WorkoutGameMesh.h \

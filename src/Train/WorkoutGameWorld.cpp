@@ -41,15 +41,6 @@ constexpr std::int64_t WalkDecisionMicroseconds = 1500000;
 constexpr float BunnyHopLaunchSpeedMetersPerSecond = 3.5f;
 constexpr float TechnicalFeatureLaunchSpeedMetersPerSecond = 4.8f;
 
-WorkoutGameGapJumpLine gapJumpLineFromActionId(std::uint64_t actionId)
-{
-    const std::uint64_t encoded = (actionId >> 8) & 0x3u;
-    if (encoded > std::uint64_t(WorkoutGameGapJumpLine::Long)) {
-        return WorkoutGameGapJumpLine::None;
-    }
-    return WorkoutGameGapJumpLine(encoded);
-}
-
 double gapJumpArc(double progress)
 {
     constexpr double ApexProgress = 0.35;
@@ -779,13 +770,16 @@ struct WorkoutGamePhysics::Impl
                                 WorkoutGameGapJumpGeometry::profile(difficulty);
                         const WorkoutGameGapJumpLineDefinition *line =
                                 WorkoutGameGapJumpGeometry::line(
-                                    profile,
-                                    gapJumpLineFromActionId(
-                                        input.featureActionId));
+                                    profile, input.gapJumpLine);
                         if (line) {
+                            const double launchSpeed =
+                                    input.gapJumpLaunchSpeedMetersPerSecond
+                                            > 0.0
+                                    ? input.gapJumpLaunchSpeedMetersPerSecond
+                                    : courseSpeed;
                             const double durationSeconds = std::clamp(
                                     line->gapLengthMeters
-                                        / std::max(0.1, courseSpeed),
+                                        / std::max(0.1, launchSpeed),
                                     0.25,
                                     std::min({line->nominalFlightSeconds,
                                               2.0,

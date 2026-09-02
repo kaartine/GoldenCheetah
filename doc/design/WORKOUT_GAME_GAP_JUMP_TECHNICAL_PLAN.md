@@ -2,8 +2,8 @@
 
 ## Status
 
-Approved for test-first implementation. This document defines the implementation
-contract for a new three-line gap jump.
+Implemented and under packaged-release acceptance. This document defines the
+implementation contract for the three-line gap jump.
 
 ## Scope
 
@@ -13,9 +13,9 @@ Add a `GapJump` technical terrain feature with three adjacent jump lines:
 2. medium gap in the centre;
 3. long gap on the right.
 
-The game predicts approach speed from fixed-step telemetry and uses effort as a
-qualification and prediction input. It previews a recommendation, locks one
-line early, and moves the rider onto that line with a continuous path. Riders
+The game previews a line from fixed-step telemetry, then evaluates the actual
+launch in the final `10-3 m`. It moves toward the current candidate with a
+rate-limited continuous path and locks one reachable line at `3 m`. Riders
 who do not qualify take a separate rollable bypass. A workout must continue and
 record normally regardless of feature outcome.
 
@@ -36,11 +36,18 @@ feature engine:
 - `WorkoutGameRoadCourse` turns sections into connected road pieces. Challenge
   placement, obstacle anchors and bypass sockets are authored here.
 - `WorkoutGameFeatureChallenge` measures effort, cadence, speed and adherence.
-  Jump cues use the newest 1.5 seconds of samples in `WorkoutGameSimulation`.
-- `WorkoutGameSimulation` advances in deterministic 50 ms steps and commits the
-  current binary `MainLine` or `SafeBypass` outcome.
-- `WorkoutGameFeatureRuntime` maps the committed result onto approach, measure,
-  committed, action and recovery phases and generates continuous rider offsets.
+  Other jump cues use the newest 1.5 seconds of samples in
+  `WorkoutGameSimulation`; gap jumps use their dedicated distance-based launch
+  window.
+- `WorkoutGameSimulation` advances in deterministic 50 ms steps and owns
+  outcomes and score. It accepts a gap-jump outcome only while that section is
+  active and awards its completion bonus at most once.
+- `WorkoutGameFeatureRuntime` measures and locks the gap-jump line, then maps
+  the result onto approach, measure, committed, action and recovery phases and
+  generates continuous rider offsets.
+- `WorkoutGameEngine` commits the runtime's locked gap result into simulation
+  in the same frame, keeping the published route, result, readiness and score
+  consistent.
 - `WorkoutGameTabletopGeometry` is the closest jump reference. It provides
   sockets, a curved surface, speed support, landing planning and a bypass.
 - `WorkoutGameTrailBranch` supplies the current smooth split-and-merge curve.
@@ -72,8 +79,9 @@ The implementation is accepted only if all of these remain true:
   elevation, grade and half-width agree within the existing road tolerances.
 - Rider lateral position and ground contact use the same selected branch and
   surface functions as the rendered mesh.
-- Line selection locks before lateral movement. It never changes after lock,
-  even if telemetry becomes stale or effort changes.
+- Lateral steering starts at `12 m` and remains acceleration- and speed-limited.
+  Line selection locks at `3 m` and never changes after lock, even if telemetry
+  becomes stale or effort changes.
 - The rider never teleports, travels backwards, falls into the gap, or leaves
   the course. Failure means a visible safe bypass and no feature bonus.
 - Supported airtime is approximately 0.25-1.40 seconds and never exceeds the
@@ -91,11 +99,12 @@ readable. The HUD shows `GAP JUMP`, predicted approach speed, and the provisiona
 line (`SHORT`, `MEDIUM`, `LONG`, or `BYPASS`). The preview may change only under
 the hysteresis rules below. It does not move the rider.
 
-At 32 m before take-off, the choice locks. The chosen line gains a restrained
-trail-edge highlight and the HUD changes to `LINE LOCKED`. The rider then moves
-onto that branch over an 18 m split transition, leaving at least 14 m straight
-on the selected line before the lip. This is long enough for a smooth move even
-at the long-line threshold.
+At `12 m` before take-off the rider starts a restrained, rate-limited move
+toward the provisional line. `BUILD SPEED` remains a preview until the launch
+window starts at `10 m`. The best complete rolling `500 ms` speed and a
+continuous `500 ms` at-or-above-target power hold are measured only in the
+`10-3 m` window. At `3 m` the highest speed-matched line that can still be
+reached without a lateral snap locks, and the HUD changes to `LINE LOCKED`.
 
 ### Action
 
@@ -163,12 +172,15 @@ struct WorkoutGameGapJumpGeometryProfile {
     double difficulty;
     double socketHalfWidthMeters;
     double prepareLeadMeters;
+    double launchWindowLeadMeters;
     double lockLeadMeters;
     double splitLengthMeters;
     double mergeLengthMeters;
     double bypassLateralMeters;
     double featureStartMeters;
     double featureEndMeters;
+    int speedWindowMilliseconds;
+    int powerHoldMilliseconds;
     std::array<WorkoutGameGapJumpLineDefinition, 3> lines;
 };
 ```
@@ -194,6 +206,7 @@ Add a road-owned gate rather than overloading the single generic bypass fields:
 struct WorkoutGameRoadGapJumpGate {
     bool enabled = false;
     double prepareDistanceMeters = 0.0;
+    double launchWindowStartDistanceMeters = 0.0;
     double lockDistanceMeters = 0.0;
     double splitStartDistanceMeters = 0.0;
     double mergeEndDistanceMeters = 0.0;
@@ -220,10 +233,10 @@ feature.
 
 ## Selection Algorithm
 
-Implement selection in a new pure `WorkoutGameGapJumpSelector` owned by
-`WorkoutGameSimulation`. It is reset on section change, seek, pause reset and
-runner generation change. It receives one sanitized sample per 50 ms simulation
-step and never sees presentation timestamps.
+Use `WorkoutGameGapJumpSelector` for the long-range preview and a separate pure
+`WorkoutGameGapJumpLaunchWindow` in `WorkoutGameFeatureRuntime` for the final
+decision. Both reset on section change, seek and backwards time/distance. They
+receive sanitized fixed-step samples and never use presentation timestamps.
 
 ### Predictor
 
@@ -244,26 +257,33 @@ Before a full history exists, use the duration-weighted available history;
 with no valid speed, recommend bypass. Sanitize NaN, infinity and negative
 values before storing them. Use integer milliseconds for all window accounting.
 
-### Qualification
+### Launch-window qualification
 
-Effort is a qualification condition, not a replacement for speed. At lock, the
-duration-weighted average actual power over the existing newest 1.5-second jump
-window must be at least the duration-weighted average target power. A missing or
-zero target falls back to the section target. Cadence is displayed but is not a
-gap-jump gate in version 1.
+Effort is a qualification condition, not a replacement for speed. From `10 m`
+until `3 m`, retain the best complete duration-weighted rolling `500 ms` speed
+average. A single sample cannot select a longer line. In the same interval,
+actual power must stay at or above target continuously for `500 ms`; one sample
+below target resets that hold. Invalid or stale telemetry clears both histories.
+Cadence is displayed but is not a gap-jump gate in version 1.
 
 Select the longest line whose acquire speed is met. If effort is below target or
 short-line speed is not met, select bypass. This preserves the simple rule that
 the user succeeds by meeting the current workout target while speed decides
 which gap is appropriate.
 
-### Hysteresis and Locking
+### Preview, reachability and locking
 
-Before lock, retain the current provisional line while predicted speed remains
+Before the launch window, retain the current preview line while predicted speed remains
 above that line's hold threshold. Promote only after the next line's acquire
 threshold has been met continuously for 300 ms. Demote after its hold threshold
 has been missed continuously for 500 ms. Bypass-to-short uses the same 300/500
-ms timing. Ties choose the shorter line.
+ms timing. This hysteresis affects preview presentation only. Ties choose the
+shorter line.
+
+During the launch window, choose from the best complete rolling speed window.
+At the `3 m` lock, downgrade a late promotion to the longest line whose centre
+is reachable with the bounded lateral velocity; never teleport to honor an
+unreachable candidate.
 
 At `lockDistanceMeters`, copy the provisional line to the locked line exactly
 once. If history is insufficient, telemetry is stale, or any selector input is
@@ -327,7 +347,8 @@ impact. The ViewModel must not add a second jump arc on top of it.
 Map the gap onto existing feature phases:
 
 - `Approach`: before the 45 m prepare point; HUD may remain hidden.
-- `Measure`: prepare point to 32 m lock point; show provisional line.
+- `Measure`: prepare point through the `10-3 m` launch window; show preview,
+  rolling speed, power hold and provisional line.
 - `Committed`: line locked, rider follows the continuous split.
 - `Action`: selected lip to selected landing, or the equivalent bypass span.
 - `Recovery`: landing/runout through the exact merge socket.
@@ -423,7 +444,9 @@ do not use sleep timing for selector or physics assertions.
 
 - Add `testWorkoutGameGapJumpSelector` with table-driven traces for bypass,
   short, medium and long.
-- Assert 300 ms promotion and 500 ms demotion hysteresis at every threshold.
+- Assert 300 ms promotion and 500 ms demotion hysteresis for long-range preview.
+- Assert exact `10 m` launch start, `3 m` lock, best rolling `500 ms` speed,
+  continuous `500 ms` power, invalid telemetry reset and late-line reachability.
 - Assert effort just below/at target, missing target fallback, stale telemetry,
   NaN/inf/negative sanitization and incomplete history.
 - Feed identical telemetry with different presentation-frame groupings and
@@ -549,11 +572,11 @@ Tests expected to be added or extended:
 
 | Risk | Mitigation |
 | --- | --- |
-| Recommendation flickers near a threshold | Timed acquire/hold hysteresis; no rider movement before lock. |
-| Late line change teleports rider | One irreversible lock 32 m before take-off; post-lock telemetry cannot select. |
+| Recommendation flickers near a threshold | Timed acquire/hold hysteresis for preview; rolling `500 ms` speed for launch. |
+| Late line change teleports rider | Rate-limited steering from `12 m`, reachability downgrade at `3 m`, stable action ID and immutable post-lock line. |
 | Mesh and rider disagree | One branch module supplies mesh, road sample, contact and rider centre. |
 | Base trail fills the gap | Gap layer owns a tested corridor and ordinary trail rendering is suppressed there. |
-| Long airtime creates absurd height | Authored bounded arc, 2.4 m apex cap and 5 s hard time cap. |
+| Long airtime creates absurd height | Authored bounded arc, 2.4 m apex cap and 2 s hard time cap. |
 | Gap does not fit a generated interval | Deterministic post-length fallback to tabletop/log-over. |
 | New schema breaks old courses | Decode and migrate v1 unchanged; append enum; never regenerate on load. |
 | Feature work delays trainer/recording | O(1) selector, bounded meshes, existing lower-priority worker and no device-path locks. |

@@ -81,6 +81,17 @@ const char *terrainName(WorkoutGameTerrainKind terrain)
     return "smooth-trail";
 }
 
+const char *gapLineName(WorkoutGameGapJumpLine line)
+{
+    switch (line) {
+    case WorkoutGameGapJumpLine::None: return "none";
+    case WorkoutGameGapJumpLine::Short: return "short";
+    case WorkoutGameGapJumpLine::Medium: return "medium";
+    case WorkoutGameGapJumpLine::Long: return "long";
+    }
+    return "none";
+}
+
 }
 
 WorkoutGame3DWindow::WorkoutGame3DWindow(
@@ -375,6 +386,30 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " readiness=" << presentedFrame.feature.readiness
            << " action_distance_m="
                 << presentedFrame.feature.distanceToObstacleMeters
+           << " distance_to_lip_m="
+                << presentedFrame.feature.distanceToObstacleMeters
+           << " launch_window="
+                << int(presentedFrame.feature.launchWindowActive)
+           << " candidate_line="
+                << gapLineName(presentedFrame.feature.provisionalGapLine)
+           << " steering_line="
+                << gapLineName(presentedFrame.feature.steeringGapLine)
+           << " locked_line="
+                << gapLineName(presentedFrame.feature.lockedGapLine)
+           << " rolling_500ms_speed_mps="
+                << presentedFrame.feature.launchRollingSpeedMetersPerSecond
+           << " best_500ms_speed_mps="
+                << presentedFrame.feature.launchBestSpeedMetersPerSecond
+           << " power_hold_ms="
+                << presentedFrame.feature.launchPowerHoldMilliseconds
+           << " line_reachable="
+                << int(presentedFrame.feature.gapLineReachable)
+           << " line_locked="
+                << int(presentedFrame.feature.gapLineLocked)
+           << " launch_speed_ready="
+                << int(presentedFrame.feature.launchSpeedReady)
+           << " launch_power_ready="
+                << int(presentedFrame.feature.launchPowerReady)
            << " action_id=" << presentedFrame.feature.actionId
            << " rear_contact="
                 << int(presentedFrame.world.rider.rearWheelGrounded)

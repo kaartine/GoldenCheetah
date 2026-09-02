@@ -47,6 +47,7 @@ Item {
     }
 
     function featureAccent(state) {
+        if (state === 8) return "#ef7849"
         if (state === 4) return "#ef7849"
         if (state === 5) return "#70c985"
         if (state === 6) return "#aeb8b5"
@@ -58,6 +59,7 @@ Item {
     function featureDistanceText(kind, meters) {
         if (kind === 1) return qsTr("DECISION") + "  " + meters.toFixed(1) + " M"
         if (kind === 2) return qsTr("FEATURE") + "  " + meters.toFixed(1) + " M"
+        if (kind === 3) return qsTr("LAUNCH") + "  " + meters.toFixed(1) + " M"
         return ""
     }
 

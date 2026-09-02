@@ -195,6 +195,22 @@ private slots:
                  WorkoutGameGapJumpLine::None);
     }
 
+    void explicitLaunchWindowDecisionOverridesPreviewSafely()
+    {
+        WorkoutGameGapJumpSelector selector;
+        selector.update(4.0, 50);
+
+        const auto locked = selector.lock(
+                9u, WorkoutGameGapJumpLine::Long, true, true);
+        QCOMPARE(locked.lockedLine, WorkoutGameGapJumpLine::Long);
+        QCOMPARE(locked.provisionalLine, WorkoutGameGapJumpLine::Long);
+
+        WorkoutGameGapJumpSelector invalid;
+        const auto rejected = invalid.lock(
+                10u, static_cast<WorkoutGameGapJumpLine>(99), true, true);
+        QCOMPARE(rejected.lockedLine, WorkoutGameGapJumpLine::None);
+    }
+
     void invalidInputsFailClosedAndDurationsAreBounded()
     {
         for (double speed : {

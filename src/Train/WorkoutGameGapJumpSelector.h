@@ -37,6 +37,11 @@ public:
             std::uint64_t actionId,
             bool effortReady,
             bool telemetryFresh);
+    WorkoutGameGapJumpSelectionState lock(
+            std::uint64_t actionId,
+            WorkoutGameGapJumpLine requestedLine,
+            bool effortReady,
+            bool telemetryFresh);
     WorkoutGameGapJumpSelectionState state() const;
 
     static WorkoutGameGapJumpLine coldSelection(

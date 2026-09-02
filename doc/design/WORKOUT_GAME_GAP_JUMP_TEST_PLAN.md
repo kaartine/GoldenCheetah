@@ -59,14 +59,14 @@ singletrack through one canonical entry and one canonical exit socket. A
 grounded roll-around route is the insufficient-effort fallback; it is not a
 fourth gap line and does not count as successful completion.
 
-### Selection state machine
+### Preview and launch selection
 
 Cold selection uses half-open intervals: below `4.00 m/s` selects fallback,
 exactly `4.00 m/s` selects `short`, exactly `5.20 m/s` selects `medium` and
 exactly `6.60 m/s` selects `long`. Invalid, negative or non-finite speed fails
 closed to the fallback route.
 
-Before commitment, selection uses a `0.35 m/s` Schmitt band:
+Before the launch window, preview selection uses a `0.35 m/s` Schmitt band:
 
 - fallback changes to `short` only at or above `4.35 m/s`.
 - `short` changes to fallback only below `3.65 m/s`.
@@ -78,18 +78,24 @@ Before commitment, selection uses a `0.35 m/s` Schmitt band:
   at or above `6.95 m/s`; the result then locks to `long` without an
   intermediate presented frame.
 
-Selection consumes the authoritative fixed-step filtered speed, not render
-FPS, instantaneous cadence-derived speed or wall-clock sample timing. Once the
-decision gate is crossed, `{actionId, selectedLine, route, outcome}` is
+The final line uses the best complete rolling `500 ms` speed average measured
+only from `10 m` until `3 m` before the lip. Power must remain at or above the
+current target for a continuous `500 ms` in that same interval. Invalid/stale
+telemetry, an incomplete speed window or an incomplete power hold fails closed.
+A single speed spike cannot select a longer gap.
+
+Selection consumes authoritative fixed-step speed, not render FPS or wall-clock
+sample timing. Once the `3 m` decision gate is crossed,
+`{actionId, selectedLine, route, outcome}` is
 immutable through landing and recovery. Later speed, power, gear or cadence
 changes cannot switch lanes.
 
 ### Effort and fallback contract
 
 Speed chooses the suitable gap length; it does not by itself complete the
-challenge. The existing feature challenge machinery measures the canonical
-six-metre approach window. Completion requires all configured power, cadence
-and minimum-speed readiness components to equal `1.0` at the decision gate.
+challenge. Completion requires one full `500 ms` speed window and a continuous
+`500 ms` at-or-above-target power hold during the `10-3 m` launch window.
+Cadence remains visible but is not a gate for this feature version.
 
 If readiness is below `1.0`, the rider commits to the grounded fallback before
 the gap split. The fallback must:
@@ -106,16 +112,17 @@ mid-air snap, gap shortening or landing teleport is allowed.
 
 ### Lateral transition contract
 
-Line movement starts `20.0 m` before the take-off and is complete no later than
-`6.0 m` before it. The decision gate is therefore upstream of the physical
-split. Entry and exit use the same canonical quintic or equivalent C2-continuous
-curve in runtime, road surface, collision surface and rendered mesh.
+Line steering starts `12.0 m` before take-off. It follows the provisional launch
+line with bounded acceleration and velocity, then locks at `3.0 m`. A late
+promotion is downgraded to a reachable shorter line instead of snapping the
+rider sideways. Entry and exit use the same canonical quintic or equivalent
+C2-continuous curve in road surface, collision surface and rendered mesh.
 
 At the existing fixed `50 ms` simulation step:
 
 - lateral position is continuous and finite;
-- the maximum lateral step is `0.12 m`;
-- the maximum lateral velocity is `2.0 m/s`;
+- the maximum lateral step is `0.15 m`;
+- the maximum lateral velocity is `3.0 m/s`;
 - heading and curvature remain finite and do not change sign repeatedly;
 - the selected line centre is reached before take-off within `0.02 m`;
 - the rider remains on that centre through the gap within `0.02 m`;
@@ -174,7 +181,7 @@ Add failing tests before adding the production enum/profile:
 Validation fails closed. It must not silently sort malformed lines, infer
 missing sockets or substitute tabletop geometry.
 
-### 2. Deterministic boundary selection
+### 2. Deterministic preview and launch selection
 
 Use table-driven tests around both thresholds with exact binary inputs and
 `nextafter` neighbors:
@@ -203,6 +210,10 @@ Required tests:
 - `gapJumpSelectionIsIndependentOfRenderFrameCadence`
 - `gapJumpDecisionLocksForActionId`
 - `gapJumpInvalidSpeedFailsClosed`
+- `gapJumpIgnoresSpeedBeforeTheTenMeterLaunchWindow`
+- `gapJumpSingleFastTickCannotSelectTheLongLine`
+- `gapJumpPowerDipResetsTheContinuousHold`
+- `gapJumpLateLongPromotionDowngradesToAReachableLine`
 
 Run the same speed trace at simulation input batching of 50, 100, 250 and 500
 milliseconds. The selected line, decision distance and outcome must be equal.
@@ -225,10 +236,10 @@ Tests: `gapJumpNoiseCannotOscillateLine`,
 `gapJumpSelectionPersistsAcrossPauseResume`, and
 `gapJumpReplayRetainsOneCommittedLine`.
 
-### 4. Early transition and no teleport
+### 4. Late launch decision and no teleport
 
 For every start lane to selected lane combination, sample the fixed-step road,
-runtime and world snapshots from `25 m` before take-off until `10 m` after
+runtime and world snapshots from `12 m` before take-off until `10 m` after
 landing. Assert the lateral contract, monotonic curve progress and exact line
 centre at the lip. Repeat for mirrored geometry and fallback.
 
@@ -252,21 +263,26 @@ Required tests:
 
 ### 5. Insufficient effort cases
 
-Use controlled inputs where one readiness component at a time fails while
-speed would otherwise select each of the three lines:
+Use controlled inputs where one required readiness component at a time fails
+while speed would otherwise select each of the three lines:
 
 - adequate speed and cadence, power below threshold;
-- adequate speed and power, cadence below threshold;
 - adequate power and cadence, speed below the shortest supported launch;
 - a late power burst after commitment;
-- missing cadence when cadence is required;
 - stale telemetry and non-finite telemetry;
 - pause spanning part of the measurement window.
 
 Every case must choose fallback, remain grounded and award no completion bonus.
+Low or missing cadence remains visible but must not reject an otherwise valid
+gap jump in this version.
 An on-threshold value succeeds; one representable value below it fails. A late
 burst inside the valid measurement window may improve readiness, but one after
 the decision gate may not alter the committed outcome.
+
+Simulation tests must also prove that a locked completion awards the existing
+bonus exactly once, a locked bypass awards none, and an unresolved gap section
+fails closed to bypass when the section ends. Engine integration tests compare
+the runtime and simulation route, outcome and readiness in every locked frame.
 
 ### 6. Physics and runtime flight matrix
 
@@ -404,8 +420,8 @@ Exercise every existing Data Generator mode:
 | `on-target` | Completes short, medium and long fixtures exactly at required effort |
 | `over-target` | Completes; speed still chooses the line and cannot be overridden directly by excess watts |
 | `under-target` | Uses fallback for all three candidate speeds |
-| `cadence-low` | Uses fallback when cadence is required even if power and speed pass |
-| `cadence-high` | Completes when power and speed also pass; cadence alone cannot promote a longer line |
+| `cadence-low` | Completes when power and speed pass; low cadence remains diagnostic only |
+| `cadence-high` | Completes when power and speed pass; cadence alone cannot promote a longer line |
 
 For boundary-speed cases, the lab driver sets deterministic initial speed and
 virtual gear rather than waiting for incidental acceleration. Repeat every

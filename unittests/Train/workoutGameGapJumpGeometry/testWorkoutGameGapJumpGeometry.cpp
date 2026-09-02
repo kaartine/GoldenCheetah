@@ -49,6 +49,12 @@ private slots:
         QVERIFY(near(profile.lines[0].nominalFlightSeconds, 0.55));
         QVERIFY(near(profile.lines[1].nominalFlightSeconds, 0.78));
         QVERIFY(near(profile.lines[2].nominalFlightSeconds, 1.05));
+        QVERIFY(near(profile.prepareLeadMeters, 45.0));
+        QVERIFY(near(profile.splitLengthMeters, 12.0));
+        QVERIFY(near(profile.launchWindowLeadMeters, 10.0));
+        QVERIFY(near(profile.lockLeadMeters, 3.0));
+        QCOMPARE(profile.speedWindowMilliseconds, 500);
+        QCOMPARE(profile.powerHoldMilliseconds, 500);
         QVERIFY(near(profile.hysteresisMetersPerSecond, 0.35));
         QVERIFY(near(profile.maximumFlightSeconds, 2.0));
     }
@@ -105,6 +111,22 @@ private slots:
 
         profile = WorkoutGameGapJumpGeometry::canonicalProfile();
         profile.lines[2].nominalFlightSeconds = 2.01;
+        QVERIFY(!WorkoutGameGapJumpGeometry::validate(profile));
+
+        profile = WorkoutGameGapJumpGeometry::canonicalProfile();
+        profile.launchWindowLeadMeters = profile.splitLengthMeters;
+        QVERIFY(!WorkoutGameGapJumpGeometry::validate(profile));
+
+        profile = WorkoutGameGapJumpGeometry::canonicalProfile();
+        profile.lockLeadMeters = profile.launchWindowLeadMeters;
+        QVERIFY(!WorkoutGameGapJumpGeometry::validate(profile));
+
+        profile = WorkoutGameGapJumpGeometry::canonicalProfile();
+        profile.speedWindowMilliseconds = 0;
+        QVERIFY(!WorkoutGameGapJumpGeometry::validate(profile));
+
+        profile = WorkoutGameGapJumpGeometry::canonicalProfile();
+        profile.powerHoldMilliseconds = 2001;
         QVERIFY(!WorkoutGameGapJumpGeometry::validate(profile));
 
         QVERIFY(!WorkoutGameGapJumpGeometry::profile(

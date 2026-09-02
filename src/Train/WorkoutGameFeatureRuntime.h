@@ -10,6 +10,7 @@
 #ifndef _GC_WorkoutGameFeatureRuntime_h
 #define _GC_WorkoutGameFeatureRuntime_h
 
+#include "WorkoutGameGapJumpLaunchWindow.h"
 #include "WorkoutGameGapJumpSelector.h"
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameSimulation.h"
@@ -49,6 +50,7 @@ struct WorkoutGameFeatureRuntimeSnapshot
     WorkoutGameRoute route = WorkoutGameRoute::MainLine;
     double visualDistanceMeters = 0.0;
     double prepareDistanceMeters = 0.0;
+    double launchWindowStartDistanceMeters = 0.0;
     double decisionDistanceMeters = 0.0;
     double obstacleDistanceMeters = 0.0;
     double physicalTakeoffDistanceMeters = 0.0;
@@ -66,8 +68,16 @@ struct WorkoutGameFeatureRuntimeSnapshot
     WorkoutGameGapJumpLine provisionalGapLine =
             WorkoutGameGapJumpLine::None;
     WorkoutGameGapJumpLine lockedGapLine = WorkoutGameGapJumpLine::None;
+    WorkoutGameGapJumpLine steeringGapLine = WorkoutGameGapJumpLine::None;
     double predictedApproachSpeedMetersPerSecond = 0.0;
+    double launchRollingSpeedMetersPerSecond = 0.0;
+    double launchBestSpeedMetersPerSecond = 0.0;
+    int launchPowerHoldMilliseconds = 0;
     double selectedGapLengthMeters = 0.0;
+    bool launchWindowActive = false;
+    bool launchSpeedReady = false;
+    bool launchPowerReady = false;
+    bool gapLineReachable = true;
     bool gapLineLocked = false;
     std::uint64_t actionId = 0;
     bool triggerJump = false;
@@ -105,6 +115,14 @@ private:
         std::uint64_t baseActionId = 0;
         std::int64_t lastWorkoutTimeMs = 0;
         bool hasTimestamp = false;
+        double lastVisualDistanceMeters = 0.0;
+        bool hasVisualDistance = false;
+        bool launchWindowStarted = false;
+        WorkoutGameGapJumpLaunchWindow launchWindow;
+        WorkoutGameGapJumpLine launchLine = WorkoutGameGapJumpLine::None;
+        bool lineReachable = true;
+        double lateralOffsetMeters = 0.0;
+        double lateralVelocityMetersPerSecond = 0.0;
         WorkoutGameGapJumpSelector selector;
     };
 

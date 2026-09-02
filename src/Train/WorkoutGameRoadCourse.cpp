@@ -882,7 +882,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     && obstacleDistance >= pieceStart
                     && (obstacleDistance < pieceEnd
                         || (part + 1 == pieceCount
-                            && obstacleDistance <= pieceEnd));
+                            && obstacleDistance
+                                <= sectionStart + sectionLength + 1e-9));
             const bool nearChallenge = challenge.enabled
                     && featureFitsSection
                     && pieceEnd >= std::min(
@@ -978,6 +979,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     piece.gapJump.enabled = gap.ready;
                     piece.gapJump.prepareDistanceMeters = obstacleDistance
                             - gap.prepareLeadMeters;
+                    piece.gapJump.launchWindowStartDistanceMeters =
+                            obstacleDistance - gap.launchWindowLeadMeters;
                     piece.gapJump.lockDistanceMeters = obstacleDistance
                             - gap.lockLeadMeters;
                     piece.gapJump.splitStartDistanceMeters = obstacleDistance

@@ -644,7 +644,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
 
         QImage prior;
-        const int featureSections[] = {0, 2, 4, 6, 8};
+        const int featureSections[] = {0, 2, 4, 6, 10};
         for (int section : featureSections) {
             const WorkoutGameRoadPiece *challengePiece = nullptr;
             for (const WorkoutGameRoadPiece &piece : road.pieces) {

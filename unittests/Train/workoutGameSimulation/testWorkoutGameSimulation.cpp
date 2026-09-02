@@ -57,6 +57,16 @@ WorkoutGameCourse challengeCourse(WorkoutGameTerrainKind terrain)
     return course;
 }
 
+WorkoutGameCourse gapJumpCourse()
+{
+    WorkoutGameCourse course = challengeCourse(
+            WorkoutGameTerrainKind::GapJump);
+    course.durationMs = 30000;
+    course.sections.front().durationMs = course.durationMs;
+    course.sections.front().lengthMeters = 120.0;
+    return course;
+}
+
 WorkoutGameFeatureChallengeProfile challengeProfileFor(
         const WorkoutGameCourse &course,
         double ftpWatts = 200.0)
@@ -159,6 +169,94 @@ class TestWorkoutGameSimulation : public QObject
     Q_OBJECT
 
 private slots:
+    void gapJumpOutcomeIsCommittedExactlyOnce()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                gapJumpCourse(), 200.0));
+        const WorkoutGameSimulationSnapshot active = simulation.update(
+                sample(0, 200.0, 200.0, 85.0));
+        QCOMPARE(active.featureOutcome, WorkoutGameFeatureOutcome::Active);
+        const std::uint64_t scoreBefore = simulation.currentScore();
+
+        QVERIFY(simulation.commitGapJumpOutcome(
+                0, WorkoutGameFeatureOutcome::Completed, 0.95));
+        QCOMPARE(simulation.sectionOutcomes().front(),
+                 WorkoutGameFeatureOutcome::Completed);
+        QCOMPARE(simulation.currentScore(),
+                 scoreBefore + active.challenge.bonusPoints);
+        QVERIFY(!simulation.commitGapJumpOutcome(
+                0, WorkoutGameFeatureOutcome::Completed, 1.0));
+        QCOMPARE(simulation.currentScore(),
+                 scoreBefore + active.challenge.bonusPoints);
+
+        const WorkoutGameSimulationSnapshot committed = simulation.update(
+                sample(100, 200.0, 200.0, 85.0));
+        QCOMPARE(committed.featureOutcome,
+                 WorkoutGameFeatureOutcome::Completed);
+        QCOMPARE(committed.challengeReadiness, 0.95);
+    }
+
+    void gapJumpBypassCannotReceiveSuccessBonus()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                gapJumpCourse(), 200.0));
+        simulation.update(sample(0, 100.0, 200.0, 50.0));
+        const std::uint64_t scoreBefore = simulation.currentScore();
+
+        QVERIFY(simulation.commitGapJumpOutcome(
+                0, WorkoutGameFeatureOutcome::Bypassed, 0.4));
+        QCOMPARE(simulation.currentScore(), scoreBefore);
+        const WorkoutGameSimulationSnapshot committed = simulation.update(
+                sample(100, 100.0, 200.0, 50.0));
+        QCOMPARE(committed.featureOutcome,
+                 WorkoutGameFeatureOutcome::Bypassed);
+        QCOMPARE(committed.route, WorkoutGameRoute::SafeBypass);
+        QCOMPARE(committed.challengeReadiness, 0.4);
+    }
+
+    void gapJumpCommitRejectsInvalidAuthority()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                challengeCourse(WorkoutGameTerrainKind::Tabletop), 200.0));
+        simulation.update(sample(0, 200.0, 200.0, 85.0));
+
+        QVERIFY(!simulation.commitGapJumpOutcome(
+                0, WorkoutGameFeatureOutcome::Completed, 1.0));
+        QVERIFY(!simulation.commitGapJumpOutcome(
+                1, WorkoutGameFeatureOutcome::Completed, 1.0));
+        QVERIFY(!simulation.commitGapJumpOutcome(
+                0, WorkoutGameFeatureOutcome::Active, 1.0));
+    }
+
+    void unresolvedGapJumpBecomesBypassAtSectionExit()
+    {
+        WorkoutGameCourse course = gapJumpCourse();
+        WorkoutGameSection runout;
+        runout.feature = WorkoutGameFeature::RecoveryDescent;
+        runout.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        runout.startMs = course.durationMs;
+        runout.durationMs = 1000;
+        runout.targetWatts = 100.0;
+        course.sections.push_back(runout);
+        course.durationMs += runout.durationMs;
+
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(course, 200.0));
+        simulation.update(sample(0, 200.0, 200.0, 85.0));
+        const WorkoutGameSimulationSnapshot result = simulation.update(
+                sample(course.sections[1].startMs,
+                       100.0, 100.0, 70.0));
+
+        QCOMPARE(result.activeSection, 1);
+        QCOMPARE(simulation.sectionOutcomes().front(),
+                 WorkoutGameFeatureOutcome::Bypassed);
+        QCOMPARE(result.previousFeatureOutcome,
+                 WorkoutGameFeatureOutcome::Bypassed);
+    }
+
     void roadOmittedShortTabletopDoesNotRestoreAChallenge()
     {
         WorkoutGameCourse course = challengeCourse(

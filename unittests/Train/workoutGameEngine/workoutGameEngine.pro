@@ -12,6 +12,9 @@ SOURCES = testWorkoutGameEngine.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameFeatureLab.cpp \
           ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
+          ../../../src/Train/WorkoutGameGapJumpLaunchWindow.cpp \
+          ../../../src/Train/WorkoutGameGapJumpSelector.cpp \
           ../../../src/Train/WorkoutGameRiderVisual.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp \
@@ -22,6 +25,9 @@ SOURCES = testWorkoutGameEngine.cpp \
 
 HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
           ../../../src/Train/WorkoutGameEngine.h \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.h \
+          ../../../src/Train/WorkoutGameGapJumpLaunchWindow.h \
+          ../../../src/Train/WorkoutGameGapJumpSelector.h \
           ../../../src/Train/TrainingDataGenerator.h \
           ../../../src/Train/WorkoutGameRiderVisual.h
 

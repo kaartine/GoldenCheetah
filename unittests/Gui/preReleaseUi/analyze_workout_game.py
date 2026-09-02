@@ -613,6 +613,98 @@ def analyze(samples: list[TraceSample]) -> dict[str, float | int]:
     }
 
 
+def analyze_gap_jump(samples: list[TraceSample]) -> dict[str, float | int]:
+    gap_samples = [
+        sample for sample in samples
+        if sample.get("feature_terrain") == "gap-jump"
+    ]
+    launch_samples = [
+        sample for sample in gap_samples
+        if numeric(sample, "launch_window") == 1.0
+    ]
+    locked_samples = [
+        sample for sample in gap_samples
+        if numeric(sample, "line_locked") == 1.0
+    ]
+    launch_distances = [
+        distance for sample in launch_samples
+        if (distance := numeric(sample, "distance_to_lip_m")) is not None
+    ]
+    locked_distances = [
+        distance for sample in locked_samples
+        if (distance := numeric(sample, "distance_to_lip_m")) is not None
+    ]
+    action_ids = [
+        int(action_id) for sample in gap_samples
+        if (action_id := numeric(sample, "action_id")) is not None
+        and action_id > 0
+    ]
+    post_lock_line_changes = 0
+    locked_line = None
+    for sample in locked_samples:
+        current = sample.get("locked_line")
+        if current is None:
+            continue
+        if locked_line is not None and current != locked_line:
+            post_lock_line_changes += 1
+        locked_line = current
+    return {
+        "gap_jump_samples": len(gap_samples),
+        "gap_launch_window_samples": len(launch_samples),
+        "gap_locked_samples": len(locked_samples),
+        "gap_launch_distance_min_m": min(launch_distances, default=0.0),
+        "gap_launch_distance_max_m": max(launch_distances, default=0.0),
+        "gap_locked_distance_max_m": max(locked_distances, default=0.0),
+        "gap_max_power_hold_ms": max(
+            (numeric(sample, "power_hold_ms") or 0.0
+             for sample in gap_samples),
+            default=0.0,
+        ),
+        "gap_speed_ready_samples": sum(
+            numeric(sample, "launch_speed_ready") == 1.0
+            for sample in gap_samples
+        ),
+        "gap_power_ready_samples": sum(
+            numeric(sample, "launch_power_ready") == 1.0
+            for sample in gap_samples
+        ),
+        "gap_action_id_changes": sum(
+            current != previous
+            for previous, current in zip(action_ids, action_ids[1:])
+        ),
+        "gap_post_lock_line_changes": post_lock_line_changes,
+        "gap_launch_samples_outside_window": sum(
+            distance <= 3.0 or distance > 10.0
+            for distance in launch_distances
+        ),
+    }
+
+
+def validate_gap_jump(summary: dict[str, float | int]) -> list[str]:
+    failures = []
+    if summary["gap_jump_samples"] < 3:
+        failures.append("too few gap jump trace samples")
+    if summary["gap_launch_window_samples"] < 1:
+        failures.append("gap jump launch window was not observed")
+    if summary["gap_locked_samples"] < 1:
+        failures.append("gap jump line lock was not observed")
+    if summary["gap_launch_samples_outside_window"]:
+        failures.append("gap jump launch window was active outside 10-3 m")
+    if summary["gap_locked_distance_max_m"] > 3.25:
+        failures.append("gap jump line locked before the 3 m decision point")
+    if summary["gap_max_power_hold_ms"] < 500.0:
+        failures.append("gap jump did not sustain target power for 500 ms")
+    if summary["gap_speed_ready_samples"] < 1:
+        failures.append("gap jump never completed a 500 ms speed window")
+    if summary["gap_power_ready_samples"] < 1:
+        failures.append("gap jump power gate never became ready")
+    if summary["gap_action_id_changes"]:
+        failures.append("gap jump action identity changed during approach")
+    if summary["gap_post_lock_line_changes"]:
+        failures.append("gap jump line changed after lock")
+    return failures
+
+
 def validate(
     summary: dict[str, float | int],
     minimum_samples: int,
@@ -682,6 +774,7 @@ def main() -> int:
     parser.add_argument("--accessible-canvas-name-file", type=Path)
     parser.add_argument("--appimage", type=Path)
     parser.add_argument("--renderer-evidence-only", action="store_true")
+    parser.add_argument("--require-gap-launch-window", action="store_true")
     parser.add_argument("--minimum-samples", type=int, default=8)
     parser.add_argument("--minimum-fps", type=float, default=25.0)
     parser.add_argument("--maximum-p95-ms", type=float, default=45.0)
@@ -768,6 +861,10 @@ def main() -> int:
         args.maximum_unexpected_airborne_frames,
         args.maximum_lateral_step_m,
     )
+    if args.require_gap_launch_window:
+        gap_summary = analyze_gap_jump(trace)
+        summary.update(gap_summary)
+        failures.extend(validate_gap_jump(gap_summary))
     if args.recording:
         acceptance = reconcile_acceptance(
             trace,

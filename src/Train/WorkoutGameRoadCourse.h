@@ -71,6 +71,7 @@ struct WorkoutGameRoadGapJumpGate
 {
     bool enabled = false;
     double prepareDistanceMeters = 0.0;
+    double launchWindowStartDistanceMeters = 0.0;
     double lockDistanceMeters = 0.0;
     double splitStartDistanceMeters = 0.0;
     double mergeEndDistanceMeters = 0.0;

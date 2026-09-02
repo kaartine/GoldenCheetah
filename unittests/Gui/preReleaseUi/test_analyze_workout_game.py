@@ -768,6 +768,68 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertEqual(samples[0]["camera_presentation"], "idle-side")
             self.assertEqual(samples[0]["camera_side_blend"], 0.75)
 
+    def test_accepts_gap_launch_window_between_ten_and_three_meters(self):
+        samples = [
+            {
+                "feature_terrain": "gap-jump",
+                "distance_to_lip_m": distance,
+                "launch_window": launch,
+                "line_locked": locked,
+                "launch_speed_ready": speed_ready,
+                "launch_power_ready": power_ready,
+                "power_hold_ms": hold,
+                "action_id": 41.0,
+                "locked_line": line,
+            }
+            for distance, launch, locked, speed_ready, power_ready, hold, line in (
+                (11.0, 0, 0, 0, 0, 0, "none"),
+                (9.0, 1, 0, 0, 0, 250, "none"),
+                (6.0, 1, 0, 1, 1, 500, "none"),
+                (3.0, 0, 1, 1, 1, 500, "long"),
+            )
+        ]
+
+        summary = ANALYZER.analyze_gap_jump(samples)
+
+        self.assertEqual(ANALYZER.validate_gap_jump(summary), [])
+        self.assertEqual(summary["gap_launch_distance_min_m"], 6.0)
+        self.assertEqual(summary["gap_locked_distance_max_m"], 3.0)
+
+    def test_rejects_gap_launch_outside_window_and_early_or_mutable_lock(self):
+        samples = [
+            {
+                "feature_terrain": "gap-jump",
+                "distance_to_lip_m": distance,
+                "launch_window": 1,
+                "line_locked": locked,
+                "launch_speed_ready": 0,
+                "launch_power_ready": 0,
+                "power_hold_ms": 100,
+                "action_id": action_id,
+                "locked_line": line,
+            }
+            for distance, locked, action_id, line in (
+                (12.0, 0, 41.0, "none"),
+                (5.0, 1, 42.0, "medium"),
+                (2.0, 1, 42.0, "long"),
+            )
+        ]
+
+        failures = ANALYZER.validate_gap_jump(
+            ANALYZER.analyze_gap_jump(samples)
+        )
+
+        self.assertTrue(any("outside 10-3 m" in item for item in failures))
+        self.assertTrue(any("before the 3 m" in item for item in failures))
+        self.assertTrue(any("identity changed" in item for item in failures))
+        self.assertTrue(any("after lock" in item for item in failures))
+
+    def test_ui_runner_requires_gap_acceptance_for_feature_lab(self):
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('GC_WORKOUT_GAME_FEATURE_LAB:-0', runner)
+        self.assertIn("--require-gap-launch-window", runner)
+
     def test_malformed_numeric_trace_field_does_not_break_analysis(self):
         samples = [{
             "frame_ms": "unavailable",
