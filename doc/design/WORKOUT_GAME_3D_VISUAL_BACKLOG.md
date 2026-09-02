@@ -66,6 +66,7 @@ Status values are `open`, `in progress`, `review` and `accepted`.
 | VIS-13 | P1 | open | Surface materials repeat visibly and do not explain trail condition. | Dirt, packed line, loose edge, rock, root, wood and forest floor remain coherent but vary without shimmer or obvious short tiling. |
 | VIS-14 | P1 | open | Feature success, bypass and landing lack enough visual punctuation. | Short bounded dust, debris, suspension and success feedback make the result clear without obscuring telemetry or changing simulation timing. |
 | VIS-15 | P1 | open | The HUD occupies a large dark band and competes with the landscape. | Essential live values and workout profile remain readable while the trail and horizon retain enough unobstructed vertical space at laptop resolution. |
+| VIS-16 | P0 | open | The game has no progressive gap-jump choice matched to approach speed. | A shared approach fans smoothly into short, medium and long adjacent gap lines with visibly different lips, gaps and landings; the selected line is locked early from predicted take-off speed, while an unsafe approach uses a separate grounded route. |
 
 ## Environment Elements
 
@@ -101,6 +102,7 @@ Berms are ordinary route geometry and do not receive a challenge banner.
 | Banked turn | A bowl-shaped outer bank whose curve, rider line and lean agree; no feature prompt. |
 | Log over | A substantial partly buried trunk extending beyond both trail edges with bark and end detail. |
 | Tabletop | Belly, lip, deck, knuckle and landing readable from the chase camera before take-off. |
+| Gap jump | Three adjacent, progressively longer real gaps with a common approach, early fan-out, distinct landings and a smooth merge; the selected line remains obvious before commitment. |
 | Rock slab | One asymmetric exposed stone face with a rollover crest, fissures and buried side edges. |
 
 ## Proposed Presentation Elements
