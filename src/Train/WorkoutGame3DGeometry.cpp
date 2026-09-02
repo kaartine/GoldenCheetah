@@ -632,7 +632,7 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
     constexpr int MaximumVerticesPerProp = 18;
     constexpr int MaximumTrianglesPerProp = 18;
     constexpr double EdgeInsetMeters = 1.5;
-    constexpr double CameraCorridorHalfWidthMeters = 4.5;
+    constexpr double CameraCorridorHalfWidthMeters = 6.0;
     const int firstSlot = int(std::floor(
             (startDistanceMeters + EdgeInsetMeters)
             / ForestDressingSpacingMeters)) - 1;

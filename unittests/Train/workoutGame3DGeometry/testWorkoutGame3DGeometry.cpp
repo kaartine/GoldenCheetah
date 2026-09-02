@@ -919,7 +919,7 @@ private slots:
         QVERIFY(groundedBaseVertices > 100);
     }
 
-    void forestDressingKeepsTreeCrownsOutsideTheCameraCorridor()
+    void forestDressingKeepsEntireTreesOutsideTheCameraCorridor()
     {
         const WorkoutGame3DMeshData dressing =
                 WorkoutGame3DGeometry::buildMeshData(
@@ -927,9 +927,10 @@ private slots:
                     straightCourse(160.0), 0.0, 145.0);
         QVERIFY(dressing.ready);
 
-        constexpr float CameraCorridorHalfWidthMeters = 4.5f;
+        constexpr float CameraCorridorHalfWidthMeters = 6.0f;
         const int stride = 12 * int(sizeof(float));
         const int vertexCount = dressing.vertexData.size() / stride;
+        int trunkVertices = 0;
         int crownVertices = 0;
         for (int vertex = 0; vertex < vertexCount; ++vertex) {
             const float red = vertexFloat(
@@ -941,13 +942,18 @@ private slots:
             const bool crown = red >= 0.05f && red <= 0.08f
                     && green >= 0.18f && green <= 0.26f
                     && blue >= 0.09f && blue <= 0.14f;
-            if (!crown) continue;
-            ++crownVertices;
+            const bool trunk = std::abs(red - 0.22f) < 0.002f
+                    && std::abs(green - 0.13f) < 0.002f
+                    && std::abs(blue - 0.07f) < 0.002f;
+            if (!crown && !trunk) continue;
+            if (crown) ++crownVertices;
+            if (trunk) ++trunkVertices;
             const float x = vertexFloat(
                     dressing.vertexData, stride, vertex, 0);
             QVERIFY2(std::abs(x) >= CameraCorridorHalfWidthMeters,
-                     "oversized foreground crown obstructs the rider view");
+                     "foreground tree obstructs the rider view");
         }
+        QVERIFY(trunkVertices > 100);
         QVERIFY(crownVertices > 100);
     }
 
