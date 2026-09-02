@@ -14,6 +14,7 @@
 #include "WorkoutGameTrailBranch.h"
 
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRootGeometry.h"
@@ -33,6 +34,13 @@ double smoothStep(double value)
     return clamped * clamped * (3.0 - 2.0 * clamped);
 }
 
+double smootherStep(double value)
+{
+    const double clamped = std::clamp(value, 0.0, 1.0);
+    const double cubed = clamped * clamped * clamped;
+    return cubed * (clamped * (clamped * 6.0 - 15.0) + 10.0);
+}
+
 double jumpArc(double progress)
 {
     constexpr double ApexProgress = 0.30;
@@ -49,6 +57,7 @@ WorkoutGameFeatureMotion motionFor(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
     case WorkoutGameTerrainKind::Tabletop:
+    case WorkoutGameTerrainKind::GapJump:
         return WorkoutGameFeatureMotion::Jump;
     case WorkoutGameTerrainKind::Roots:
     case WorkoutGameTerrainKind::RockGarden:
@@ -63,6 +72,51 @@ WorkoutGameFeatureMotion motionFor(WorkoutGameTerrainKind terrain)
     default:
         return WorkoutGameFeatureMotion::None;
     }
+}
+
+double gapJumpLateralAt(
+        double distanceMeters,
+        double splitStartMeters,
+        double splitLengthMeters,
+        double mergeStartMeters,
+        double mergeEndMeters,
+        double lateralMeters)
+{
+    if (distanceMeters <= splitStartMeters
+            || distanceMeters >= mergeEndMeters) {
+        return 0.0;
+    }
+    const double splitEndMeters = splitStartMeters
+            + std::max(0.01, splitLengthMeters);
+    if (distanceMeters < splitEndMeters) {
+        return lateralMeters * smootherStep(
+                (distanceMeters - splitStartMeters)
+                    / (splitEndMeters - splitStartMeters));
+    }
+    if (distanceMeters <= mergeStartMeters) return lateralMeters;
+    return lateralMeters * (1.0 - smootherStep(
+            (distanceMeters - mergeStartMeters)
+                / std::max(0.01, mergeEndMeters - mergeStartMeters)));
+}
+
+std::uint64_t gapJumpActionId(
+        std::uint64_t baseActionId,
+        WorkoutGameGapJumpLine line)
+{
+    constexpr std::uint64_t LineMask = std::uint64_t(0x3) << 8;
+    return (baseActionId & ~LineMask)
+            | (std::uint64_t(line) << 8);
+}
+
+const WorkoutGameRoadGapJumpLine *gapJumpRoadLine(
+        const WorkoutGameRoadGapJumpGate &gate,
+        WorkoutGameGapJumpLine id)
+{
+    if (!gate.enabled || id == WorkoutGameGapJumpLine::None) return nullptr;
+    for (const WorkoutGameRoadGapJumpLine &line : gate.lines) {
+        if (line.id == id) return &line;
+    }
+    return nullptr;
 }
 
 double jumpHeight(WorkoutGameTerrainKind terrain)
@@ -142,6 +196,11 @@ bool WorkoutGameFeatureRuntime::airborneExpected(
         const WorkoutGameFeatureRuntimeSnapshot &feature)
 {
     if (!feature.ready) return false;
+    if (feature.terrain == WorkoutGameTerrainKind::GapJump) {
+        return feature.lockedGapLine != WorkoutGameGapJumpLine::None
+                && feature.motion == WorkoutGameFeatureMotion::Jump
+                && feature.phase == WorkoutGameFeaturePhase::Action;
+    }
     if (feature.motion == WorkoutGameFeatureMotion::Jump
             && feature.phase == WorkoutGameFeaturePhase::Committed) {
         return feature.visualDistanceMeters
@@ -157,12 +216,13 @@ void WorkoutGameFeatureRuntime::reset()
 {
     configuredCourse = WorkoutGameRoadCourse();
     sections.clear();
+    gapJumpState = GapJumpState();
 }
 
 WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         const WorkoutGameSimulationSnapshot &simulation,
         double actualWatts,
-        double targetWatts) const
+        double targetWatts)
 {
     WorkoutGameFeatureRuntimeSnapshot result;
     if (!configuredCourse.ready || !simulation.ready
@@ -250,7 +310,8 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     result.distanceToObstacleMeters = result.obstacleDistanceMeters
             - result.visualDistanceMeters;
 
-    if (result.motion == WorkoutGameFeatureMotion::Jump) {
+    if (result.motion == WorkoutGameFeatureMotion::Jump
+            && piece->terrain != WorkoutGameTerrainKind::GapJump) {
         const WorkoutGameFeatureGeometryProfile geometry =
                 WorkoutGameFeatureGeometry::profile(
                     piece->terrain, piece->difficulty);
@@ -265,7 +326,154 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     double actionEnd = std::min(
             layout->endDistanceMeters, actionStart + 6.0);
     bool jumpSpeedSupported = true;
-    if (piece->terrain == WorkoutGameTerrainKind::Climb) {
+    if (piece->terrain == WorkoutGameTerrainKind::GapJump) {
+        const WorkoutGameGapJumpGeometryProfile profile =
+                WorkoutGameGapJumpGeometry::profile(piece->difficulty);
+        const WorkoutGameRoadGapJumpGate &gate = piece->gapJump;
+        const std::uint64_t baseActionId =
+                (std::uint64_t(featureSection + 1) << 32)
+                | (std::uint64_t(piece->terrain) + 1u);
+        const bool newAction = gapJumpState.sourceSectionIndex != featureSection
+                || gapJumpState.baseActionId != baseActionId
+                || (gapJumpState.hasTimestamp
+                    && simulation.workoutTimeMs
+                        < gapJumpState.lastWorkoutTimeMs);
+        if (newAction) {
+            gapJumpState = GapJumpState();
+            gapJumpState.sourceSectionIndex = featureSection;
+            gapJumpState.baseActionId = baseActionId;
+            gapJumpState.selector = WorkoutGameGapJumpSelector(profile);
+        }
+
+        const double predictedSpeed = simulation.challengeMeasurementActive
+                && std::isfinite(
+                    simulation.challengeMetrics.averageSpeedKph)
+                && simulation.challengeMetrics.averageSpeedKph >= 0.0
+            ? simulation.challengeMetrics.averageSpeedKph / 3.6
+            : std::max(0.0, std::isfinite(simulation.speedKph)
+                ? simulation.speedKph / 3.6 : 0.0);
+        result.predictedApproachSpeedMetersPerSecond = predictedSpeed;
+
+        int elapsedMilliseconds = 50;
+        if (gapJumpState.hasTimestamp) {
+            elapsedMilliseconds = int(std::clamp<std::int64_t>(
+                    simulation.workoutTimeMs
+                        - gapJumpState.lastWorkoutTimeMs,
+                    0, 2000));
+        }
+        gapJumpState.lastWorkoutTimeMs = simulation.workoutTimeMs;
+        gapJumpState.hasTimestamp = true;
+        if (!gapJumpState.selector.state().locked
+                && elapsedMilliseconds > 0) {
+            for (int remaining = elapsedMilliseconds;
+                 remaining > 0; remaining -= 50) {
+                gapJumpState.selector.update(
+                        predictedSpeed, std::min(50, remaining));
+            }
+        }
+
+        result.prepareDistanceMeters = gate.enabled
+                ? gate.prepareDistanceMeters
+                : piece->challenge.prepareDistanceMeters;
+        result.decisionDistanceMeters = gate.enabled
+                ? gate.lockDistanceMeters
+                : piece->challenge.decisionDistanceMeters;
+        result.distanceToObstacleMeters = result.obstacleDistanceMeters
+                - result.visualDistanceMeters;
+
+        if (!gapJumpState.selector.state().locked
+                && result.visualDistanceMeters
+                    >= result.decisionDistanceMeters) {
+            const double measuredActual =
+                    simulation.challengeMeasurementActive
+                        ? simulation.challengeMetrics.averageActualWatts
+                        : actualWatts;
+            const double measuredTarget =
+                    simulation.challengeMeasurementActive
+                        ? simulation.challengeMetrics.averageTargetWatts
+                        : targetWatts;
+            const bool finiteTelemetry = std::isfinite(measuredActual)
+                    && std::isfinite(measuredTarget)
+                    && std::isfinite(predictedSpeed)
+                    && measuredActual >= 0.0
+                    && measuredTarget > 0.0;
+            const bool effortReady = finiteTelemetry
+                    && measuredActual >= measuredTarget;
+            const bool telemetryFresh = finiteTelemetry
+                    && (simulation.challengeMeasurementActive
+                        || actualWatts > 0.0);
+            gapJumpState.selector.lock(
+                    baseActionId, effortReady && gate.enabled,
+                    telemetryFresh);
+        }
+
+        const WorkoutGameGapJumpSelectionState selection =
+                gapJumpState.selector.state();
+        result.provisionalGapLine = selection.provisionalLine;
+        result.lockedGapLine = selection.lockedLine;
+        result.gapLineLocked = selection.locked;
+        const WorkoutGameGapJumpLine activeLine = selection.locked
+                ? selection.lockedLine : selection.provisionalLine;
+        const WorkoutGameRoadGapJumpLine *line =
+                gapJumpRoadLine(gate, activeLine);
+        const bool bypassGap = selection.locked
+                && selection.lockedLine == WorkoutGameGapJumpLine::None;
+        if (bypassGap) {
+            result.route = WorkoutGameRoute::SafeBypass;
+            result.outcome = WorkoutGameFeatureOutcome::Bypassed;
+        } else {
+            result.route = WorkoutGameRoute::MainLine;
+            if (selection.locked) {
+                result.outcome = WorkoutGameFeatureOutcome::Completed;
+            }
+        }
+
+        const WorkoutGameRoadGapJumpLine *fallbackLine = gate.enabled
+                ? &gate.lines.front() : nullptr;
+        actionStart = line ? line->takeoffDistanceMeters
+                : fallbackLine ? fallbackLine->takeoffDistanceMeters
+                : result.obstacleDistanceMeters;
+        actionEnd = std::min(
+                layout->endDistanceMeters,
+                line ? line->landingDistanceMeters
+                     : fallbackLine ? fallbackLine->landingDistanceMeters
+                     : actionStart);
+        result.physicalTakeoffDistanceMeters = actionStart;
+        result.selectedGapLengthMeters = line ? line->gapLengthMeters : 0.0;
+        const double sectionLengthMeters = std::max(
+                0.01, layout->endDistanceMeters - layout->startDistanceMeters);
+        const double sectionSeconds = std::max(
+                0.001, double(layout->durationMs) / 1000.0);
+        const double courseSpeedMetersPerSecond = layout->durationMs > 0
+                ? sectionLengthMeters / sectionSeconds
+                : std::max(0.1, predictedSpeed);
+        result.flightDurationSeconds = line
+                ? std::clamp(
+                    line->gapLengthMeters / courseSpeedMetersPerSecond,
+                    0.25,
+                    std::min({line->nominalFlightSeconds, 2.0,
+                              profile.maximumFlightSeconds}))
+                : 0.0;
+
+        const double mergeEnd = gate.enabled
+                ? gate.mergeEndDistanceMeters : actionEnd;
+        const double mergeStart = std::max(
+                actionEnd,
+                mergeEnd - profile.mergeLengthMeters);
+        const double lateral = bypassGap
+                ? piece->challenge.bypassLateralMeters
+                : line ? line->lateralMeters : 0.0;
+        if (selection.locked) {
+            result.lateralOffsetMeters = gapJumpLateralAt(
+                    result.visualDistanceMeters,
+                    gate.enabled ? gate.splitStartDistanceMeters
+                                 : result.decisionDistanceMeters,
+                    profile.splitLengthMeters,
+                    mergeStart, mergeEnd, lateral);
+        }
+        result.actionId = gapJumpActionId(baseActionId,
+                                         selection.lockedLine);
+    } else if (piece->terrain == WorkoutGameTerrainKind::Climb) {
         const WorkoutGameClimbGeometryProfile climb =
                 WorkoutGameClimbGeometry::profile(piece->difficulty);
         actionStart = std::max(
@@ -360,10 +568,10 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             && result.visualDistanceMeters < actionEnd) {
         result.phase = WorkoutGameFeaturePhase::Action;
     } else if (result.visualDistanceMeters
-            < piece->challenge.prepareDistanceMeters) {
+            < result.prepareDistanceMeters) {
         result.phase = WorkoutGameFeaturePhase::Approach;
     } else if (result.visualDistanceMeters
-            < piece->challenge.decisionDistanceMeters) {
+            < result.decisionDistanceMeters) {
         result.phase = WorkoutGameFeaturePhase::Measure;
     } else if (result.visualDistanceMeters < actionStart) {
         result.phase = WorkoutGameFeaturePhase::Committed;
@@ -373,8 +581,10 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         result.phase = WorkoutGameFeaturePhase::Recovery;
     }
 
-    result.actionId = (std::uint64_t(featureSection + 1) << 32)
-            | (std::uint64_t(piece->terrain) + 1u);
+    if (piece->terrain != WorkoutGameTerrainKind::GapJump) {
+        result.actionId = (std::uint64_t(featureSection + 1) << 32)
+                | (std::uint64_t(piece->terrain) + 1u);
+    }
     const bool completed = result.outcome
             == WorkoutGameFeatureOutcome::Completed;
     const bool bypass = result.terrain != WorkoutGameTerrainKind::Rollers
@@ -382,7 +592,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             && result.terrain != WorkoutGameTerrainKind::Skinny
             && (result.outcome == WorkoutGameFeatureOutcome::Bypassed
                 || result.route == WorkoutGameRoute::SafeBypass);
-    if (bypass) {
+    if (bypass && piece->terrain != WorkoutGameTerrainKind::GapJump) {
         if (piece->terrain == WorkoutGameTerrainKind::Roots) {
             const WorkoutGameRootGeometryProfile roots =
                     WorkoutGameRootGeometry::profile(piece->difficulty);
@@ -426,8 +636,25 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                 && jumpSpeedSupported
                 && !bypass) {
             result.triggerJump = true;
-            result.verticalOffsetMeters = jumpHeight(piece->terrain)
-                    * jumpArc(actionProgress);
+            double heightMeters = jumpHeight(piece->terrain);
+            double arcProgress = actionProgress;
+            if (piece->terrain == WorkoutGameTerrainKind::GapJump) {
+                const auto *line = gapJumpRoadLine(
+                        piece->gapJump, result.lockedGapLine);
+                if (line) {
+                    heightMeters = std::min(
+                            2.4,
+                            line->lipHeightMeters
+                                + 0.12 * line->gapLengthMeters);
+                    constexpr double ApexProgress = 0.35;
+                    arcProgress = actionProgress <= ApexProgress
+                            ? actionProgress / ApexProgress * 0.30
+                            : 0.30 + (actionProgress - ApexProgress)
+                                / (1.0 - ApexProgress) * 0.70;
+                }
+            }
+            result.verticalOffsetMeters = heightMeters
+                    * jumpArc(arcProgress);
             result.pitchDegrees = 7.0 * std::cos(Pi * actionProgress);
         } else if (result.motion == WorkoutGameFeatureMotion::Drop
                 && completed && !bypass) {

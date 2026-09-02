@@ -11,6 +11,7 @@
 #include "Train/WorkoutGame3DTerrainProfile.h"
 #include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameClimbGeometry.h"
+#include "Train/WorkoutGameGapJumpGeometry.h"
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
@@ -1147,6 +1148,77 @@ private slots:
                 << int(WorkoutGameTerrainKind::LogOver);
         QTest::newRow("tabletop")
                 << int(WorkoutGameTerrainKind::Tabletop);
+    }
+
+    void gapJumpAuthoredFlightIsBoundedAndCannotRetrigger()
+    {
+        const auto profile = WorkoutGameGapJumpGeometry::canonicalProfile();
+        const auto *line = WorkoutGameGapJumpGeometry::line(
+                profile, WorkoutGameGapJumpLine::Long);
+        QVERIFY(line != nullptr);
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(997u));
+        WorkoutGamePhysicsInput input;
+        input.terrain = WorkoutGameTerrainKind::GapJump;
+        input.desiredSpeedMetersPerSecond = 7.0;
+        input.courseSpeedMetersPerSecond = 7.0;
+        input.effortRatio = 1.0;
+        input.jumpRequested = true;
+        input.featureActionId = 42u
+                | (std::uint64_t(WorkoutGameGapJumpLine::Long) << 8);
+        physics.update(input);
+
+        int takeoffMs = -1;
+        int landingMs = -1;
+        double maximumAirHeight = 0.0;
+        for (int time = 20; time <= 2500; time += 20) {
+            input.workoutTimeMs = time;
+            const auto frame = physics.update(input);
+            maximumAirHeight = std::max(
+                    maximumAirHeight, frame.rider.airHeightMeters());
+            if (frame.rider.airborne && takeoffMs < 0) takeoffMs = time;
+            if (takeoffMs >= 0 && !frame.rider.airborne) {
+                landingMs = time;
+                break;
+            }
+        }
+        QVERIFY(takeoffMs >= 0);
+        QVERIFY(landingMs > takeoffMs);
+        QVERIFY(landingMs - takeoffMs
+                <= int(std::ceil(line->nominalFlightSeconds * 1000.0)) + 50);
+        QVERIFY(landingMs - takeoffMs <= 2000);
+        QVERIFY(maximumAirHeight > 0.25);
+        QVERIFY(maximumAirHeight <= 2.4);
+
+        bool retriggered = false;
+        for (int time = landingMs + 20; time <= landingMs + 1000; time += 20) {
+            input.workoutTimeMs = time;
+            retriggered = retriggered || physics.update(input).rider.airborne;
+        }
+        QVERIFY(!retriggered);
+    }
+
+    void gapJumpSafeBypassAlwaysFollowsTheGround()
+    {
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(997u));
+        WorkoutGamePhysicsInput input;
+        input.terrain = WorkoutGameTerrainKind::GapJump;
+        input.desiredSpeedMetersPerSecond = 7.0;
+        input.courseSpeedMetersPerSecond = 7.0;
+        input.effortRatio = 0.7;
+        input.jumpRequested = false;
+        input.forceGroundFollowing = true;
+        input.featureActionId = 42u;
+        physics.update(input);
+
+        for (int time = 20; time <= 2500; time += 20) {
+            input.workoutTimeMs = time;
+            const auto frame = physics.update(input);
+            QVERIFY(!frame.rider.airborne);
+            QVERIFY(frame.rider.airHeightMeters() <= 1e-9);
+        }
     }
 
     void jumpableFeaturesLeaveGroundAndLand()

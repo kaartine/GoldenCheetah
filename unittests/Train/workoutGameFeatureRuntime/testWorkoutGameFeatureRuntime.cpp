@@ -10,6 +10,7 @@
 #include "Train/WorkoutGameFeatureLab.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
+#include "Train/WorkoutGameGapJumpGeometry.h"
 #include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameClimbGeometry.h"
 #include "Train/WorkoutGameRootGeometry.h"
@@ -102,6 +103,76 @@ double jumpActionEndDistance(
             std::max(takeoff + 5.5,
                      piece.challenge.obstacleDistanceMeters
                         + geometry.endMeters + 1.5));
+}
+
+WorkoutGameRoadCourse gapJumpRoad()
+{
+    WorkoutGameRoadCourse road;
+    road.ready = true;
+    road.seed = 88031u;
+    road.totalLengthMeters = 140.0;
+    road.visualLengthMeters = road.totalLengthMeters;
+
+    WorkoutGameRoadPiece piece;
+    piece.sourceSectionIndex = 0;
+    piece.terrain = WorkoutGameTerrainKind::GapJump;
+    piece.startDistanceMeters = 0.0;
+    piece.lengthMeters = road.totalLengthMeters;
+    piece.difficulty = 0.5;
+    piece.challenge.enabled = true;
+    piece.challenge.prepareDistanceMeters = 35.0;
+    piece.challenge.decisionDistanceMeters = 48.0;
+    piece.challenge.obstacleDistanceMeters = 80.0;
+    const auto profile = WorkoutGameGapJumpGeometry::canonicalProfile();
+    piece.gapJump.enabled = true;
+    piece.gapJump.prepareDistanceMeters = 34.5;
+    piece.gapJump.lockDistanceMeters = 47.5;
+    piece.gapJump.splitStartDistanceMeters = 60.0;
+    for (std::size_t index = 0; index < profile.lines.size(); ++index) {
+        const auto &source = profile.lines[index];
+        auto &line = piece.gapJump.lines[index];
+        line.id = source.id;
+        line.takeoffDistanceMeters = 80.0 + 0.3 * double(index);
+        line.landingDistanceMeters = line.takeoffDistanceMeters
+                + source.gapLengthMeters;
+        line.lateralMeters = source.lateralMeters;
+        line.gapLengthMeters = source.gapLengthMeters;
+        line.minimumSpeedMetersPerSecond =
+                source.coldThresholdMetersPerSecond;
+        line.nominalFlightSeconds = source.nominalFlightSeconds;
+        line.lipHeightMeters = source.lipHeightMeters;
+        line.landingDropMeters = source.landingDropMeters;
+    }
+    piece.gapJump.mergeEndDistanceMeters =
+            piece.gapJump.lines.back().landingDistanceMeters
+            + 6.0 + profile.mergeLengthMeters;
+    piece.challenge.bypassStartDistanceMeters =
+            piece.gapJump.splitStartDistanceMeters;
+    piece.challenge.bypassEndDistanceMeters =
+            piece.gapJump.mergeEndDistanceMeters;
+    piece.challenge.bypassLateralMeters = profile.bypassLateralMeters;
+    road.pieces.push_back(piece);
+    road.timeline.push_back({0, 0, 28000, 0.0, road.totalLengthMeters});
+    return road;
+}
+
+WorkoutGameSimulationSnapshot gapSnapshot(
+        double distanceMeters,
+        std::int64_t workoutTimeMs,
+        double speedMetersPerSecond,
+        double actualWatts,
+        double targetWatts)
+{
+    WorkoutGameSimulationSnapshot result = snapshot(
+            0, distanceMeters / 140.0,
+            WorkoutGameFeatureOutcome::Active);
+    result.workoutTimeMs = workoutTimeMs;
+    result.speedKph = speedMetersPerSecond * 3.6;
+    result.challengeMeasurementActive = true;
+    result.challengeMetrics.averageActualWatts = actualWatts;
+    result.challengeMetrics.averageTargetWatts = targetWatts;
+    result.challengeMetrics.averageSpeedKph = result.speedKph;
+    return result;
 }
 
 WorkoutGameCourse climbWithRunoutCourse()
@@ -920,6 +991,172 @@ private slots:
         QCOMPARE(feature.route, WorkoutGameRoute::MainLine);
         QCOMPARE(feature.lateralOffsetMeters, 0.0);
         QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(feature));
+    }
+
+    void gapJumpLocksTheSpeedMatchedLineBeforeFanOut()
+    {
+        const WorkoutGameRoadCourse road = gapJumpRoad();
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+
+        runtime.update(gapSnapshot(30.0, 0, 7.0, 230.0, 220.0),
+                       230.0, 220.0);
+        const auto measure = runtime.update(
+                gapSnapshot(40.0, 50, 7.0, 230.0, 220.0), 230.0, 220.0);
+        QCOMPARE(measure.phase, WorkoutGameFeaturePhase::Measure);
+        QCOMPARE(measure.prepareDistanceMeters,
+                 road.pieces.front().gapJump.prepareDistanceMeters);
+        QCOMPARE(measure.decisionDistanceMeters,
+                 road.pieces.front().gapJump.lockDistanceMeters);
+        QCOMPARE(measure.provisionalGapLine, WorkoutGameGapJumpLine::Long);
+        QVERIFY(!measure.gapLineLocked);
+        QCOMPARE(measure.lateralOffsetMeters, 0.0);
+
+        const auto locked = runtime.update(
+                gapSnapshot(48.0, 100, 7.0, 230.0, 220.0), 230.0, 220.0);
+        QCOMPARE(locked.phase, WorkoutGameFeaturePhase::Committed);
+        QVERIFY(locked.gapLineLocked);
+        QCOMPARE(locked.lockedGapLine, WorkoutGameGapJumpLine::Long);
+        QCOMPARE(locked.route, WorkoutGameRoute::MainLine);
+        QCOMPARE(locked.lateralOffsetMeters, 0.0);
+
+        const auto afterTelemetryChange = runtime.update(
+                gapSnapshot(65.0, 150, 2.0, 0.0, 220.0), 0.0, 220.0);
+        QCOMPARE(afterTelemetryChange.lockedGapLine,
+                 WorkoutGameGapJumpLine::Long);
+        QCOMPARE(afterTelemetryChange.actionId, locked.actionId);
+        QVERIFY(afterTelemetryChange.lateralOffsetMeters > 0.0);
+    }
+
+    void gapJumpFanOutAndMergeAreContinuous()
+    {
+        const WorkoutGameRoadCourse road = gapJumpRoad();
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        runtime.update(gapSnapshot(40.0, 0, 7.0, 230.0, 220.0),
+                       230.0, 220.0);
+        runtime.update(gapSnapshot(48.0, 50, 7.0, 230.0, 220.0),
+                       230.0, 220.0);
+
+        double maximumStep = 0.0;
+        const WorkoutGameRoadGapJumpGate &gate = road.pieces.front().gapJump;
+        const auto splitSocket = runtime.update(gapSnapshot(
+                gate.splitStartDistanceMeters, 100,
+                7.0, 230.0, 220.0), 230.0, 220.0);
+        QCOMPARE(splitSocket.lateralOffsetMeters, 0.0);
+        double previous = splitSocket.lateralOffsetMeters;
+        for (int index = 1;
+             gate.splitStartDistanceMeters + 0.2 * index
+                <= gate.mergeEndDistanceMeters; ++index) {
+            const double distance = gate.splitStartDistanceMeters
+                    + 0.2 * index;
+            const auto frame = runtime.update(gapSnapshot(
+                    distance, 100 + index * 50, 7.0, 230.0, 220.0),
+                    230.0, 220.0);
+            maximumStep = std::max(
+                    maximumStep,
+                    std::abs(frame.lateralOffsetMeters - previous));
+            previous = frame.lateralOffsetMeters;
+        }
+        QVERIFY(maximumStep < 0.05);
+        const auto atLip = runtime.update(gapSnapshot(
+                gate.lines.back().takeoffDistanceMeters,
+                18000, 7.0, 230.0, 220.0), 230.0, 220.0);
+        QCOMPARE(atLip.lockedGapLine, WorkoutGameGapJumpLine::Long);
+        QVERIFY(atLip.lateralOffsetMeters > 2.2);
+        const auto mergeSocket = runtime.update(gapSnapshot(
+                gate.mergeEndDistanceMeters, 18100,
+                7.0, 230.0, 220.0), 230.0, 220.0);
+        QCOMPARE(mergeSocket.lateralOffsetMeters, 0.0);
+    }
+
+    void gapJumpInsufficientEffortUsesGroundedBypass()
+    {
+        const WorkoutGameRoadCourse road = gapJumpRoad();
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        runtime.update(gapSnapshot(40.0, 0, 5.5, 180.0, 220.0),
+                       180.0, 220.0);
+        const auto locked = runtime.update(gapSnapshot(
+                48.0, 50, 5.5, 180.0, 220.0), 180.0, 220.0);
+        QVERIFY(locked.gapLineLocked);
+        QCOMPARE(locked.lockedGapLine, WorkoutGameGapJumpLine::None);
+        QCOMPARE(locked.route, WorkoutGameRoute::SafeBypass);
+        QCOMPARE(locked.outcome, WorkoutGameFeatureOutcome::Bypassed);
+
+        const auto bypass = runtime.update(gapSnapshot(
+                80.0, 100, 7.0, 300.0, 220.0), 300.0, 220.0);
+        QVERIFY(std::abs(bypass.lateralOffsetMeters) > 3.0);
+        QVERIFY(!bypass.triggerJump);
+        QCOMPARE(bypass.verticalOffsetMeters, 0.0);
+        QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(bypass));
+    }
+
+    void gapJumpSelectionIsIndependentOfRuntimeUpdateBatching()
+    {
+        const WorkoutGameRoadCourse road = gapJumpRoad();
+        WorkoutGameFeatureRuntime stepped;
+        WorkoutGameFeatureRuntime batched;
+        QVERIFY(stepped.configure(road));
+        QVERIFY(batched.configure(road));
+
+        stepped.update(gapSnapshot(20.0, 0, 3.0, 230.0, 220.0),
+                       230.0, 220.0);
+        batched.update(gapSnapshot(20.0, 0, 3.0, 230.0, 220.0),
+                       230.0, 220.0);
+        WorkoutGameFeatureRuntimeSnapshot steppedFrame;
+        for (int tick = 1; tick <= 6; ++tick) {
+            steppedFrame = stepped.update(gapSnapshot(
+                    20.0 + tick * 0.35, tick * 50,
+                    7.0, 230.0, 220.0), 230.0, 220.0);
+        }
+        const auto batchedFrame = batched.update(gapSnapshot(
+                22.1, 300, 7.0, 230.0, 220.0), 230.0, 220.0);
+        QCOMPARE(steppedFrame.provisionalGapLine,
+                 WorkoutGameGapJumpLine::Long);
+        QCOMPARE(batchedFrame.provisionalGapLine,
+                 steppedFrame.provisionalGapLine);
+    }
+
+    void gapJumpUsesSelectedGapAndBoundedAuthoredFlight()
+    {
+        const WorkoutGameRoadCourse road = gapJumpRoad();
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        runtime.update(gapSnapshot(40.0, 0, 5.5, 230.0, 220.0),
+                       230.0, 220.0);
+        runtime.update(gapSnapshot(48.0, 50, 5.5, 230.0, 220.0),
+                       230.0, 220.0);
+
+        const auto profile = WorkoutGameGapJumpGeometry::canonicalProfile();
+        const WorkoutGameRoadGapJumpLine &medium =
+                road.pieces.front().gapJump.lines[1];
+        const auto apex = runtime.update(gapSnapshot(
+                medium.takeoffDistanceMeters
+                    + medium.gapLengthMeters * 0.35,
+                100, 5.5, 230.0, 220.0), 230.0, 220.0);
+        QCOMPARE(apex.phase, WorkoutGameFeaturePhase::Action);
+        QCOMPARE(apex.lockedGapLine, WorkoutGameGapJumpLine::Medium);
+        QCOMPARE(apex.physicalTakeoffDistanceMeters,
+                 medium.takeoffDistanceMeters);
+        QCOMPARE(apex.actionEndDistanceMeters,
+                 medium.landingDistanceMeters);
+        QCOMPARE(apex.selectedGapLengthMeters, medium.gapLengthMeters);
+        QCOMPARE(apex.flightDurationSeconds,
+                 medium.gapLengthMeters / 5.0);
+        QVERIFY(apex.flightDurationSeconds <= profile.maximumFlightSeconds);
+        QVERIFY(apex.flightDurationSeconds <= 2.0);
+        QVERIFY(apex.triggerJump);
+        QVERIFY(apex.verticalOffsetMeters > 0.0);
+        QVERIFY(WorkoutGameFeatureRuntime::airborneExpected(apex));
+
+        const auto landed = runtime.update(gapSnapshot(
+                apex.actionEndDistanceMeters, 150, 5.5, 230.0, 220.0),
+                230.0, 220.0);
+        QCOMPARE(landed.phase, WorkoutGameFeaturePhase::Recovery);
+        QVERIFY(!landed.triggerJump);
+        QCOMPARE(landed.verticalOffsetMeters, 0.0);
+        QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(landed));
     }
 };
 

@@ -9,6 +9,7 @@
 
 #include "WorkoutGameWorld.h"
 #include "WorkoutGameFeatureCatalog.h"
+#include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameRockGardenGeometry.h"
@@ -39,6 +40,25 @@ constexpr std::int64_t MaximumCatchupMicroseconds = 1000000;
 constexpr std::int64_t WalkDecisionMicroseconds = 1500000;
 constexpr float BunnyHopLaunchSpeedMetersPerSecond = 3.5f;
 constexpr float TechnicalFeatureLaunchSpeedMetersPerSecond = 4.8f;
+
+WorkoutGameGapJumpLine gapJumpLineFromActionId(std::uint64_t actionId)
+{
+    const std::uint64_t encoded = (actionId >> 8) & 0x3u;
+    if (encoded > std::uint64_t(WorkoutGameGapJumpLine::Long)) {
+        return WorkoutGameGapJumpLine::None;
+    }
+    return WorkoutGameGapJumpLine(encoded);
+}
+
+double gapJumpArc(double progress)
+{
+    constexpr double ApexProgress = 0.35;
+    const double clamped = std::clamp(progress, 0.0, 1.0);
+    if (clamped <= ApexProgress) {
+        return std::sin(clamped / ApexProgress * Pi * 0.5);
+    }
+    return std::sin((1.0 - clamped) / (1.0 - ApexProgress) * Pi * 0.5);
+}
 
 float featureLaunchSpeed(
         WorkoutGameTerrainKind terrain,
@@ -82,6 +102,7 @@ double targetZoom(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
     case WorkoutGameTerrainKind::Tabletop:
+    case WorkoutGameTerrainKind::GapJump:
     case WorkoutGameTerrainKind::Drop:
         return 0.9;
     case WorkoutGameTerrainKind::Skinny:
@@ -204,6 +225,10 @@ struct WorkoutGamePhysics::Impl
     bool wasGrounded = true;
     bool safeBypassActive = false;
     bool followCourseSurfaceActive = false;
+    bool gapJumpFlightActive = false;
+    std::int64_t gapJumpFlightMicroseconds = 0;
+    std::int64_t gapJumpFlightDurationMicroseconds = 0;
+    double gapJumpApexMeters = 0.0;
     int lastJumpTile = -1;
     std::uint64_t lastFeatureActionId = 0;
     WorkoutGameWorldSnapshot latest;
@@ -234,6 +259,10 @@ struct WorkoutGamePhysics::Impl
         frontWheelShape = b2_nullShapeId;
         rearJoint = b2_nullJointId;
         frontJoint = b2_nullJointId;
+        gapJumpFlightActive = false;
+        gapJumpFlightMicroseconds = 0;
+        gapJumpFlightDurationMicroseconds = 0;
+        gapJumpApexMeters = 0.0;
     }
 
     b2BodyId createWheel(b2Vec2 position, b2ShapeId &shape)
@@ -536,6 +565,42 @@ struct WorkoutGamePhysics::Impl
         b2Body_ApplyTorque(chassis, torque, true);
     }
 
+    void applyGapJumpFlight()
+    {
+        if (!gapJumpFlightActive || safeBypassActive
+                || gapJumpFlightDurationMicroseconds <= 0) {
+            gapJumpFlightActive = false;
+            return;
+        }
+
+        gapJumpFlightMicroseconds = std::min(
+                gapJumpFlightDurationMicroseconds,
+                gapJumpFlightMicroseconds + PhysicsStepMicroseconds);
+        const double progress = double(gapJumpFlightMicroseconds)
+                / double(gapJumpFlightDurationMicroseconds);
+        const double offsetMeters = gapJumpApexMeters * gapJumpArc(progress);
+        const double chassisX = b2Body_GetPosition(chassis).x;
+        constexpr double GroundedChassisClearanceMeters = 0.82;
+        const double targetChassisY = surfaceHeight(chassisX)
+                + GroundedChassisClearanceMeters + offsetMeters;
+        const double verticalDelta = targetChassisY
+                - b2Body_GetPosition(chassis).y;
+        for (const b2BodyId body : {chassis, rearWheel, frontWheel}) {
+            const b2Vec2 position = b2Body_GetPosition(body);
+            b2Body_SetTransform(
+                    body, position + b2Vec2{0.0f, float(verticalDelta)},
+                    b2Body_GetRotation(body));
+            b2Vec2 velocity = b2Body_GetLinearVelocity(body);
+            velocity.y = 0.0f;
+            b2Body_SetLinearVelocity(body, velocity);
+        }
+        if (gapJumpFlightMicroseconds >= gapJumpFlightDurationMicroseconds) {
+            gapJumpFlightActive = false;
+            landingImpact = std::max(landingImpact, 0.18);
+            wasGrounded = true;
+        }
+    }
+
     void synchronizeDistance(
             double distanceMeters,
             bool forceGroundFollowing,
@@ -640,11 +705,13 @@ struct WorkoutGamePhysics::Impl
                     ground, safeBypassActive, roadCourse)
                 : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
-        result.rider.airborne = !safeBypassActive
-                && !followCourseSurfaceActive
-                && !result.rider.rearWheelGrounded
-                && !result.rider.frontWheelGrounded
-                && !retainsOrdinaryGroundContact(terrain);
+        result.rider.airborne = terrain == WorkoutGameTerrainKind::GapJump
+                ? gapJumpFlightActive && !safeBypassActive
+                : !safeBypassActive
+                    && !followCourseSurfaceActive
+                    && !result.rider.rearWheelGrounded
+                    && !result.rider.frontWheelGrounded
+                    && !retainsOrdinaryGroundContact(terrain);
         result.rider.walking = weakClimbMicroseconds
                 >= WalkDecisionMicroseconds;
         result.speedMetersPerSecond = std::max(0.0, double(velocity.x));
@@ -672,6 +739,7 @@ struct WorkoutGamePhysics::Impl
 
     void rebaseIfNeeded()
     {
+        if (gapJumpFlightActive) return;
         if (b2Body_GetPosition(chassis).x < RebaseAtMeters) return;
         const WorkoutGameWorldSnapshot before = captureSnapshot();
         distanceBase = before.rider.distanceMeters;
@@ -706,6 +774,34 @@ struct WorkoutGamePhysics::Impl
                             != WorkoutGameTerrainKind::Tabletop
                         || tabletop.supportsJumpAtForwardSpeed(courseSpeed);
                 if (supportedTabletopJump) {
+                    if (terrain == WorkoutGameTerrainKind::GapJump) {
+                        const WorkoutGameGapJumpGeometryProfile profile =
+                                WorkoutGameGapJumpGeometry::profile(difficulty);
+                        const WorkoutGameGapJumpLineDefinition *line =
+                                WorkoutGameGapJumpGeometry::line(
+                                    profile,
+                                    gapJumpLineFromActionId(
+                                        input.featureActionId));
+                        if (line) {
+                            const double durationSeconds = std::clamp(
+                                    line->gapLengthMeters
+                                        / std::max(0.1, courseSpeed),
+                                    0.25,
+                                    std::min({line->nominalFlightSeconds,
+                                              2.0,
+                                              profile.maximumFlightSeconds}));
+                            gapJumpFlightDurationMicroseconds =
+                                    std::int64_t(std::llround(
+                                        durationSeconds * 1000000.0));
+                            gapJumpFlightMicroseconds = 0;
+                            gapJumpApexMeters = std::min(
+                                    2.4,
+                                    line->lipHeightMeters
+                                        + 0.12 * line->gapLengthMeters);
+                            gapJumpFlightActive =
+                                    gapJumpFlightDurationMicroseconds > 0;
+                        }
+                    }
                     const float launchSpeed = featureLaunchSpeed(
                             terrain, courseSpeed, difficulty);
                     const auto launchBody =
@@ -722,10 +818,12 @@ struct WorkoutGamePhysics::Impl
                                     body, {0.0f, impulse}, true);
                         }
                     };
-                    launchBody(chassis);
-                    if (terrain == WorkoutGameTerrainKind::Tabletop) {
-                        launchBody(rearWheel);
-                        launchBody(frontWheel);
+                    if (terrain != WorkoutGameTerrainKind::GapJump) {
+                        launchBody(chassis);
+                        if (terrain == WorkoutGameTerrainKind::Tabletop) {
+                            launchBody(rearWheel);
+                            launchBody(frontWheel);
+                        }
                     }
                 }
                 lastFeatureActionId = input.featureActionId;
@@ -749,6 +847,7 @@ struct WorkoutGamePhysics::Impl
 
         const b2Vec2 priorVelocity = b2Body_GetLinearVelocity(chassis);
         b2World_Step(world, float(PhysicsStepMicroseconds) / 1000000.0f, 4);
+        applyGapJumpFlight();
         const bool isGrounded = grounded();
         if (!wasGrounded && isGrounded && priorVelocity.y < -0.5f) {
             landingImpact = std::clamp(
@@ -801,6 +900,10 @@ void WorkoutGamePhysics::reset()
     impl->landingImpact = 0.0;
     impl->safeBypassActive = false;
     impl->followCourseSurfaceActive = false;
+    impl->gapJumpFlightActive = false;
+    impl->gapJumpFlightMicroseconds = 0;
+    impl->gapJumpFlightDurationMicroseconds = 0;
+    impl->gapJumpApexMeters = 0.0;
     impl->lastJumpTile = -1;
     impl->lastFeatureActionId = 0;
     impl->latest = WorkoutGameWorldSnapshot();
@@ -874,6 +977,7 @@ double WorkoutGamePhysics::terrainHeight(
     case WorkoutGameTerrainKind::Climb:
     case WorkoutGameTerrainKind::SmoothTrail:
     case WorkoutGameTerrainKind::Berm:
+    case WorkoutGameTerrainKind::GapJump:
         return slope;
     }
     return slope;

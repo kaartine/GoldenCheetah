@@ -10,6 +10,7 @@
 #ifndef _GC_WorkoutGameFeatureRuntime_h
 #define _GC_WorkoutGameFeatureRuntime_h
 
+#include "WorkoutGameGapJumpSelector.h"
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameSimulation.h"
 
@@ -62,6 +63,12 @@ struct WorkoutGameFeatureRuntimeSnapshot
     double pitchDegrees = 0.0;
     double vibration = 0.0;
     double landingImpact = 0.0;
+    WorkoutGameGapJumpLine provisionalGapLine =
+            WorkoutGameGapJumpLine::None;
+    WorkoutGameGapJumpLine lockedGapLine = WorkoutGameGapJumpLine::None;
+    double predictedApproachSpeedMetersPerSecond = 0.0;
+    double selectedGapLengthMeters = 0.0;
+    bool gapLineLocked = false;
     std::uint64_t actionId = 0;
     bool triggerJump = false;
 };
@@ -76,7 +83,7 @@ public:
     WorkoutGameFeatureRuntimeSnapshot update(
             const WorkoutGameSimulationSnapshot &simulation,
             double actualWatts = 0.0,
-            double targetWatts = 0.0) const;
+            double targetWatts = 0.0);
 
 private:
     struct SectionLayout
@@ -92,8 +99,18 @@ private:
                 std::numeric_limits<std::size_t>::max();
     };
 
+    struct GapJumpState
+    {
+        int sourceSectionIndex = -1;
+        std::uint64_t baseActionId = 0;
+        std::int64_t lastWorkoutTimeMs = 0;
+        bool hasTimestamp = false;
+        WorkoutGameGapJumpSelector selector;
+    };
+
     WorkoutGameRoadCourse configuredCourse;
     std::vector<SectionLayout> sections;
+    GapJumpState gapJumpState;
 };
 
 #endif
