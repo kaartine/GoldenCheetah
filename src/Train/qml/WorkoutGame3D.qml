@@ -574,12 +574,15 @@ Item {
                 }
 
                 Text {
+                    objectName: "featureNameLabel"
                     width: Math.max(70, parent.width - featureStatePill.width
                                     - featureDistance.width - 20)
                     height: parent.height
                     text: workoutGame3D.featureName
                     color: "white"
                     font.pixelSize: 18
+                    fontSizeMode: Text.HorizontalFit
+                    minimumPixelSize: 11
                     font.bold: true
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight

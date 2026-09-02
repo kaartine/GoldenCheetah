@@ -1091,6 +1091,7 @@ private slots:
         QVERIFY(trace.contains(QStringLiteral("p95_frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("p99_frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("frame_ms=")));
+        QVERIFY(trace.contains(QStringLiteral("timing_warm=")));
         QVERIFY(trace.contains(QStringLiteral("geometry_queue=")));
         QVERIFY(trace.contains(QStringLiteral("presentation_work_ms=")));
         QVERIFY(trace.contains(QStringLiteral("feature_phase=measure")));
@@ -3112,6 +3113,42 @@ private slots:
         QVERIFY(!viewModel.cadenceRequired());
         QCOMPARE(viewModel.requiredCadenceRpm(), 0.0);
         QCOMPARE(viewModel.cadenceReadinessPercent(), 100);
+    }
+
+    void gapJumpHudNamesAdaptiveLineAndPredictedSpeed()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::GapJump);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        WorkoutGameVisualSnapshot frame = frameAt(road, 12.0);
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::GapJump;
+        frame.feature.phase = WorkoutGameFeaturePhase::Measure;
+        frame.feature.provisionalGapLine = WorkoutGameGapJumpLine::Long;
+        frame.feature.predictedApproachSpeedMetersPerSecond = 7.9;
+        viewModel.setFrame(frame, 225.0, 220.0, 88, 149, 8);
+
+        QCOMPARE(viewModel.featureName(),
+                 QStringLiteral("Gap jump - LONG - 28.4 KM/H"));
+
+        frame.feature.phase = WorkoutGameFeaturePhase::Committed;
+        frame.feature.gapLineLocked = true;
+        frame.feature.lockedGapLine = WorkoutGameGapJumpLine::Medium;
+        frame.feature.predictedApproachSpeedMetersPerSecond = 5.2;
+        viewModel.setFrame(frame, 225.0, 220.0, 88, 149, 8);
+        QCOMPARE(viewModel.featureName(),
+                 QStringLiteral("Gap jump - MEDIUM - 18.7 KM/H"));
+
+        frame.feature.route = WorkoutGameRoute::SafeBypass;
+        frame.feature.lockedGapLine = WorkoutGameGapJumpLine::None;
+        viewModel.setFrame(frame, 120.0, 220.0, 70, 140, 3);
+        QCOMPARE(viewModel.featureName(),
+                 QStringLiteral("Gap jump - SAFE LINE"));
     }
 
     void settingCourseClearsFeatureHudState()

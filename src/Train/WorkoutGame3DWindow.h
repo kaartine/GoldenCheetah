@@ -92,6 +92,7 @@ private:
     std::atomic_bool presentationDispatchPending{false};
     std::uint64_t frameNumber = 0;
     std::int64_t lastTracePublishMs = -1;
+    std::int64_t frameTimingWarmupStartMs = 0;
     bool hasFrame = false;
     bool sessionRunning = false;
     bool failureReported = false;

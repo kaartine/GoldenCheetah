@@ -24,6 +24,8 @@
 
 namespace {
 
+constexpr std::int64_t FrameTimingWarmupMilliseconds = 500;
+
 QEvent::Type presentationEventType()
 {
     static const int type = QEvent::registerEventType();
@@ -217,6 +219,7 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
         rootObject()->setProperty("sessionRunning", sessionRunning);
     }
     if (running) {
+        frameTimingWarmupStartMs = monotonicClock.elapsed();
         frameRateCounter.reset();
         presentFrame();
     }
@@ -272,6 +275,8 @@ void WorkoutGame3DWindow::updateDiagnostics(
     input.movingForward = presentedFrame.simulation.ready
             && !presentedFrame.simulation.finished
             && presentedFrame.simulation.speedKph > 0.2;
+    input.frameTimingWarmupComplete = monotonicTimeMs
+            - frameTimingWarmupStartMs >= FrameTimingWarmupMilliseconds;
     input.frameNumber = ++frameNumber;
     input.monotonicTimeMs = monotonicTimeMs;
     input.sourceWorkoutTimeMs = sourceFrame.simulation.workoutTimeMs;
@@ -342,6 +347,8 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " render_road_m=" << input.renderedRoadDistanceMeters
            << " delta_m=" << publishedDiagnostics.frameDistanceDeltaMeters
            << " frame_ms=" << publishedDiagnostics.frameIntervalMs
+           << " timing_warm="
+                << int(input.frameTimingWarmupComplete)
            << " fps=" << input.framesPerSecond
            << " p50_frame_ms=" << input.p50FrameIntervalMs
            << " p95_frame_ms=" << input.p95FrameIntervalMs

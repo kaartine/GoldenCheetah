@@ -24,6 +24,7 @@ constexpr double LongPresentationWorkThresholdMs = 8.0;
 void WorkoutGameDiagnostics::reset()
 {
     initialized = false;
+    frameTimingInitialized = false;
     previousRoadDistanceMeters = 0.0;
     previousMonotonicTimeMs = 0;
     previousRenderedWorkoutTimeMs = 0;
@@ -55,6 +56,7 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
         previousRoadDistanceMeters = input.renderedRoadDistanceMeters;
         previousMonotonicTimeMs = input.monotonicTimeMs;
         previousRenderedWorkoutTimeMs = input.renderedWorkoutTimeMs;
+        frameTimingInitialized = input.frameTimingWarmupComplete;
         result.ready = true;
         result.backwardFrameCount = backwardFrameCount;
         result.stationaryFrameCount = stationaryFrameCount;
@@ -68,11 +70,17 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
     }
 
     result.ready = true;
-    result.frameIntervalMs = std::max<std::int64_t>(
-            0, input.monotonicTimeMs - previousMonotonicTimeMs);
-    largestFrameIntervalMs = std::max(
-            largestFrameIntervalMs, result.frameIntervalMs);
-    if (result.frameIntervalMs > LateFrameThresholdMs) ++lateFrameCount;
+    if (!input.frameTimingWarmupComplete) {
+        frameTimingInitialized = false;
+    } else if (!frameTimingInitialized) {
+        frameTimingInitialized = true;
+    } else {
+        result.frameIntervalMs = std::max<std::int64_t>(
+                0, input.monotonicTimeMs - previousMonotonicTimeMs);
+        largestFrameIntervalMs = std::max(
+                largestFrameIntervalMs, result.frameIntervalMs);
+        if (result.frameIntervalMs > LateFrameThresholdMs) ++lateFrameCount;
+    }
     const double presentationWorkMs =
             std::isfinite(input.presentationWorkMs)
             ? std::max(0.0, input.presentationWorkMs) : 0.0;

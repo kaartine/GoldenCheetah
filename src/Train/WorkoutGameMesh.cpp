@@ -848,6 +848,7 @@ WorkoutGameMesh WorkoutGameMeshLibrary::feature(
     case WorkoutGameTerrainKind::RockGarden:
         return roughModel(terrain, difficulty);
     case WorkoutGameTerrainKind::Tabletop:
+    case WorkoutGameTerrainKind::GapJump:
         return tabletopModel(difficulty);
     case WorkoutGameTerrainKind::RockSlab:
         return rockSlabModel(difficulty);

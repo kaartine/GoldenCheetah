@@ -18,6 +18,7 @@ struct WorkoutGameDiagnosticsInput
     bool ready = false;
     bool sessionRunning = false;
     bool movingForward = false;
+    bool frameTimingWarmupComplete = true;
     std::uint64_t frameNumber = 0;
     std::int64_t monotonicTimeMs = 0;
     std::int64_t sourceWorkoutTimeMs = 0;
@@ -72,6 +73,7 @@ public:
 
 private:
     bool initialized = false;
+    bool frameTimingInitialized = false;
     double previousRoadDistanceMeters = 0.0;
     std::int64_t previousMonotonicTimeMs = 0;
     std::int64_t previousRenderedWorkoutTimeMs = 0;

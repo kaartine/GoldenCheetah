@@ -630,6 +630,15 @@ void WorkoutGame3DViewModel::setFrame(
     }
     currentFeatureName = currentFeatureHud.visible
             ? terrainText(currentFeatureHud.terrain) : QString();
+    if (currentFeatureHud.visible
+            && currentFeatureHud.terrain == WorkoutGameTerrainKind::GapJump) {
+        const WorkoutGameGapJumpLine line = frame.feature.gapLineLocked
+                ? frame.feature.lockedGapLine
+                : frame.feature.provisionalGapLine;
+        currentFeatureName = gapJumpFeatureText(
+                line,
+                frame.feature.predictedApproachSpeedMetersPerSecond);
+    }
     currentFeatureActionText = featureActionText(currentFeatureHud);
     rebuildFloor(currentDistanceMeters);
     rebuildFeatures(currentDistanceMeters);
@@ -1020,6 +1029,31 @@ QString WorkoutGame3DViewModel::terrainText(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::GapJump: return tr("Gap jump");
     }
     return tr("Trail");
+}
+
+QString WorkoutGame3DViewModel::gapJumpFeatureText(
+        WorkoutGameGapJumpLine line,
+        double predictedSpeedMetersPerSecond)
+{
+    QString lineName;
+    switch (line) {
+    case WorkoutGameGapJumpLine::Short:
+        lineName = tr("SHORT");
+        break;
+    case WorkoutGameGapJumpLine::Medium:
+        lineName = tr("MEDIUM");
+        break;
+    case WorkoutGameGapJumpLine::Long:
+        lineName = tr("LONG");
+        break;
+    case WorkoutGameGapJumpLine::None:
+        return tr("Gap jump - SAFE LINE");
+    }
+    const double speedKph = std::max(
+            0.0, finiteOrZero(predictedSpeedMetersPerSecond) * 3.6);
+    return tr("Gap jump - %1 - %2 KM/H")
+            .arg(lineName)
+            .arg(speedKph, 0, 'f', 1);
 }
 
 QString WorkoutGame3DViewModel::featureText(

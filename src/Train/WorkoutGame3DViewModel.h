@@ -336,6 +336,9 @@ signals:
 
 private:
     static QString terrainText(WorkoutGameTerrainKind terrain);
+    static QString gapJumpFeatureText(
+            WorkoutGameGapJumpLine line,
+            double predictedSpeedMetersPerSecond);
     static QString featureText(
             const WorkoutGameFeatureRuntimeSnapshot &feature);
     static QString featureActionText(
