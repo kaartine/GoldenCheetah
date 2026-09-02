@@ -148,6 +148,8 @@ all qt Train/workoutGameFeatureChallenge
 all qt Train/workoutGameFeatureHud
 all qt Train/workoutGameFeatureLab
 all qt Train/workoutGameFeatureRuntime
+all qt Train/workoutGameGapJumpGeometry
+all qt Train/workoutGameGapJumpSelector
 all qt Train/workoutGameRendererPolicy
 all qt Train/workoutGameReplay
 all qt Train/workoutGameRoadCourse

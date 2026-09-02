@@ -154,6 +154,8 @@ exists(unittests.pri) {
 			   Train/workoutGameFeatureHud \
 			   Train/workoutGameFeatureLab \
 			   Train/workoutGameFeatureRuntime \
+			   Train/workoutGameGapJumpGeometry \
+			   Train/workoutGameGapJumpSelector \
 			   Train/workoutGameRendererPolicy \
 			   Train/workoutGameReplay \
 			   Train/workoutGameRunner \

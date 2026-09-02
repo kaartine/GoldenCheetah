@@ -111,7 +111,7 @@ Line movement starts `20.0 m` before the take-off and is complete no later than
 split. Entry and exit use the same canonical quintic or equivalent C2-continuous
 curve in runtime, road surface, collision surface and rendered mesh.
 
-At the fixed `20 ms` simulation step:
+At the existing fixed `50 ms` simulation step:
 
 - lateral position is continuous and finite;
 - the maximum lateral step is `0.12 m`;
@@ -204,7 +204,7 @@ Required tests:
 - `gapJumpDecisionLocksForActionId`
 - `gapJumpInvalidSpeedFailsClosed`
 
-Run the same speed trace at simulation input batching of 20, 40, 100 and 250
+Run the same speed trace at simulation input batching of 50, 100, 250 and 500
 milliseconds. The selected line, decision distance and outcome must be equal.
 
 ### 3. Hysteresis and no oscillation
@@ -273,7 +273,7 @@ the decision gate may not alter the committed outcome.
 Run real road-configured physics, not a scripted vertical-offset helper, at the
 minimum, midpoint and maximum accepted speed for each line. Capture take-off,
 apex, first contact, maximum clearance, pitch, suspension and impact. Run at
-fixed 20 ms steps and again with equivalent batched inputs to prove the fixed
+fixed 50 ms steps and again with equivalent batched inputs to prove the fixed
 step is authoritative.
 
 Required tests:
