@@ -815,6 +815,150 @@ private slots:
                  "forest variety exceeds the bounded batch budget");
     }
 
+    void forestDressingBasesFollowTheGroundSurface()
+    {
+        const WorkoutGameRoadCourse course = straightCourse(160.0, 9.0);
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    course, 0.0, 145.0);
+        QVERIFY(dressing.ready);
+
+        const int stride = 12 * int(sizeof(float));
+        const int vertexCount = dressing.vertexData.size() / stride;
+        const auto hasColor = [&](int vertex, float red, float green,
+                                  float blue) {
+            return std::abs(vertexFloat(
+                        dressing.vertexData, stride, vertex, 24) - red)
+                            < 0.002f
+                    && std::abs(vertexFloat(
+                        dressing.vertexData, stride, vertex, 28) - green)
+                            < 0.002f
+                    && std::abs(vertexFloat(
+                        dressing.vertexData, stride, vertex, 32) - blue)
+                            < 0.002f;
+        };
+        const auto groundAt = [&course](float x, float z) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(course, z);
+            if (!sample.ready) return std::numeric_limits<double>::quiet_NaN();
+            const WorkoutGame3DTerrainProfileSnapshot terrain =
+                    WorkoutGame3DTerrainProfile::build(
+                        sample, z, course.seed);
+            return WorkoutGame3DTerrainProfile::elevationAtLateral(
+                    terrain, x);
+        };
+        const auto verifyBase = [&](int vertex, double maximumEmbed) {
+            const float x = vertexFloat(
+                    dressing.vertexData, stride, vertex, 0);
+            const float y = vertexFloat(
+                    dressing.vertexData, stride, vertex, 4);
+            const float z = vertexFloat(
+                    dressing.vertexData, stride, vertex, 8);
+            const double ground = groundAt(x, z);
+            QVERIFY(std::isfinite(ground));
+            QVERIFY2(y <= ground + 0.012,
+                     "forest prop base floats above the terrain");
+            QVERIFY2(y >= ground - maximumEmbed,
+                     "forest prop base is visibly buried in the terrain");
+        };
+
+        int groundedBaseVertices = 0;
+        for (int vertex = 0; vertex < vertexCount;) {
+            if (hasColor(vertex, 0.22f, 0.13f, 0.07f)) {
+                QVERIFY(vertex + 3 < vertexCount);
+                verifyBase(vertex, 0.04);
+                verifyBase(vertex + 1, 0.04);
+                groundedBaseVertices += 2;
+                vertex += 4;
+            } else if (hasColor(vertex, 0.34f, 0.35f, 0.31f)) {
+                QVERIFY(vertex + 4 < vertexCount);
+                for (int corner = 0; corner < 4; ++corner) {
+                    verifyBase(vertex + corner, 0.07);
+                    ++groundedBaseVertices;
+                }
+                vertex += 5;
+            } else if (hasColor(vertex, 0.29f, 0.17f, 0.08f)) {
+                QVERIFY(vertex + 12 < vertexCount);
+                for (int side = 0; side < 6; ++side) {
+                    verifyBase(vertex + side, 0.035);
+                    ++groundedBaseVertices;
+                }
+                vertex += 13;
+            } else if (hasColor(vertex, 0.09f, 0.29f, 0.12f)) {
+                QVERIFY(vertex + 9 < vertexCount);
+                for (const int baseVertex : {0, 1, 5, 6}) {
+                    verifyBase(vertex + baseVertex, 0.035);
+                    ++groundedBaseVertices;
+                }
+                vertex += 10;
+            } else {
+                ++vertex;
+            }
+        }
+        QVERIFY(groundedBaseVertices > 100);
+    }
+
+    void forestDressingKeepsTreeCrownsOutsideTheCameraCorridor()
+    {
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    straightCourse(160.0), 0.0, 145.0);
+        QVERIFY(dressing.ready);
+
+        constexpr float CameraCorridorHalfWidthMeters = 4.5f;
+        const int stride = 12 * int(sizeof(float));
+        const int vertexCount = dressing.vertexData.size() / stride;
+        int crownVertices = 0;
+        for (int vertex = 0; vertex < vertexCount; ++vertex) {
+            const float red = vertexFloat(
+                    dressing.vertexData, stride, vertex, 24);
+            const float green = vertexFloat(
+                    dressing.vertexData, stride, vertex, 28);
+            const float blue = vertexFloat(
+                    dressing.vertexData, stride, vertex, 32);
+            const bool crown = red >= 0.05f && red <= 0.08f
+                    && green >= 0.18f && green <= 0.26f
+                    && blue >= 0.09f && blue <= 0.14f;
+            if (!crown) continue;
+            ++crownVertices;
+            const float x = vertexFloat(
+                    dressing.vertexData, stride, vertex, 0);
+            QVERIFY2(std::abs(x) >= CameraCorridorHalfWidthMeters,
+                     "oversized foreground crown obstructs the rider view");
+        }
+        QVERIFY(crownVertices > 100);
+    }
+
+    void forestDressingDoesNotClampPropsToStreamingRangeEdges()
+    {
+        constexpr double StartDistanceMeters = 10.0;
+        constexpr double EndDistanceMeters = 155.0;
+        constexpr float EdgeInsetMeters = 1.5f;
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    straightCourse(180.0),
+                    StartDistanceMeters, EndDistanceMeters);
+        QVERIFY(dressing.ready);
+
+        const int stride = 12 * int(sizeof(float));
+        const int vertexCount = dressing.vertexData.size() / stride;
+        int verticesPinnedToRangeEdge = 0;
+        for (int vertex = 0; vertex < vertexCount; ++vertex) {
+            const float z = vertexFloat(
+                    dressing.vertexData, stride, vertex, 8);
+            if (std::abs(z - float(StartDistanceMeters) - EdgeInsetMeters)
+                        < 0.0001f
+                    || std::abs(z - float(EndDistanceMeters)
+                                + EdgeInsetMeters) < 0.0001f) {
+                ++verticesPinnedToRangeEdge;
+            }
+        }
+        QCOMPARE(verticesPinnedToRangeEdge, 0);
+    }
+
     void forestPropsStayOutsideFeatureAndBypassCorridor()
     {
         const WorkoutGameRoadCourse course = tabletopCourse();
