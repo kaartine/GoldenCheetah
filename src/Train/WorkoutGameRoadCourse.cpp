@@ -120,7 +120,7 @@ double trailReliefOffset(
     const double phase = double((piece.sourceSectionIndex * 37u
             + std::size_t(std::llround(piece.startDistanceMeters))) % 101u)
             / 101.0 * 2.0 * Pi;
-    double amplitude = (0.95 + 0.85 * piece.difficulty)
+    double amplitude = (1.25 + 1.00 * piece.difficulty)
             * piece.reliefScale;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Climb:
@@ -131,8 +131,13 @@ double trailReliefOffset(
         break;
     case WorkoutGameTerrainKind::Roots:
     case WorkoutGameTerrainKind::RockGarden:
-    case WorkoutGameTerrainKind::Rollers:
         amplitude *= 0.62;
+        break;
+    case WorkoutGameTerrainKind::Rollers:
+        // Keep the broad trail relief subordinate to the three authored
+        // roller crests so their silhouette remains readable from the chase
+        // camera.
+        amplitude *= 0.42;
         break;
     default:
         break;
@@ -335,14 +340,14 @@ double pieceTurn(
     double amount = 0.0;
     switch (section.terrain) {
     case WorkoutGameTerrainKind::SmoothTrail:
-        amount = section.visualVariant == 0u ? 0.0 : 0.16;
+        amount = section.visualVariant == 0u ? 0.13 : 0.20;
         break;
-    case WorkoutGameTerrainKind::Rollers: amount = 0.21; break;
+    case WorkoutGameTerrainKind::Rollers: amount = 0.28; break;
     case WorkoutGameTerrainKind::Roots:
-    case WorkoutGameTerrainKind::RockGarden: amount = 0.18; break;
+    case WorkoutGameTerrainKind::RockGarden: amount = 0.23; break;
     case WorkoutGameTerrainKind::Skinny: amount = 0.13; break;
     case WorkoutGameTerrainKind::Climb:
-    case WorkoutGameTerrainKind::RockSlab: amount = 0.12; break;
+    case WorkoutGameTerrainKind::RockSlab: amount = 0.16; break;
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
     case WorkoutGameTerrainKind::Tabletop: amount = 0.08; break;
@@ -604,14 +609,18 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     ? climbSustainedPieceCount + 2
                 : flowingRecovery
                     ? boundedPieceCount(
-                        sectionLength, 56.0,
+                        sectionLength, 44.0,
                         MaximumRoadPiecesPerSection)
                 : section.terrain == WorkoutGameTerrainKind::SmoothTrail
                     ? boundedPieceCount(
-                        sectionLength, 48.0,
+                        sectionLength, 32.0,
+                        MaximumRoadPiecesPerSection)
+                : section.terrain == WorkoutGameTerrainKind::Rollers
+                    ? boundedPieceCount(
+                        sectionLength, 30.0,
                         MaximumRoadPiecesPerSection)
                     : boundedPieceCount(
-                        sectionLength, 90.0,
+                        sectionLength, 42.0,
                         MaximumRoadPiecesPerSection);
         const double pieceLength = sectionLength / double(pieceCount);
         const WorkoutGameFeatureChallengeProfile challenge =

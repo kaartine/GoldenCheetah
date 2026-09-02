@@ -149,8 +149,8 @@ public:
         switch (terrain) {
         case WorkoutGameTerrainKind::Rollers:
             result = {
-                true, -5.25, -4.5, 4.5, 5.25,
-                0.20 + 0.08 * difficulty,
+                true, -6.0, -5.25, 5.25, 6.0,
+                0.34 + 0.16 * difficulty,
                 WorkoutGameFeatureGeometryShape::RoundedRollers
             };
             break;

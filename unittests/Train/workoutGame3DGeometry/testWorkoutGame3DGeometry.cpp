@@ -381,7 +381,27 @@ private slots:
         QCOMPARE(triangleCount, 792);
         QVERIFY(skinny.boundsMax().x() - skinny.boundsMin().x() > 0.45f);
         QVERIFY(skinny.boundsMax().y() - skinny.boundsMin().y() > 0.30f);
-        QVERIFY(skinny.boundsMax().z() - skinny.boundsMin().z() > 23.5f);
+        double maximumHorizontalSpan = 0.0;
+        for (int first = 0; first < skinny.sampleCount(); ++first) {
+            const double firstX = vertexFloat(
+                    skinny.vertexData(), skinny.stride(), first, 0);
+            const double firstZ = vertexFloat(
+                    skinny.vertexData(), skinny.stride(), first,
+                    2 * int(sizeof(float)));
+            for (int second = first + 1;
+                 second < skinny.sampleCount(); ++second) {
+                const double secondX = vertexFloat(
+                        skinny.vertexData(), skinny.stride(), second, 0);
+                const double secondZ = vertexFloat(
+                        skinny.vertexData(), skinny.stride(), second,
+                        2 * int(sizeof(float)));
+                maximumHorizontalSpan = std::max(
+                        maximumHorizontalSpan,
+                        std::hypot(secondX - firstX, secondZ - firstZ));
+            }
+        }
+        QVERIFY2(maximumHorizontalSpan > 23.5,
+                 "the merged skinny does not cover its authored length");
     }
 
     void skinnyRangeBuildExcludesDistantTiles()

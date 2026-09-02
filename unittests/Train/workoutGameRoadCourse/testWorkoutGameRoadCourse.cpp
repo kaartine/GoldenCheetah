@@ -1315,17 +1315,17 @@ private slots:
                 WorkoutGameFeatureGeometry::profile(
                     rollers->terrain, rollers->difficulty);
         QVERIFY(profile.ready);
-        QCOMPARE(profile.startMeters, -5.25);
-        QCOMPARE(profile.plateauStartMeters, -4.5);
-        QCOMPARE(profile.plateauEndMeters, 4.5);
-        QCOMPARE(profile.endMeters, 5.25);
-        QCOMPARE(profile.heightMeters, 0.24);
+        QCOMPARE(profile.startMeters, -6.0);
+        QCOMPARE(profile.plateauStartMeters, -5.25);
+        QCOMPARE(profile.plateauEndMeters, 5.25);
+        QCOMPARE(profile.endMeters, 6.0);
+        QCOMPARE(profile.heightMeters, 0.42);
         QCOMPARE(rollers->challenge.bypassStartDistanceMeters,
                  rollers->challenge.bypassEndDistanceMeters);
         QCOMPARE(rollers->challenge.bypassLateralMeters, 0.0);
 
         const double obstacle = rollers->challenge.obstacleDistanceMeters;
-        for (double local : {-5.25, -4.5, -1.5, 1.5, 4.5, 5.25}) {
+        for (double local : {-6.0, -5.25, -1.75, 1.75, 5.25, 6.0}) {
             const WorkoutGameRoadSample sample =
                     WorkoutGameRoadCourseBuilder::sample(
                         road, obstacle + local);
@@ -1335,7 +1335,7 @@ private slots:
                          "roller trough at %1 m was %2 m")
                          .arg(local).arg(sample.surfaceOffsetMeters)));
         }
-        for (double local : {-3.0, 0.0, 3.0}) {
+        for (double local : {-3.5, 0.0, 3.5}) {
             const WorkoutGameRoadSample sample =
                     WorkoutGameRoadCourseBuilder::sample(
                         road, obstacle + local);
@@ -1499,6 +1499,92 @@ private slots:
         QVERIFY(std::abs(road.pieces.front().turnRadians) > 0.02);
     }
 
+    void ordinaryTrailNeverDegeneratesIntoAFeaturelessStraight()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 17u;
+        course.durationMs = 60000;
+        WorkoutGameSection section;
+        section.startMs = 0;
+        section.durationMs = course.durationMs;
+        section.targetWatts = 150.0;
+        section.lengthMeters = 180.0;
+        section.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        section.visualVariant = 0u;
+        section.reliefScale = 1.0;
+        course.sections.push_back(section);
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+        QVERIFY2(road.pieces.size() >= 6,
+                 "long ordinary trail needs enough pieces to form bends");
+
+        double totalAbsoluteTurn = 0.0;
+        double minimumElevation = 1e9;
+        double maximumElevation = -1e9;
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            QVERIFY(piece.lengthMeters <= 32.0 + 1e-9);
+            totalAbsoluteTurn += std::abs(piece.turnRadians);
+        }
+        for (double distance = 0.0;
+             distance <= road.totalLengthMeters; distance += 0.5) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(road, distance);
+            minimumElevation = std::min(
+                    minimumElevation, sample.center.elevationMeters);
+            maximumElevation = std::max(
+                    maximumElevation, sample.center.elevationMeters);
+        }
+        QVERIFY2(totalAbsoluteTurn >= 0.70,
+                 "variant zero must still produce a winding forest trail");
+        QVERIFY2(maximumElevation - minimumElevation >= 0.75,
+                 "ordinary trail needs visible rolling relief");
+    }
+
+    void rollersAreShortCurvedPiecesWithReadableVerticalRelief()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 29u;
+        course.durationMs = 60000;
+        WorkoutGameSection section;
+        section.startMs = 0;
+        section.durationMs = course.durationMs;
+        section.targetWatts = 175.0;
+        section.lengthMeters = 120.0;
+        section.terrain = WorkoutGameTerrainKind::Rollers;
+        section.difficulty = 0.5;
+        section.challengeCount = 1;
+        course.sections.push_back(section);
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+        QVERIFY(road.pieces.size() >= 4);
+        double totalAbsoluteTurn = 0.0;
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            QVERIFY(piece.lengthMeters <= 30.0 + 1e-9);
+            totalAbsoluteTurn += std::abs(piece.turnRadians);
+        }
+        QVERIFY(totalAbsoluteTurn >= 0.80);
+
+        const auto rollers = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.challenge.enabled;
+                });
+        QVERIFY(rollers != road.pieces.end());
+        const double obstacle = rollers->challenge.obstacleDistanceMeters;
+        const WorkoutGameRoadSample trough =
+                WorkoutGameRoadCourseBuilder::sample(road, obstacle - 1.75);
+        const WorkoutGameRoadSample crest =
+                WorkoutGameRoadCourseBuilder::sample(road, obstacle);
+        QVERIFY(crest.center.elevationMeters
+                - trough.center.elevationMeters >= 0.35);
+    }
+
     void jumpEffortWindowIsCloseToObstacle()
     {
         for (std::int64_t durationMs : {15000, 120000}) {
@@ -1538,8 +1624,21 @@ private slots:
             section.gradePercent = 0.0;
             section.challengeCount = 0;
         }
-        const WorkoutGameRoadCourse road =
+        WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(straightCourse, 200.0);
+        // Projection owns no course-generation policy. Give it an explicitly
+        // straight connector chain so this test continues to isolate depth
+        // projection even though ordinary generated trails now always bend.
+        WorkoutGameRoadConnector connector;
+        for (WorkoutGameRoadPiece &piece : road.pieces) {
+            piece.entry = connector;
+            piece.turnRadians = 0.0;
+            piece.riseMeters = 0.0;
+            piece.exit = connector;
+            piece.exit.zMeters += piece.lengthMeters;
+            piece.exit.halfWidthMeters = piece.entry.halfWidthMeters;
+            connector = piece.exit;
+        }
         const WorkoutGameRoadProjectionFrame frame =
                 WorkoutGameRoadProjection::project(road, 0.0);
         QVERIFY(frame.ready);
