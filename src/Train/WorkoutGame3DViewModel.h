@@ -345,7 +345,8 @@ private:
     void updateVisibleTriangleCount();
     void rebuildTrees(double distanceMeters);
     void rebuildPowerProfile(const WorkoutGameCourse &course);
-    void updateCameraPose(double distanceMeters, double lateralMeters);
+    void updateCameraPose(double distanceMeters, double lateralMeters,
+                          std::int64_t workoutTimeMs);
 
     std::unique_ptr<WorkoutGame3DGeometry> trail;
     std::unique_ptr<WorkoutGame3DGeometry> bypass;
@@ -439,6 +440,8 @@ private:
     double cameraTargetPositionX = 0.0;
     double cameraTargetPositionY = 0.85;
     double cameraTargetPositionZ = 12.0;
+    bool cameraPoseInitialized = false;
+    std::int64_t lastCameraPoseTimeMs = 0;
     std::uint64_t courseGeneration = 0;
     WorkoutGame3DChunkBuilder chunkBuilder;
     std::atomic<bool> floorInstallQueued{false};

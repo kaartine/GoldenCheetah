@@ -1781,6 +1781,36 @@ private slots:
                          .arg(maximumYawAcceleration)));
     }
 
+    void cameraDoesNotAdvanceWithoutSimulationTime()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, 250.0);
+
+        WorkoutGameVisualSnapshot first = frameAt(road, 30.0);
+        first.simulation.workoutTimeMs = 6000;
+        viewModel.setFrame(first, 190.0, 190.0, 85, 145, 7);
+        const double cameraX = viewModel.cameraX();
+        const double cameraY = viewModel.cameraY();
+        const double cameraZ = viewModel.cameraZ();
+        const double targetX = viewModel.cameraTargetX();
+        const double targetY = viewModel.cameraTargetY();
+        const double targetZ = viewModel.cameraTargetZ();
+
+        WorkoutGameVisualSnapshot repeated = frameAt(road, 90.0);
+        repeated.simulation.workoutTimeMs = first.simulation.workoutTimeMs;
+        viewModel.setFrame(repeated, 190.0, 190.0, 85, 145, 7);
+        QCOMPARE(viewModel.cameraX(), cameraX);
+        QCOMPARE(viewModel.cameraY(), cameraY);
+        QCOMPARE(viewModel.cameraZ(), cameraZ);
+        QCOMPARE(viewModel.cameraTargetX(), targetX);
+        QCOMPARE(viewModel.cameraTargetY(), targetY);
+        QCOMPARE(viewModel.cameraTargetZ(), targetZ);
+    }
+
     void longBermCourseKeepsVisibleGeometryChunkBounded()
     {
         const WorkoutGameCourse course = longFlowingMtbCourse();
