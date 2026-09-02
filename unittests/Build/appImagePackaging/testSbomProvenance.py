@@ -549,6 +549,49 @@ class SbomProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "authenticated .deb"):
                 self.runtime_generator.resolve_debian_package(payload)
 
+    def test_authenticated_debian_artifact_retries_transient_downloads(self):
+        artifact_payload = b"authenticated fixture package"
+        artifact_digest = hashlib.sha256(artifact_payload).hexdigest()
+        identity = {
+            "architecture": "amd64",
+            "binary": "libfixture",
+            "binary_version": "1.0",
+        }
+        record = {
+            "sha256": artifact_digest,
+            "size": len(artifact_payload),
+            "spec": "libfixture:amd64=1.0",
+        }
+        attempts = []
+
+        def download(arguments, **kwargs):
+            attempts.append(arguments)
+            if len(attempts) < 3:
+                raise subprocess.CalledProcessError(100, arguments)
+            Path(kwargs["cwd"], "libfixture_1.0_amd64.deb").write_bytes(
+                artifact_payload
+            )
+
+        self.runtime_generator.DEBIAN_ARTIFACT_CACHE.clear()
+        with mock.patch.object(
+            self.runtime_generator, "apt_package_record", return_value=record
+        ), mock.patch.object(
+            self.runtime_generator.subprocess, "run", side_effect=download
+        ), mock.patch.object(
+            self.runtime_generator,
+            "deb_regular_file_hashes",
+            return_value={"usr/lib/libfixture.so": "f" * 64},
+        ), mock.patch.object(
+            self.runtime_generator,
+            "APT_DOWNLOAD_RETRY_DELAYS_SECONDS",
+            (0, 0),
+            create=True,
+        ):
+            result = self.runtime_generator.authenticated_debian_artifact(identity)
+
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(result["sha256"], artifact_digest)
+
     def test_debian_provenance_records_authenticated_apt_and_deb_digest(self):
         payload = self.appdir / "lib" / "libauthenticated.so.1"
         payload.write_bytes(b"authenticated package bytes")

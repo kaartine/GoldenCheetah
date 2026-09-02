@@ -11,6 +11,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import time
 from urllib.parse import quote, unquote, urlparse
 
 
@@ -25,6 +26,7 @@ FFMPEG_LIBRARY_RE = re.compile(
 ICU_LIBRARY_RE = re.compile(
     r"^libicu(?:data|i18n|io|test|tu|uc)\.so\.(\d+\.\d+)$"
 )
+APT_DOWNLOAD_RETRY_DELAYS_SECONDS = (2, 5)
 
 
 def sha256_file(path):
@@ -866,20 +868,27 @@ def authenticated_debian_artifact(identity):
         return DEBIAN_ARTIFACT_CACHE[cache_key]
     with tempfile.TemporaryDirectory(prefix="gc-debian-provenance-") as directory:
         try:
-            subprocess.run(
-                [
-                    "apt-get",
-                    "-o", "APT::Get::AllowUnauthenticated=false",
-                    "-o", "Acquire::AllowInsecureRepositories=false",
-                    "-o", "Acquire::AllowDowngradeToInsecureRepositories=false",
-                    "download",
-                    record["spec"],
-                ],
-                check=True,
-                cwd=directory,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
+            for attempt in range(len(APT_DOWNLOAD_RETRY_DELAYS_SECONDS) + 1):
+                try:
+                    subprocess.run(
+                        [
+                            "apt-get",
+                            "-o", "APT::Get::AllowUnauthenticated=false",
+                            "-o", "Acquire::AllowInsecureRepositories=false",
+                            "-o", "Acquire::AllowDowngradeToInsecureRepositories=false",
+                            "download",
+                            record["spec"],
+                        ],
+                        check=True,
+                        cwd=directory,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                    )
+                    break
+                except subprocess.CalledProcessError:
+                    if attempt == len(APT_DOWNLOAD_RETRY_DELAYS_SECONDS):
+                        raise
+                    time.sleep(APT_DOWNLOAD_RETRY_DELAYS_SECONDS[attempt])
         except (FileNotFoundError, subprocess.CalledProcessError) as error:
             raise ValueError(
                 f"cannot acquire authenticated .deb for {record['spec']}"
