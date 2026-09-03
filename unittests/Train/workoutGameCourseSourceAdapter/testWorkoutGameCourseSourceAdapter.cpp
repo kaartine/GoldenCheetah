@@ -8,8 +8,14 @@
  */
 
 #include "Train/WorkoutGameCourseSourceAdapter.h"
+#include "Train/WorkoutGameDistancePlayback.h"
+#include "Train/WorkoutGameRoadCourse.h"
+#include "Train/WorkoutGameRoadPlan.h"
+#include "Train/WorkoutGameRoadQuality.h"
 
 #include <QTest>
+
+#include <cmath>
 
 namespace {
 
@@ -47,6 +53,68 @@ class TestWorkoutGameCourseSourceAdapter : public QObject
     Q_OBJECT
 
 private slots:
+    void convertedCourseProducesAnAcceptedPersistableRoadPlan()
+    {
+        const WorkoutGameCourseSourceRequest source = sampleRequest();
+        const WorkoutGameWorkout workout =
+                WorkoutGameWorkoutAdapter::normalize(source.points);
+        QCOMPARE(workout.status, WorkoutGameWorkoutStatus::Ready);
+        WorkoutGameCourseConversionRequest request;
+        request.intervals = workout.intervals;
+        request.ftpWatts = source.ftpWatts;
+        request.preset = source.preset;
+        request.roadPhysics = source.roadPhysics;
+        request.seed = source.seed;
+        const WorkoutGameCourseConversionResult conversion =
+                WorkoutGameCourseConverter::convert(request);
+        QCOMPARE(conversion.status, WorkoutGameCourseConversionStatus::Ready);
+        const WorkoutGameCourse visual =
+                WorkoutGameDistancePlayback::visualCourse(conversion.course);
+        const WorkoutGameRoadPlan plan =
+                WorkoutGameRoadCourseBuilder::generatePlan(
+                    visual, source.ftpWatts);
+
+        QVERIFY(!plan.pieces.empty());
+        double expectedStart = 0.0;
+        for (std::size_t index = 0; index < plan.pieces.size(); ++index) {
+            const WorkoutGameRoadPiece &piece = plan.pieces[index];
+            QVERIFY2(piece.sourceSectionIndex < conversion.course.sections.size(),
+                     qPrintable(QStringLiteral("section index at piece %1").arg(index)));
+            QVERIFY2(std::isfinite(piece.startDistanceMeters)
+                        && std::abs(piece.startDistanceMeters - expectedStart)
+                            <= 1.0e-6,
+                     qPrintable(QStringLiteral("start at piece %1").arg(index)));
+            QVERIFY2(piece.lengthMeters > 0.0 && piece.lengthMeters <= 500.0,
+                     qPrintable(QStringLiteral("length at piece %1").arg(index)));
+            QVERIFY2(std::abs(piece.turnRadians) <= 1.4835298641951802 + 1.0e-9,
+                     qPrintable(QStringLiteral("turn at piece %1").arg(index)));
+            QVERIFY2(!piece.qualityExempt || piece.challenge.enabled,
+                     qPrintable(QStringLiteral("exemption at piece %1").arg(index)));
+            if (piece.challenge.enabled) {
+                QVERIFY2(piece.challenge.prepareDistanceMeters >= 0.0,
+                         qPrintable(QStringLiteral("prepare at piece %1").arg(index)));
+                QVERIFY2(piece.challenge.prepareDistanceMeters
+                            <= piece.challenge.decisionDistanceMeters + 1.0e-6,
+                         qPrintable(QStringLiteral("decision order at piece %1").arg(index)));
+                QVERIFY2(piece.challenge.decisionDistanceMeters
+                            <= piece.challenge.obstacleDistanceMeters + 1.0e-6,
+                         qPrintable(QStringLiteral("obstacle order at piece %1").arg(index)));
+                QVERIFY2(std::abs(piece.qualityExemptionStartDistanceMeters
+                            - piece.startDistanceMeters) <= 1.0e-6,
+                         qPrintable(QStringLiteral("exemption start at piece %1").arg(index)));
+            }
+            expectedStart += piece.lengthMeters;
+        }
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(
+                    plan, conversion.course.sections.size()),
+                 WorkoutGameRoadPlanValidationStatus::Ready);
+        const WorkoutGameRoadQualityReport quality =
+                WorkoutGameRoadQuality::audit(plan);
+        QVERIFY2(quality.accepted(),
+                 qPrintable(QStringLiteral("quality violation count: %1")
+                    .arg(quality.violations.size())));
+    }
+
     void validSourceBuildsPrivacySafeDocument()
     {
         const WorkoutGameCourseSourceRequest request = sampleRequest();
@@ -69,6 +137,15 @@ private slots:
                  std::int64_t(0));
         QCOMPARE(result.document.course.status,
                  WorkoutGameDistanceCourseStatus::Ready);
+        QCOMPARE(result.document.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QVERIFY(result.document.course.roadPlan);
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(
+                    *result.document.course.roadPlan,
+                    result.document.course.sections.size()),
+                 WorkoutGameRoadPlanValidationStatus::Ready);
+        QVERIFY(WorkoutGameRoadQuality::audit(
+                    *result.document.course.roadPlan).accepted());
         QCOMPARE(result.summary.distanceMeters,
                  result.document.course.totalDistanceMeters);
         QCOMPARE(request.points.front().watts, 140.0);
@@ -140,6 +217,8 @@ private slots:
         QCOMPARE(second.status, WorkoutGameCourseSourceStatus::Ready);
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(first.document),
                  WorkoutGameCourseDocumentCodec::encode(second.document));
+        QCOMPARE(first.document.course.roadPlan->pieces.size(),
+                 second.document.course.roadPlan->pieces.size());
     }
 
     void storedIntervalsCanBeRegeneratedWithAnotherPreset()
@@ -162,6 +241,17 @@ private slots:
                  original.document.sourceIntervals.size());
         QVERIFY(edited.summary.technicalFeatureCount
                 > original.summary.technicalFeatureCount);
+        QCOMPARE(edited.document.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QVERIFY(edited.document.course.roadPlan);
+        QVERIFY(WorkoutGameRoadQuality::audit(
+                    *edited.document.course.roadPlan).accepted());
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(edited.document),
+                 WorkoutGameCourseDocumentCodec::encode(
+                    WorkoutGameCourseSourceAdapter::regenerate(
+                        original.document,
+                        WorkoutGameCoursePreset::RideFirst,
+                        QStringLiteral("Technical Tuesday")).document));
     }
 };
 

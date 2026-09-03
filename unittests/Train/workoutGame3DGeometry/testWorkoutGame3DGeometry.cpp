@@ -815,9 +815,13 @@ private slots:
                 / int(3 * sizeof(quint32));
         QVERIFY(triangleCount >= 180);
         QVERIFY(triangleCount <= 228);
-        QVERIFY(slab.boundsMax().x() - slab.boundsMin().x() > 1.5f);
+        const double horizontalX =
+                slab.boundsMax().x() - slab.boundsMin().x();
+        const double horizontalZ =
+                slab.boundsMax().z() - slab.boundsMin().z();
+        QVERIFY(std::min(horizontalX, horizontalZ) > 1.5);
         QVERIFY(slab.boundsMax().y() - slab.boundsMin().y() > 0.9f);
-        QVERIFY(slab.boundsMax().z() - slab.boundsMin().z() > 7.0f);
+        QVERIFY(std::hypot(horizontalX, horizontalZ) > 7.0);
     }
 
     void rockSlabRangeBuildExcludesDistantTiles()

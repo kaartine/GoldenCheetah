@@ -90,6 +90,9 @@ struct WorkoutGameRoadPiece
     double difficulty = 0.0;
     double reliefScale = 1.0;
     double geometryAnchorDistanceMeters = 0.0;
+    bool qualityExempt = false;
+    double qualityExemptionStartDistanceMeters = 0.0;
+    double qualityExemptionEndDistanceMeters = 0.0;
     WorkoutGameRoadConnector entry;
     WorkoutGameRoadConnector exit;
     WorkoutGameRoadChallengeGate challenge;
@@ -153,6 +156,12 @@ struct WorkoutGameRoadTimelineSample
 class WorkoutGameRoadCourseBuilder
 {
 public:
+    static WorkoutGameRoadPlan generatePlan(
+            const WorkoutGameCourse &course,
+            double ftpWatts);
+    static WorkoutGameRoadCourse materialize(
+            const WorkoutGameCourse &course,
+            const WorkoutGameRoadPlan &plan);
     static WorkoutGameRoadCourse build(
             const WorkoutGameCourse &course,
             double ftpWatts);

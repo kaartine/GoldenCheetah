@@ -8,11 +8,16 @@
  */
 
 #include "WorkoutGameCourseSourceAdapter.h"
+#include "WorkoutGameDistancePlayback.h"
+#include "WorkoutGameRoadCourse.h"
+#include "WorkoutGameRoadPlan.h"
+#include "WorkoutGameRoadQuality.h"
 
 #include <QCryptographicHash>
 #include <QFileInfo>
 
 #include <cmath>
+#include <memory>
 
 namespace {
 
@@ -32,6 +37,21 @@ bool validTitle(const QString &title)
             && title.size() <= 200
             && !title.contains(QLatin1Char('\n'))
             && !title.contains(QLatin1Char('\r'));
+}
+
+bool attachRoadPlan(WorkoutGameDistanceCourse &course, double ftpWatts)
+{
+    const WorkoutGameCourse visual =
+            WorkoutGameDistancePlayback::visualCourse(course);
+    const WorkoutGameRoadPlan plan =
+            WorkoutGameRoadCourseBuilder::generatePlan(visual, ftpWatts);
+    if (WorkoutGameRoadPlanValidator::validate(plan, course.sections.size())
+            != WorkoutGameRoadPlanValidationStatus::Ready
+            || !WorkoutGameRoadQuality::audit(plan).accepted()) {
+        return false;
+    }
+    course.roadPlan = std::make_shared<const WorkoutGameRoadPlan>(plan);
+    return true;
 }
 
 }
@@ -72,13 +92,19 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
     conversionRequest.preset = request.preset;
     conversionRequest.roadPhysics = request.roadPhysics;
     conversionRequest.seed = request.seed;
-    const WorkoutGameCourseConversionResult conversion =
+    WorkoutGameCourseConversionResult conversion =
             WorkoutGameCourseConverter::convert(conversionRequest);
     if (conversion.status != WorkoutGameCourseConversionStatus::Ready) {
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }
+    if (!attachRoadPlan(conversion.course, request.ftpWatts)) {
+        result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
+        return result;
+    }
 
+    result.document.schemaVersion =
+            WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
     result.document.title = title;
     result.document.sourceFileName = sourceName;
     result.document.sourceSha256 = QString::fromLatin1(
@@ -117,14 +143,20 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
     request.preset = preset;
     request.roadPhysics = source.generationParameters.roadPhysics;
     request.seed = source.course.seed;
-    const WorkoutGameCourseConversionResult conversion =
+    WorkoutGameCourseConversionResult conversion =
             WorkoutGameCourseConverter::convert(request);
     if (conversion.status != WorkoutGameCourseConversionStatus::Ready) {
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }
+    if (!attachRoadPlan(conversion.course, source.ftpWatts)) {
+        result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
+        return result;
+    }
 
     result.document = source;
+    result.document.schemaVersion =
+            WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
     result.document.title = title;
     result.document.preset = preset;
     result.document.generationParameters = conversion.generationParameters;

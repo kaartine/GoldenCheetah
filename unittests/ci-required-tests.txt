@@ -155,6 +155,7 @@ all qt Train/workoutGameGapJumpSelector
 all qt Train/workoutGameRendererPolicy
 all qt Train/workoutGameReplay
 all qt Train/workoutGameRoadCourse
+all qt Train/workoutGameRoadPlan
 all qt Train/workoutGameRoadPhysics
 all qt Train/workoutGameRunner
 all qt Train/workoutGameSceneGraph

@@ -8,6 +8,8 @@ SOURCES = testWorkoutGameMesh.cpp \
           ../../../src/Train/WorkoutGameMesh.cpp \
           ../../../src/Train/WorkoutGameTrailTile.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
+          ../../../src/Train/WorkoutGameRoadPlan.cpp \
+          ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameRoadProjection.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameMesh.h \

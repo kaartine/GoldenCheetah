@@ -8,6 +8,8 @@
  */
 
 #include "WorkoutGameRoadCourse.h"
+#include "WorkoutGameRoadPlan.h"
+#include "WorkoutGameRoadQuality.h"
 
 #include "WorkoutGameBermGeometry.h"
 #include "WorkoutGameClimbGeometry.h"
@@ -408,27 +410,23 @@ double pieceTurn(
             * amount * flowingTurnFactor(section, pieceIndex);
 }
 
-bool useAmbientTurn(
+double ordinaryPieceTurn(
+        const WorkoutGameCourse &course,
         const WorkoutGameSection &section,
-        int pieceIndex,
-        int pieceCount)
+        std::size_t ordinaryPieceIndex)
 {
-    if (section.terrain == WorkoutGameTerrainKind::Berm
-            || pieceCount < 5 || pieceIndex <= 0
-            || pieceIndex + 1 >= pieceCount) {
-        return false;
-    }
-    return (pieceIndex + int(section.visualVariant & 1u)) % 2 == 1;
-}
-
-double ambientTurn(
-        const WorkoutGameSection &section,
-        std::size_t pieceIndex)
-{
-    const WorkoutGameBermGeometryProfile profile =
-            WorkoutGameBermGeometry::profile(section.difficulty);
-    return flowingTurnDirection(section, pieceIndex)
-            * std::min(profile.turnMagnitudeRadians, 1.48);
+    const std::size_t sharpPhase = std::size_t(course.seed % 12u);
+    const bool nearNinety = (ordinaryPieceIndex + sharpPhase) % 12u == 6u;
+    const bool pronounced = (ordinaryPieceIndex + sharpPhase) % 5u == 2u;
+    const double ordinaryMagnitude = std::clamp(
+            0.27 + 0.10 * section.difficulty,
+            0.27, 0.37);
+    const double magnitude = nearNinety ? 1.3962634015954636
+            : pronounced ? 0.62 : ordinaryMagnitude;
+    const double mirror = (course.seed & 1u) == 0u ? 1.0 : -1.0;
+    const double direction = (ordinaryPieceIndex & 1u) == 0u
+            ? mirror : -mirror;
+    return direction * magnitude;
 }
 
 WorkoutGameRoadAnimation animationFor(
@@ -591,7 +589,9 @@ WorkoutGameRoadConnector connectorAt(
 
 }
 
-WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
+namespace {
+
+WorkoutGameRoadCourse generateRoadCourse(
         const WorkoutGameCourse &course,
         double ftpWatts)
 {
@@ -602,11 +602,11 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             || ftpWatts <= 0.0) {
         return result;
     }
-
     result.seed = course.seed;
     WorkoutGameRoadConnector connector;
     connector.halfWidthMeters = targetHalfWidth(
             course.sections.front().terrain);
+    std::size_t ordinaryPieceIndex = 0;
     for (std::size_t sectionIndex = 0;
          sectionIndex < course.sections.size(); ++sectionIndex) {
         const WorkoutGameSection &section = course.sections[sectionIndex];
@@ -633,7 +633,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
         const int climbSustainedPieceCount = section.terrain
                     == WorkoutGameTerrainKind::Climb
                 ? boundedPieceCount(
-                    climbSustainedLength, 64.0,
+                    climbSustainedLength, 22.0,
                     MaximumRoadPiecesPerSection)
                 : 0;
         const double climbExitGrade = section.terrain
@@ -656,22 +656,22 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     ? climbSustainedPieceCount + 2
                 : flowingRecovery
                     ? boundedPieceCount(
-                        sectionLength, 44.0,
+                        sectionLength, 22.0,
                         MaximumRoadPiecesPerSection)
                 : section.terrain == WorkoutGameTerrainKind::SmoothTrail
                     ? boundedPieceCount(
-                        sectionLength, 32.0,
+                        sectionLength, 22.0,
                         MaximumRoadPiecesPerSection)
                 : section.terrain == WorkoutGameTerrainKind::Rollers
                     ? boundedPieceCount(
-                        sectionLength, 30.0,
+                        sectionLength, 22.0,
                         MaximumRoadPiecesPerSection)
                 : section.terrain == WorkoutGameTerrainKind::Skinny
                     ? boundedPieceCount(
-                        sectionLength, 48.0,
+                        sectionLength, 32.0,
                         MaximumRoadPiecesPerSection)
                     : boundedPieceCount(
-                        sectionLength, 42.0,
+                        sectionLength, 22.0,
                         MaximumRoadPiecesPerSection);
         const double pieceLength = sectionLength / double(pieceCount);
         const WorkoutGameFeatureChallengeProfile challenge =
@@ -884,27 +884,17 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         || (part + 1 == pieceCount
                             && obstacleDistance
                                 <= sectionStart + sectionLength + 1e-9));
-            const bool nearChallenge = challenge.enabled
-                    && featureFitsSection
-                    && pieceEnd >= std::min(
-                        challengeDistance, obstacleDistance)
-                        - (section.terrain
-                                == WorkoutGameTerrainKind::GapJump
-                            ? 16.0 : 24.0)
-                    && pieceStart <= std::max(
-                        challengeDistance, obstacleDistance) + 32.0;
-            const bool ambientCurve = !ownsChallenge
-                    && !nearChallenge
-                    && useAmbientTurn(section, part, pieceCount);
-
             WorkoutGameRoadPiece piece;
             piece.sourceSectionIndex = sectionIndex;
             piece.terrain = section.terrain;
             piece.startDistanceMeters = pieceStart;
             piece.lengthMeters = currentPieceLength;
-            piece.turnRadians = ambientCurve
-                    ? ambientTurn(section, std::size_t(part))
-                    : pieceTurn(section, std::size_t(part));
+            const bool explicitBerm = section.terrain
+                    == WorkoutGameTerrainKind::Berm;
+            piece.turnRadians = ownsChallenge || explicitBerm
+                    ? pieceTurn(section, std::size_t(part))
+                    : ordinaryPieceTurn(
+                        course, section, ordinaryPieceIndex++);
             piece.difficulty = std::clamp(section.difficulty, 0.0, 1.0);
             piece.reliefScale = std::clamp(
                     std::isfinite(section.reliefScale)
@@ -1088,6 +1078,9 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 piece.challenge.profile.decisionProgress =
                         (piece.challenge.decisionDistanceMeters - sectionStart)
                         / sectionLength;
+                piece.qualityExempt = true;
+                piece.qualityExemptionStartDistanceMeters = pieceStart;
+                piece.qualityExemptionEndDistanceMeters = pieceEnd;
             }
 
             if (section.terrain == WorkoutGameTerrainKind::Berm) {
@@ -1110,6 +1103,82 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
     if (!result.ready) return {};
     result.visualLengthMeters = result.totalLengthMeters + VisualRunoutMeters;
     return result;
+}
+
+}
+
+WorkoutGameRoadPlan WorkoutGameRoadCourseBuilder::generatePlan(
+        const WorkoutGameCourse &course,
+        double ftpWatts)
+{
+    WorkoutGameCourse source = course;
+    source.roadPlan.reset();
+    const WorkoutGameRoadCourse road = generateRoadCourse(source, ftpWatts);
+    WorkoutGameRoadPlan plan;
+    if (!road.ready) return plan;
+    plan.pieces = road.pieces;
+    return plan;
+}
+
+WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::materialize(
+        const WorkoutGameCourse &course,
+        const WorkoutGameRoadPlan &plan)
+{
+    WorkoutGameRoadCourse result;
+    if (course.status != WorkoutGameCourseStatus::Ready
+            || course.sections.empty()
+            || WorkoutGameRoadPlanValidator::validate(
+                plan, course.sections.size())
+                != WorkoutGameRoadPlanValidationStatus::Ready
+            || !WorkoutGameRoadQuality::audit(plan).accepted()) {
+        return result;
+    }
+
+    result.seed = course.seed;
+    result.pieces = plan.pieces;
+    result.totalLengthMeters = result.pieces.back().startDistanceMeters
+            + result.pieces.back().lengthMeters;
+    result.visualLengthMeters = result.totalLengthMeters + VisualRunoutMeters;
+    result.timeline.reserve(course.sections.size());
+    std::size_t pieceIndex = 0;
+    for (std::size_t sectionIndex = 0;
+         sectionIndex < course.sections.size(); ++sectionIndex) {
+        const std::size_t firstPiece = pieceIndex;
+        while (pieceIndex < result.pieces.size()
+                && result.pieces[pieceIndex].sourceSectionIndex
+                    == sectionIndex) {
+            ++pieceIndex;
+        }
+        if (firstPiece == pieceIndex) return {};
+        const WorkoutGameSection &section = course.sections[sectionIndex];
+        const double start = result.pieces[firstPiece].startDistanceMeters;
+        const WorkoutGameRoadPiece &last = result.pieces[pieceIndex - 1];
+        result.timeline.push_back({
+            sectionIndex,
+            section.startMs,
+            section.durationMs,
+            start,
+            last.startDistanceMeters + last.lengthMeters
+        });
+    }
+    if (pieceIndex != result.pieces.size()) return {};
+    result.ready = true;
+    return result;
+}
+
+WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
+        const WorkoutGameCourse &course,
+        double ftpWatts)
+{
+    if (course.status != WorkoutGameCourseStatus::Ready
+            || course.sections.empty()
+            || !std::isfinite(ftpWatts)
+            || ftpWatts <= 0.0) {
+        return {};
+    }
+    if (course.roadPlan) return materialize(course, *course.roadPlan);
+    const WorkoutGameRoadPlan plan = generatePlan(course, ftpWatts);
+    return materialize(course, plan);
 }
 
 WorkoutGameRoadTimelineSample
@@ -1226,19 +1295,25 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     result.center.elevationMeters += reliefOffset
             + result.surfaceOffsetMeters;
     const double sampleRadius = std::min(0.05, piece.lengthMeters * 0.1);
-    if (sampleRadius > 0.0) {
+    if (sampleRadius > 0.0
+            && distance > piece.startDistanceMeters + sampleRadius
+            && distance < piece.startDistanceMeters
+                + piece.lengthMeters - sampleRadius) {
         const double low = std::max(
                 piece.startDistanceMeters, distance - sampleRadius);
         const double high = std::min(
                 piece.startDistanceMeters + piece.lengthMeters,
                 distance + sampleRadius);
         if (high > low) {
-            result.center.gradePercent +=
-                    (trailReliefOffset(piece, high)
+            double reliefGrade = (trailReliefOffset(piece, high)
                      + surfaceOffsetAt(course, high)
                      - trailReliefOffset(piece, low)
                      - surfaceOffsetAt(course, low))
                     / (high - low) * 100.0;
+            if (piece.terrain == WorkoutGameTerrainKind::Climb) {
+                reliefGrade = std::clamp(reliefGrade, -2.0, 2.0);
+            }
+            result.center.gradePercent += reliefGrade;
         }
     }
     return result;

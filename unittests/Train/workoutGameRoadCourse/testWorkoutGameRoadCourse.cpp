@@ -528,10 +528,8 @@ private slots:
         huge.sections = {section};
         const WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(huge, 200.0);
-        QVERIFY(road.ready);
-        // The sustained climb is capped at 4096 pieces, with one entry and
-        // one crest-transition piece around it.
-        QVERIFY(road.pieces.size() <= 4098u);
+        QVERIFY2(!road.ready,
+                 "an unpersistable trillion-metre plan must fail closed");
     }
 
     void skinnyProfileHasRaisedDeckSocketsAndDeterministicBalance()

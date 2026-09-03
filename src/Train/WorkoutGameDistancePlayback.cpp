@@ -75,6 +75,7 @@ WorkoutGameCourse WorkoutGameDistancePlayback::visualCourse(
     result.status = WorkoutGameCourseStatus::Ready;
     result.seed = course.seed;
     result.durationMs = course.nominalDurationMs;
+    result.roadPlan = course.roadPlan;
     result.sections.reserve(course.sections.size());
     for (const WorkoutGameDistanceCourseSection &source : course.sections) {
         WorkoutGameSection section;

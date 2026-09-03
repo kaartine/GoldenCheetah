@@ -8,6 +8,8 @@ SOURCES = testWorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
           ../../../src/Train/WorkoutGameHorizon.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
+          ../../../src/Train/WorkoutGameRoadPlan.cpp \
+          ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameRoadProjection.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
@@ -17,6 +19,8 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameGapJumpGeometry.h \
           ../../../src/Train/WorkoutGameHorizon.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
+          ../../../src/Train/WorkoutGameRoadPlan.h \
+          ../../../src/Train/WorkoutGameRoadQuality.h \
           ../../../src/Train/WorkoutGameRoadProjection.h \
           ../../../src/Train/WorkoutGameRootGeometry.h \
           ../../../src/Train/WorkoutGameRockGardenGeometry.h \

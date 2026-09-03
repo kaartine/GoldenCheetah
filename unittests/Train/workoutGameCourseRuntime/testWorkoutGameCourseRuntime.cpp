@@ -9,6 +9,8 @@
 
 #include "Train/WorkoutGameCourseRuntime.h"
 #include "Train/WorkoutGameCourseDocument.h"
+#include "Train/WorkoutGameRoadCourse.h"
+#include "Train/WorkoutGameRoadPlan.h"
 
 #include <QFile>
 #include <QTemporaryDir>
@@ -21,6 +23,7 @@ namespace {
 WorkoutGameCourseDocument sampleDocument()
 {
     WorkoutGameCourseDocument document;
+    document.schemaVersion = 1;
     document.title = QStringLiteral("Runtime MTB");
     document.sourceFileName = QStringLiteral("runtime.erg");
     document.sourceSha256 = QString(64, QLatin1Char('b'));
@@ -98,6 +101,7 @@ private slots:
         QCOMPARE(runtime.ftpWatts(), 190.0);
         QCOMPARE(runtime.visualCourse().status, WorkoutGameCourseStatus::Ready);
         QCOMPARE(runtime.visualCourse().durationMs, std::int64_t(30000));
+        QVERIFY(runtime.visualCourse().roadPlan);
 
         const WorkoutGameDistancePlaybackSnapshot first =
                 runtime.atWorkoutPosition(50);
@@ -111,6 +115,41 @@ private slots:
         QCOMPARE(second.sectionIndex, std::size_t(1));
         QCOMPARE(second.nominalTimeMs, std::int64_t(20000));
         QCOMPARE(second.targetWatts, 100.0);
+    }
+
+    void runtimeMaterializesThePersistedPlanInsteadOfRegeneratingFromSeed()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("runtime.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, sampleDocument(), error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseDocument persisted;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    path, persisted, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(persisted.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QVERIFY(persisted.course.roadPlan);
+        QVERIFY(!persisted.course.roadPlan->pieces.empty());
+
+        const double persistedFirstTurn =
+                persisted.course.roadPlan->pieces.front().turnRadians;
+        persisted.course.seed += 1000u;
+        QCOMPARE(WorkoutGameCourseDocumentStore::replaceArtifact(
+                    path, persisted, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseRuntime runtime;
+        QCOMPARE(runtime.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
+        const WorkoutGameRoadCourse road = WorkoutGameRoadCourseBuilder::build(
+                runtime.visualCourse(), runtime.ftpWatts());
+        QVERIFY(road.ready);
+        QCOMPARE(road.pieces.front().turnRadians, persistedFirstTurn);
+        QCOMPARE(road.seed, persisted.course.seed);
     }
 
     void missingOrInvalidMetadataFailsClosed()

@@ -13,6 +13,8 @@ SOURCES = testWorkoutGameCanvas.cpp \
           ../../../src/Train/WorkoutGameOpenGLCanvas.cpp \
           ../../../src/Train/WorkoutGamePowerProfile.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
+          ../../../src/Train/WorkoutGameRoadPlan.cpp \
+          ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp \
           ../../../src/Train/WorkoutGameTerrainTransition.cpp \
           ../../../src/Train/WorkoutGameTrailScene.cpp \

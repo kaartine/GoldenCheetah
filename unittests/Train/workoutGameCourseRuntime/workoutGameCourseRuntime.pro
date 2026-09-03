@@ -11,6 +11,11 @@ SOURCES = testWorkoutGameCourseRuntime.cpp \
           ../../../src/Train/WorkoutGameCourseRuntime.cpp \
           ../../../src/Train/WorkoutGameDistanceCourse.cpp \
           ../../../src/Train/WorkoutGameDistancePlayback.cpp \
+          ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
+          ../../../src/Train/WorkoutGameRoadCourse.cpp \
+          ../../../src/Train/WorkoutGameRoadPlan.cpp \
+          ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameRoadPhysics.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
@@ -20,6 +25,9 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameCourseRuntime.h \
           ../../../src/Train/WorkoutGameDistanceCourse.h \
           ../../../src/Train/WorkoutGameDistancePlayback.h \
+          ../../../src/Train/WorkoutGameRoadCourse.h \
+          ../../../src/Train/WorkoutGameRoadPlan.h \
+          ../../../src/Train/WorkoutGameRoadQuality.h \
           ../../../src/Train/WorkoutGameRoadPhysics.h
 
 include(../../unittests.pri)

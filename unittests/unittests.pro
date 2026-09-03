@@ -161,6 +161,7 @@ exists(unittests.pri) {
 			   Train/workoutGameRendererPolicy \
 			   Train/workoutGameReplay \
 			   Train/workoutGameRunner \
+    Train/workoutGameRoadPlan \
     Train/workoutGameRoadCourse \
     Train/workoutGameSceneGraph \
 			   Train/workoutGameRoadPhysics \

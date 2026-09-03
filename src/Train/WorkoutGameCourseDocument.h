@@ -28,7 +28,7 @@ enum class WorkoutGameCourseDocumentStatus
 
 struct WorkoutGameCourseDocument
 {
-    int schemaVersion = 1;
+    int schemaVersion = 2;
     QString title;
     QString sourceFileName;
     QString sourceSha256;
@@ -42,7 +42,7 @@ struct WorkoutGameCourseDocument
 class WorkoutGameCourseDocumentCodec
 {
 public:
-    static constexpr int CurrentSchemaVersion = 1;
+    static constexpr int CurrentSchemaVersion = 2;
     static constexpr qsizetype MaximumDocumentBytes = 1024 * 1024;
 
     static bool valid(const WorkoutGameCourseDocument &document);

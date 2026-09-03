@@ -10,6 +10,10 @@
 #include "WorkoutGameCourseDocument.h"
 
 #include "WorkoutGameCourseCrsExporter.h"
+#include "WorkoutGameDistancePlayback.h"
+#include "WorkoutGameRoadCourse.h"
+#include "WorkoutGameRoadPlan.h"
+#include "WorkoutGameRoadQuality.h"
 
 #include <QDir>
 #include <QFile>
@@ -22,6 +26,7 @@
 
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <utility>
 
 namespace {
@@ -136,6 +141,102 @@ bool parseTerrain(const QString &name, WorkoutGameTerrainKind &terrain)
     return false;
 }
 
+QString animationName(WorkoutGameRoadAnimation animation)
+{
+    switch (animation) {
+    case WorkoutGameRoadAnimation::None: return QStringLiteral("none");
+    case WorkoutGameRoadAnimation::Absorb: return QStringLiteral("absorb");
+    case WorkoutGameRoadAnimation::Pump: return QStringLiteral("pump");
+    case WorkoutGameRoadAnimation::Climb: return QStringLiteral("climb");
+    case WorkoutGameRoadAnimation::Jump: return QStringLiteral("jump");
+    case WorkoutGameRoadAnimation::Drop: return QStringLiteral("drop");
+    case WorkoutGameRoadAnimation::Balance: return QStringLiteral("balance");
+    case WorkoutGameRoadAnimation::LeanLeft: return QStringLiteral("lean-left");
+    case WorkoutGameRoadAnimation::LeanRight: return QStringLiteral("lean-right");
+    }
+    return {};
+}
+
+bool parseAnimation(const QString &name, WorkoutGameRoadAnimation &animation)
+{
+    const std::pair<const char *, WorkoutGameRoadAnimation> values[] = {
+        {"none", WorkoutGameRoadAnimation::None},
+        {"absorb", WorkoutGameRoadAnimation::Absorb},
+        {"pump", WorkoutGameRoadAnimation::Pump},
+        {"climb", WorkoutGameRoadAnimation::Climb},
+        {"jump", WorkoutGameRoadAnimation::Jump},
+        {"drop", WorkoutGameRoadAnimation::Drop},
+        {"balance", WorkoutGameRoadAnimation::Balance},
+        {"lean-left", WorkoutGameRoadAnimation::LeanLeft},
+        {"lean-right", WorkoutGameRoadAnimation::LeanRight}
+    };
+    for (const auto &value : values) {
+        if (name == QLatin1String(value.first)) {
+            animation = value.second;
+            return true;
+        }
+    }
+    return false;
+}
+
+QString challengeCueName(WorkoutGameChallengeCue cue)
+{
+    switch (cue) {
+    case WorkoutGameChallengeCue::None: return QStringLiteral("none");
+    case WorkoutGameChallengeCue::CarrySpeed: return QStringLiteral("carry-speed");
+    case WorkoutGameChallengeCue::Jump: return QStringLiteral("jump");
+    case WorkoutGameChallengeCue::HoldLine: return QStringLiteral("hold-line");
+    case WorkoutGameChallengeCue::Climb: return QStringLiteral("climb");
+    }
+    return {};
+}
+
+bool parseChallengeCue(const QString &name, WorkoutGameChallengeCue &cue)
+{
+    const std::pair<const char *, WorkoutGameChallengeCue> values[] = {
+        {"none", WorkoutGameChallengeCue::None},
+        {"carry-speed", WorkoutGameChallengeCue::CarrySpeed},
+        {"jump", WorkoutGameChallengeCue::Jump},
+        {"hold-line", WorkoutGameChallengeCue::HoldLine},
+        {"climb", WorkoutGameChallengeCue::Climb}
+    };
+    for (const auto &value : values) {
+        if (name == QLatin1String(value.first)) {
+            cue = value.second;
+            return true;
+        }
+    }
+    return false;
+}
+
+QString gapLineName(WorkoutGameGapJumpLine line)
+{
+    switch (line) {
+    case WorkoutGameGapJumpLine::None: return QStringLiteral("none");
+    case WorkoutGameGapJumpLine::Short: return QStringLiteral("short");
+    case WorkoutGameGapJumpLine::Medium: return QStringLiteral("medium");
+    case WorkoutGameGapJumpLine::Long: return QStringLiteral("long");
+    }
+    return {};
+}
+
+bool parseGapLine(const QString &name, WorkoutGameGapJumpLine &line)
+{
+    if (name == QStringLiteral("short")) {
+        line = WorkoutGameGapJumpLine::Short;
+        return true;
+    }
+    if (name == QStringLiteral("medium")) {
+        line = WorkoutGameGapJumpLine::Medium;
+        return true;
+    }
+    if (name == QStringLiteral("long")) {
+        line = WorkoutGameGapJumpLine::Long;
+        return true;
+    }
+    return false;
+}
+
 QJsonObject physicsToJson(const WorkoutGameRoadPhysicsParameters &physics)
 {
     return {
@@ -188,6 +289,38 @@ bool unsignedNumber(
         return false;
     }
     value = std::uint32_t(number);
+    return true;
+}
+
+bool sizeNumber(
+        const QJsonObject &object,
+        const char *key,
+        std::size_t &value)
+{
+    std::int64_t number = 0;
+    if (!integerNumber(object, key, number) || number < 0
+            || std::uint64_t(number)
+                > std::numeric_limits<std::size_t>::max()) {
+        return false;
+    }
+    value = std::size_t(number);
+    return true;
+}
+
+bool safeUnsigned64Number(
+        const QJsonObject &object,
+        const char *key,
+        std::uint64_t &value)
+{
+    constexpr double MaximumExactJsonInteger = 9007199254740991.0;
+    double number = 0.0;
+    if (!finiteNumber(object, key, number)
+            || number < 0.0
+            || number > MaximumExactJsonInteger
+            || std::floor(number) != number) {
+        return false;
+    }
+    value = std::uint64_t(number);
     return true;
 }
 
@@ -416,6 +549,418 @@ bool parseCourse(const QJsonObject &object, WorkoutGameDistanceCourse &course)
     return true;
 }
 
+QJsonObject connectorToJson(const WorkoutGameRoadConnector &connector)
+{
+    return {
+        {QStringLiteral("xMeters"), connector.xMeters},
+        {QStringLiteral("zMeters"), connector.zMeters},
+        {QStringLiteral("elevationMeters"), connector.elevationMeters},
+        {QStringLiteral("headingRadians"), connector.headingRadians},
+        {QStringLiteral("halfWidthMeters"), connector.halfWidthMeters},
+        {QStringLiteral("gradePercent"), connector.gradePercent}
+    };
+}
+
+bool parseConnector(
+        const QJsonValue &value,
+        WorkoutGameRoadConnector &connector)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    return finiteNumber(object, "xMeters", connector.xMeters)
+            && finiteNumber(object, "zMeters", connector.zMeters)
+            && finiteNumber(object, "elevationMeters",
+                            connector.elevationMeters)
+            && finiteNumber(object, "headingRadians",
+                            connector.headingRadians)
+            && finiteNumber(object, "halfWidthMeters",
+                            connector.halfWidthMeters)
+            && finiteNumber(object, "gradePercent", connector.gradePercent);
+}
+
+QJsonObject challengeProfileToJson(
+        const WorkoutGameFeatureChallengeProfile &profile)
+{
+    return {
+        {QStringLiteral("enabled"), profile.enabled},
+        {QStringLiteral("cue"), challengeCueName(profile.cue)},
+        {QStringLiteral("measurementStartProgress"),
+         profile.measurementStartProgress},
+        {QStringLiteral("decisionProgress"), profile.decisionProgress},
+        {QStringLiteral("minimumEffortRatio"), profile.minimumEffortRatio},
+        {QStringLiteral("minimumCadenceRpm"), profile.minimumCadenceRpm},
+        {QStringLiteral("minimumSpeedKph"), profile.minimumSpeedKph},
+        {QStringLiteral("maximumSpeedKph"), profile.maximumSpeedKph},
+        {QStringLiteral("minimumAdherence"), profile.minimumAdherence},
+        {QStringLiteral("bonusPoints"), double(profile.bonusPoints)}
+    };
+}
+
+bool parseChallengeProfile(
+        const QJsonValue &value,
+        WorkoutGameFeatureChallengeProfile &profile)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    const QJsonValue enabled = object.value(QStringLiteral("enabled"));
+    const QJsonValue cue = object.value(QStringLiteral("cue"));
+    return enabled.isBool()
+            && cue.isString()
+            && (profile.enabled = enabled.toBool(), true)
+            && parseChallengeCue(cue.toString(), profile.cue)
+            && finiteNumber(object, "measurementStartProgress",
+                            profile.measurementStartProgress)
+            && finiteNumber(object, "decisionProgress",
+                            profile.decisionProgress)
+            && finiteNumber(object, "minimumEffortRatio",
+                            profile.minimumEffortRatio)
+            && finiteNumber(object, "minimumCadenceRpm",
+                            profile.minimumCadenceRpm)
+            && finiteNumber(object, "minimumSpeedKph",
+                            profile.minimumSpeedKph)
+            && finiteNumber(object, "maximumSpeedKph",
+                            profile.maximumSpeedKph)
+            && finiteNumber(object, "minimumAdherence",
+                            profile.minimumAdherence)
+            && safeUnsigned64Number(object, "bonusPoints",
+                                    profile.bonusPoints);
+}
+
+QJsonObject challengeToJson(const WorkoutGameRoadChallengeGate &challenge)
+{
+    return {
+        {QStringLiteral("prepareDistanceMeters"),
+         challenge.prepareDistanceMeters},
+        {QStringLiteral("decisionDistanceMeters"),
+         challenge.decisionDistanceMeters},
+        {QStringLiteral("obstacleDistanceMeters"),
+         challenge.obstacleDistanceMeters},
+        {QStringLiteral("bypassStartDistanceMeters"),
+         challenge.bypassStartDistanceMeters},
+        {QStringLiteral("bypassEndDistanceMeters"),
+         challenge.bypassEndDistanceMeters},
+        {QStringLiteral("bypassLateralMeters"),
+         challenge.bypassLateralMeters},
+        {QStringLiteral("profile"),
+         challengeProfileToJson(challenge.profile)}
+    };
+}
+
+bool parseChallenge(
+        const QJsonValue &value,
+        WorkoutGameRoadChallengeGate &challenge)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    challenge.enabled = true;
+    return finiteNumber(object, "prepareDistanceMeters",
+                        challenge.prepareDistanceMeters)
+            && finiteNumber(object, "decisionDistanceMeters",
+                            challenge.decisionDistanceMeters)
+            && finiteNumber(object, "obstacleDistanceMeters",
+                            challenge.obstacleDistanceMeters)
+            && finiteNumber(object, "bypassStartDistanceMeters",
+                            challenge.bypassStartDistanceMeters)
+            && finiteNumber(object, "bypassEndDistanceMeters",
+                            challenge.bypassEndDistanceMeters)
+            && finiteNumber(object, "bypassLateralMeters",
+                            challenge.bypassLateralMeters)
+            && parseChallengeProfile(
+                object.value(QStringLiteral("profile")), challenge.profile);
+}
+
+QJsonObject gapLineToJson(const WorkoutGameRoadGapJumpLine &line)
+{
+    return {
+        {QStringLiteral("id"), gapLineName(line.id)},
+        {QStringLiteral("takeoffDistanceMeters"), line.takeoffDistanceMeters},
+        {QStringLiteral("landingDistanceMeters"), line.landingDistanceMeters},
+        {QStringLiteral("lateralMeters"), line.lateralMeters},
+        {QStringLiteral("gapLengthMeters"), line.gapLengthMeters},
+        {QStringLiteral("minimumSpeedMetersPerSecond"),
+         line.minimumSpeedMetersPerSecond},
+        {QStringLiteral("nominalFlightSeconds"), line.nominalFlightSeconds},
+        {QStringLiteral("lipHeightMeters"), line.lipHeightMeters},
+        {QStringLiteral("landingDropMeters"), line.landingDropMeters}
+    };
+}
+
+bool parseGapLine(
+        const QJsonValue &value,
+        WorkoutGameRoadGapJumpLine &line)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    const QJsonValue id = object.value(QStringLiteral("id"));
+    return id.isString()
+            && parseGapLine(id.toString(), line.id)
+            && finiteNumber(object, "takeoffDistanceMeters",
+                            line.takeoffDistanceMeters)
+            && finiteNumber(object, "landingDistanceMeters",
+                            line.landingDistanceMeters)
+            && finiteNumber(object, "lateralMeters", line.lateralMeters)
+            && finiteNumber(object, "gapLengthMeters", line.gapLengthMeters)
+            && finiteNumber(object, "minimumSpeedMetersPerSecond",
+                            line.minimumSpeedMetersPerSecond)
+            && finiteNumber(object, "nominalFlightSeconds",
+                            line.nominalFlightSeconds)
+            && finiteNumber(object, "lipHeightMeters", line.lipHeightMeters)
+            && finiteNumber(object, "landingDropMeters",
+                            line.landingDropMeters);
+}
+
+QJsonObject gapJumpToJson(const WorkoutGameRoadGapJumpGate &gap)
+{
+    QJsonArray lines;
+    for (const WorkoutGameRoadGapJumpLine &line : gap.lines) {
+        lines.append(gapLineToJson(line));
+    }
+    return {
+        {QStringLiteral("prepareDistanceMeters"), gap.prepareDistanceMeters},
+        {QStringLiteral("launchWindowStartDistanceMeters"),
+         gap.launchWindowStartDistanceMeters},
+        {QStringLiteral("lockDistanceMeters"), gap.lockDistanceMeters},
+        {QStringLiteral("splitStartDistanceMeters"),
+         gap.splitStartDistanceMeters},
+        {QStringLiteral("mergeEndDistanceMeters"), gap.mergeEndDistanceMeters},
+        {QStringLiteral("lines"), lines}
+    };
+}
+
+bool parseGapJump(
+        const QJsonValue &value,
+        WorkoutGameRoadGapJumpGate &gap)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    const QJsonValue linesValue = object.value(QStringLiteral("lines"));
+    if (!linesValue.isArray()) return false;
+    const QJsonArray lines = linesValue.toArray();
+    if (lines.size() != int(gap.lines.size())) return false;
+    gap.enabled = true;
+    if (!finiteNumber(object, "prepareDistanceMeters",
+                      gap.prepareDistanceMeters)
+            || !finiteNumber(object, "launchWindowStartDistanceMeters",
+                             gap.launchWindowStartDistanceMeters)
+            || !finiteNumber(object, "lockDistanceMeters",
+                             gap.lockDistanceMeters)
+            || !finiteNumber(object, "splitStartDistanceMeters",
+                             gap.splitStartDistanceMeters)
+            || !finiteNumber(object, "mergeEndDistanceMeters",
+                             gap.mergeEndDistanceMeters)) {
+        return false;
+    }
+    for (int index = 0; index < lines.size(); ++index) {
+        if (!parseGapLine(lines[index], gap.lines[std::size_t(index)])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+QJsonObject roadPieceToJson(const WorkoutGameRoadPiece &piece)
+{
+    QJsonObject result {
+        {QStringLiteral("sourceSectionIndex"),
+         double(piece.sourceSectionIndex)},
+        {QStringLiteral("terrain"), terrainName(piece.terrain)},
+        {QStringLiteral("animation"), animationName(piece.animation)},
+        {QStringLiteral("startDistanceMeters"), piece.startDistanceMeters},
+        {QStringLiteral("lengthMeters"), piece.lengthMeters},
+        {QStringLiteral("turnRadians"), piece.turnRadians},
+        {QStringLiteral("riseMeters"), piece.riseMeters},
+        {QStringLiteral("difficulty"), piece.difficulty},
+        {QStringLiteral("reliefScale"), piece.reliefScale},
+        {QStringLiteral("geometryAnchorDistanceMeters"),
+         piece.geometryAnchorDistanceMeters},
+        {QStringLiteral("entry"), connectorToJson(piece.entry)},
+        {QStringLiteral("exit"), connectorToJson(piece.exit)},
+        {QStringLiteral("qualityExempt"), piece.qualityExempt},
+        {QStringLiteral("qualityExemptionStartDistanceMeters"),
+         piece.qualityExemptionStartDistanceMeters},
+        {QStringLiteral("qualityExemptionEndDistanceMeters"),
+         piece.qualityExemptionEndDistanceMeters}
+    };
+    if (piece.challenge.enabled) {
+        result.insert(QStringLiteral("challenge"),
+                      challengeToJson(piece.challenge));
+    }
+    if (piece.gapJump.enabled) {
+        result.insert(QStringLiteral("gapJump"), gapJumpToJson(piece.gapJump));
+    }
+    return result;
+}
+
+bool parseRoadPiece(const QJsonObject &object, WorkoutGameRoadPiece &piece)
+{
+    const QJsonValue terrain = object.value(QStringLiteral("terrain"));
+    const QJsonValue animation = object.value(QStringLiteral("animation"));
+    const QJsonValue qualityExempt =
+            object.value(QStringLiteral("qualityExempt"));
+    if (!terrain.isString() || !animation.isString()
+            || !qualityExempt.isBool()
+            || !sizeNumber(object, "sourceSectionIndex",
+                           piece.sourceSectionIndex)
+            || !parseTerrain(terrain.toString(), piece.terrain)
+            || !parseAnimation(animation.toString(), piece.animation)
+            || !finiteNumber(object, "startDistanceMeters",
+                             piece.startDistanceMeters)
+            || !finiteNumber(object, "lengthMeters", piece.lengthMeters)
+            || !finiteNumber(object, "turnRadians", piece.turnRadians)
+            || !finiteNumber(object, "riseMeters", piece.riseMeters)
+            || !finiteNumber(object, "difficulty", piece.difficulty)
+            || !finiteNumber(object, "reliefScale", piece.reliefScale)
+            || !finiteNumber(object, "geometryAnchorDistanceMeters",
+                             piece.geometryAnchorDistanceMeters)
+            || !parseConnector(object.value(QStringLiteral("entry")),
+                               piece.entry)
+            || !parseConnector(object.value(QStringLiteral("exit")),
+                               piece.exit)
+            || !finiteNumber(object,
+                    "qualityExemptionStartDistanceMeters",
+                    piece.qualityExemptionStartDistanceMeters)
+            || !finiteNumber(object,
+                    "qualityExemptionEndDistanceMeters",
+                    piece.qualityExemptionEndDistanceMeters)) {
+        return false;
+    }
+    piece.qualityExempt = qualityExempt.toBool();
+    const QJsonValue challenge = object.value(QStringLiteral("challenge"));
+    const QJsonValue gapJump = object.value(QStringLiteral("gapJump"));
+    if (!challenge.isUndefined() && !parseChallenge(challenge, piece.challenge)) {
+        return false;
+    }
+    if (!gapJump.isUndefined() && !parseGapJump(gapJump, piece.gapJump)) {
+        return false;
+    }
+    return true;
+}
+
+QJsonObject roadPlanToJson(const WorkoutGameRoadPlan &plan)
+{
+    QJsonArray pieces;
+    for (const WorkoutGameRoadPiece &piece : plan.pieces) {
+        pieces.append(roadPieceToJson(piece));
+    }
+    return {
+        {QStringLiteral("generationVersion"),
+         double(plan.generationVersion)},
+        {QStringLiteral("pieces"), pieces}
+    };
+}
+
+WorkoutGameCourseDocumentStatus parseRoadPlan(
+        const QJsonValue &value,
+        std::size_t sourceSectionCount,
+        std::shared_ptr<const WorkoutGameRoadPlan> &destination)
+{
+    if (!value.isObject()) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    const QJsonObject object = value.toObject();
+    std::uint32_t generationVersion = 0;
+    if (!unsignedNumber(object, "generationVersion", generationVersion)) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    if (generationVersion != WorkoutGameRoadPlan::CurrentGenerationVersion) {
+        return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+    }
+    const QJsonValue piecesValue = object.value(QStringLiteral("pieces"));
+    if (!piecesValue.isArray()) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    const QJsonArray pieces = piecesValue.toArray();
+    if (pieces.size() > int(WorkoutGameRoadPlan::MaximumPieces)) {
+        return WorkoutGameCourseDocumentStatus::ResourceLimit;
+    }
+    auto plan = std::make_shared<WorkoutGameRoadPlan>();
+    plan->generationVersion = generationVersion;
+    plan->pieces.reserve(std::size_t(pieces.size()));
+    for (const QJsonValue &pieceValue : pieces) {
+        WorkoutGameRoadPiece piece;
+        if (!pieceValue.isObject()
+                || !parseRoadPiece(pieceValue.toObject(), piece)) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        plan->pieces.push_back(piece);
+    }
+    const WorkoutGameRoadPlanValidationStatus validation =
+            WorkoutGameRoadPlanValidator::validate(
+                *plan, sourceSectionCount);
+    if (validation == WorkoutGameRoadPlanValidationStatus::ResourceLimit) {
+        return WorkoutGameCourseDocumentStatus::ResourceLimit;
+    }
+    if (validation == WorkoutGameRoadPlanValidationStatus::UnsupportedVersion) {
+        return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+    }
+    if (validation != WorkoutGameRoadPlanValidationStatus::Ready
+            || !WorkoutGameRoadQuality::audit(*plan).accepted()) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    destination = std::move(plan);
+    return WorkoutGameCourseDocumentStatus::Ready;
+}
+
+bool roadPlanMatchesCourse(const WorkoutGameDistanceCourse &course)
+{
+    if (!course.roadPlan
+            || WorkoutGameRoadPlanValidator::validate(
+                *course.roadPlan, course.sections.size())
+                != WorkoutGameRoadPlanValidationStatus::Ready
+            || !WorkoutGameRoadQuality::audit(*course.roadPlan).accepted()) {
+        return false;
+    }
+    std::vector<double> sectionLengths(course.sections.size(), 0.0);
+    for (const WorkoutGameRoadPiece &piece : course.roadPlan->pieces) {
+        if (piece.sourceSectionIndex >= course.sections.size()
+                || piece.terrain
+                    != course.sections[piece.sourceSectionIndex].terrain) {
+            return false;
+        }
+        sectionLengths[piece.sourceSectionIndex] += piece.lengthMeters;
+    }
+    for (std::size_t index = 0; index < course.sections.size(); ++index) {
+        if (std::abs(sectionLengths[index] - course.sections[index].lengthMeters)
+                > 1.0e-5) {
+            return false;
+        }
+    }
+    const WorkoutGameRoadPiece &last = course.roadPlan->pieces.back();
+    return std::abs(last.startDistanceMeters + last.lengthMeters
+                    - course.totalDistanceMeters) <= 1.0e-5;
+}
+
+bool documentForPersistence(
+        const WorkoutGameCourseDocument &source,
+        WorkoutGameCourseDocument &destination)
+{
+    destination = source;
+    if (destination.schemaVersion
+            == WorkoutGameCourseDocumentCodec::CurrentSchemaVersion) {
+        return WorkoutGameCourseDocumentCodec::valid(destination);
+    }
+    if (destination.schemaVersion != 1
+            || !WorkoutGameCourseDocumentCodec::valid(destination)) {
+        return false;
+    }
+    const WorkoutGameCourse visual =
+            WorkoutGameDistancePlayback::visualCourse(destination.course);
+    const WorkoutGameRoadPlan plan =
+            WorkoutGameRoadCourseBuilder::generatePlan(
+                visual, destination.ftpWatts);
+    if (WorkoutGameRoadPlanValidator::validate(
+                plan, destination.course.sections.size())
+            != WorkoutGameRoadPlanValidationStatus::Ready
+            || !WorkoutGameRoadQuality::audit(plan).accepted()) {
+        return false;
+    }
+    destination.schemaVersion =
+            WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
+    destination.course.roadPlan =
+            std::make_shared<const WorkoutGameRoadPlan>(plan);
+    return WorkoutGameCourseDocumentCodec::valid(destination);
+}
+
 bool writeAtomically(
         const QString &path,
         const QByteArray &data,
@@ -444,7 +989,11 @@ bool WorkoutGameCourseDocumentCodec::valid(
     const bool sourceIntervalsValid = document.sourceIntervals.empty()
             || validIntervals(document.sourceIntervals,
                               document.course.nominalDurationMs);
-    return document.schemaVersion == CurrentSchemaVersion
+    const bool schemaValid = document.schemaVersion == 1
+            ? !document.course.roadPlan
+            : document.schemaVersion == CurrentSchemaVersion
+                && roadPlanMatchesCourse(document.course);
+    return schemaValid
             && !document.title.trimmed().isEmpty()
             && document.title.size() <= 200
             && !document.title.contains(QLatin1Char('\n'))
@@ -482,13 +1031,17 @@ QByteArray WorkoutGameCourseDocumentCodec::encode(
         {QStringLiteral("parameters"), generationToJson(
             document.generationParameters)}
     };
-    const QJsonObject root {
+    QJsonObject root {
         {QStringLiteral("schemaVersion"), document.schemaVersion},
         {QStringLiteral("title"), document.title},
         {QStringLiteral("source"), source},
         {QStringLiteral("conversion"), conversion},
         {QStringLiteral("course"), courseToJson(document.course)}
     };
+    if (document.schemaVersion == CurrentSchemaVersion) {
+        root.insert(QStringLiteral("roadPlan"),
+                    roadPlanToJson(*document.course.roadPlan));
+    }
     const QByteArray encoded =
             QJsonDocument(root).toJson(QJsonDocument::Compact) + '\n';
     return encoded.size() <= MaximumDocumentBytes ? encoded : QByteArray();
@@ -512,7 +1065,7 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
     if (!integerNumber(root, "schemaVersion", schemaVersion)) {
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
-    if (schemaVersion != CurrentSchemaVersion) {
+    if (schemaVersion != 1 && schemaVersion != CurrentSchemaVersion) {
         return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
     }
     const QJsonValue title = root.value(QStringLiteral("title"));
@@ -553,6 +1106,19 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
                 || !parseIntervals(intervals.toArray(), document.sourceIntervals))) {
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
+    const QJsonValue roadPlan = root.value(QStringLiteral("roadPlan"));
+    if (document.schemaVersion == 1) {
+        if (!roadPlan.isUndefined()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+    } else {
+        const WorkoutGameCourseDocumentStatus planStatus = parseRoadPlan(
+                roadPlan, document.course.sections.size(),
+                document.course.roadPlan);
+        if (planStatus != WorkoutGameCourseDocumentStatus::Ready) {
+            return planStatus;
+        }
+    }
     return valid(document)
             ? WorkoutGameCourseDocumentStatus::Ready
             : WorkoutGameCourseDocumentStatus::InvalidDocument;
@@ -572,8 +1138,13 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentStore::saveNewArtifact(
         QString &error)
 {
     error.clear();
-    const QByteArray metadata = WorkoutGameCourseDocumentCodec::encode(document);
-    const QByteArray course = WorkoutGameCourseCrsExporter::encode(document);
+    WorkoutGameCourseDocument persisted;
+    if (!documentForPersistence(document, persisted)) {
+        error = QStringLiteral("Invalid MTB course document");
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    const QByteArray metadata = WorkoutGameCourseDocumentCodec::encode(persisted);
+    const QByteArray course = WorkoutGameCourseCrsExporter::encode(persisted);
     if (metadata.isEmpty() || course.isEmpty()) {
         error = QStringLiteral("Invalid MTB course document");
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
@@ -604,8 +1175,13 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentStore::replaceArtifact(
             loadForCourse(coursePath, existing, error);
     if (loadStatus != WorkoutGameCourseDocumentStatus::Ready) return loadStatus;
 
-    const QByteArray metadata = WorkoutGameCourseDocumentCodec::encode(document);
-    const QByteArray course = WorkoutGameCourseCrsExporter::encode(document);
+    WorkoutGameCourseDocument persisted;
+    if (!documentForPersistence(document, persisted)) {
+        error = QStringLiteral("Invalid MTB course document");
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    const QByteArray metadata = WorkoutGameCourseDocumentCodec::encode(persisted);
+    const QByteArray course = WorkoutGameCourseCrsExporter::encode(persisted);
     if (metadata.isEmpty() || course.isEmpty()) {
         error = QStringLiteral("Invalid MTB course document");
         return WorkoutGameCourseDocumentStatus::InvalidDocument;

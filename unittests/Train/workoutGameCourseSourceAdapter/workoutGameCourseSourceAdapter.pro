@@ -10,6 +10,12 @@ SOURCES = testWorkoutGameCourseSourceAdapter.cpp \
           ../../../src/Train/WorkoutGameCourseDocument.cpp \
           ../../../src/Train/WorkoutGameCourseSourceAdapter.cpp \
           ../../../src/Train/WorkoutGameDistanceCourse.cpp \
+          ../../../src/Train/WorkoutGameDistancePlayback.cpp \
+          ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
+          ../../../src/Train/WorkoutGameRoadCourse.cpp \
+          ../../../src/Train/WorkoutGameRoadPlan.cpp \
+          ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameRoadPhysics.cpp \
           ../../../src/Train/WorkoutGameWorkoutAdapter.cpp
 
@@ -19,6 +25,10 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameCourseDocument.h \
           ../../../src/Train/WorkoutGameCourseSourceAdapter.h \
           ../../../src/Train/WorkoutGameDistanceCourse.h \
+          ../../../src/Train/WorkoutGameDistancePlayback.h \
+          ../../../src/Train/WorkoutGameRoadCourse.h \
+          ../../../src/Train/WorkoutGameRoadPlan.h \
+          ../../../src/Train/WorkoutGameRoadQuality.h \
           ../../../src/Train/WorkoutGameRoadPhysics.h \
           ../../../src/Train/WorkoutGameWorkoutAdapter.h
 

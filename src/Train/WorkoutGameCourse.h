@@ -13,7 +13,10 @@
 #include "WorkoutGameWorld.h"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
+
+struct WorkoutGameRoadPlan;
 
 enum class WorkoutGameFeature
 {
@@ -64,6 +67,7 @@ struct WorkoutGameCourse
     std::uint32_t seed = 0;
     std::int64_t durationMs = 0;
     std::vector<WorkoutGameSection> sections;
+    std::shared_ptr<const WorkoutGameRoadPlan> roadPlan;
 };
 
 class WorkoutGameCourseBuilder

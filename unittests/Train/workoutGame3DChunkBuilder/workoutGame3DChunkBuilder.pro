@@ -10,6 +10,8 @@ SOURCES += testWorkoutGame3DChunkBuilder.cpp \
            ../../../src/Train/WorkoutGame3DGeometry.cpp \
            ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
+           ../../../src/Train/WorkoutGameRoadPlan.cpp \
+           ../../../src/Train/WorkoutGameRoadQuality.cpp \
            ../../../src/Train/WorkoutGameFeatureChallenge.cpp
 
 HEADERS += ../../../src/Train/WorkoutGame3DChunkBuilder.h \

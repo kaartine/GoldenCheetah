@@ -58,6 +58,7 @@ struct WorkoutGameDistanceCourse
     double elevationGainMeters = 0.0;
     double elevationLossMeters = 0.0;
     std::vector<WorkoutGameDistanceCourseSection> sections;
+    std::shared_ptr<const WorkoutGameRoadPlan> roadPlan;
 };
 
 struct WorkoutGameDistanceCourseGenerationParameters

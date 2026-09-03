@@ -6,6 +6,8 @@ TARGET = testWorkoutGame3DFeatureAsset
 SOURCES = testWorkoutGame3DFeatureAsset.cpp \
           ../../../src/Train/WorkoutGame3DFeatureAsset.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
+          ../../../src/Train/WorkoutGameRoadPlan.cpp \
+          ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameGapJumpGeometry.cpp
 
