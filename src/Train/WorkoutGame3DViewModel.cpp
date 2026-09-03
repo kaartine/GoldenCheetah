@@ -55,6 +55,112 @@ double finiteOrZero(double value)
     return std::isfinite(value) ? value : 0.0;
 }
 
+struct WorkoutGameRoutePoint
+{
+    double xMeters = 0.0;
+    double zMeters = 0.0;
+    bool ready = false;
+};
+
+const WorkoutGameRoadPiece *challengePieceAt(
+        const WorkoutGameRoadCourse &course,
+        double distanceMeters)
+{
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (piece.challenge.enabled
+                && distanceMeters
+                    >= piece.challenge.bypassStartDistanceMeters
+                && distanceMeters
+                    <= piece.challenge.bypassEndDistanceMeters) {
+            return &piece;
+        }
+    }
+    return nullptr;
+}
+
+double selectedRouteLateralMeters(
+        const WorkoutGameRoadCourse &course,
+        WorkoutGameRoute route,
+        double distanceMeters,
+        double requestedLateralMeters)
+{
+    if (route != WorkoutGameRoute::SafeBypass) {
+        return requestedLateralMeters;
+    }
+    const WorkoutGameRoadSample sample = WorkoutGameRoadCourseBuilder::sample(
+            course, distanceMeters);
+    if (sample.ready && sample.pieceIndex < course.pieces.size()) {
+        const WorkoutGameRoadPiece &piece = course.pieces[sample.pieceIndex];
+        const double local = distanceMeters
+                - piece.challenge.obstacleDistanceMeters;
+        switch (piece.terrain) {
+        case WorkoutGameTerrainKind::Roots:
+            return WorkoutGameRootGeometry::profile(
+                    piece.difficulty).safeLineOffsetMeters(local);
+        case WorkoutGameTerrainKind::RockGarden:
+            return WorkoutGameRockGardenGeometry::profile(
+                    piece.difficulty).safeLineOffsetMeters(local);
+        case WorkoutGameTerrainKind::RockSlab:
+            return WorkoutGameRockSlabGeometry::profile(
+                    piece.difficulty).safeLineOffsetMeters(local);
+        default:
+            break;
+        }
+    }
+    const WorkoutGameRoadPiece *piece =
+            challengePieceAt(course, distanceMeters);
+    if (!piece || piece->gapJump.enabled) return requestedLateralMeters;
+    const WorkoutGameRoadChallengeGate &challenge = piece->challenge;
+    return WorkoutGameTrailBranch::lateralAt(
+            distanceMeters,
+            challenge.bypassStartDistanceMeters,
+            challenge.bypassEndDistanceMeters,
+            challenge.bypassLateralMeters);
+}
+
+WorkoutGameRoutePoint selectedRoutePoint(
+        const WorkoutGameRoadCourse &course,
+        WorkoutGameRoute route,
+        double distanceMeters,
+        double requestedLateralMeters)
+{
+    const WorkoutGameRoadSample sample = WorkoutGameRoadCourseBuilder::sample(
+            course, distanceMeters);
+    if (!sample.ready) return {};
+    const double lateral = selectedRouteLateralMeters(
+            course, route, distanceMeters, requestedLateralMeters);
+    const double rightX = std::cos(sample.center.headingRadians);
+    const double rightZ = -std::sin(sample.center.headingRadians);
+    return {
+        sample.center.xMeters + lateral * rightX,
+        sample.center.zMeters + lateral * rightZ,
+        true
+    };
+}
+
+double selectedRouteHeadingRadians(
+        const WorkoutGameRoadCourse &course,
+        WorkoutGameRoute route,
+        double distanceMeters,
+        double requestedLateralMeters,
+        double fallbackHeadingRadians)
+{
+    constexpr double TangentSampleMeters = 0.01;
+    const double beforeDistance = std::max(
+            0.0, distanceMeters - TangentSampleMeters);
+    const double afterDistance = std::min(
+            course.totalLengthMeters, distanceMeters + TangentSampleMeters);
+    const WorkoutGameRoutePoint before = selectedRoutePoint(
+            course, route, beforeDistance, requestedLateralMeters);
+    const WorkoutGameRoutePoint after = selectedRoutePoint(
+            course, route, afterDistance, requestedLateralMeters);
+    if (!before.ready || !after.ready) return fallbackHeadingRadians;
+    const double deltaX = after.xMeters - before.xMeters;
+    const double deltaZ = after.zMeters - before.zMeters;
+    return std::hypot(deltaX, deltaZ) > 1.0e-9
+            ? std::atan2(deltaX, deltaZ) : fallbackHeadingRadians;
+}
+
 double horizontalDistanceToSegmentSquared(
         double pointX,
         double pointZ,
@@ -232,7 +338,11 @@ void WorkoutGame3DViewModel::setFrame(
     const WorkoutGameRoadSample sample = WorkoutGameRoadCourseBuilder::sample(
             roadCourse, distanceMeters);
     if (!sample.ready) return;
-    const double lateral = finiteOrZero(frame.feature.lateralOffsetMeters);
+    const double requestedLateral = finiteOrZero(
+            frame.feature.lateralOffsetMeters);
+    const double lateral = selectedRouteLateralMeters(
+            roadCourse, frame.feature.route,
+            distanceMeters, requestedLateral);
     const double rightX = std::cos(sample.center.headingRadians);
     const double rightZ = -std::sin(sample.center.headingRadians);
     riderPositionX = sample.center.xMeters + lateral * rightX;
@@ -244,7 +354,7 @@ void WorkoutGame3DViewModel::setFrame(
             completedAirFeature
                 ? frame.world.visualAirHeightMeters()
                 : frame.world.rider.airHeightMeters()));
-    double visualGround = sample.center.elevationMeters;
+    double visualGround = sample.visualGroundElevationMeters();
     if (frame.feature.route == WorkoutGameRoute::SafeBypass) {
         const WorkoutGame3DTerrainProfileSnapshot terrain =
                 WorkoutGame3DTerrainProfile::build(
@@ -313,7 +423,10 @@ void WorkoutGame3DViewModel::setFrame(
     cameraGroundY = visualGround;
     riderPositionY = visualGround + authoritativeAir;
     riderPositionZ = sample.center.zMeters + lateral * rightZ;
-    riderHeadingDegrees = sample.center.headingRadians * 180.0 / Pi;
+    riderHeadingDegrees = selectedRouteHeadingRadians(
+            roadCourse, frame.feature.route,
+            distanceMeters, requestedLateral,
+            sample.center.headingRadians) * 180.0 / Pi;
     const bool featureCritical = frame.feature.ready
             && frame.feature.phase != WorkoutGameFeaturePhase::None
             && frame.feature.phase != WorkoutGameFeaturePhase::Recovery;

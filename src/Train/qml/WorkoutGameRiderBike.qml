@@ -76,7 +76,7 @@ Node {
     readonly property real pelvisY: bodyY - 0.15
     readonly property real pelvisZ: bodyZ - 0.09
 
-    function wheelFrustumScenePoints() {
+    function riderFrustumScenePoints() {
         return [
             articulatedRider.mapPositionToScene(
                 Qt.vector3d(0, 2 * wheelRadius, rearAxleZ)),
@@ -93,8 +93,23 @@ Node {
             articulatedRider.mapPositionToScene(
                 Qt.vector3d(0, wheelRadius, frontAxleZ + wheelRadius)),
             articulatedRider.mapPositionToScene(
-                Qt.vector3d(0, wheelRadius, frontAxleZ - wheelRadius))
+                Qt.vector3d(0, wheelRadius, frontAxleZ - wheelRadius)),
+            sprungBike.mapPositionToScene(
+                Qt.vector3d(-0.34, steerY, steerZ)),
+            sprungBike.mapPositionToScene(
+                Qt.vector3d(0.34, steerY, steerZ)),
+            body.mapPositionToScene(Qt.vector3d(-0.25, -0.30, -0.18)),
+            body.mapPositionToScene(Qt.vector3d(0.25, -0.30, -0.18)),
+            body.mapPositionToScene(Qt.vector3d(-0.25, 0.30, 0.08)),
+            body.mapPositionToScene(Qt.vector3d(0.25, 0.30, 0.08)),
+            body.mapPositionToScene(Qt.vector3d(-0.18, 0.62, -0.12)),
+            body.mapPositionToScene(Qt.vector3d(0.18, 0.62, -0.12)),
+            body.mapPositionToScene(Qt.vector3d(0, 0.70, 0.10))
         ]
+    }
+
+    function wheelFrustumScenePoints() {
+        return riderFrustumScenePoints()
     }
     readonly property vector3d leftPedal: Qt.vector3d(
         -0.13,

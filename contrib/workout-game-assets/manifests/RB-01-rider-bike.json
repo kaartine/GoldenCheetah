@@ -45,7 +45,7 @@
     {
       "path": "src/Train/qml/WorkoutGameRiderBike.qml",
       "purpose": "runtime",
-      "sha256": "54f9ca234e7d31f970a99d4dfa8a44d85b5a087c6a4e3d68b904d3697e703fb2"
+      "sha256": "d4ff52ffe8ccbdcf8a5668745f7da46497071a47af286253511926a6dc8a0b6c"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_BikeComponents_LOD0_mesh.mesh",

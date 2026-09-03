@@ -1974,6 +1974,16 @@ private slots:
             recovery.startDistanceMeters + recoverySpan * 0.50,
             recovery.startDistanceMeters + recoverySpan * 0.78
         };
+        for (int index = 1; index <= 12; ++index) {
+            distances.push_back(road.totalLengthMeters
+                    * double(index) / 13.0);
+        }
+        std::sort(distances.begin(), distances.end());
+        distances.erase(std::unique(
+                distances.begin(), distances.end(),
+                [](double first, double second) {
+                    return std::abs(first - second) < 0.01;
+                }), distances.end());
         const QString requestedDistances = qEnvironmentVariable(
                 "GC_WORKOUT_GAME_3D_COURSE_AUDIT_DISTANCES");
         if (!requestedDistances.isEmpty()) {
@@ -2050,10 +2060,10 @@ private slots:
                      qPrintable(QStringLiteral(
                          "rider body has only %1 blue pixels at %2 m")
                          .arg(bluePixels).arg(distances[index])));
-            const QVariantList wheelPoints = window.rootObject()->property(
+            const QVariantList riderPoints = window.rootObject()->property(
                     "riderWheelFrustumScreenPoints").toList();
-            QCOMPARE(wheelPoints.size(), 8);
-            for (const QVariant &pointValue : wheelPoints) {
+            QVERIFY(riderPoints.size() >= 17);
+            for (const QVariant &pointValue : riderPoints) {
                 const QVector3D point = pointValue.value<QVector3D>();
                 QVERIFY(std::isfinite(point.x()));
                 QVERIFY(std::isfinite(point.y()));
@@ -2062,7 +2072,7 @@ private slots:
                                 && point.y() >= 2.0f
                                 && point.y() <= rendered.height() - 2.0f,
                          qPrintable(QStringLiteral(
-                             "wheel rim projected outside frame at %1 m: "
+                             "rider bound projected outside frame at %1 m: "
                              "(%2, %3)")
                              .arg(distances[index])
                              .arg(point.x()).arg(point.y())));
@@ -2382,6 +2392,66 @@ private slots:
         const QByteArray riderQml = riderSource.readAll();
         QVERIFY(!riderQml.contains("emissiveFactor"));
         QVERIFY(!riderQml.contains("emissiveMap"));
+    }
+
+    void riderExportsCompleteFrustumBounds()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::SmoothTrail);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 8.0), 190.0, 190.0, 86, 148, 6);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QCoreApplication::processEvents();
+
+        QObject *rider = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderNode"));
+        QVERIFY(rider);
+        QVariant result;
+        QVERIFY(QMetaObject::invokeMethod(
+                rider, "riderFrustumScenePoints",
+                Q_RETURN_ARG(QVariant, result)));
+        const QVariantList points = result.toList();
+        QVERIFY2(points.size() >= 17,
+                 "complete rider bounds must cover wheels, bars, torso and helmet");
+        QVariant compatibilityResult;
+        QVERIFY(QMetaObject::invokeMethod(
+                rider, "wheelFrustumScenePoints",
+                Q_RETURN_ARG(QVariant, compatibilityResult)));
+        QCOMPARE(compatibilityResult.toList().size(), points.size());
+
+        float minimumX = std::numeric_limits<float>::max();
+        float maximumX = std::numeric_limits<float>::lowest();
+        float minimumY = std::numeric_limits<float>::max();
+        float maximumY = std::numeric_limits<float>::lowest();
+        float minimumZ = std::numeric_limits<float>::max();
+        float maximumZ = std::numeric_limits<float>::lowest();
+        for (const QVariant &pointValue : points) {
+            const QVector3D point = pointValue.value<QVector3D>();
+            QVERIFY(std::isfinite(point.x()));
+            QVERIFY(std::isfinite(point.y()));
+            QVERIFY(std::isfinite(point.z()));
+            minimumX = std::min(minimumX, point.x());
+            maximumX = std::max(maximumX, point.x());
+            minimumY = std::min(minimumY, point.y());
+            maximumY = std::max(maximumY, point.y());
+            minimumZ = std::min(minimumZ, point.z());
+            maximumZ = std::max(maximumZ, point.z());
+        }
+        QVERIFY(maximumX - minimumX >= 0.60f);
+        QVERIFY(maximumY - minimumY >= 1.70f);
+        QVERIFY(maximumZ - minimumZ >= 1.65f);
     }
 
     void riderReadabilityMaterialsAndScopedLightInstantiate()
@@ -3853,6 +3923,190 @@ private slots:
                 + WorkoutGameTrailBranch::treadLiftMeters(
                     WorkoutGameTrailBranch::blend(0.5));
         QVERIFY(std::abs(viewModel.riderY() - expectedY) < 1e-9);
+    }
+
+    void bypassRiderHeadingFollowsTheSelectedBranchTangent()
+    {
+        constexpr double Pi = 3.14159265358979323846;
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::LogOver);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+
+        const double start = piece->challenge.bypassStartDistanceMeters;
+        const double end = piece->challenge.bypassEndDistanceMeters;
+        const double span = end - start;
+        QVERIFY(span > 1.0);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        const auto branchPosition = [&](double distance) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(road, distance);
+            const double lateral = WorkoutGameTrailBranch::lateralAt(
+                    distance, start, end,
+                    piece->challenge.bypassLateralMeters);
+            const double rightX = std::cos(sample.center.headingRadians);
+            const double rightZ = -std::sin(sample.center.headingRadians);
+            return std::pair<double, double>(
+                    sample.center.xMeters + lateral * rightX,
+                    sample.center.zMeters + lateral * rightZ);
+        };
+
+        double previousYaw = 0.0;
+        bool havePreviousYaw = false;
+        for (double progress : {0.08, 0.20, 0.35, 0.50,
+                                0.65, 0.80, 0.92}) {
+            const double distance = start + span * progress;
+            WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+            frame.feature.ready = true;
+            frame.feature.route = WorkoutGameRoute::SafeBypass;
+            frame.feature.outcome = WorkoutGameFeatureOutcome::Bypassed;
+            frame.feature.lateralOffsetMeters =
+                    WorkoutGameTrailBranch::lateralAt(
+                        distance, start, end,
+                        piece->challenge.bypassLateralMeters);
+            viewModel.setFrame(frame, 150.0, 220.0, 72, 145, 4);
+
+            constexpr double DeltaMeters = 0.01;
+            const auto before = branchPosition(distance - DeltaMeters);
+            const auto after = branchPosition(distance + DeltaMeters);
+            const double expectedYaw = std::atan2(
+                    after.first - before.first,
+                    after.second - before.second) * 180.0 / Pi;
+            const double yawError = normalizedRadians(
+                    (viewModel.riderYaw() - expectedYaw) * Pi / 180.0)
+                    * 180.0 / Pi;
+            QVERIFY2(std::abs(yawError) < 0.25,
+                     qPrintable(QStringLiteral(
+                         "bypass yaw differs from branch tangent by %1 degrees")
+                         .arg(yawError)));
+            if (havePreviousYaw) {
+                const double step = normalizedRadians(
+                        (viewModel.riderYaw() - previousYaw) * Pi / 180.0)
+                        * 180.0 / Pi;
+                QVERIFY2(std::abs(step) < 35.0,
+                         "bypass heading changed discontinuously");
+            }
+            previousYaw = viewModel.riderYaw();
+            havePreviousYaw = true;
+        }
+
+        const double mainDistance = start + span * 0.35;
+        WorkoutGameVisualSnapshot mainFrame = frameAt(road, mainDistance);
+        mainFrame.feature.ready = true;
+        mainFrame.feature.route = WorkoutGameRoute::MainLine;
+        viewModel.setFrame(mainFrame, 220.0, 220.0, 86, 145, 6);
+        const WorkoutGameRoadSample mainSample =
+                WorkoutGameRoadCourseBuilder::sample(road, mainDistance);
+        const double mainYawError = normalizedRadians(
+                (viewModel.riderYaw()
+                 - mainSample.center.headingRadians * 180.0 / Pi)
+                * Pi / 180.0) * 180.0 / Pi;
+        QVERIFY(std::abs(mainYawError) < 0.01);
+    }
+
+    void technicalBypassRiderHeadingFollowsProfileTangent_data()
+    {
+        QTest::addColumn<int>("terrain");
+        QTest::newRow("roots") << int(WorkoutGameTerrainKind::Roots);
+        QTest::newRow("rock-garden")
+                << int(WorkoutGameTerrainKind::RockGarden);
+        QTest::newRow("rock-slab")
+                << int(WorkoutGameTerrainKind::RockSlab);
+    }
+
+    void technicalBypassRiderHeadingFollowsProfileTangent()
+    {
+        constexpr double Pi = 3.14159265358979323846;
+        QFETCH(int, terrain);
+        const WorkoutGameTerrainKind kind = WorkoutGameTerrainKind(terrain);
+        const WorkoutGameCourse course = catalogCourse(kind);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [kind](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.terrain == kind
+                            && candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+
+        const auto lateralAt = [&](double distance) {
+            const double local = distance
+                    - piece->challenge.obstacleDistanceMeters;
+            switch (kind) {
+            case WorkoutGameTerrainKind::Roots:
+                return WorkoutGameRootGeometry::profile(
+                        piece->difficulty).safeLineOffsetMeters(local);
+            case WorkoutGameTerrainKind::RockGarden:
+                return WorkoutGameRockGardenGeometry::profile(
+                        piece->difficulty).safeLineOffsetMeters(local);
+            case WorkoutGameTerrainKind::RockSlab:
+                return WorkoutGameRockSlabGeometry::profile(
+                        piece->difficulty).safeLineOffsetMeters(local);
+            default:
+                return 0.0;
+            }
+        };
+        double transitionStart = -5.0;
+        double transitionEnd = WorkoutGameRootGeometry::profile(
+                piece->difficulty).activeStartMeters;
+        if (kind == WorkoutGameTerrainKind::RockGarden) {
+            transitionStart = -6.0;
+            transitionEnd = WorkoutGameRockGardenGeometry::profile(
+                    piece->difficulty).activeStartMeters;
+        } else if (kind == WorkoutGameTerrainKind::RockSlab) {
+            const WorkoutGameRockSlabGeometryProfile profile =
+                    WorkoutGameRockSlabGeometry::profile(piece->difficulty);
+            transitionStart = profile.startMeters;
+            transitionEnd = profile.activeStartMeters;
+        }
+        const double distance = piece->challenge.obstacleDistanceMeters
+                + (transitionStart + transitionEnd) * 0.5;
+        const double lateral = lateralAt(distance);
+        QVERIFY(std::abs(lateral) > 0.05);
+
+        WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+        frame.feature.ready = true;
+        frame.feature.route = WorkoutGameRoute::SafeBypass;
+        frame.feature.outcome = WorkoutGameFeatureOutcome::Bypassed;
+        frame.feature.lateralOffsetMeters = lateral;
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frame, 150.0, 220.0, 72, 145, 4);
+
+        const auto branchPosition = [&](double atDistance) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(road, atDistance);
+            const double offset = lateralAt(atDistance);
+            return std::pair<double, double>(
+                    sample.center.xMeters
+                        + offset * std::cos(sample.center.headingRadians),
+                    sample.center.zMeters
+                        - offset * std::sin(sample.center.headingRadians));
+        };
+        constexpr double DeltaMeters = 0.01;
+        const auto before = branchPosition(distance - DeltaMeters);
+        const auto after = branchPosition(distance + DeltaMeters);
+        const double expectedYaw = std::atan2(
+                after.first - before.first,
+                after.second - before.second) * 180.0 / Pi;
+        const double yawError = normalizedRadians(
+                (viewModel.riderYaw() - expectedYaw) * Pi / 180.0)
+                * 180.0 / Pi;
+        QVERIFY2(std::abs(yawError) < 0.25,
+                 qPrintable(QStringLiteral(
+                     "technical bypass yaw differs by %1 degrees")
+                     .arg(yawError)));
     }
 
     void packagedLogOverAssetLoadsWithRequiredNodes()
@@ -5769,6 +6023,81 @@ private slots:
         QVERIFY(sample.ready);
         const double visualGround = sample.center.elevationMeters;
         QVERIFY(std::abs(viewModel.riderY() - visualGround - 0.38) < 1e-9);
+    }
+
+    void nonPhysicalFeatureHeightUsesOneRoadDatum_data()
+    {
+        QTest::addColumn<int>("terrain");
+        QTest::newRow("bunny-hop")
+                << int(WorkoutGameTerrainKind::BunnyHop);
+        QTest::newRow("log-over")
+                << int(WorkoutGameTerrainKind::LogOver);
+    }
+
+    void nonPhysicalFeatureHeightUsesOneRoadDatum()
+    {
+        QFETCH(int, terrain);
+        const WorkoutGameTerrainKind kind = WorkoutGameTerrainKind(terrain);
+        const WorkoutGameCourse course = catalogCourse(kind);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [kind](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.terrain == kind
+                            && candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        double distance = piece->challenge.bypassStartDistanceMeters;
+        WorkoutGameRoadSample sample;
+        for (int index = 0; index <= 100; ++index) {
+            const double candidateDistance =
+                    piece->challenge.bypassStartDistanceMeters
+                    + (piece->challenge.bypassEndDistanceMeters
+                       - piece->challenge.bypassStartDistanceMeters)
+                        * double(index) / 100.0;
+            const WorkoutGameRoadSample candidate =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, candidateDistance);
+            if (!sample.ready
+                    || candidate.nonPhysicalFeatureOffsetMeters
+                        > sample.nonPhysicalFeatureOffsetMeters) {
+                distance = candidateDistance;
+                sample = candidate;
+            }
+        }
+        QVERIFY(sample.ready);
+        if (kind == WorkoutGameTerrainKind::LogOver) {
+            QVERIFY(sample.nonPhysicalFeatureOffsetMeters > 0.01);
+        } else {
+            QCOMPARE(sample.nonPhysicalFeatureOffsetMeters, 0.0);
+        }
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+        frame.feature.ready = true;
+        frame.feature.terrain = kind;
+        frame.feature.route = WorkoutGameRoute::MainLine;
+        frame.feature.motion = WorkoutGameFeatureMotion::Jump;
+        frame.feature.outcome = WorkoutGameFeatureOutcome::None;
+        frame.world.rider.airborne = false;
+        frame.world.rider.clearanceMeters = 0.82;
+        viewModel.setFrame(frame, 220.0, 220.0, 86, 148, 6);
+        QVERIFY(std::abs(viewModel.groundY()
+                    - sample.visualGroundElevationMeters()) < 1e-9);
+        QVERIFY(std::abs(viewModel.riderY()
+                    - sample.visualGroundElevationMeters()) < 1e-9);
+
+        frame.feature.outcome = WorkoutGameFeatureOutcome::Completed;
+        frame.world.rider.airborne = true;
+        frame.world.rider.clearanceMeters = 1.22;
+        viewModel.setFrame(frame, 250.0, 220.0, 92, 152, 8);
+        QVERIFY(std::abs(viewModel.groundY()
+                    - sample.visualGroundElevationMeters()) < 1e-9);
+        QVERIFY(std::abs(viewModel.riderY()
+                    - sample.visualGroundElevationMeters() - 0.40) < 1e-9);
     }
 
     void completedDropKeepsTheNegativeRoadSurfaceOffset()
