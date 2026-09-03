@@ -37,6 +37,29 @@ failures first, then WG-02, WG-03 through WG-15, the physical WG-01 gate and
 finally WG-17. This keeps independently automatable work moving while the real
 trainer/user gate is unavailable.
 
+## Execution Batches
+
+Each batch begins with a focused design and test-impact review. Small related
+changes share one build and regression run; a batch is committed only after its
+focused tests and the listed aggregate gate pass. Source remains canonical on
+the local workstation. The remote Docker host is a bounded build/test helper,
+uses at most ten CPUs, and publishes an accepted development AppImage to
+`/home/jkaartinen/Documents/personal/GoldenCheetah-latest.AppImage`.
+
+| Batch | Scope | Focused verification | Aggregate gate |
+| --- | --- | --- | --- |
+| B0 Test foundation | WG-16 inventory, the two known world failures, gap-jump contract conflict and stale release evidence | Required-test inventory reconciliation; failing world cases; gap branch/runtime tests | All current non-visual unit projects, then ASan/UBSan for changed pure modules |
+| B1 Route and world | WG-03, WG-04, WG-06 and WG-15 | Route-quality windows, persisted road plan/version, berm frequency/line, socket continuity, terrain anchoring and render budgets | Course conversion, document/store, road, geometry, terrain and deterministic render suites |
+| B2 Motion and gameplay | WG-05, WG-07 through WG-14 | Camera/frustum, crank/feet, contact, feature traces, guidance, gap lines and progressive gearing | Simulation, engine, runner, ViewModel/QML and feature-lab suites plus sanitizer subset |
+| B3 Presentation performance | WG-02 and remaining WG-10/WG-12/WG-15 visual acceptance | Cold first-ten-second frame trace, per-feature still/motion catalog, HUD bounds and prop sweep | Isolated packaged-AppImage Intel/NVIDIA video, trace and frame-budget matrix |
+| B4 Workflow and release | Final WG-16 workflow, AppImage provenance and stable publication | Create/save/start/gears/continue/save/reopen with visible Data Generator and no production athlete data | Full required inventory, isolated UI matrix, package manifest/SBOM/secret scan and clean-tree check |
+| B5 Physical acceptance | WG-01 followed by WG-17 | Isolated real-trainer recording reconciliation and user A/B ride | Remove legacy renderers only after every preceding gate passes; rebuild and repeat B4 |
+
+Post-release gameplay, adjacent integrations and conditional architecture
+optimizations are not allowed to interrupt B0-B4. A change may be pulled
+forward only when it directly removes a release blocker and receives the same
+test coverage as its owning batch.
+
 | ID | Priority | Status | Consolidated work | Done when | Source requirements |
 | --- | --- | --- | --- | --- | --- |
 | WG-01 | P0 | partial | Real-trainer end-to-end acceptance | An isolated athlete session on the target laptop proves trainer target, recording and feature outcome agree, followed by the user A/B ride. | `VS-04`, `REL-04` |
