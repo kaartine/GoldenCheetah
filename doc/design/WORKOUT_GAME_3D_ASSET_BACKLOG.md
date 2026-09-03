@@ -1,5 +1,10 @@
 # Workout Game 3D Asset And Delivery Backlog
 
+> Historical plan: current status and remaining work are tracked in
+> `WORKOUT_GAME_3D_RELEASE_CHECKLIST.md` and
+> `WORKOUT_GAME_3D_REMAINING_WORK.md`. Unchecked boxes in this file are not
+> authoritative and may describe work completed by the newer 3D pipeline.
+
 ## Goal
 
 Turn the Qt Quick 3D renderer prototype into a releasable stylized MTB game

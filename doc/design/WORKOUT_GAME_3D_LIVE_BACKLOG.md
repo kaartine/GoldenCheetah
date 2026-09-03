@@ -1,9 +1,12 @@
 # Workout Game 3D Live-Test Backlog
 
+> This is the detailed observation and evidence register. Schedule work only
+> through the deduplicated packages in `WORKOUT_GAME_3D_REMAINING_WORK.md`.
+
 ## Purpose
 
-This is the authoritative list of defects and improvement requests found while
-riding development AppImages. An item is closed only after its code change,
+This records defects and improvement requests found while riding development
+AppImages. An item is closed only after its code change,
 focused regression test, rendered evidence and interactive test have all been
 recorded. The release checklist remains the release gate; this file preserves
 the more detailed rider observations that lead to those gates.

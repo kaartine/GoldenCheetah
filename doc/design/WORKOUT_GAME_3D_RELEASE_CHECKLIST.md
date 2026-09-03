@@ -1,5 +1,9 @@
 # Workout Game 3D Release Checklist
 
+> Canonical remaining work is tracked in
+> `WORKOUT_GAME_3D_REMAINING_WORK.md`. This file owns release gates and evidence;
+> it is not a second implementation backlog.
+
 Detailed observations from interactive development rides are tracked in
 `WORKOUT_GAME_3D_LIVE_BACKLOG.md`. Its open release-scope items must not be
 lost when the broader gates below are updated.
@@ -18,7 +22,7 @@ visual-readability task.
 ## Completed Audit Foundation
 
 - [x] `AUD-01` Capture matching legacy and Qt Quick 3D catalogs for all eleven
-  features at 1280 by 720 and a fixed ten-metre approach.
+  non-berm feature terrain types at 1280 by 720 and a fixed ten-metre approach.
 - [x] `AUD-02` Capture isolated-data legacy and 3D application sessions plus a
   side-by-side comparison video.
 - [x] `AUD-03` Provide a deterministic 109.5-second course containing ten
@@ -443,13 +447,16 @@ and a runtime/geometry regression test.
 - [x] `FTR-02` Bunny hop: distinct hurdle/kicker and short preload window.
 - [x] `FTR-03` Drop: sharp ledge, exposed face, lower landing and downward pose.
 - [x] `FTR-04` Rollers: rounded continuous crests/troughs and pump motion.
-- [x] `FTR-05` Berm: broad banked bowl and shared curved rider line.
+- [x] `FTR-05` Berm route module: broad banked bowl and shared curved rider
+  line, with no scored-feature prompt.
 - [x] `FTR-06` Roots: branching embedded network and bounded roughness.
 - [x] `FTR-07` Rock garden: sunk varied rocks and a readable rideable line.
 - [x] `FTR-08` Rock slab: asymmetric mass, crest, sides and surface following.
 - [x] `FTR-09` Skinny: narrow deck, supports, ground clearance and transitions.
 - [x] `FTR-10` Climb: visible rising face, crest and effort pose.
 - [x] `FTR-11` Tabletop: promote the accepted vertical slice to production.
+- [ ] `FTR-12` Gap jump: complete packaged visual, motion, endurance and user
+  acceptance for the implemented three-line speed-selected jump.
 
 **FTR-01 evidence:** a 16-sided transverse log now extends beyond both
 trail edges, includes end-grain faces and a buried lower hull, and scales from
@@ -785,6 +792,15 @@ and
 `42b5b6e1863d187ef3939318072f6d4856270fe2cc0ecbd9203748d4efe70e49`.
 No external model, image or texture was added.
 
+**FTR-12 current evidence:** production code contains distinct short, medium
+and long lines, a ten-metre measured speed window, three-metre lock point,
+grounded fallback and bounded flight. The current packaged capture is not
+release acceptance: it lacks the complete per-line
+approach/take-off/apex/landing matrix, repeated-action and five-minute
+capture-free performance evidence, and signed interactive review. Its reported
+p95/max frame intervals must also be shown to meet the contract outside the
+excluded warm-up period.
+
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct
 completed outcome plus a bypassed outcome where that feature has a safe branch.
@@ -841,7 +857,8 @@ passes 25 tests; the complete headless suite passes under ASan and UBSan.
 
 - [x] Generator follows the selected game/workout target by default.
 - [x] Add deterministic over-target, on-target, under-target and cadence modes.
-- [x] Add completed and bypassed scripts for all eleven features.
+- [x] Add completed and bypassed scripts for all eleven non-berm feature
+  terrain types.
 - [x] Expose generator state clearly without affecting normal devices.
 
 **Tests:** target equality, outcome matrix, reproducible telemetry trace and
@@ -1084,7 +1101,7 @@ newest 100 runs succeeded. This long-running baseline failure is not evidence
 of a regression in an individual Workout Game change, but it remains visible
 CI debt rather than being treated as a passing gate.
 
-- [x] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
+- [ ] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
 - [x] `REL-02` Verify stop/save/cancel/continue and accidental-stop recovery.
 - [x] `REL-03` Verify AppImage startup, QML/Quick 3D modules, assets, licenses,
   attribution, SBOM and isolated production-like athlete data.
@@ -1114,7 +1131,7 @@ offscreen event-loop smoke. A repository search must find no references to the
 four retired classes or either renderer-selection environment variable, and a
 fresh AppImage must pass on both Intel and NVIDIA without a fallback renderer.
 
-**REL-01 evidence (2026-08-26):** the controlled remote Linux shadow build
+**Historical REL-01 evidence (2026-08-26):** the controlled remote Linux shadow build
 reconciled all 168 eligible projects from the required-test inventory. The
 release run completed 164 QtTest suites with 5,632 passing cases after
 test-first repairs to missing production link dependencies, stale feature-gate
@@ -1125,8 +1142,12 @@ that produces a blank framebuffer under Qt's `offscreen` plugin. The inventory
 also covers Quick 3D, deterministic replay, workout adaptation, recording,
 durable save/removal, FTMS readiness, Bluetooth telemetry, ANT lifecycle and
 USBXpress safety. Together with the isolated AppImage UI matrices and recording
-recovery evidence below, this closes the automated release-test gate. Real
-trainer A/B acceptance remains separately open under `REL-04`.
+recovery evidence below, this closed the automated release-test gate for that
+revision. The current inventory has changed, and
+`Train/workoutGameGapJumpLaunchWindow` is not yet listed in
+`unittests/ci-required-tests.txt`; reconcile and rerun the current full suite
+before checking `REL-01` again. Real trainer A/B acceptance remains separately
+open under `REL-04`.
 
 **REL-03/REL-05 evidence (`56faa71`):** two independent clean release builds
 produced byte-identical ELF binaries and AppImages. The promoted AppImage is

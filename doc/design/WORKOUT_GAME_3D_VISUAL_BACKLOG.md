@@ -1,5 +1,9 @@
 # Workout Game 3D Visual Backlog
 
+> This is the detailed art-direction and visual-acceptance register. Schedule
+> work only through the deduplicated packages in
+> `WORKOUT_GAME_3D_REMAINING_WORK.md`.
+
 ## Purpose
 
 This is the visual-quality backlog for the Quick 3D Workout Game. Technical

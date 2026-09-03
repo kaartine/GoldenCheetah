@@ -1,5 +1,11 @@
 # Workout Game Architecture
 
+> This document contains the renderer-independent core design and historical
+> transition context. Qt Quick 3D is the production target; renderer migration,
+> remaining work and legacy retirement are governed by
+> `WORKOUT_GAME_3D_MIGRATION.md` and
+> `WORKOUT_GAME_3D_REMAINING_WORK.md`.
+
 The offline geometry and AI-assisted art workflow is documented in
 `WORKOUT_GAME_ASSET_PIPELINE.md`.
 
@@ -540,6 +546,10 @@ protects these item fields, and queued callbacks must not retain scene graph
 nodes or textures whose lifetime belongs to the render thread.
 
 ### Current Gaps And Priorities
+
+Canonical scheduling and deduplication for these gaps is maintained in
+`WORKOUT_GAME_3D_REMAINING_WORK.md`. This section retains the architectural
+rationale and must not be treated as a parallel implementation backlog.
 
 1. **P1: telemetry history is still collapsed to the newest sample.** The
    current monotonic timestamp and two-second expiry prevent disconnected power,
