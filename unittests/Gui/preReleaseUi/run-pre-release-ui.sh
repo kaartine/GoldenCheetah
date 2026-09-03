@@ -227,6 +227,7 @@ if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
     if [ "$REQUIRE_QUICK3D_EVIDENCE" = 1 ]; then
         ANALYZER_ARGS+=(
             --require-quick3d-evidence
+            --require-cold-start-continuity
             --renderer-evidence-json "$ARTIFACT_DIR/renderer-evidence.json"
             --accessible-canvas-name-file \
                 "$TEST_ROOT/renderer-canvas-name.txt"

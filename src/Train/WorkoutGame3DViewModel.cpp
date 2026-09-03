@@ -35,14 +35,17 @@
 namespace {
 
 constexpr double Pi = 3.14159265358979323846;
-constexpr double FloorBucketMeters = 10.0;
 constexpr double FloorBehindMeters = 15.0;
 constexpr double FloorAheadMeters = 130.0;
-constexpr double FeatureBucketMeters = 12.0;
+constexpr double FloorRefreshAheadMeters = 50.0;
 constexpr double FeatureBehindMeters = 15.0;
 constexpr double FeatureAheadMeters = 180.0;
+constexpr double FeatureRefreshAheadMeters = 60.0;
 constexpr int MaximumVisibleFeatures = 32;
 constexpr double TreeSpacingMeters = 7.0;
+constexpr double TreeBehindMeters = 14.0;
+constexpr double TreeAheadMeters = 49.0;
+constexpr double TreeRefreshAheadMeters = 14.0;
 constexpr int MaximumVisibleTrees = 18;
 constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double CameraCorridorClearanceMeters = 0.85;
@@ -167,9 +170,10 @@ void WorkoutGame3DViewModel::setCourse(
     gapJump->setCourse(roadCourse);
     floorBucket = std::numeric_limits<int>::min();
     requestedFloorBucket = std::numeric_limits<int>::min();
-    featureBucket = std::numeric_limits<int>::min();
-    treeBucket = std::numeric_limits<int>::min();
-    treePresentationBucket = std::numeric_limits<int>::min();
+    nextFloorBucket = 0;
+    requestedFloorCoverage = {};
+    featureCoverage = {};
+    treeCoverage = {};
     visibleTrees.clear();
     currentFeatureHud = {};
     currentFeatureName.clear();
@@ -982,7 +986,8 @@ void WorkoutGame3DViewModel::setDiagnostics(
         const WorkoutGameDiagnosticsInput &input = snapshot.input;
         text = QStringLiteral(
                 "P50 %1  P95 %2  P99 %3 MS   MAX %4   LATE %5   "
-                "BACK %6   STILL %7   SKIP %8   QUEUE %9   WORK %10/%11 MS")
+                "BACK %6   STILL %7   SKIP %8   QUEUE %9   WORK %10/%11 MS   "
+                "SWAP %12   VIS %13   FIRST %14 MS   VSTALL %15 MS")
                 .arg(input.p50FrameIntervalMs, 0, 'f', 1)
                 .arg(input.p95FrameIntervalMs, 0, 'f', 1)
                 .arg(input.p99FrameIntervalMs, 0, 'f', 1)
@@ -993,7 +998,12 @@ void WorkoutGame3DViewModel::setDiagnostics(
                 .arg(input.skippedSimulationTicks)
                 .arg(input.rendererQueueDepth)
                 .arg(input.presentationWorkMs, 0, 'f', 1)
-                .arg(snapshot.largestPresentationWorkMs, 0, 'f', 1);
+                .arg(snapshot.largestPresentationWorkMs, 0, 'f', 1)
+                .arg(input.coldStart.swapFramesPerSecond, 0, 'f', 1)
+                .arg(input.coldStart.uniqueVisualFramesPerSecond, 0, 'f', 1)
+                .arg(input.coldStart.startToFirstSwapMs, 0, 'f', 1)
+                .arg(input.coldStart.longestUnchangedVisualIntervalMs,
+                     0, 'f', 1);
     }
     if (currentDiagnosticsText == text) return;
     currentDiagnosticsText = text;
@@ -1120,17 +1130,24 @@ QString WorkoutGame3DViewModel::featureActionText(
 
 void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
 {
-    const int bucket = int(std::floor(
-            distanceMeters / FeatureBucketMeters));
-    if (bucket == featureBucket) return;
-    featureBucket = bucket;
+    const double courseEnd = std::max(
+            roadCourse.totalLengthMeters, roadCourse.visualLengthMeters);
+    if (!featureCoverage.needsRefresh(
+                distanceMeters, courseEnd,
+                FeatureBehindMeters, FeatureRefreshAheadMeters)) {
+        return;
+    }
     courseFeatures.clear();
-    if (!roadCourse.ready) return;
+    if (!roadCourse.ready) {
+        featureCoverage = {};
+        return;
+    }
     const double minimumDistance = std::max(
             0.0, distanceMeters - FeatureBehindMeters);
     const double maximumDistance = std::min(
-            roadCourse.totalLengthMeters,
+            courseEnd,
             distanceMeters + FeatureAheadMeters);
+    featureCoverage = {minimumDistance, maximumDistance};
     for (const WorkoutGameRoadPiece &piece : roadCourse.pieces) {
         if (!piece.challenge.enabled) continue;
         if (piece.challenge.obstacleDistanceMeters < minimumDistance
@@ -1190,19 +1207,26 @@ void WorkoutGame3DViewModel::rebuildFloor(
         activeFloorBuffer = 0;
         floorBucket = std::numeric_limits<int>::min();
         requestedFloorBucket = std::numeric_limits<int>::min();
+        requestedFloorCoverage = {};
         updateVisibleTriangleCount();
         emit floorGeometryChanged();
         return;
     }
-    const int bucket = int(std::floor(distanceMeters / FloorBucketMeters));
-    if (bucket == requestedFloorBucket) return;
-    requestedFloorBucket = bucket;
+    const double courseEnd = std::max(
+            roadCourse.totalLengthMeters, roadCourse.visualLengthMeters);
+    if (!immediate && !requestedFloorCoverage.needsRefresh(
+                distanceMeters, courseEnd,
+                FloorBehindMeters, FloorRefreshAheadMeters)) {
+        return;
+    }
     const double start = std::max(
             0.0, distanceMeters - FloorBehindMeters);
     const double end = std::min(
-            std::max(roadCourse.totalLengthMeters,
-                     roadCourse.visualLengthMeters),
+            courseEnd,
             distanceMeters + FloorAheadMeters);
+    requestedFloorCoverage = {start, end};
+    const int bucket = ++nextFloorBucket;
+    requestedFloorBucket = bucket;
     if (!immediate) {
         chunkBuilder.request(
                 roadCourseSnapshot, start, end, bucket, courseGeneration);
@@ -1315,22 +1339,43 @@ void WorkoutGame3DViewModel::updateVisibleTriangleCount()
 void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
 {
     if (!roadCourse.ready) return;
-    const int bucket = int(std::floor(distanceMeters / TreeSpacingMeters));
     const bool sidePresentation =
             cameraPresentationSnapshot.sideBlend > 0.0;
-    const int presentationBucket = sidePresentation
-            ? int(std::floor(distanceMeters))
-            : std::numeric_limits<int>::min();
-    if (bucket == treeBucket
-            && presentationBucket == treePresentationBucket) {
+    bool cameraClearanceChanged = false;
+    for (const QVariant &entry : visibleTrees) {
+        const QVariantMap tree = entry.toMap();
+        const double requiredClearance =
+                tree.value(QStringLiteral("crownRadius")).toDouble()
+                + CameraCorridorClearanceMeters
+                + (sidePresentation ? 1.05 : 0.0);
+        if (horizontalDistanceToSegmentSquared(
+                    tree.value(QStringLiteral("x")).toDouble(),
+                    tree.value(QStringLiteral("z")).toDouble(),
+                    cameraPositionX, cameraPositionZ,
+                    cameraTargetPositionX, cameraTargetPositionZ)
+                < requiredClearance * requiredClearance) {
+            cameraClearanceChanged = true;
+            break;
+        }
+    }
+    const double courseEnd = std::max(
+            roadCourse.totalLengthMeters, roadCourse.visualLengthMeters);
+    if (!cameraClearanceChanged && !treeCoverage.needsRefresh(
+                distanceMeters, courseEnd,
+                TreeBehindMeters, TreeRefreshAheadMeters)) {
         return;
     }
-    treeBucket = bucket;
-    treePresentationBucket = presentationBucket;
+    const double coverageStart = std::max(
+            0.0, distanceMeters - TreeBehindMeters);
+    const double coverageEnd = std::min(
+            courseEnd, distanceMeters + TreeAheadMeters);
+    treeCoverage = {coverageStart, coverageEnd};
     visibleTrees.clear();
-    for (int offset = -3; offset <= 15; ++offset) {
-        const int slot = bucket + offset;
-        if (slot < 0) continue;
+    const int firstSlot = std::max(
+            0, int(std::floor(coverageStart / TreeSpacingMeters)));
+    const int finalSlot = std::max(
+            firstSlot, int(std::floor(coverageEnd / TreeSpacingMeters)));
+    for (int slot = firstSlot; slot <= finalSlot; ++slot) {
         for (int sideIndex = 0; sideIndex < 2; ++sideIndex) {
             const std::uint32_t random = mix(
                     roadCourse.seed
@@ -1341,8 +1386,8 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
             const double distance = (double(slot) + 0.5)
                     * TreeSpacingMeters + jitter;
             if (distance < 0.0) continue;
-            if (distance > std::max(roadCourse.totalLengthMeters,
-                                    roadCourse.visualLengthMeters)) break;
+            if (distance < coverageStart) continue;
+            if (distance > coverageEnd || distance > courseEnd) break;
             const WorkoutGameRoadSample sample =
                     WorkoutGameRoadCourseBuilder::sampleVisual(
                         roadCourse, distance);

@@ -10,6 +10,7 @@
 #include "WorkoutGame3DChunkBuilder.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 #if defined(__linux__)
@@ -37,6 +38,40 @@ void lowerWorkerPriority()
 #endif
 }
 
+}
+
+bool WorkoutGame3DStreamingCoverage::valid() const
+{
+    return std::isfinite(startDistanceMeters)
+            && std::isfinite(endDistanceMeters)
+            && startDistanceMeters >= 0.0
+            && endDistanceMeters >= startDistanceMeters;
+}
+
+bool WorkoutGame3DStreamingCoverage::needsRefresh(
+        double distanceMeters,
+        double maximumDistanceMeters,
+        double requiredBehindMeters,
+        double requiredAheadMeters) const
+{
+    if (!valid() || !std::isfinite(distanceMeters)
+            || !std::isfinite(maximumDistanceMeters)) {
+        return true;
+    }
+    const double maximumDistance = std::max(0.0, maximumDistanceMeters);
+    const double distance = std::clamp(distanceMeters, 0.0, maximumDistance);
+    if (distanceMeters < startDistanceMeters
+            || distanceMeters > endDistanceMeters) {
+        return true;
+    }
+    const double behind = std::max(0.0, requiredBehindMeters);
+    if (startDistanceMeters > 0.0
+            && distance - startDistanceMeters < behind) {
+        return true;
+    }
+    const double ahead = std::max(0.0, requiredAheadMeters);
+    const double remaining = maximumDistance - distance;
+    return remaining > ahead && endDistanceMeters - distance < ahead;
 }
 
 int WorkoutGame3DChunk::triangleCount() const

@@ -613,6 +613,91 @@ def analyze(samples: list[TraceSample]) -> dict[str, float | int]:
     }
 
 
+def analyze_cold_start(
+    samples: list[TraceSample], deadline_errors: int = 0
+) -> dict[str, float | int]:
+    def maximum(name: str) -> float:
+        return max(
+            (value for sample in samples
+             if (value := numeric(sample, name)) is not None),
+            default=0.0,
+        )
+
+    latest = max(
+        samples,
+        key=lambda sample: numeric(sample, "cold_samples") or -1.0,
+        default={},
+    )
+
+    def latest_value(name: str) -> float:
+        return numeric(latest, name) or 0.0
+
+    return {
+        "cold_complete": int(maximum("cold_complete")),
+        "cold_samples": int(maximum("cold_samples")),
+        "cold_dropped_frames": int(maximum("cold_dropped_frames")),
+        "cold_swap_fps": latest_value("cold_swap_fps"),
+        "cold_visual_fps": latest_value("cold_visual_fps"),
+        "cold_start_first_swap_ms": latest_value(
+            "cold_start_first_swap_ms"
+        ),
+        "cold_p99_frame_ms": latest_value("cold_p99_frame_ms"),
+        "cold_max_frame_ms": maximum("cold_max_frame_ms"),
+        "cold_consecutive_late": int(maximum("cold_consecutive_late")),
+        "cold_visual_stall_ms": maximum("cold_visual_stall_ms"),
+        "cold_max_geometry_queue": int(maximum("geometry_queue")),
+        "cold_backward_frames": int(maximum("backwards")),
+        "cold_skipped_ticks": int(maximum("skipped_ticks")),
+        "cold_deadline_errors": int(max(
+            deadline_errors, maximum("deadline_errors")
+        )),
+    }
+
+
+def validate_cold_start(summary: dict[str, float | int]) -> list[str]:
+    failures = []
+    if not summary["cold_complete"]:
+        failures.append("cold-start evidence is not complete for the first 10 seconds")
+    if summary["cold_samples"] <= 0:
+        failures.append("cold-start evidence contains no frame swaps")
+    if summary["cold_dropped_frames"]:
+        failures.append("cold-start frame capture dropped swap timestamps")
+    if summary["cold_p99_frame_ms"] > 25.0:
+        failures.append("cold-start p99 frame interval exceeds 25 ms")
+    if summary["cold_max_frame_ms"] > 50.0:
+        failures.append("cold-start maximum frame interval exceeds 50 ms")
+    if summary["cold_consecutive_late"] > 1:
+        failures.append("cold-start contains consecutive late frames")
+    if summary["cold_start_first_swap_ms"] > 50.0:
+        failures.append("cold-start first swap took more than 50 ms")
+    if summary["cold_visual_stall_ms"] > 50.0:
+        failures.append("cold-start visual revision stalled for more than 50 ms")
+    if summary["cold_swap_fps"] <= 0.0:
+        failures.append("cold-start swap FPS was not reported")
+    if summary["cold_visual_fps"] <= 0.0:
+        failures.append("cold-start unique visual FPS was not reported")
+    if summary["cold_max_geometry_queue"] > 1:
+        failures.append("cold-start renderer queue exceeded one item")
+    if summary["cold_backward_frames"]:
+        failures.append("cold-start renderer counted backward frames")
+    if summary["cold_skipped_ticks"]:
+        failures.append("cold-start simulation skipped ticks")
+    if summary["cold_deadline_errors"]:
+        failures.append("cold-start trainer or recording deadline errors were logged")
+    return failures
+
+
+def count_deadline_errors(path: Path) -> int:
+    pattern = re.compile(
+        r"(?:trainer|recording).*deadline.*(?:miss|error|exceed)|"
+        r"deadline.*(?:trainer|recording).*(?:miss|error|exceed)",
+        re.IGNORECASE,
+    )
+    return sum(1 for line in path.read_text(
+        encoding="utf-8", errors="replace"
+    ).splitlines() if pattern.search(line))
+
+
 def analyze_gap_jump(samples: list[TraceSample]) -> dict[str, float | int]:
     gap_samples = [
         sample for sample in samples
@@ -775,6 +860,7 @@ def main() -> int:
     parser.add_argument("--appimage", type=Path)
     parser.add_argument("--renderer-evidence-only", action="store_true")
     parser.add_argument("--require-gap-launch-window", action="store_true")
+    parser.add_argument("--require-cold-start-continuity", action="store_true")
     parser.add_argument("--minimum-samples", type=int, default=8)
     parser.add_argument("--minimum-fps", type=float, default=25.0)
     parser.add_argument("--maximum-p95-ms", type=float, default=45.0)
@@ -861,6 +947,12 @@ def main() -> int:
         args.maximum_unexpected_airborne_frames,
         args.maximum_lateral_step_m,
     )
+    if args.require_cold_start_continuity:
+        cold_start = analyze_cold_start(
+            trace, count_deadline_errors(args.log)
+        )
+        summary.update(cold_start)
+        failures.extend(validate_cold_start(cold_start))
     if args.require_gap_launch_window:
         gap_summary = analyze_gap_jump(trace)
         summary.update(gap_summary)

@@ -53,6 +53,10 @@ public:
         return publishedDiagnostics;
     }
     QString diagnosticsTraceLine() const;
+    bool rendererPrewarmed() const
+    {
+        return prewarmCompleted.load(std::memory_order_acquire);
+    }
 
 signals:
     void rendererFailed();
@@ -70,14 +74,18 @@ private slots:
 private:
     void handlePresentedFrame(std::int64_t presentationTimeNs);
     void updateDiagnostics(
-            std::int64_t monotonicTimeMs,
+            std::int64_t presentationTimeNs,
             double presentationWorkMs);
+    void requestRendererPrewarm();
+    void finishRendererPrewarm();
     void reportFailure(const QString &message);
 
     WorkoutGame3DViewModel *viewModel;
     WorkoutGameVisualSmoother visualSmoother;
     WorkoutGameFrameRateCounter frameRateCounter;
+    WorkoutGameColdStartFrameCapture coldStartFrameCapture;
     WorkoutGameDiagnostics diagnostics;
+    WorkoutGameDiagnosticsSnapshot currentDiagnostics;
     WorkoutGameDiagnosticsSnapshot publishedDiagnostics;
     WorkoutGameRoadCourse roadCourse;
     WorkoutGameVisualSnapshot sourceFrame;
@@ -90,10 +98,16 @@ private:
     int virtualGear = 1;
     std::atomic<std::int64_t> pendingPresentationTimeNs{0};
     std::atomic_bool presentationDispatchPending{false};
+    std::atomic<std::uint64_t> presentedVisualRevision{0};
+    std::atomic_bool sessionRunningAtomic{false};
+    std::atomic_bool prewarmPending{false};
+    std::atomic_bool prewarmSwapSeen{false};
+    std::atomic_bool prewarmCompleted{false};
     std::uint64_t frameNumber = 0;
     std::int64_t lastTracePublishMs = -1;
-    std::int64_t frameTimingWarmupStartMs = 0;
+    bool coldStartCompletePublished = false;
     bool hasFrame = false;
+    bool hasPresentedVisualState = false;
     bool sessionRunning = false;
     bool failureReported = false;
     bool diagnosticsEnabled = false;

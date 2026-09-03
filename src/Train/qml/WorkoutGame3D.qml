@@ -7,10 +7,11 @@ Item {
     width: 1280
     height: 720
     property bool sessionRunning: false
+    property bool rendererPrewarming: false
 
     FrameAnimation {
         objectName: "presentationFrameAnimation"
-        running: root.sessionRunning && root.visible
+        running: (root.sessionRunning || root.rendererPrewarming) && root.visible
     }
 
     readonly property vector3d riderGroundScreen: {

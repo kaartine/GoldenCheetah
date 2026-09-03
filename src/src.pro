@@ -65,6 +65,12 @@ QT += xml sql network svg widgets quick quick3d concurrent serialport multimedia
       webenginecore webenginewidgets webchannel positioning webenginequick core5compat
 CONFIG += c++17
 
+# Precompile embedded QML when the selected Qt still ships the qmake feature.
+# Qt installations without it retain their normal runtime disk cache.
+exists($$[QT_INSTALL_ARCHDATA]/mkspecs/features/qtquickcompiler.prf) {
+    CONFIG += qtquickcompiler
+}
+
 ###=======================================================================
 ### Directory Structure - Split into subdirs to be more manageable
 ###=======================================================================

@@ -21,6 +21,19 @@
 #include <optional>
 #include <thread>
 
+struct WorkoutGame3DStreamingCoverage
+{
+    double startDistanceMeters = 1.0;
+    double endDistanceMeters = 0.0;
+
+    bool valid() const;
+    bool needsRefresh(
+            double distanceMeters,
+            double maximumDistanceMeters,
+            double requiredBehindMeters,
+            double requiredAheadMeters) const;
+};
+
 struct WorkoutGame3DChunk
 {
     static constexpr std::size_t LayerCount = 8;

@@ -10,8 +10,56 @@
 #ifndef _GC_WorkoutGameDiagnostics_h
 #define _GC_WorkoutGameDiagnostics_h
 
+#include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+
+struct WorkoutGameColdStartFrameSnapshot
+{
+    bool active = false;
+    bool complete = false;
+    std::uint32_t frameCount = 0;
+    std::uint32_t droppedFrameCount = 0;
+    double swapFramesPerSecond = 0.0;
+    double uniqueVisualFramesPerSecond = 0.0;
+    double startToFirstSwapMs = 0.0;
+    double p99FrameIntervalMs = 0.0;
+    double maximumFrameIntervalMs = 0.0;
+    std::uint32_t maximumConsecutiveLateFrames = 0;
+    double longestUnchangedVisualIntervalMs = 0.0;
+};
+
+class WorkoutGameColdStartFrameCapture
+{
+public:
+    static constexpr std::size_t Capacity = 4096;
+    static constexpr std::int64_t DurationNs = 10000000000ll;
+
+    void start(
+            std::int64_t startTimeNs,
+            std::uint64_t initialVisualRevision) noexcept;
+    void stop() noexcept;
+    void recordFrame(
+            std::int64_t presentationTimeNs,
+            std::uint64_t visualRevision) noexcept;
+    WorkoutGameColdStartFrameSnapshot snapshot(
+            std::int64_t currentTimeNs) const noexcept;
+
+private:
+    struct Sample
+    {
+        std::atomic<std::int64_t> presentationTimeNs{0};
+        std::atomic<std::uint64_t> visualRevision{0};
+    };
+
+    std::array<Sample, Capacity> samples;
+    std::atomic<std::int64_t> measurementStartNs{0};
+    std::atomic<std::uint64_t> initialRevision{0};
+    std::atomic<std::uint32_t> recordedFrames{0};
+    std::atomic<std::uint32_t> droppedFrames{0};
+    std::atomic_bool recording{false};
+};
 
 struct WorkoutGameDiagnosticsInput
 {
@@ -46,6 +94,7 @@ struct WorkoutGameDiagnosticsInput
     double lateralOffsetMeters = 0.0;
     double visibleElevationChangeMeters = 0.0;
     double renderedGradePercent = 0.0;
+    WorkoutGameColdStartFrameSnapshot coldStart;
 };
 
 struct WorkoutGameDiagnosticsSnapshot

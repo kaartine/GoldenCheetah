@@ -379,9 +379,10 @@ private:
     bool sceneReady = false;
     int floorBucket = std::numeric_limits<int>::min();
     int requestedFloorBucket = std::numeric_limits<int>::min();
-    int featureBucket = std::numeric_limits<int>::min();
-    int treeBucket = std::numeric_limits<int>::min();
-    int treePresentationBucket = std::numeric_limits<int>::min();
+    int nextFloorBucket = 0;
+    WorkoutGame3DStreamingCoverage requestedFloorCoverage;
+    WorkoutGame3DStreamingCoverage featureCoverage;
+    WorkoutGame3DStreamingCoverage treeCoverage;
     double riderPositionX = 0.0;
     double riderPositionY = 0.0;
     double riderPositionZ = 0.0;

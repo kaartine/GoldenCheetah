@@ -21,15 +21,57 @@
 #include <QUrl>
 
 #include <chrono>
+#include <cmath>
 
 namespace {
-
-constexpr std::int64_t FrameTimingWarmupMilliseconds = 500;
 
 QEvent::Type presentationEventType()
 {
     static const int type = QEvent::registerEventType();
     return static_cast<QEvent::Type>(type);
+}
+
+bool visuallyDifferent(
+        const WorkoutGameVisualSnapshot &left,
+        const WorkoutGameVisualSnapshot &right)
+{
+    const auto changed = [](double first, double second) {
+        return !std::isfinite(first) || !std::isfinite(second)
+                || std::abs(first - second) > 1.0e-9;
+    };
+    return left.sessionGeneration != right.sessionGeneration
+            || left.simulation.ready != right.simulation.ready
+            || left.simulation.finished != right.simulation.finished
+            || left.simulation.workoutTimeMs != right.simulation.workoutTimeMs
+            || left.world.ready != right.world.ready
+            || left.world.generation != right.world.generation
+            || changed(left.world.rider.distanceMeters,
+                       right.world.rider.distanceMeters)
+            || changed(left.world.rider.elevationMeters,
+                       right.world.rider.elevationMeters)
+            || changed(left.world.rider.pitchDegrees,
+                       right.world.rider.pitchDegrees)
+            || changed(left.world.rider.rollDegrees,
+                       right.world.rider.rollDegrees)
+            || changed(left.world.rider.rearWheelRadians,
+                       right.world.rider.rearWheelRadians)
+            || changed(left.world.rider.frontWheelRadians,
+                       right.world.rider.frontWheelRadians)
+            || changed(left.riderPedalCycles, right.riderPedalCycles)
+            || left.camera.ready != right.camera.ready
+            || changed(left.camera.centerDistanceMeters,
+                       right.camera.centerDistanceMeters)
+            || changed(left.camera.centerElevationMeters,
+                       right.camera.centerElevationMeters)
+            || changed(left.camera.yawDegrees, right.camera.yawDegrees)
+            || changed(left.camera.pitchDegrees, right.camera.pitchDegrees)
+            || left.feature.phase != right.feature.phase
+            || left.feature.route != right.feature.route
+            || left.feature.outcome != right.feature.outcome
+            || changed(left.feature.lateralOffsetMeters,
+                       right.feature.lateralOffsetMeters)
+            || changed(left.feature.verticalOffsetMeters,
+                       right.feature.verticalOffsetMeters);
 }
 
 const char *featurePhaseName(WorkoutGameFeaturePhase phase)
@@ -118,13 +160,20 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now().time_since_epoch())
                 .count();
+        coldStartFrameCapture.recordFrame(
+                presentationTimeNs,
+                presentedVisualRevision.load(std::memory_order_acquire));
+        if (!sessionRunningAtomic.load(std::memory_order_acquire)
+                && prewarmPending.load(std::memory_order_acquire)) {
+            prewarmSwapSeen.store(true, std::memory_order_release);
+        }
         pendingPresentationTimeNs.store(
                 presentationTimeNs, std::memory_order_release);
         if (!presentationDispatchPending.exchange(
                     true, std::memory_order_acq_rel)) {
             QCoreApplication::postEvent(
                     this, new QEvent(presentationEventType()),
-                    Qt::LowEventPriority);
+                    Qt::NormalEventPriority);
         }
     }, Qt::DirectConnection);
     connect(this, &QQuickWindow::sceneGraphError,
@@ -145,6 +194,9 @@ WorkoutGame3DWindow::~WorkoutGame3DWindow()
 bool WorkoutGame3DWindow::event(QEvent *event)
 {
     if (event->type() == presentationEventType()) {
+        if (prewarmSwapSeen.exchange(false, std::memory_order_acq_rel)) {
+            finishRendererPrewarm();
+        }
         presentationDispatchPending.store(false, std::memory_order_release);
         const std::int64_t presentationTimeNs =
                 pendingPresentationTimeNs.exchange(
@@ -163,15 +215,19 @@ void WorkoutGame3DWindow::setCourse(
 {
     visualSmoother.reset();
     diagnostics.reset();
+    currentDiagnostics = {};
     publishedDiagnostics = {};
     viewModel->setDiagnostics(publishedDiagnostics);
     roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
     sourceFrame = {};
     presentedFrame = {};
+    hasPresentedVisualState = false;
     frameNumber = 0;
     lastTracePublishMs = -1;
+    coldStartCompletePublished = false;
     hasFrame = false;
     viewModel->setCourse(course, ftpWatts);
+    requestRendererPrewarm();
 }
 
 void WorkoutGame3DWindow::setFrame(
@@ -218,21 +274,42 @@ void WorkoutGame3DWindow::setTelemetry(
 
 void WorkoutGame3DWindow::setSessionRunning(bool running)
 {
+    const bool starting = running && !sessionRunning;
+    const bool stopping = !running && sessionRunning;
+    if (starting) {
+        const std::int64_t startTimeNs =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        coldStartFrameCapture.start(
+                startTimeNs,
+                presentedVisualRevision.load(std::memory_order_acquire));
+    } else if (stopping) {
+        coldStartFrameCapture.stop();
+    }
     if (running != sessionRunning) {
         diagnostics.reset();
+        currentDiagnostics = {};
         publishedDiagnostics = {};
         viewModel->setDiagnostics(publishedDiagnostics);
         frameNumber = 0;
         lastTracePublishMs = -1;
+        coldStartCompletePublished = false;
     }
     sessionRunning = running;
+    sessionRunningAtomic.store(running, std::memory_order_release);
     if (rootObject()) {
         rootObject()->setProperty("sessionRunning", sessionRunning);
     }
     if (running) {
-        frameTimingWarmupStartMs = monotonicClock.elapsed();
+        prewarmPending.store(false, std::memory_order_release);
+        if (rootObject()) rootObject()->setProperty("rendererPrewarming", false);
         frameRateCounter.reset();
         presentFrame();
+        requestUpdate();
+    } else {
+        coldStartFrameCapture.stop();
+        requestRendererPrewarm();
     }
 }
 
@@ -244,29 +321,35 @@ void WorkoutGame3DWindow::setGeneratorState(const QString &state)
 void WorkoutGame3DWindow::presentFrame()
 {
     if (!hasFrame) return;
-    presentedFrame = visualSmoother.sample(monotonicClock.elapsed());
+    const WorkoutGameVisualSnapshot nextFrame =
+            visualSmoother.sample(monotonicClock.elapsed());
+    const bool changed = !hasPresentedVisualState
+            || visuallyDifferent(presentedFrame, nextFrame);
+    presentedFrame = nextFrame;
+    hasPresentedVisualState = true;
     viewModel->setFrame(
             presentedFrame,
             watts, targetWatts, cadenceRpm, heartRate, virtualGear);
+    if (changed) {
+        presentedVisualRevision.fetch_add(1, std::memory_order_release);
+    }
 }
 
 void WorkoutGame3DWindow::handlePresentedFrame(
         std::int64_t presentationTimeNs)
 {
     if (!sessionRunning) return;
-    const double fps = frameRateCounter.frameRenderedNanoseconds(
-            presentationTimeNs);
-    viewModel->setFps(fps);
+    frameRateCounter.frameRenderedNanoseconds(presentationTimeNs);
     QElapsedTimer presentationWork;
     presentationWork.start();
     presentFrame();
     updateDiagnostics(
-            presentationTimeNs / 1000000,
+            presentationTimeNs,
             double(presentationWork.nsecsElapsed()) / 1000000.0);
 }
 
 void WorkoutGame3DWindow::updateDiagnostics(
-        std::int64_t monotonicTimeMs,
+        std::int64_t presentationTimeNs,
         double presentationWorkMs)
 {
     if ((!diagnosticsEnabled && !traceEnabled)
@@ -274,6 +357,7 @@ void WorkoutGame3DWindow::updateDiagnostics(
         return;
     }
 
+    const std::int64_t monotonicTimeMs = presentationTimeNs / 1000000;
     const WorkoutGameRoadTimelineSample sourceTimeline =
             WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
                 roadCourse, sourceFrame.simulation.workoutTimeMs);
@@ -286,8 +370,7 @@ void WorkoutGame3DWindow::updateDiagnostics(
     input.movingForward = presentedFrame.simulation.ready
             && !presentedFrame.simulation.finished
             && presentedFrame.simulation.speedKph > 0.2;
-    input.frameTimingWarmupComplete = monotonicTimeMs
-            - frameTimingWarmupStartMs >= FrameTimingWarmupMilliseconds;
+    input.frameTimingWarmupComplete = true;
     input.frameNumber = ++frameNumber;
     input.monotonicTimeMs = monotonicTimeMs;
     input.sourceWorkoutTimeMs = sourceFrame.simulation.workoutTimeMs;
@@ -330,15 +413,48 @@ void WorkoutGame3DWindow::updateDiagnostics(
             presentedFrame.world.rider.elevationMeters
             - presentedFrame.world.surfaceElevationMeters;
     input.renderedGradePercent = presentedFrame.world.gradePercent;
-    publishedDiagnostics = diagnostics.update(input);
-    viewModel->setDiagnostics(publishedDiagnostics);
+    input.coldStart = coldStartFrameCapture.snapshot(presentationTimeNs);
+    if (input.coldStart.frameCount > 1) {
+        input.framesPerSecond = input.coldStart.swapFramesPerSecond;
+        input.p99FrameIntervalMs = input.coldStart.p99FrameIntervalMs;
+    }
+    currentDiagnostics = diagnostics.update(input);
 
-    if (traceEnabled && publishedDiagnostics.ready
-            && (lastTracePublishMs < 0
-                || monotonicTimeMs - lastTracePublishMs >= 250)) {
-        lastTracePublishMs = monotonicTimeMs;
+    const bool publishColdStartCompletion = input.coldStart.complete
+            && !coldStartCompletePublished;
+    if (lastTracePublishMs >= 0
+            && monotonicTimeMs - lastTracePublishMs < 250
+            && !publishColdStartCompletion) {
+        return;
+    }
+    lastTracePublishMs = monotonicTimeMs;
+    coldStartCompletePublished = coldStartCompletePublished
+            || input.coldStart.complete;
+    publishedDiagnostics = currentDiagnostics;
+    viewModel->setFps(input.framesPerSecond);
+    viewModel->setDiagnostics(publishedDiagnostics);
+    if (traceEnabled && publishedDiagnostics.ready) {
         qInfo().noquote() << diagnosticsTraceLine();
     }
+}
+
+void WorkoutGame3DWindow::requestRendererPrewarm()
+{
+    if (sessionRunningAtomic.load(std::memory_order_acquire)
+            || !rootObject()) {
+        return;
+    }
+    prewarmCompleted.store(false, std::memory_order_release);
+    prewarmPending.store(true, std::memory_order_release);
+    rootObject()->setProperty("rendererPrewarming", true);
+    requestUpdate();
+}
+
+void WorkoutGame3DWindow::finishRendererPrewarm()
+{
+    if (!prewarmPending.exchange(false, std::memory_order_acq_rel)) return;
+    if (rootObject()) rootObject()->setProperty("rendererPrewarming", false);
+    prewarmCompleted.store(true, std::memory_order_release);
 }
 
 QString WorkoutGame3DWindow::diagnosticsTraceLine() const
@@ -367,6 +483,24 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " max_frame_ms="
                 << publishedDiagnostics.largestFrameIntervalMs
            << " late_frames=" << publishedDiagnostics.lateFrameCount
+           << " cold_complete=" << int(input.coldStart.complete)
+           << " cold_samples=" << input.coldStart.frameCount
+           << " cold_dropped_frames="
+                << input.coldStart.droppedFrameCount
+           << " cold_swap_fps="
+                << input.coldStart.swapFramesPerSecond
+           << " cold_visual_fps="
+                << input.coldStart.uniqueVisualFramesPerSecond
+           << " cold_start_first_swap_ms="
+                << input.coldStart.startToFirstSwapMs
+           << " cold_p99_frame_ms="
+                << input.coldStart.p99FrameIntervalMs
+           << " cold_max_frame_ms="
+                << input.coldStart.maximumFrameIntervalMs
+           << " cold_consecutive_late="
+                << input.coldStart.maximumConsecutiveLateFrames
+           << " cold_visual_stall_ms="
+                << input.coldStart.longestUnchangedVisualIntervalMs
            << " backwards=" << publishedDiagnostics.backwardFrameCount
            << " stationary=" << publishedDiagnostics.stationaryFrameCount
            << " skipped_ticks=" << input.skippedSimulationTicks
@@ -455,6 +589,8 @@ void WorkoutGame3DWindow::handleStatusChanged(QQuickView::Status status)
 {
     if (status == QQuickView::Ready && rootObject()) {
         rootObject()->setProperty("sessionRunning", sessionRunning);
+        rootObject()->setProperty("rendererPrewarming", false);
+        requestRendererPrewarm();
     }
     if (status != QQuickView::Error || failureReported) return;
     const QList<QQmlError> loadErrors = errors();

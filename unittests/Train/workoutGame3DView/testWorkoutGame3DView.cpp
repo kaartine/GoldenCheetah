@@ -581,6 +581,80 @@ private slots:
         QCOMPARE(window.format().swapInterval(), 0);
     }
 
+    void coldStartCaptureKeepsEverySwapAndVisualRevision()
+    {
+        WorkoutGameColdStartFrameCapture capture;
+        constexpr std::int64_t StartNs = 1000000000ll;
+        capture.start(StartNs, 7);
+
+        capture.recordFrame(StartNs + 16000000ll, 7);
+        capture.recordFrame(StartNs + 32000000ll, 8);
+        capture.recordFrame(StartNs + 48000000ll, 8);
+        capture.recordFrame(StartNs + 64000000ll, 9);
+
+        const WorkoutGameColdStartFrameSnapshot snapshot =
+                capture.snapshot(StartNs + 80000000ll);
+        QVERIFY(snapshot.active);
+        QCOMPARE(snapshot.frameCount, std::uint32_t(4));
+        QCOMPARE(snapshot.droppedFrameCount, std::uint32_t(0));
+        QCOMPARE(snapshot.startToFirstSwapMs, 16.0);
+        QCOMPARE(snapshot.p99FrameIntervalMs, 16.0);
+        QCOMPARE(snapshot.maximumFrameIntervalMs, 16.0);
+        QCOMPARE(snapshot.maximumConsecutiveLateFrames, std::uint32_t(0));
+        QCOMPARE(snapshot.swapFramesPerSecond, 50.0);
+        QCOMPARE(snapshot.uniqueVisualFramesPerSecond, 25.0);
+        QCOMPARE(snapshot.longestUnchangedVisualIntervalMs, 32.0);
+    }
+
+    void coldStartCaptureIncludesStartAndConsecutiveLateFrames()
+    {
+        WorkoutGameColdStartFrameCapture capture;
+        constexpr std::int64_t StartNs = 2000000000ll;
+        capture.start(StartNs, 1);
+        capture.recordFrame(StartNs + 30000000ll, 2);
+        capture.recordFrame(StartNs + 61000000ll, 3);
+        capture.recordFrame(StartNs + 77000000ll, 4);
+
+        const WorkoutGameColdStartFrameSnapshot snapshot =
+                capture.snapshot(StartNs + 77000000ll);
+        QCOMPARE(snapshot.startToFirstSwapMs, 30.0);
+        QCOMPARE(snapshot.p99FrameIntervalMs, 31.0);
+        QCOMPARE(snapshot.maximumFrameIntervalMs, 31.0);
+        QCOMPARE(snapshot.maximumConsecutiveLateFrames, std::uint32_t(2));
+    }
+
+    void coldStartCaptureReportsFixedCapacityOverflow()
+    {
+        WorkoutGameColdStartFrameCapture capture;
+        capture.start(0, 0);
+        for (std::size_t index = 0;
+             index < WorkoutGameColdStartFrameCapture::Capacity + 3;
+             ++index) {
+            capture.recordFrame(
+                    std::int64_t(index + 1) * 1000000ll,
+                    std::uint64_t(index + 1));
+        }
+
+        const WorkoutGameColdStartFrameSnapshot snapshot =
+                capture.snapshot(5000000000ll);
+        QCOMPARE(snapshot.frameCount,
+                 std::uint32_t(WorkoutGameColdStartFrameCapture::Capacity));
+        QCOMPARE(snapshot.droppedFrameCount, std::uint32_t(3));
+    }
+
+    void streamingCoverageRefreshesOnlyNearAnEdge()
+    {
+        const WorkoutGame3DStreamingCoverage coverage{0.0, 130.0};
+        QVERIFY(coverage.valid());
+        QVERIFY(!coverage.needsRefresh(0.0, 500.0, 15.0, 50.0));
+        QVERIFY(!coverage.needsRefresh(79.9, 500.0, 15.0, 50.0));
+        QVERIFY(coverage.needsRefresh(80.1, 500.0, 15.0, 50.0));
+        const WorkoutGame3DStreamingCoverage finalCoverage{350.0, 500.0};
+        QVERIFY(!finalCoverage.needsRefresh(
+                    470.0, 500.0, 15.0, 50.0));
+        QVERIFY(coverage.needsRefresh(-0.1, 500.0, 15.0, 50.0));
+    }
+
     void unchangedTelemetryDoesNotRepublishHudBindings()
     {
         WorkoutGame3DViewModel viewModel;
