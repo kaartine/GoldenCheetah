@@ -85,12 +85,14 @@ test coverage as its owning batch.
 
 ## Known Concrete Release Failures
 
-- `Train/workoutGameGapJumpLaunchWindow` is present in
-  `unittests/unittests.pro` but absent from `unittests/ci-required-tests.txt`.
-  `REL-01` is reopened until the inventory is reconciled and rerun.
-- Two `workoutGameWorld` assertions still fail: climb vertical continuity and
-  rock-garden bypass suspension isolation. They must close under WG-06/WG-11;
-  their pre-existing status does not satisfy an all-tests-pass gate.
+- The required inventory now includes
+  `Train/workoutGameGapJumpLaunchWindow` and reconciles 172/172 projects. Its
+  five focused gap suites pass 73/73, but `REL-01` remains open until the full
+  current inventory has been rerun.
+- The formerly documented climb-continuity and rock-garden bypass failures are
+  stale. Current `workoutGameWorld` passes 45/45 normally and under ASan/UBSan;
+  both regressions also pass 25 repeated runs. Keep the strict tests, but do not
+  schedule duplicate implementation work for them.
 - Current gap-jump evidence proves an implemented three-line system, but lacks
   the complete per-line image/action/endurance matrix. Its recorded p95/max
   frame intervals also exceed the stated limit unless shown to belong solely
@@ -139,10 +141,10 @@ renderer. Quick 3D batching/instancing pressure belongs to WG-15.
 
 ## Specification Decisions And Conflicts
 
-- Gap-jump documents disagree on the 50 ms lateral-step limit (`0.05 m` in the
-  technical plan and `0.15 m` in the test plan). Resolve this before WG-13 can
-  be accepted; use the stricter `0.05 m` unless measured rideability requires a
-  documented change. The separate 250 ms diagnostics ceiling remains `1.0 m`.
+- The gap-jump 50 ms lateral-step limit is `0.15 m`: the exact displacement at
+  the existing `3.0 m/s` lateral-velocity ceiling. The former `0.05 m` wording
+  conflicted with reaching a selected line and is retired. The separate 250 ms
+  diagnostics ceiling remains `1.0 m`.
 - The `50` draw-call value is the optimization target and `80` is the current
   hard acceptance ceiling for the complete measured scene. Do not compare one
   as if it superseded the other.

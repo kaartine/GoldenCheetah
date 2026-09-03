@@ -471,8 +471,9 @@ do not use sleep timing for selector or physics assertions.
 - Extend `testWorkoutGameFeatureRuntime` for phase boundaries, selected-line
   lateral continuity, correct selected take-off/landing, one `actionId`, and no
   jump on bypass.
-- At 50 ms steps, assert lateral displacement is continuous and below 0.05 m per
-  step at the maximum supported course rate.
+- At 50 ms steps, assert lateral displacement is continuous and at most 0.15 m
+  per step. This is the exact displacement ceiling implied by the 3.0 m/s
+  lateral-velocity limit.
 - Assert airborne duration is within the selected line's bounded range, begins
   at the selected lip, ends at the selected landing, and cannot retrigger on
   recovery.
@@ -589,8 +590,9 @@ Tests expected to be added or extended:
 Production release requires all automated tests above plus evidence that:
 
 - short, medium, long and bypass are selected by the specified traces;
-- no trace contains a lateral step over 0.05 m, backwards movement, duplicate
-  take-off, unexpected airborne frame or two-second airtime-ceiling violation;
+- no fixed-step trace contains a lateral step over 0.15 m, backwards movement,
+  duplicate take-off, unexpected airborne frame or two-second airtime-ceiling
+  violation;
 - every rendered line is identifiable before lock and visibly joins the same
   trail at both sockets;
 - the packaged Quick 3D AppImage completes synthetic and physical-trainer runs

@@ -150,6 +150,7 @@ all qt Train/workoutGameFeatureLab
 all qt Train/workoutGameFeatureRuntime
 all qt Train/workoutGameGapJumpGeometry
 all qt Train/workoutGameGapJumpIntegration
+all qt Train/workoutGameGapJumpLaunchWindow
 all qt Train/workoutGameGapJumpSelector
 all qt Train/workoutGameRendererPolicy
 all qt Train/workoutGameReplay

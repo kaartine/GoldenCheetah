@@ -1144,10 +1144,16 @@ durable save/removal, FTMS readiness, Bluetooth telemetry, ANT lifecycle and
 USBXpress safety. Together with the isolated AppImage UI matrices and recording
 recovery evidence below, this closed the automated release-test gate for that
 revision. The current inventory has changed, and
-`Train/workoutGameGapJumpLaunchWindow` is not yet listed in
-`unittests/ci-required-tests.txt`; reconcile and rerun the current full suite
-before checking `REL-01` again. Real trainer A/B acceptance remains separately
-open under `REL-04`.
+`Train/workoutGameGapJumpLaunchWindow` was initially absent from
+`unittests/ci-required-tests.txt`; the inventory is now reconciled, but the
+current full suite must still be rerun before checking `REL-01` again. Real
+trainer A/B acceptance remains separately open under `REL-04`.
+
+**Current B0 evidence (2026-09-03):** the required inventory now includes
+`Train/workoutGameGapJumpLaunchWindow` and reconciles 172/172 projects. Five
+focused gap-jump suites pass 73/73. `workoutGameWorld` passes 45/45 normally,
+45/45 under ASan/UBSan and both formerly failing regressions across 25 repeated
+runs. `REL-01` remains open until the complete current inventory is rerun.
 
 **REL-03/REL-05 evidence (`56faa71`):** two independent clean release builds
 produced byte-identical ELF binaries and AppImages. The promoted AppImage is

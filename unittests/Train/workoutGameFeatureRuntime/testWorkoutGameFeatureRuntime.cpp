@@ -1169,7 +1169,7 @@ private slots:
             previous = frame.lateralOffsetMeters;
             QCOMPARE(frame.actionId, actionId);
         }
-        QVERIFY(maximumStep <= 0.151);
+        QVERIFY(maximumStep <= 0.15 + 1e-9);
         QCOMPARE(frame.lockedGapLine, WorkoutGameGapJumpLine::Long);
         QVERIFY(std::abs(frame.lateralOffsetMeters) < 0.20);
     }
@@ -1201,7 +1201,7 @@ private slots:
         QCOMPARE(frame.provisionalGapLine, WorkoutGameGapJumpLine::Medium);
         QCOMPARE(frame.lockedGapLine, WorkoutGameGapJumpLine::Medium);
         QVERIFY(!frame.gapLineReachable);
-        QVERIFY(maximumStep <= 0.151);
+        QVERIFY(maximumStep <= 0.15 + 1e-9);
 
         const auto afterLock = runtime.update(gapSnapshot(
                 78.0, time + 50, 9.0, 300.0, 220.0), 300.0, 220.0);

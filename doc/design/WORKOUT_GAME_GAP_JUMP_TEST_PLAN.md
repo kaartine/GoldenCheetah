@@ -121,7 +121,8 @@ C2-continuous curve in road surface, collision surface and rendered mesh.
 At the existing fixed `50 ms` simulation step:
 
 - lateral position is continuous and finite;
-- the maximum lateral step is `0.15 m`;
+- the maximum lateral step is `0.15 m`, the exact ceiling produced by the
+  `3.0 m/s` lateral-velocity limit over one fixed step;
 - the maximum lateral velocity is `3.0 m/s`;
 - heading and curvature remain finite and do not change sign repeatedly;
 - the selected line centre is reached before take-off within `0.02 m`;

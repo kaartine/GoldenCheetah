@@ -91,12 +91,12 @@ Status values are `open`, `in progress`, `verified` and `deferred`.
 - Final scoped regression on 2026-09-02 passed 49 road-course, 32 geometry,
   24 feature-runtime, 8 distance-playback, 10 feature-lab, 20 asset-policy and
   76 real X11/Quick 3D tests. The target-GPU gate measured 149.0 FPS, 7.80 ms
-  p95 and 8.10 ms p99 frame time, no skipped simulation ticks and no trainer or recording
-  deadline misses. Two world-physics tolerances still fail with exactly the
-  same values on `e85665a`: climb vertical step `0.0832901 m` at 7 m/s and
-  safe-line rock-garden suspension `0.0850116` versus main-line `0.203219`.
-  They are recorded as pre-existing failures rather than hidden by weaker
-  physics assertions.
+  p95 and 8.10 ms p99 frame time, no skipped simulation ticks and no trainer or
+  recording deadline misses. The older `e85665a` baseline reproduced climb
+  vertical-step and safe-line rock-garden suspension failures. Current code
+  retains their strict regression assertions and passes all 45 world cases
+  normally and under ASan/UBSan; both former failures also pass 25 repeated
+  focused runs.
 - Independent review then exercised a 20 km persisted smooth section and the
   downstream extents of roots, rock gardens, rock slabs and skinnies. The
   per-section safety cap now allows up to 4096 bounded road pieces, and forest
