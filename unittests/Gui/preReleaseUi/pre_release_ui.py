@@ -283,6 +283,12 @@ class UiDriver:
         except Exception:
             return False
 
+    def selectable(self, node) -> bool:
+        try:
+            return node.getState().contains(self.pyatspi.STATE_SELECTABLE)
+        except Exception:
+            return False
+
     def wait_for_application(self, timeout=30.0):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -638,6 +644,201 @@ class UiDriver:
             time.sleep(0.1)
         raise UiFailure(f"Discarded recording still exists: {path}")
 
+    def reopen_saved_activity(self, activity: Path, timeout=20.0) -> str:
+        if not activity.is_file() or activity.stat().st_size == 0:
+            raise UiFailure(f"Saved activity is unavailable: {activity}")
+
+        self.activate_named("Train", "menu item")
+        self.activate_named("Activities", "menu item")
+        self.find("Activities", "label", showing=True, timeout=timeout)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            candidates = []
+            for role in ("table", "tree table"):
+                for table in self.find_all(role=role, showing=True):
+                    candidates.extend(
+                        node
+                        for node in self.all_nodes(table)
+                        if self.role(node) in ("table cell", "list item")
+                        and self.showing(node)
+                        and self.enabled(node)
+                        and self.selectable(node)
+                    )
+            for node in candidates:
+                try:
+                    self.activate(node)
+                except UiFailure:
+                    continue
+                selected_deadline = min(deadline, time.monotonic() + 2.0)
+                while time.monotonic() < selected_deadline:
+                    if self.selected(node):
+                        return self.name(node)
+                    time.sleep(0.1)
+            time.sleep(0.2)
+        raise UiFailure(
+            "Saved activity exists in the isolated library, but the Activities "
+            "view exposes no selectable activity row through AT-SPI: "
+            f"{activity.name}"
+        )
+
+
+class WorkoutGameUiWorkflow:
+    def __init__(
+        self,
+        driver: UiDriver,
+        root: Path,
+        artifacts: Path,
+        capture_screenshots: bool,
+        enter_train,
+    ):
+        self.driver = driver
+        self.root = root
+        self.artifacts = artifacts
+        self.capture_screenshots = capture_screenshots
+        self.enter_train = enter_train
+        self.records = root / "library" / ATHLETE / "records"
+        self.activities = root / "library" / ATHLETE / "activities"
+        self.existing_records: set[Path] = set()
+        self.existing_activities: set[Path] = set()
+        self.gear = None
+        self.canvas = None
+        self.first_frame = None
+        self.initial_gear = 0.0
+        run_seconds = game_run_seconds_from_environment()
+        self.run_delays = (
+            run_seconds / 4.0,
+            run_seconds / 4.0,
+            run_seconds / 2.0,
+        )
+
+    def run(self) -> Path:
+        self.open_game()
+        recording = self.start()
+        self.shift_up()
+        self.shift_down()
+        self.stop_and_continue(recording)
+        return self.stop_save_and_reopen(recording)
+
+    def open_game(self) -> None:
+        self.enter_train()
+        selected = False
+        for workout_name in ("Pre-release UI test", "ui-test.erg", "ui-test"):
+            try:
+                self.driver.click_named_item(workout_name)
+                selected = True
+                break
+            except UiFailure:
+                pass
+        if not selected:
+            raise UiFailure("Prepared ui-test.erg workout was not selectable")
+
+        self.driver.select_named("Data Generator")
+        self.gear = self.driver.find(
+            "Virtual gear", "spin button", showing=True
+        )
+        if not self.driver.enabled(self.gear):
+            self.driver.activate(
+                self.driver.find(
+                    "Connect training devices", "push button", showing=True
+                )
+            )
+            deadline = time.monotonic() + 8.0
+            while not self.driver.enabled(self.gear) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            if not self.driver.enabled(self.gear):
+                raise UiFailure("Data Generator did not connect for Workout Game")
+
+        self.driver.select_combo_item(
+            ["Workout Game", "Workout Editor"], "Workout Game"
+        )
+        self.canvas = self.driver.find_named_any(
+            WORKOUT_GAME_CANVAS_NAMES, showing=True
+        )
+        self.existing_records = set(self.records.glob("*.csv"))
+        self.existing_activities = set(self.activities.glob("*.json"))
+
+    def start(self) -> Path:
+        self.driver.activate(
+            self.driver.find(
+                "Start or pause training", "push button", showing=True
+            )
+        )
+        recording = self.driver.wait_new_file(
+            self.records, self.existing_records, "*.csv"
+        )
+        record_renderer_canvas_name(self.root, self.driver.name(self.canvas))
+        self.initial_gear = self.driver.current_value(self.gear)
+        if self.capture_screenshots:
+            time.sleep(1.2)
+            self.first_frame = self.driver.screenshot(
+                "04-workout-game-first", self.canvas
+            )
+        return recording
+
+    def shift_up(self) -> None:
+        time.sleep(self.run_delays[0])
+        self.driver.send_key("w")
+        self.driver.wait_value(self.gear, self.initial_gear + 1)
+
+    def shift_down(self) -> None:
+        time.sleep(self.run_delays[1])
+        self.driver.send_key("s")
+        self.driver.wait_value(self.gear, self.initial_gear)
+
+    def stop_and_continue(self, recording: Path) -> None:
+        time.sleep(self.run_delays[2])
+        if self.capture_screenshots:
+            second = self.driver.screenshot(
+                "04-workout-game-running", self.canvas
+            )
+            if canvas_requires_pixel_motion(self.driver.name(self.canvas)):
+                changed = self.driver.changed_pixels(self.first_frame, second)
+                if changed < 1200:
+                    raise UiFailure(
+                        "Workout Game appears static: "
+                        f"only {changed} sampled pixels changed"
+                    )
+
+        self.driver.activate(
+            self.driver.find("Stop training", "push button", showing=True)
+        )
+        continue_button = self.driver.find(
+            "Continue Training", "push button", showing=True, timeout=8.0
+        )
+        paused_size = recording.stat().st_size
+        self.driver.activate(continue_button)
+        self.driver.wait_file_growth(recording, paused_size)
+        if self.capture_screenshots:
+            self.driver.screenshot("05-workout-game-continued")
+
+    def stop_save_and_reopen(self, recording: Path) -> Path:
+        time.sleep(1.0)
+        self.driver.activate(
+            self.driver.find("Stop training", "push button", showing=True)
+        )
+        self.driver.activate(
+            self.driver.find("Save", "push button", showing=True, timeout=8.0)
+        )
+        activity = self.driver.wait_new_file(
+            self.activities,
+            self.existing_activities,
+            "*.json",
+            timeout=15.0,
+        )
+        self.driver.activate(
+            self.driver.find("Finish", "push button", showing=True, timeout=8.0)
+        )
+        selected_name = self.driver.reopen_saved_activity(activity)
+        write_text(
+            self.artifacts / "reopened-activity.txt",
+            f"{activity.name}\n{selected_name}\n",
+        )
+        if self.capture_screenshots:
+            self.driver.screenshot("06-workout-game-saved-and-reopened")
+        if validate_trainer_acceptance_from_environment():
+            preserve_game_recording(recording, self.artifacts)
+        return activity
+
 
 class Suite:
     def __init__(self, driver: UiDriver, artifacts: Path):
@@ -854,152 +1055,21 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             finally:
                 stop_without_saving()
 
-        def game():
-            enter_train()
-            validate_trainer_acceptance = (
-                validate_trainer_acceptance_from_environment()
+        def game_training_lifecycle():
+            workflow = WorkoutGameUiWorkflow(
+                driver,
+                root,
+                artifacts,
+                capture_screenshots,
+                enter_train,
             )
-            records = root / "library" / ATHLETE / "records"
-            existing_records = set(records.glob("*.csv"))
-            selected = False
-            for workout_name in ("Pre-release UI test", "ui-test.erg", "ui-test"):
-                try:
-                    driver.click_named_item(workout_name)
-                    selected = True
-                    break
-                except UiFailure:
-                    pass
-            if not selected:
-                raise UiFailure("Prepared ui-test.erg workout was not selectable")
-
-            driver.select_named("Data Generator")
-            gear = driver.find("Virtual gear", "spin button", showing=True)
-            if not driver.enabled(gear):
-                driver.activate(
-                    driver.find(
-                        "Connect training devices", "push button", showing=True
-                    )
-                )
-                deadline = time.monotonic() + 8.0
-                while not driver.enabled(gear) and time.monotonic() < deadline:
-                    time.sleep(0.1)
-                if not driver.enabled(gear):
-                    raise UiFailure("Data Generator did not connect for Workout Game")
-
-            driver.select_combo_item(
-                ["Workout Game", "Workout Editor"], "Workout Game"
-            )
-            driver.find_named_any(WORKOUT_GAME_CANVAS_NAMES, showing=True)
-            driver.activate(
-                driver.find(
-                    "Start or pause training", "push button", showing=True
-                )
-            )
-            recording = None
+            completed = False
             try:
-                if validate_trainer_acceptance:
-                    recording = driver.wait_new_file(
-                        records, existing_records, "*.csv"
-                    )
-                canvas = driver.find_named_any(
-                    WORKOUT_GAME_CANVAS_NAMES, showing=True
-                )
-                record_renderer_canvas_name(root, driver.name(canvas))
-                if validate_trainer_acceptance:
-                    delays = trainer_acceptance_shift_delays(
-                        game_run_seconds_from_environment()
-                    )
-                    initial_gear = driver.current_value(gear)
-                    time.sleep(delays[0])
-                    driver.send_key("w")
-                    driver.wait_value(gear, initial_gear + 1)
-                    time.sleep(delays[1])
-                    driver.send_key("s")
-                    driver.wait_value(gear, initial_gear)
-                    time.sleep(delays[2])
-                else:
-                    require_pixel_motion = canvas_requires_pixel_motion(
-                        driver.name(canvas)
-                    )
-                    time.sleep(1.2)
-                    first = driver.screenshot("04-workout-game-first", canvas)
-                    time.sleep(game_run_seconds_from_environment())
-                    second = driver.screenshot("04-workout-game-running", canvas)
-                    if require_pixel_motion:
-                        changed = driver.changed_pixels(first, second)
-                        if changed < 1200:
-                            raise UiFailure(
-                                "Workout Game appears static: "
-                                f"only {changed} sampled pixels changed"
-                            )
-                if recording is not None:
-                    preserve_game_recording(recording, artifacts)
+                workflow.run()
+                completed = True
             finally:
-                stop_without_saving()
-                driver.select_combo_item(
-                    ["Erg Workout", "Workout Game"], "Erg Workout"
-                )
-
-        def stop_continue():
-            enter_train()
-            driver.select_named("Manual Erg Mode")
-            records = root / "library" / ATHLETE / "records"
-            existing_records = set(records.glob("*.csv"))
-            start = driver.find(
-                "Start or pause training", "push button", showing=True
-            )
-            driver.activate(start)
-            recording = driver.wait_new_file(
-                records, existing_records, "*.csv"
-            )
-            time.sleep(1.0)
-            driver.activate(
-                driver.find("Stop training", "push button", showing=True)
-            )
-            continue_button = driver.find(
-                "Continue Training", "push button", showing=True, timeout=8.0
-            )
-            paused_size = recording.stat().st_size
-            driver.activate(continue_button)
-            driver.wait_file_growth(recording, paused_size)
-            if capture_screenshots:
-                driver.screenshot("05-continued-training")
-            driver.activate(
-                driver.find("Stop training", "push button", showing=True)
-            )
-            driver.activate(
-                driver.find("Cancel", "push button", showing=True, timeout=8.0)
-            )
-            driver.wait_file_removed(recording)
-
-        def stop_save():
-            enter_train()
-            driver.select_named("Manual Erg Mode")
-            activities = root / "library" / ATHLETE / "activities"
-            records = root / "library" / ATHLETE / "records"
-            existing_activities = set(activities.glob("*.json"))
-            existing_records = set(records.glob("*.csv"))
-            driver.activate(
-                driver.find(
-                    "Start or pause training", "push button", showing=True
-                )
-            )
-            driver.wait_new_file(records, existing_records, "*.csv")
-            time.sleep(1.0)
-            driver.activate(
-                driver.find("Stop training", "push button", showing=True)
-            )
-            driver.activate(
-                driver.find("Save", "push button", showing=True, timeout=8.0)
-            )
-            driver.wait_new_file(
-                activities, existing_activities, "*.json", timeout=15.0
-            )
-            driver.activate(
-                driver.find("Finish", "push button", showing=True, timeout=8.0)
-            )
-            if capture_screenshots:
-                driver.screenshot("06-training-saved")
+                if not completed:
+                    stop_without_saving()
 
         def save_workout():
             enter_train()
@@ -1054,9 +1124,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
         suite.run("prepared_workout_library_import", import_prepared_workout)
         suite.run("train_control_accessibility", train_controls)
         suite.run("data_generator_and_virtual_gears", generator_and_gears)
-        suite.run("workout_game_perspective", game)
-        suite.run("stop_continue_and_discard_training", stop_continue)
-        suite.run("stop_and_save_training", stop_save)
+        suite.run("workout_game_training_lifecycle", game_training_lifecycle)
         if not skip_save_as_from_environment():
             suite.run("new_workout_save_as", save_workout)
         suite.run("graceful_shutdown_request", shutdown)

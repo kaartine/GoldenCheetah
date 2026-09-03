@@ -14,11 +14,13 @@ unittests/Gui/preReleaseUi/run-pre-release-ui-matrix.sh \
 The output directory contains `junit.xml`, `goldencheetah.log`, screenshots and,
 when `GC_UI_RECORD_VIDEO=1` and `ffmpeg` are available, `session.mp4`.
 
-The stop workflow is verified through its filesystem effects as well as its
-buttons. Continuing must resume growth of the same raw recording, Cancel must
-remove that recording, and Save must publish a new activity JSON before the
-import dialog can finish. All paths run only inside the temporary athlete
-library.
+The Workout Game lifecycle is verified through its filesystem effects as well
+as its visible controls. One isolated Data Generator session starts in Game
+mode, shifts the virtual gear up and down, stops and continues the same raw
+recording, then stops and saves it. The workflow finishes by leaving and
+returning to Activities and selecting the saved activity row. The saved file
+and selected row are recorded in `reopened-activity.txt`. All paths run only
+inside the temporary athlete library.
 
 Set `GC_UI_GENERATOR_MODE` to `on-target`, `over-target`, `under-target`,
 `cadence-low`, `cadence-high` or `follow-target` to select the isolated Data
@@ -46,9 +48,13 @@ AppImage root whose `lib`, `plugins` and `qml` directories provide the matching
 runtime. Those paths are applied only to GoldenCheetah, so the host AT-SPI
 Python process keeps using its normal system libraries.
 
-The matrix runs twice against separate temporary athletes. The first run forces
-the QPainter fallback. The second run exercises the packaged Scene Graph path
-with trace validation. To run only the Scene Graph leg:
+The matrix runs three times against separate temporary athletes. The first run
+forces the QPainter fallback, the second exercises the packaged Scene Graph
+path with trace validation, and the third selects the production Qt Quick 3D
+renderer and requires renderer and cold-start trace evidence. The harness uses
+the visible Data Generator and perspective controls; it does not require
+Feature Lab or another hidden course-selection switch. To run only the Scene
+Graph leg:
 
 ```bash
 GC_WORKOUT_GAME_FORCE_PAINTER=0 \
@@ -56,6 +62,18 @@ GC_WORKOUT_GAME_TRACE=1 \
 GC_WORKOUT_GAME_DIAGNOSTICS=1 \
 unittests/Gui/preReleaseUi/run-pre-release-ui.sh \
   /path/to/GoldenCheetah.AppImage artifacts/ui-scenegraph
+```
+
+To run only the production Quick 3D leg:
+
+```bash
+GC_WORKOUT_GAME_FORCE_PAINTER=0 \
+GC_WORKOUT_GAME_3D=1 \
+GC_WORKOUT_GAME_TRACE=1 \
+GC_WORKOUT_GAME_DIAGNOSTICS=1 \
+GC_UI_REQUIRE_QUICK3D_EVIDENCE=1 \
+unittests/Gui/preReleaseUi/run-pre-release-ui.sh \
+  /path/to/GoldenCheetah.AppImage artifacts/ui-quick3d
 ```
 
 On a test session where direct rendering is available, add
