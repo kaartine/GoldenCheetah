@@ -897,8 +897,28 @@ private slots:
         };
 
         const auto target = lineAt(0.0, 180.0);
-        const auto above = lineAt(0.0, 270.0);
-        const auto below = lineAt(0.0, 90.0);
+        WorkoutGameFeatureRuntimeSnapshot above;
+        for (int index = 1; index <= 100; ++index) {
+            WorkoutGameSimulationSnapshot input = snapshot(
+                    section,
+                    progressAtDistance(
+                        road, section, piece->geometryAnchorDistanceMeters),
+                    WorkoutGameFeatureOutcome::Completed);
+            input.workoutTimeMs = index * 20;
+            above = runtime.update(input, 270.0, 180.0);
+        }
+        runtime.reset();
+        QVERIFY(runtime.configure(road));
+        WorkoutGameFeatureRuntimeSnapshot below;
+        for (int index = 0; index <= 100; ++index) {
+            WorkoutGameSimulationSnapshot input = snapshot(
+                    section,
+                    progressAtDistance(
+                        road, section, piece->geometryAnchorDistanceMeters),
+                    WorkoutGameFeatureOutcome::Completed);
+            input.workoutTimeMs = index * 20;
+            below = runtime.update(input, 90.0, 180.0);
+        }
         QCOMPARE(target.phase, WorkoutGameFeaturePhase::None);
         QCOMPARE(target.outcome, WorkoutGameFeatureOutcome::None);
         QCOMPARE(target.actionId, std::uint64_t(0));
@@ -910,6 +930,185 @@ private slots:
         QVERIFY(std::abs(above.lateralOffsetMeters) <= 0.55);
         QCOMPARE(lineAt(profile.startMeters, 270.0).lateralOffsetMeters, 0.0);
         QCOMPARE(lineAt(profile.endMeters, 90.0).lateralOffsetMeters, 0.0);
+    }
+
+    void ordinaryBankedTurnUsesEffortWithoutBecomingAFeature()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 0x423106u;
+        course.durationMs = 90000;
+        WorkoutGameSection trail;
+        trail.feature = WorkoutGameFeature::Trail;
+        trail.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        trail.durationMs = course.durationMs;
+        trail.lengthMeters = 360.0;
+        trail.targetWatts = 190.0;
+        trail.difficulty = 0.7;
+        trail.challengeCount = 0;
+        course.sections = {trail};
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.bank.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const double progress = progressAtDistance(
+                road, 0, piece->geometryAnchorDistanceMeters);
+        WorkoutGameSimulationSnapshot input = snapshot(
+                0, progress, WorkoutGameFeatureOutcome::None);
+        input.workoutTimeMs = 1000;
+        const auto target = runtime.update(input, 190.0, 190.0);
+        WorkoutGameFeatureRuntimeSnapshot high;
+        for (int index = 1; index <= 100; ++index) {
+            input.workoutTimeMs = 1000 + index * 20;
+            high = runtime.update(input, 280.0, 190.0);
+        }
+        runtime.reset();
+        QVERIFY(runtime.configure(road));
+        input.workoutTimeMs = 1000;
+        runtime.update(input, 190.0, 190.0);
+        WorkoutGameFeatureRuntimeSnapshot low;
+        for (int index = 1; index <= 100; ++index) {
+            input.workoutTimeMs = 1000 + index * 20;
+            low = runtime.update(input, 100.0, 190.0);
+        }
+
+        QCOMPARE(target.phase, WorkoutGameFeaturePhase::None);
+        QCOMPARE(target.actionId, std::uint64_t(0));
+        QCOMPARE(target.outcome, WorkoutGameFeatureOutcome::None);
+        QCOMPARE(target.route, WorkoutGameRoute::MainLine);
+        QVERIFY(std::abs(target.lateralOffsetMeters) < 1.0e-9);
+        QVERIFY(high.lateralOffsetMeters * piece->turnRadians < 0.0);
+        QVERIFY(low.lateralOffsetMeters * piece->turnRadians > 0.0);
+    }
+
+    void ordinaryBankLineRejectsPowerNoiseWithoutLateralTeleportation()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 0x42310au;
+        course.durationMs = 90000;
+        WorkoutGameSection trail;
+        trail.feature = WorkoutGameFeature::Trail;
+        trail.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        trail.durationMs = course.durationMs;
+        trail.lengthMeters = 360.0;
+        trail.targetWatts = 190.0;
+        trail.difficulty = 0.7;
+        trail.challengeCount = 0;
+        course.sections = {trail};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.bank.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const double progress = progressAtDistance(
+                road, 0, piece->geometryAnchorDistanceMeters);
+        WorkoutGameSimulationSnapshot input = snapshot(
+                0, progress, WorkoutGameFeatureOutcome::None);
+        input.workoutTimeMs = 1000;
+        auto previous = runtime.update(input, 190.0, 190.0);
+        double previousVelocity = 0.0;
+        bool previousVelocityComparable = true;
+        const int intervals[] = {8, 33, 12, 250, 17, 41, 9, 25};
+        const WorkoutGameBermGeometryProfile bank =
+                WorkoutGameBermGeometry::profile(*piece);
+        for (int index = 0; index < 64; ++index) {
+            const int interval = intervals[index % 8];
+            input.workoutTimeMs += interval;
+            const double watts = (index & 1) == 0 ? 280.0 : 100.0;
+            const auto current = runtime.update(input, watts, 190.0);
+            const double velocity = (current.lateralOffsetMeters
+                    - previous.lateralOffsetMeters)
+                    / (double(interval) / 1000.0);
+            QVERIFY2(std::abs(velocity) <= 1.2 + 1.0e-6,
+                     qPrintable(QStringLiteral("lateral velocity %1 m/s")
+                                .arg(velocity)));
+            QVERIFY(std::abs(current.lateralOffsetMeters)
+                    <= bank.maximumLineOffsetMeters + 1.0e-6);
+            if (interval <= 50 && previousVelocityComparable) {
+                const double acceleration = (velocity - previousVelocity)
+                        / (double(interval) / 1000.0);
+                QVERIFY2(std::abs(acceleration) <= 4.0 + 1.0e-6,
+                         qPrintable(QStringLiteral(
+                             "lateral acceleration %1 m/s2 at sample %2 (%3 -> %4 m/s, dt %5ms)")
+                             .arg(acceleration).arg(index).arg(previousVelocity)
+                             .arg(velocity).arg(interval)));
+            }
+            previous = current;
+            previousVelocity = velocity;
+            previousVelocityComparable = interval <= 50;
+        }
+    }
+
+    void ordinaryBankLineReturnsToStraightTrailContinuously()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 0x42310cu;
+        course.durationMs = 90000;
+        WorkoutGameSection trail;
+        trail.feature = WorkoutGameFeature::Trail;
+        trail.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        trail.durationMs = course.durationMs;
+        trail.lengthMeters = 360.0;
+        trail.targetWatts = 190.0;
+        trail.difficulty = 0.7;
+        trail.challengeCount = 0;
+        course.sections = {trail};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        auto piece = road.pieces.begin();
+        while (piece != road.pieces.end()) {
+            const auto next = std::next(piece);
+            if (piece->bank.enabled && next != road.pieces.end()
+                    && !next->bank.enabled) {
+                break;
+            }
+            ++piece;
+        }
+        QVERIFY(piece != road.pieces.end());
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        WorkoutGameSimulationSnapshot input = snapshot(
+                0,
+                progressAtDistance(
+                    road, 0, piece->geometryAnchorDistanceMeters),
+                WorkoutGameFeatureOutcome::None);
+        input.workoutTimeMs = 1000;
+        WorkoutGameFeatureRuntimeSnapshot current =
+                runtime.update(input, 280.0, 190.0);
+        for (int index = 1; index <= 100; ++index) {
+            input.workoutTimeMs = 1000 + index * 20;
+            current = runtime.update(input, 280.0, 190.0);
+        }
+        const double bankOffset = current.lateralOffsetMeters;
+        QVERIFY(std::abs(bankOffset) > 0.05);
+
+        input.sectionProgress = progressAtDistance(
+                road, 0,
+                piece->startDistanceMeters + piece->lengthMeters + 0.01);
+        input.workoutTimeMs += 20;
+        current = runtime.update(input, 190.0, 190.0);
+        QVERIFY(std::abs(current.lateralOffsetMeters - bankOffset)
+                <= 1.2 * 0.020 + 1.0e-6);
+        for (int index = 0; index < 150; ++index) {
+            input.workoutTimeMs += 20;
+            current = runtime.update(input, 190.0, 190.0);
+        }
+        QVERIFY(std::abs(current.lateralOffsetMeters) < 0.01);
     }
 
     void dropPoseDoesNotSynthesizeASecondLandingImpact()

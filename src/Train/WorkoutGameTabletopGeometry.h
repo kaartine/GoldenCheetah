@@ -39,7 +39,8 @@ struct WorkoutGameTabletopGeometryProfile
                 surfaceOffsetMeters(landing) - heightMeters;
         // Compensate for the sprung three-body bike so each difficulty lands
         // on its authored runout instead of using point-mass ballistics.
-        const double bikeModelCalibration = 0.05 - 1.03 * difficulty;
+        const double bikeModelCalibration = 0.55
+                - 1.03 * std::min(difficulty, 0.7);
         return std::clamp(
                 (verticalDisplacement
                  + 0.5 * GravityMetersPerSecondSquared

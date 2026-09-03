@@ -192,7 +192,9 @@ public:
         result.minimumLengthMeters = result.endMeters - result.startMeters;
         result.entryTransitionMeters = 5.0;
         result.crestTransitionMeters = 5.0;
-        result.contactRampMeters = 0.24;
+        // Blend the embedded trail steps over enough tyre travel that a fast
+        // rider follows the surface without a one-frame vertical kick.
+        result.contactRampMeters = 0.34;
         result.steps = {{
             step(-10.1, -0.06, 0.17, 0.60, 0.10,  3.0),
             step( -8.5,  0.04, 0.20, 0.56, 0.13, -4.0),

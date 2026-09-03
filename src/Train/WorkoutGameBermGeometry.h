@@ -10,6 +10,8 @@
 #ifndef _GC_WorkoutGameBermGeometry_h
 #define _GC_WorkoutGameBermGeometry_h
 
+#include "WorkoutGameRoadCourse.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -24,6 +26,8 @@ struct WorkoutGameBermGeometryProfile
     double activeHalfWidthMeters = 0.0;
     double turnMagnitudeRadians = 0.0;
     double maximumBankRadians = 0.0;
+    double maximumLineOffsetMeters = 0.0;
+    double designSpeedMetersPerSecond = 0.0;
 
     double headingProgress(double localDistanceMeters) const
     {
@@ -101,7 +105,8 @@ struct WorkoutGameBermGeometryProfile
                     / (endMeters - startMeters),
                 0.0, 1.0);
         const double outsideDirection = -std::copysign(1.0, turnRadians);
-        return outsideDirection * 0.52 * std::clamp(lineBias, -1.0, 1.0)
+        return outsideDirection * maximumLineOffsetMeters
+                * std::clamp(lineBias, -1.0, 1.0)
                 * std::pow(std::sin(Pi * progress), 2.0);
     }
 
@@ -176,6 +181,31 @@ struct WorkoutGameBermGeometryProfile
 class WorkoutGameBermGeometry
 {
 public:
+    static WorkoutGameBermGeometryProfile profile(
+            const WorkoutGameRoadPiece &piece)
+    {
+        if (!piece.bank.enabled) {
+            return piece.terrain == WorkoutGameTerrainKind::Berm
+                    ? profile(piece.difficulty)
+                    : WorkoutGameBermGeometryProfile();
+        }
+        const WorkoutGameRoadBankProfile &bank = piece.bank;
+        const double anchor = piece.geometryAnchorDistanceMeters;
+        return {
+            true,
+            bank.startDistanceMeters - anchor,
+            bank.curveStartDistanceMeters - anchor,
+            bank.curveEndDistanceMeters - anchor,
+            bank.endDistanceMeters - anchor,
+            bank.socketHalfWidthMeters,
+            bank.activeHalfWidthMeters,
+            std::abs(piece.turnRadians),
+            bank.maximumBankRadians,
+            bank.maximumLineOffsetMeters,
+            bank.designSpeedMetersPerSecond
+        };
+    }
+
     static WorkoutGameBermGeometryProfile profile(double requestedDifficulty)
     {
         constexpr double Pi = 3.14159265358979323846;
@@ -195,7 +225,9 @@ public:
             0.68 * 1.17,
             0.90 + 0.15 * difficulty,
             (42.0 + 58.0 * difficulty) * Pi / 180.0,
-            (18.0 + 16.0 * difficulty) * Pi / 180.0
+            (18.0 + 16.0 * difficulty) * Pi / 180.0,
+            0.52,
+            7.5 + 2.0 * difficulty
         };
     }
 };

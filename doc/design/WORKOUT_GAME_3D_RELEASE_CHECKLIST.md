@@ -792,14 +792,14 @@ and
 `42b5b6e1863d187ef3939318072f6d4856270fe2cc0ecbd9203748d4efe70e49`.
 No external model, image or texture was added.
 
-**FTR-12 current evidence:** production code contains distinct short, medium
-and long lines, a ten-metre measured speed window, three-metre lock point,
-grounded fallback and bounded flight. The current packaged capture is not
-release acceptance: it lacks the complete per-line
-approach/take-off/apex/landing matrix, repeated-action and five-minute
-capture-free performance evidence, and signed interactive review. Its reported
-p95/max frame intervals must also be shown to meet the contract outside the
-excluded warm-up period.
+**FTR-12 current evidence:** the opt-in
+`exportsGapJumpAcceptanceMatrixAndRunsSimulatedEndurance` Quick 3D port writes
+only below `GC_WORKOUT_GAME_GAP_JUMP_ACCEPTANCE_DIR`. Its X11/Quick 3D run
+exports approach, take-off, apex, landing and 72-frame motion evidence for the
+short, medium, long and grounded safe lines. A separate capture-free
+five-minute, 15,000-step run reports 1.90 ms p95, 15.38 ms maximum update time
+and zero queued geometry. Packaged execution and signed interactive review
+remain release gates.
 
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct
@@ -1149,11 +1149,17 @@ revision. The current inventory has changed, and
 current full suite must still be rerun before checking `REL-01` again. Real
 trainer A/B acceptance remains separately open under `REL-04`.
 
-**Current B0 evidence (2026-09-03):** the required inventory now includes
-`Train/workoutGameGapJumpLaunchWindow` and reconciles 172/172 projects. Five
-focused gap-jump suites pass 73/73. `workoutGameWorld` passes 45/45 normally,
-45/45 under ASan/UBSan and both formerly failing regressions across 25 repeated
-runs. `REL-01` remains open until the complete current inventory is rerun.
+**Current B1/B2 evidence (2026-09-03):** the required inventory includes
+`Train/workoutGameGapJumpLaunchWindow` and reconciles 173/173 projects. The
+final X11 inventory passed 172 projects and stopped only at the AppImage policy
+project because two protected inventory hashes were stale. After updating
+exactly those hashes, the complete AppImage project passes its reproducibility,
+SBOM, credential, immutable-action and private-OAuth gates without another
+source change. The twelve directly affected suites pass 386/386 under
+ASan/UBSan, with 34 expected opt-in renderer skips. The current automated
+unit/integration inventory is therefore complete; `REL-01` remains open for
+the new packaged UI run. Real trainer A/B acceptance remains separately open
+under `REL-04`.
 
 **REL-03/REL-05 evidence (`56faa71`):** two independent clean release builds
 produced byte-identical ELF binaries and AppImages. The promoted AppImage is

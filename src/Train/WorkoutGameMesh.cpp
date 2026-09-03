@@ -595,7 +595,7 @@ WorkoutGameMesh rollersModel(double difficulty)
                 WorkoutGameTerrainKind::Rollers, difficulty);
     if (!profile.ready) return mesh;
     std::vector<SculptedStripSample> samples;
-    constexpr int Samples = 42;
+    constexpr int Samples = 48;
     for (int index = 0; index <= Samples; ++index) {
         const double progress = double(index) / double(Samples);
         const double forward = profile.startMeters

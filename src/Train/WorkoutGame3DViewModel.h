@@ -391,6 +391,7 @@ private:
     double riderPitchDegrees = 0.0;
     double riderRollDegrees = 0.0;
     bool riderPoseInitialized = false;
+    bool riderBankRollActive = false;
     double riderPumpMeters = 0.0;
     double currentRiderAirHeightMeters = 0.0;
     double currentLandingImpact = 0.0;
@@ -449,6 +450,8 @@ private:
     double cameraTargetPositionY = 0.85;
     double cameraTargetPositionZ = 12.0;
     bool cameraPoseInitialized = false;
+    double cameraYawRadians = 0.0;
+    double cameraYawVelocityRadiansPerSecond = 0.0;
     std::int64_t lastCameraPoseTimeMs = 0;
     std::uint64_t courseGeneration = 0;
     WorkoutGame3DChunkBuilder chunkBuilder;

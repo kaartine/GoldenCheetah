@@ -2020,6 +2020,43 @@ private slots:
         QVERIFY(std::abs(firstOuter + 0.68) < 0.001);
         QVERIFY(std::abs(lastOuter - 0.68) < 0.001);
     }
+
+    void ordinaryTurnBankBuildsASeparateBoundedSurface()
+    {
+        WorkoutGameRoadCourse course = straightCourse(40.0);
+        WorkoutGameRoadPiece &piece = course.pieces.front();
+        piece.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        piece.turnRadians = 0.72;
+        piece.geometryAnchorDistanceMeters = 20.0;
+        piece.bank.enabled = true;
+        piece.bank.startDistanceMeters = 0.0;
+        piece.bank.curveStartDistanceMeters = 3.0;
+        piece.bank.curveEndDistanceMeters = 37.0;
+        piece.bank.endDistanceMeters = 40.0;
+        piece.bank.socketHalfWidthMeters = 0.68;
+        piece.bank.activeHalfWidthMeters = 0.96;
+        piece.bank.maximumBankRadians = 0.34;
+        piece.bank.maximumLineOffsetMeters = 0.42;
+        piece.bank.designSpeedMetersPerSecond = 7.0;
+
+        const WorkoutGameRoadSample middle =
+                WorkoutGameRoadCourseBuilder::sample(course, 20.0);
+        QVERIFY(middle.ready);
+        QVERIFY(std::abs(middle.bermBankRadians) > 0.30);
+        QVERIFY(!middle.renderableTrailSurface);
+        QCOMPARE(middle.terrain, WorkoutGameTerrainKind::SmoothTrail);
+
+        WorkoutGame3DGeometry bank(WorkoutGame3DGeometry::Layer::Berm);
+        bank.setCourse(course);
+        QVERIFY(bank.ready());
+        QVERIFY(bank.sampleCount() > 200);
+        QVERIFY(bank.sampleCount() <= 16000);
+        const int triangleCount = bank.indexData().size()
+                / int(3 * sizeof(quint32));
+        QVERIFY(triangleCount <= 192000);
+        QCOMPARE(bank.vertexData().size(),
+                 bank.sampleCount() * 7 * bank.stride());
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGame3DGeometry)

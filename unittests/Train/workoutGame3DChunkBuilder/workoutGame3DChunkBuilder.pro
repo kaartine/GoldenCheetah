@@ -9,6 +9,7 @@ SOURCES += testWorkoutGame3DChunkBuilder.cpp \
            ../../../src/Train/WorkoutGame3DChunkBuilder.cpp \
            ../../../src/Train/WorkoutGame3DGeometry.cpp \
            ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
+           ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
            ../../../src/Train/WorkoutGameRoadPlan.cpp \
            ../../../src/Train/WorkoutGameRoadQuality.cpp \

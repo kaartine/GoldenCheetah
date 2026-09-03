@@ -49,10 +49,22 @@ constexpr double TreeRefreshAheadMeters = 14.0;
 constexpr int MaximumVisibleTrees = 18;
 constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double CameraCorridorClearanceMeters = 0.85;
+constexpr double CameraIntegrationStepSeconds = 0.05;
+constexpr double MaximumCameraCatchupSeconds = 0.25;
+constexpr double MaximumCameraSpeedMetersPerSecond = 17.0;
+constexpr double MaximumCameraYawVelocityRadiansPerSecond = 0.68;
+constexpr double MaximumCameraYawAccelerationRadiansPerSecondSquared = 4.0;
+constexpr double MaximumCameraTargetDistanceMeters = 23.95;
+constexpr double MaximumRiderBankRollDegreesPerSecond = 75.0;
 
 double finiteOrZero(double value)
 {
     return std::isfinite(value) ? value : 0.0;
+}
+
+double normalizedRadians(double radians)
+{
+    return std::remainder(radians, 2.0 * Pi);
 }
 
 struct WorkoutGameRoutePoint
@@ -302,6 +314,7 @@ void WorkoutGame3DViewModel::setCourse(
     currentRiderWalking = false;
     currentRiderPoseState = QStringLiteral("pedal");
     riderPoseInitialized = false;
+    riderBankRollActive = false;
     rootCompressionInitialized = false;
     rockCompressionInitialized = false;
     slabCompressionInitialized = false;
@@ -309,6 +322,8 @@ void WorkoutGame3DViewModel::setCourse(
     cameraPresentationController.reset();
     cameraPresentationSnapshot = {};
     cameraPoseInitialized = false;
+    cameraYawRadians = 0.0;
+    cameraYawVelocityRadiansPerSecond = 0.0;
     lastCameraPoseTimeMs = 0;
     rebuildFloor(0.0, true);
     sceneReady = roadCourse.ready && trail->ready()
@@ -406,18 +421,20 @@ void WorkoutGame3DViewModel::setFrame(
                     - sample.surfaceOffsetMeters;
         }
     }
-    if (sample.terrain == WorkoutGameTerrainKind::Berm
-            && sample.pieceIndex < roadCourse.pieces.size()) {
+    const WorkoutGameBermGeometryProfile activeBank =
+            sample.pieceIndex < roadCourse.pieces.size()
+        ? WorkoutGameBermGeometry::profile(
+            roadCourse.pieces[sample.pieceIndex])
+        : WorkoutGameBermGeometryProfile();
+    if (activeBank.ready && sample.pieceIndex < roadCourse.pieces.size()) {
         const WorkoutGameRoadPiece &piece =
                 roadCourse.pieces[sample.pieceIndex];
-        const WorkoutGameBermGeometryProfile bermProfile =
-                WorkoutGameBermGeometry::profile(piece.difficulty);
         const double local = distanceMeters
                 - piece.geometryAnchorDistanceMeters;
         visualGround = sample.visualGroundElevationMeters()
-                + bermProfile.surfaceOffsetMeters(
+                + activeBank.surfaceOffsetMeters(
                     local, lateral,
-                    bermProfile.halfWidthMeters(local),
+                    activeBank.halfWidthMeters(local),
                     piece.turnRadians);
     }
     cameraGroundY = visualGround;
@@ -443,13 +460,10 @@ void WorkoutGame3DViewModel::setFrame(
             finiteOrZero(frame.world.rider.pitchDegrees), -35.0, 35.0);
     double targetRiderRollDegrees =
             finiteOrZero(frame.world.rider.rollDegrees);
-    if (frame.world.terrain == WorkoutGameTerrainKind::Berm
-            && sample.pieceIndex < roadCourse.pieces.size()) {
+    if (activeBank.ready && sample.pieceIndex < roadCourse.pieces.size()) {
         const WorkoutGameRoadPiece &piece =
                 roadCourse.pieces[sample.pieceIndex];
-        const WorkoutGameBermGeometryProfile bermProfile =
-                WorkoutGameBermGeometry::profile(piece.difficulty);
-        targetRiderRollDegrees = bermProfile.riderWorldRollRadians(
+        targetRiderRollDegrees = activeBank.riderWorldRollRadians(
                 distanceMeters - piece.geometryAnchorDistanceMeters,
                 piece.turnRadians,
                 std::max(0.0, frame.simulation.speedKph) / 3.6,
@@ -465,16 +479,27 @@ void WorkoutGame3DViewModel::setFrame(
         targetRiderRollDegrees = skinny.balanceRollDegrees(
                 distanceMeters - piece.challenge.obstacleDistanceMeters);
     }
-    constexpr double MaximumBermRollStepDegrees = 1.5;
-    if (riderPoseInitialized
-            && frame.world.terrain == WorkoutGameTerrainKind::Berm) {
+    if (riderPoseInitialized && (activeBank.ready || riderBankRollActive)) {
+        const double elapsedSeconds = lastRiderPoseTimeMs >= 0
+                ? std::clamp(
+                    double(frame.simulation.workoutTimeMs
+                           - lastRiderPoseTimeMs) / 1000.0,
+                    0.0, MaximumCameraCatchupSeconds)
+                : 0.0;
+        const double maximumRollStep =
+                MaximumRiderBankRollDegreesPerSecond * elapsedSeconds;
         riderRollDegrees += std::clamp(
                 targetRiderRollDegrees - riderRollDegrees,
-                -MaximumBermRollStepDegrees,
-                MaximumBermRollStepDegrees);
+                -maximumRollStep, maximumRollStep);
+        if (!activeBank.ready
+                && std::abs(targetRiderRollDegrees - riderRollDegrees)
+                    <= 1.0e-6) {
+            riderBankRollActive = false;
+        }
     } else {
         riderRollDegrees = targetRiderRollDegrees;
     }
+    if (activeBank.ready) riderBankRollActive = true;
     riderPoseInitialized = true;
     currentRiderAirHeightMeters = authoritativeAir;
     currentLandingImpact = std::clamp(
@@ -827,12 +852,22 @@ void WorkoutGame3DViewModel::updateCameraPose(
     const double previousTargetX = cameraTargetPositionX;
     const double previousTargetY = cameraTargetPositionY;
     const double previousTargetZ = cameraTargetPositionZ;
+    double minimumCameraPositionY =
+            -std::numeric_limits<double>::infinity();
     const auto constrainCameraTravel = [this, previousX, previousY, previousZ,
                                         previousTargetX, previousTargetY,
-                                        previousTargetZ, workoutTimeMs]() {
+                                        previousTargetZ, workoutTimeMs,
+                                        &minimumCameraPositionY]() {
         const std::int64_t now = std::max<std::int64_t>(0, workoutTimeMs);
+        const double desiredTargetX = cameraTargetPositionX;
+        const double desiredTargetZ = cameraTargetPositionZ;
+        const double desiredYaw = std::atan2(
+                desiredTargetX - cameraPositionX,
+                desiredTargetZ - cameraPositionZ);
         if (!cameraPoseInitialized || now < lastCameraPoseTimeMs) {
             cameraPoseInitialized = true;
+            cameraYawRadians = desiredYaw;
+            cameraYawVelocityRadiansPerSecond = 0.0;
             lastCameraPoseTimeMs = now;
             return;
         }
@@ -847,8 +882,7 @@ void WorkoutGame3DViewModel::updateCameraPose(
         }
         const double elapsedSeconds = std::clamp(
                 double(now - lastCameraPoseTimeMs) / 1000.0,
-                0.0, 0.10);
-        constexpr double MaximumCameraSpeedMetersPerSecond = 17.0;
+                0.0, MaximumCameraCatchupSeconds);
         const double maximumStep =
                 MaximumCameraSpeedMetersPerSecond * elapsedSeconds;
         const double deltaX = cameraPositionX - previousX;
@@ -863,6 +897,44 @@ void WorkoutGame3DViewModel::updateCameraPose(
             cameraPositionX = constrainedX;
             cameraPositionZ = constrainedZ;
         }
+
+        double remainingSeconds = elapsedSeconds;
+        while (remainingSeconds > 1.0e-9) {
+            const double stepSeconds = std::min(
+                    CameraIntegrationStepSeconds, remainingSeconds);
+            const double yawError = normalizedRadians(
+                    desiredYaw - cameraYawRadians);
+            const double stoppingVelocity = std::sqrt(
+                    2.0 * MaximumCameraYawAccelerationRadiansPerSecondSquared
+                        * std::abs(yawError));
+            const double desiredYawVelocity = std::copysign(
+                    std::min(MaximumCameraYawVelocityRadiansPerSecond,
+                             stoppingVelocity),
+                    yawError);
+            const double maximumVelocityChange =
+                    MaximumCameraYawAccelerationRadiansPerSecondSquared
+                        * stepSeconds;
+            const double previousYawVelocity =
+                    cameraYawVelocityRadiansPerSecond;
+            cameraYawVelocityRadiansPerSecond += std::clamp(
+                    desiredYawVelocity - cameraYawVelocityRadiansPerSecond,
+                    -maximumVelocityChange, maximumVelocityChange);
+            const double yawStep = 0.5 * (previousYawVelocity
+                    + cameraYawVelocityRadiansPerSecond) * stepSeconds;
+            cameraYawRadians = normalizedRadians(
+                    cameraYawRadians + yawStep);
+            remainingSeconds -= stepSeconds;
+        }
+        const double targetDistance = std::clamp(
+                std::hypot(desiredTargetX - cameraPositionX,
+                           desiredTargetZ - cameraPositionZ),
+                10.0, MaximumCameraTargetDistanceMeters);
+        cameraTargetPositionX = cameraPositionX
+                + std::sin(cameraYawRadians) * targetDistance;
+        cameraTargetPositionZ = cameraPositionZ
+                + std::cos(cameraYawRadians) * targetDistance;
+        cameraPositionY = std::max(
+                cameraPositionY, minimumCameraPositionY);
         lastCameraPoseTimeMs = now;
     };
     const double cameraDistance = std::max(
@@ -897,6 +969,8 @@ void WorkoutGame3DViewModel::updateCameraPose(
             - cameraRightZ * cameraSideDistanceMeters;
     cameraPositionY = cameraSample.visualGroundElevationMeters()
             + cameraHeightDistanceMeters;
+    minimumCameraPositionY = cameraSample.visualGroundElevationMeters()
+            + 2.65;
 
     const double targetForwardX = std::sin(
             targetSample.center.headingRadians);
@@ -969,7 +1043,6 @@ void WorkoutGame3DViewModel::updateCameraPose(
                 (sideTargetZ - cameraTargetPositionZ) * blend;
     };
     if (!riderSample.ready
-            || riderSample.terrain != WorkoutGameTerrainKind::Berm
             || riderSample.pieceIndex >= roadCourse.pieces.size()) {
         applyPresentationCamera();
         constrainCameraTravel();
@@ -978,7 +1051,12 @@ void WorkoutGame3DViewModel::updateCameraPose(
     const WorkoutGameRoadPiece &piece =
             roadCourse.pieces[riderSample.pieceIndex];
     const WorkoutGameBermGeometryProfile berm =
-            WorkoutGameBermGeometry::profile(piece.difficulty);
+            WorkoutGameBermGeometry::profile(piece);
+    if (!berm.ready) {
+        applyPresentationCamera();
+        constrainCameraTravel();
+        return;
+    }
     const double local = distanceMeters
             - piece.geometryAnchorDistanceMeters;
     if (local <= berm.startMeters || local >= berm.endMeters) {

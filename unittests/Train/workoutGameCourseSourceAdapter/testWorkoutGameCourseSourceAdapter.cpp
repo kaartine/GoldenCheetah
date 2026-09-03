@@ -13,6 +13,7 @@
 #include "Train/WorkoutGameRoadPlan.h"
 #include "Train/WorkoutGameRoadQuality.h"
 
+#include <QTemporaryDir>
 #include <QTest>
 
 #include <cmath>
@@ -252,6 +253,48 @@ private slots:
                         original.document,
                         WorkoutGameCoursePreset::RideFirst,
                         QStringLiteral("Technical Tuesday")).document));
+    }
+
+    void legacyDocumentRegenerationPersistsAsCurrentRoadPlan()
+    {
+        WorkoutGameCourseSourceResult original =
+                WorkoutGameCourseSourceAdapter::convert(sampleRequest());
+        QCOMPARE(original.status, WorkoutGameCourseSourceStatus::Ready);
+        WorkoutGameCourseDocument legacy = original.document;
+        legacy.schemaVersion = 1;
+        legacy.course.roadPlan.reset();
+        QVERIFY(WorkoutGameCourseDocumentCodec::valid(legacy));
+
+        const WorkoutGameCourseSourceResult regenerated =
+                WorkoutGameCourseSourceAdapter::regenerate(
+                    legacy, legacy.preset, legacy.title);
+        QCOMPARE(regenerated.status, WorkoutGameCourseSourceStatus::Ready);
+        QCOMPARE(regenerated.document.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QVERIFY(regenerated.document.course.roadPlan);
+        QCOMPARE(regenerated.document.course.roadPlan->generationVersion,
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString coursePath = directory.filePath(
+                QStringLiteral("regenerated-v2.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    coursePath, regenerated.document, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        WorkoutGameCourseDocument reopened;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    coursePath, reopened, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(reopened.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QVERIFY(reopened.course.roadPlan);
+        QCOMPARE(reopened.course.roadPlan->generationVersion,
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(reopened),
+                 WorkoutGameCourseDocumentCodec::encode(
+                     regenerated.document));
     }
 };
 

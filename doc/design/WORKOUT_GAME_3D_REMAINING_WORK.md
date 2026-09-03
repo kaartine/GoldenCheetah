@@ -60,6 +60,58 @@ optimizations are not allowed to interrupt B0-B4. A change may be pulled
 forward only when it directly removes a release blocker and receives the same
 test coverage as its owning batch.
 
+## Current Execution Snapshot
+
+The following implementation slices are committed and pushed to the public
+fork. Their remaining parent packages stay `partial` until the packaged visual
+and live gates also pass.
+
+- `4eee279` measures cold first-ten-second continuity, prewarms the renderer
+  and bounds resident geometry refresh work.
+- `6737f5a` adds the isolated Quick 3D UI lifecycle gate for Data Generator,
+  start, gears, stop/continue, save and reopen.
+- `8a5029b` adds deterministic batched birch, sapling, dead-wood and low-growth
+  forest variety.
+- `f881ae3` persists a versioned deterministic road plan and enforces the
+  straight-run, rolling-window and sharp-turn quality rules.
+- `7bb32cd` makes the selected trail trajectory authoritative for rider
+  position and heading, fixes the feature-height datum and expands complete
+  rider-and-bicycle frustum coverage.
+
+The completed B1/B2 focused gate covers road plan, document, source adapter,
+runtime, road course, conversion dialog, geometry, world physics and the 3D
+ViewModel. The ViewModel run has 34 expected skips
+for opt-in X11/OpenGL artifact exporters. Persisted generation-two routes now
+store deterministic rolling relief and ordinary-turn banks, generation-one
+documents remain readable and are upgraded on save, short feature preparation
+is clamped no later than its decision, and the rider follows the same bank and
+surface used by rendering. The world regressions cover fast climb contact,
+speed-dependent tabletop flight and persisted relief. Route-following camera
+yaw is elapsed-time based and passes irregular 8-50 ms frame intervals,
+near-90-degree turns and repeated timestamps. Banked ordinary turns now use
+the same persisted heading curve for road placement and rider lean, noisy
+power input is bounded to 1.2 m/s lateral speed and 4.0 m/s2 lateral
+acceleration, and rider roll returns from a bank without a frame jump.
+Independent reviews' fifteen persistence, geometry, indexing, timing,
+generated-relief and motion findings are covered by added regressions. The
+twelve directly affected suites pass 386/386 under ASan/UBSan; leak
+detection remains enabled except for
+the Quick 3D View suite, where Qt 6.8.3 retains a known 600-byte offscreen
+renderer allocation after its platform-dependent cases are skipped.
+
+The required inventory reconciles 173/173 projects. Its final X11 run passed
+172 projects and stopped only at the AppImage policy project because two
+protected inventory hashes were stale. After updating exactly those hashes,
+the complete AppImage project, including reproducibility, SBOM, credential,
+immutable-action and private-OAuth gates, passes without any other source
+change. This dependency-scoped rerun completes the current 173-project
+unit/integration inventory.
+
+Work now in progress is B3: build the clean reproducible AppImage, exercise
+its isolated packaged UI and cold-start workflow, and publish it. The
+real-trainer and user A/B gates remain deliberately separate and cannot be
+replaced with generated telemetry.
+
 | ID | Priority | Status | Consolidated work | Done when | Source requirements |
 | --- | --- | --- | --- | --- | --- |
 | WG-01 | P0 | partial | Real-trainer end-to-end acceptance | An isolated athlete session on the target laptop proves trainer target, recording and feature outcome agree, followed by the user A/B ride. | `VS-04`, `REL-04` |
@@ -86,17 +138,21 @@ test coverage as its owning batch.
 ## Known Concrete Release Failures
 
 - The required inventory now includes
-  `Train/workoutGameGapJumpLaunchWindow` and reconciles 172/172 projects. Its
-  five focused gap suites pass 73/73, but `REL-01` remains open until the full
-  current inventory has been rerun.
+  `Train/workoutGameGapJumpLaunchWindow` and reconciles 173/173 projects. Its
+  five focused gap suites pass 73/73, and the complete current unit/integration
+  inventory is green. `REL-01` remains open only for the new packaged UI run.
 - The formerly documented climb-continuity and rock-garden bypass failures are
-  stale. Current `workoutGameWorld` passes 45/45 normally and under ASan/UBSan;
+  stale. Current `workoutGameWorld` passes 47/47 normally and under ASan/UBSan;
   both regressions also pass 25 repeated runs. Keep the strict tests, but do not
   schedule duplicate implementation work for them.
-- Current gap-jump evidence proves an implemented three-line system, but lacks
-  the complete per-line image/action/endurance matrix. Its recorded p95/max
-  frame intervals also exceed the stated limit unless shown to belong solely
-  to the excluded warm-up. WG-13 therefore remains partial.
+- Current gap-jump evidence proves the three rideable lines and grounded safe
+  line in a 305-artifact X11/Quick 3D matrix. A capture-free five-minute,
+  15,000-step endurance run reports 1.90 ms p95, 15.38 ms maximum update time
+  and zero queued geometry. Packaged execution and signed interactive review
+  remain open, so WG-13 remains partial.
+- The short-section preparation-order defect and the camera yaw-step failure
+  are closed in the current B1 aggregate gate. Their strict regressions remain
+  in the required suite; neither threshold was weakened.
 - No automated evidence substitutes for WG-01's physical trainer ride and
   user A/B acceptance.
 

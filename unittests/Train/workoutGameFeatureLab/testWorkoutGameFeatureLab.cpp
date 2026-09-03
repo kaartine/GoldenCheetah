@@ -176,14 +176,33 @@ private slots:
         QVERIFY(simulation.configure(course, 200.0));
 
         for (std::int64_t time = 0; time <= course.durationMs; time += 50) {
-            simulation.update(WorkoutGameFeatureLab::input(
-                    course, time, WorkoutGameFeatureLabScenario::Pass));
+            const WorkoutGameSimulationSnapshot snapshot = simulation.update(
+                    WorkoutGameFeatureLab::input(
+                        course, time, WorkoutGameFeatureLabScenario::Pass));
+            if (snapshot.activeSection >= 0
+                    && snapshot.featureOutcome
+                        == WorkoutGameFeatureOutcome::Active
+                    && course.sections[std::size_t(snapshot.activeSection)]
+                        .terrain == WorkoutGameTerrainKind::GapJump) {
+                // Gap jumps are committed by the distance-based runtime in
+                // production; this simulation-only matrix supplies that
+                // already-tested external decision explicitly.
+                QVERIFY(simulation.commitGapJumpOutcome(
+                        snapshot.activeSection,
+                        WorkoutGameFeatureOutcome::Completed,
+                        1.0));
+            }
         }
 
         for (std::size_t index = 0; index < course.sections.size(); ++index) {
             if (course.sections[index].challengeCount <= 0) continue;
-            QCOMPARE(simulation.sectionOutcomes()[index],
-                     WorkoutGameFeatureOutcome::Completed);
+            QVERIFY2(simulation.sectionOutcomes()[index]
+                            == WorkoutGameFeatureOutcome::Completed,
+                     qPrintable(QStringLiteral(
+                         "feature-lab pass scenario bypassed section %1 "
+                         "(terrain %2)")
+                         .arg(index)
+                         .arg(int(course.sections[index].terrain))));
         }
     }
 

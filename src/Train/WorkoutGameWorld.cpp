@@ -527,10 +527,9 @@ struct WorkoutGamePhysics::Impl
         }
     }
 
-    void stabilizeRollerPitch()
+    void stabilizeSurfacePitch()
     {
-        if (terrain != WorkoutGameTerrainKind::Rollers
-                || safeBypassActive) {
+        if (!retainsOrdinaryGroundContact(terrain)) {
             return;
         }
 
@@ -749,7 +748,7 @@ struct WorkoutGamePhysics::Impl
                     0.0, 16.0);
         setDriveSpeed(requestedSpeed);
         applyRollerPumpForce(requestedSpeed);
-        stabilizeRollerPitch();
+        stabilizeSurfacePitch();
 
         if (input.jumpRequested
                 && WorkoutGameFeatureCatalog::definition(terrain).jumpable

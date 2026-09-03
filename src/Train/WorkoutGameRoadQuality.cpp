@@ -117,7 +117,8 @@ WorkoutGameRoadQualityReport WorkoutGameRoadQuality::audit(
 
     for (const WorkoutGameRoadPiece &piece : plan.pieces) {
         const double magnitude = std::abs(piece.turnRadians);
-        if (magnitude > maximumTurnRadians + Epsilon) {
+        if (piece.terrain != WorkoutGameTerrainKind::Berm
+                && magnitude > maximumTurnRadians + Epsilon) {
             addOnce(report, WorkoutGameRoadQualityViolation::TurnExceedsBound);
         }
         const double center = piece.startDistanceMeters

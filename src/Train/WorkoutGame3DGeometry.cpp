@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGame3DGeometry.h"
+#include "WorkoutGameChallengeGeometry.h"
 
 #include "WorkoutGameBermGeometry.h"
 #include "WorkoutGameClimbGeometry.h"
@@ -43,48 +44,6 @@ constexpr double BypassEdgeWidthMeters = 0.08;
 constexpr double ForestDressingSpacingMeters = 3.0;
 constexpr double Pi = 3.14159265358979323846;
 
-std::pair<double, double> challengeGeometrySpan(
-        const WorkoutGameRoadPiece &piece)
-{
-    switch (piece.terrain) {
-    case WorkoutGameTerrainKind::Roots: {
-        const auto profile = WorkoutGameRootGeometry::profile(piece.difficulty);
-        return {profile.startMeters, profile.endMeters};
-    }
-    case WorkoutGameTerrainKind::RockGarden: {
-        const auto profile = WorkoutGameRockGardenGeometry::profile(
-                piece.difficulty);
-        return {profile.startMeters, profile.endMeters};
-    }
-    case WorkoutGameTerrainKind::RockSlab: {
-        const auto profile = WorkoutGameRockSlabGeometry::profile(
-                piece.difficulty);
-        return {profile.startMeters, profile.endMeters};
-    }
-    case WorkoutGameTerrainKind::Skinny: {
-        const auto profile = WorkoutGameSkinnyGeometry::profile(
-                piece.difficulty);
-        return {profile.startMeters, profile.endMeters};
-    }
-    case WorkoutGameTerrainKind::Climb: {
-        const auto profile = WorkoutGameClimbGeometry::profile(piece.difficulty);
-        return {profile.startMeters, profile.endMeters};
-    }
-    case WorkoutGameTerrainKind::Berm: {
-        const auto profile = WorkoutGameBermGeometry::profile(piece.difficulty);
-        return {profile.startMeters, profile.endMeters};
-    }
-    default: {
-        const auto profile = WorkoutGameFeatureGeometry::profile(
-                piece.terrain, piece.difficulty);
-        return profile.ready
-                ? std::pair<double, double>{
-                    profile.startMeters, profile.endMeters}
-                : std::pair<double, double>{0.0, 0.0};
-    }
-    }
-}
-
 bool overlapsChallengeCorridor(
         const WorkoutGameRoadCourse &course,
         double distanceMeters,
@@ -93,7 +52,8 @@ bool overlapsChallengeCorridor(
     constexpr double DressingClearanceMeters = 2.0;
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
         if (!piece.challenge.enabled) continue;
-        const auto [featureStart, featureEnd] = challengeGeometrySpan(piece);
+        const auto [featureStart, featureEnd] =
+                workoutGameChallengeGeometrySpan(piece);
         const double start = std::min({
                 piece.challenge.prepareDistanceMeters,
                 piece.challenge.bypassStartDistanceMeters,
@@ -292,11 +252,9 @@ void appendFeatureSamples(
         }
     }
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
-        if (piece.terrain != WorkoutGameTerrainKind::Berm) {
-            continue;
-        }
         const WorkoutGameBermGeometryProfile profile =
-                WorkoutGameBermGeometry::profile(piece.difficulty);
+                WorkoutGameBermGeometry::profile(piece);
+        if (!profile.ready) continue;
         const double center = piece.geometryAnchorDistanceMeters;
         const auto append = [&](double distance) {
             if (distance >= startDistanceMeters
@@ -489,8 +447,11 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
         }
         rideableSamples.push_back(sample.rideableSurface);
         renderableTrailSamples.push_back(sample.renderableTrailSurface);
+        const bool bankedSample = sample.pieceIndex < course.pieces.size()
+                && WorkoutGameBermGeometry::profile(
+                    course.pieces[sample.pieceIndex]).ready;
         trailBackingSamples.push_back(sample.renderableTrailSurface
-                || sample.terrain == WorkoutGameTerrainKind::Berm);
+                || bankedSample);
         const WorkoutGameRoadGapJumpGate *activeGapJump = nullptr;
         for (const WorkoutGameRoadPiece &piece : course.pieces) {
             if (!piece.gapJump.enabled) continue;
@@ -543,13 +504,13 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
         }
         double trailBackingDropMeters = 0.0;
         if (layer == Layer::Trail
-                && sample.terrain == WorkoutGameTerrainKind::Berm
+                && bankedSample
                 && !sample.renderableTrailSurface
                 && sample.pieceIndex < course.pieces.size()) {
             const WorkoutGameRoadPiece &piece =
                     course.pieces[sample.pieceIndex];
             const WorkoutGameBermGeometryProfile berm =
-                    WorkoutGameBermGeometry::profile(piece.difficulty);
+                    WorkoutGameBermGeometry::profile(piece);
             const double local = distance
                     - piece.geometryAnchorDistanceMeters;
             const double progress = std::clamp(
@@ -2337,11 +2298,8 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildBerms(
     int totalSamples = 0;
 
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
-        if (piece.terrain != WorkoutGameTerrainKind::Berm) {
-            continue;
-        }
         const WorkoutGameBermGeometryProfile profile =
-                WorkoutGameBermGeometry::profile(piece.difficulty);
+                WorkoutGameBermGeometry::profile(piece);
         if (!profile.ready) continue;
         const double center = piece.geometryAnchorDistanceMeters;
         const double start = std::max(

@@ -5,6 +5,7 @@ TARGET = testWorkoutGameMesh
 
 SOURCES = testWorkoutGameMesh.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
           ../../../src/Train/WorkoutGameMesh.cpp \
           ../../../src/Train/WorkoutGameTrailTile.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \

@@ -18,7 +18,8 @@
 
 struct WorkoutGameRoadPlan
 {
-    static constexpr std::uint32_t CurrentGenerationVersion = 1;
+    static constexpr std::uint32_t LegacyGenerationVersion = 1;
+    static constexpr std::uint32_t CurrentGenerationVersion = 2;
     static constexpr std::size_t MaximumPieces = 4096;
 
     std::uint32_t generationVersion = CurrentGenerationVersion;

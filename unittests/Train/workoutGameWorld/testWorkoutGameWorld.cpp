@@ -516,7 +516,11 @@ private slots:
         const Flight mismatchedDrive = measure(5.0, 7.0, true);
         for (const Flight &flight : {
                  slow, medium, fast, mismatchedDrive}) {
-            QVERIFY(flight.durationMs >= 400);
+            QVERIFY2(flight.durationMs >= 400,
+                     qPrintable(QStringLiteral(
+                         "tabletop flight lasted %1 ms at %2 m/s")
+                         .arg(flight.durationMs)
+                         .arg(flight.requestedSpeedMetersPerSecond)));
             QVERIFY(flight.durationMs <= 2000);
             QVERIFY(flight.sawBothWheelContact);
             QVERIFY(flight.sawNoWheelContact);
@@ -560,6 +564,76 @@ private slots:
         QCOMPARE(unsupportedFast.durationMs, naturalFast.durationMs);
         QCOMPARE(unsupportedFast.maximumAirMeters,
                  naturalFast.maximumAirMeters);
+    }
+
+    void tabletopCalibrationCoversDifficultyEndpoints()
+    {
+        for (const double difficulty : {0.0, 1.0}) {
+            WorkoutGameCourse course;
+            course.status = WorkoutGameCourseStatus::Ready;
+            course.seed = 0x423109u;
+            course.durationMs = 60000;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = WorkoutGameTerrainKind::Tabletop;
+            section.durationMs = course.durationMs;
+            section.lengthMeters = 120.0;
+            section.targetWatts = 260.0;
+            section.difficulty = difficulty;
+            section.challengeCount = 1;
+            course.sections = {section};
+            const WorkoutGameRoadCourse road =
+                    WorkoutGameRoadCourseBuilder::build(course, 200.0);
+            const auto piece = std::find_if(
+                    road.pieces.begin(), road.pieces.end(),
+                    [](const WorkoutGameRoadPiece &candidate) {
+                        return candidate.challenge.enabled;
+                    });
+            QVERIFY(piece != road.pieces.end());
+            const auto profile = WorkoutGameTabletopGeometry::profile(
+                    difficulty);
+            const double lip = piece->challenge.obstacleDistanceMeters
+                    + profile.lipMeters;
+
+            for (const double speed : {3.0, 7.0}) {
+                WorkoutGamePhysics physics;
+                QVERIFY(physics.configure(road));
+                WorkoutGamePhysicsInput input;
+                input.terrain = WorkoutGameTerrainKind::Tabletop;
+                input.desiredSpeedMetersPerSecond = speed;
+                input.courseSpeedMetersPerSecond = speed;
+                input.difficulty = difficulty;
+                input.effortRatio = 1.0;
+                const double start = lip - 3.0;
+                int takeoffMs = -1;
+                int durationMs = 0;
+                double apexMeters = 0.0;
+                for (int tick = 0; tick <= 220; ++tick) {
+                    input.workoutTimeMs = tick * 20;
+                    input.courseDistanceMeters = start
+                            + speed * double(input.workoutTimeMs) / 1000.0;
+                    input.jumpRequested = input.courseDistanceMeters >= lip;
+                    input.featureActionId = 0x423109u;
+                    const WorkoutGameWorldSnapshot frame = physics.update(input);
+                    apexMeters = std::max(
+                            apexMeters, frame.rider.airHeightMeters());
+                    if (frame.rider.airborne && takeoffMs < 0) {
+                        takeoffMs = int(input.workoutTimeMs);
+                    } else if (takeoffMs >= 0 && !frame.rider.airborne) {
+                        durationMs = int(input.workoutTimeMs) - takeoffMs;
+                        break;
+                    }
+                }
+                QVERIFY2(durationMs >= 400 && durationMs <= 2000,
+                         qPrintable(QStringLiteral(
+                             "tabletop difficulty %1 at %2 m/s flew %3 ms")
+                             .arg(difficulty).arg(speed).arg(durationMs)));
+                QVERIFY2(apexMeters >= 0.20 && apexMeters <= 1.80,
+                         qPrintable(QStringLiteral(
+                             "tabletop difficulty %1 at %2 m/s apex %3 m")
+                             .arg(difficulty).arg(speed).arg(apexMeters)));
+            }
+        }
     }
 
     void tabletopBypassSurfaceContinuesAcrossRoadPieceBoundaries()
@@ -1079,6 +1153,7 @@ private slots:
                 double maximumSurfaceRise = 0.0;
                 double minimumPitch = 90.0;
                 double maximumPitch = -90.0;
+                double minimumRoadGrade = 1000.0;
                 const int ticks = int(std::ceil(
                         (end - start) / (speed * 0.02)));
                 for (int tick = 0; tick <= ticks; ++tick) {
@@ -1107,6 +1182,9 @@ private slots:
                                 + slab.activeStartMeters
                             && input.courseDistanceMeters <= center
                                 + slab.activeEndMeters) {
+                        minimumRoadGrade = std::min(
+                                minimumRoadGrade,
+                                roadSample.center.gradePercent);
                         minimumPitch = std::min(
                                 minimumPitch, result.rider.pitchDegrees);
                         maximumPitch = std::max(
@@ -1132,8 +1210,9 @@ private slots:
                                  .arg(maximumPitch)));
                     QVERIFY2(minimumPitch < -3.0,
                              qPrintable(QStringLiteral(
-                                 "slab descent pitch reached only %1 degrees")
-                                 .arg(minimumPitch)));
+                                 "slab descent pitch reached only %1 degrees; "
+                                 "road grade reached %2 percent")
+                                 .arg(minimumPitch).arg(minimumRoadGrade)));
                 }
             }
         }
@@ -1922,6 +2001,62 @@ private slots:
 
         world.ready = false;
         QVERIFY(!camera.update(world, 0.016).ready);
+    }
+
+    void persistedReliefSurfaceIsTheAuthoritativeWorldContact()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 0x423105u;
+        source.durationMs = 60000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        section.durationMs = source.durationMs;
+        section.lengthMeters = 180.0;
+        section.targetWatts = 180.0;
+        section.gradePercent = 0.0;
+        section.difficulty = 0.6;
+        section.challengeCount = 0;
+        source.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        QVERIFY(road.ready);
+        QVERIFY(std::all_of(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.relief.enabled;
+                }));
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+        WorkoutGamePhysicsInput input;
+        input.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        input.desiredSpeedMetersPerSecond = 5.0;
+        input.followCourseSurface = true;
+        double maximumElevation = -1e9;
+        double minimumElevation = 1e9;
+        for (int tick = 0; tick <= 500; ++tick) {
+            input.workoutTimeMs = tick * 20;
+            input.courseDistanceMeters = 100.0 * double(tick) / 500.0;
+            const WorkoutGameRoadSample roadSample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, input.courseDistanceMeters);
+            QVERIFY(roadSample.ready);
+            input.gradePercent = roadSample.center.gradePercent;
+            const WorkoutGameWorldSnapshot world = physics.update(input);
+            QVERIFY(world.ready);
+            QVERIFY(!world.rider.airborne);
+            QVERIFY(std::abs(world.surfaceElevationMeters
+                             - roadSample.surfaceElevationMeters()) < 0.03);
+            minimumElevation = std::min(
+                    minimumElevation, world.surfaceElevationMeters);
+            maximumElevation = std::max(
+                    maximumElevation, world.surfaceElevationMeters);
+        }
+        QVERIFY(maximumElevation - minimumElevation >= 1.5);
+        QCOMPARE(source.sections[0].gradePercent, 0.0);
+        QCOMPARE(source.sections[0].targetWatts, 180.0);
     }
 };
 

@@ -282,6 +282,7 @@ void WorkoutGameFeatureRuntime::reset()
     configuredCourse = WorkoutGameRoadCourse();
     sections.clear();
     gapJumpState = GapJumpState();
+    bankLineState = BankLineState();
 }
 
 WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
@@ -339,25 +340,106 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             std::isfinite(featureReadiness) ? featureReadiness : 0.0,
             0.0, 1.0);
 
-    if (layout->challengePieceIndex >= configuredCourse.pieces.size()) {
-        if (layout->terrain == WorkoutGameTerrainKind::Berm
-                && layout->terrainPieceIndex < configuredCourse.pieces.size()) {
-            result.outcome = WorkoutGameFeatureOutcome::None;
-            result.route = WorkoutGameRoute::MainLine;
-            result.readiness = 0.0;
-            const WorkoutGameRoadPiece &piece =
-                    configuredCourse.pieces[layout->terrainPieceIndex];
-            const WorkoutGameBermGeometryProfile berm =
-                    WorkoutGameBermGeometry::profile(piece.difficulty);
-            const double local = result.visualDistanceMeters
-                    - piece.geometryAnchorDistanceMeters;
-            result.obstacleDistanceMeters =
-                    piece.geometryAnchorDistanceMeters;
-            result.bermLineBias = berm.effortLineBias(
-                    actualWatts, targetWatts);
-            result.lateralOffsetMeters = berm.effortLineLateralMeters(
-                    local, piece.turnRadians, result.bermLineBias);
+    const WorkoutGameRoadSample activeRoadSample =
+            WorkoutGameRoadCourseBuilder::sample(
+                configuredCourse, visualDistanceMeters);
+    const WorkoutGameRoadPiece *activeRoadPiece =
+            activeRoadSample.ready
+                && activeRoadSample.pieceIndex < configuredCourse.pieces.size()
+            ? &configuredCourse.pieces[activeRoadSample.pieceIndex] : nullptr;
+    const auto updateOrdinaryBankLine = [&]() {
+        constexpr double MaximumLateralSpeedMetersPerSecond = 1.2;
+        constexpr double MaximumLateralAccelerationMetersPerSecondSquared = 4.0;
+        constexpr double MaximumCatchupSeconds = 0.25;
+        constexpr double IntegrationStepSeconds = 0.05;
+        double targetOffsetMeters = 0.0;
+        bool ordinaryBankActive = false;
+        double activeMaximumOffsetMeters = 0.0;
+        if (activeRoadPiece && !activeRoadPiece->challenge.enabled) {
+            const WorkoutGameBermGeometryProfile bank =
+                    WorkoutGameBermGeometry::profile(*activeRoadPiece);
+            if (bank.ready) {
+                ordinaryBankActive = true;
+                const double local = visualDistanceMeters
+                        - activeRoadPiece->geometryAnchorDistanceMeters;
+                result.bermLineBias = bank.effortLineBias(
+                        actualWatts, targetWatts);
+                targetOffsetMeters = bank.effortLineLateralMeters(
+                        local, activeRoadPiece->turnRadians,
+                        result.bermLineBias);
+                activeMaximumOffsetMeters = bank.maximumLineOffsetMeters;
+            }
         }
+
+        const std::int64_t now = std::max<std::int64_t>(
+                0, simulation.workoutTimeMs);
+        if (!bankLineState.hasTimestamp
+                || now < bankLineState.lastWorkoutTimeMs) {
+            bankLineState = BankLineState();
+            bankLineState.hasTimestamp = true;
+            bankLineState.lastWorkoutTimeMs = now;
+        } else {
+            const double elapsedSeconds = std::clamp(
+                    double(now - bankLineState.lastWorkoutTimeMs) / 1000.0,
+                    0.0, MaximumCatchupSeconds);
+            double remainingSeconds = elapsedSeconds;
+            while (remainingSeconds > 1.0e-9) {
+                const double stepSeconds = std::min(
+                        IntegrationStepSeconds, remainingSeconds);
+                const double delta = targetOffsetMeters
+                        - bankLineState.lateralOffsetMeters;
+                const double stoppingSpeed = std::sqrt(
+                        2.0 * MaximumLateralAccelerationMetersPerSecondSquared
+                            * std::abs(delta));
+                const double targetVelocity = std::abs(delta) > 1.0e-9
+                        ? std::copysign(
+                            std::min(MaximumLateralSpeedMetersPerSecond,
+                                     stoppingSpeed), delta)
+                        : 0.0;
+                const double maximumVelocityChange =
+                        MaximumLateralAccelerationMetersPerSecondSquared
+                            * stepSeconds;
+                bankLineState.lateralVelocityMetersPerSecond += std::clamp(
+                        targetVelocity
+                            - bankLineState.lateralVelocityMetersPerSecond,
+                        -maximumVelocityChange, maximumVelocityChange);
+                bankLineState.lateralOffsetMeters +=
+                        bankLineState.lateralVelocityMetersPerSecond
+                            * stepSeconds;
+                if (bankLineState.maximumLineOffsetMeters > 0.0) {
+                    bankLineState.lateralOffsetMeters = std::clamp(
+                            bankLineState.lateralOffsetMeters,
+                            -bankLineState.maximumLineOffsetMeters,
+                            bankLineState.maximumLineOffsetMeters);
+                }
+                remainingSeconds -= stepSeconds;
+            }
+            bankLineState.lastWorkoutTimeMs = now;
+        }
+        if (ordinaryBankActive) {
+            bankLineState.maximumLineOffsetMeters = activeMaximumOffsetMeters;
+            bankLineState.lateralOffsetMeters = std::clamp(
+                    bankLineState.lateralOffsetMeters,
+                    -activeMaximumOffsetMeters, activeMaximumOffsetMeters);
+        }
+        if (activeRoadPiece && !activeRoadPiece->challenge.enabled
+                && result.route == WorkoutGameRoute::MainLine
+                && (ordinaryBankActive
+                    || std::abs(bankLineState.lateralOffsetMeters) > 1.0e-6)) {
+            result.lateralOffsetMeters = bankLineState.lateralOffsetMeters;
+        }
+    };
+
+    if (layout->challengePieceIndex >= configuredCourse.pieces.size()) {
+        result.outcome = WorkoutGameFeatureOutcome::None;
+        result.route = WorkoutGameRoute::MainLine;
+        result.readiness = 0.0;
+        if (activeRoadPiece
+                && WorkoutGameBermGeometry::profile(*activeRoadPiece).ready) {
+            result.obstacleDistanceMeters =
+                    activeRoadPiece->geometryAnchorDistanceMeters;
+        }
+        updateOrdinaryBankLine();
         return result;
     }
     const WorkoutGameRoadPiece *piece =
@@ -711,9 +793,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         actionStart = std::max(
                 layout->startDistanceMeters,
                 result.obstacleDistanceMeters + skinny.activeStartMeters);
-        actionEnd = std::min(
-                layout->endDistanceMeters,
-                result.obstacleDistanceMeters + skinny.activeEndMeters);
+        actionEnd = result.obstacleDistanceMeters + skinny.activeEndMeters;
     } else if (result.motion == WorkoutGameFeatureMotion::Jump) {
         const WorkoutGameFeatureGeometryProfile geometry =
                 WorkoutGameFeatureGeometry::profile(
@@ -862,5 +942,6 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                     * smoothStep(actionProgress);
         }
     }
+    updateOrdinaryBankLine();
     return result;
 }

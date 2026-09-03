@@ -105,6 +105,7 @@ private:
     std::atomic_bool prewarmCompleted{false};
     std::uint64_t frameNumber = 0;
     std::int64_t lastTracePublishMs = -1;
+    std::int64_t lastFpsPublishMs = -1;
     bool coldStartCompletePublished = false;
     bool hasFrame = false;
     bool hasPresentedVisualState = false;

@@ -126,9 +126,19 @@ private:
         WorkoutGameGapJumpSelector selector;
     };
 
+    struct BankLineState
+    {
+        bool hasTimestamp = false;
+        std::int64_t lastWorkoutTimeMs = 0;
+        double lateralOffsetMeters = 0.0;
+        double lateralVelocityMetersPerSecond = 0.0;
+        double maximumLineOffsetMeters = 0.0;
+    };
+
     WorkoutGameRoadCourse configuredCourse;
     std::vector<SectionLayout> sections;
     GapJumpState gapJumpState;
+    BankLineState bankLineState;
 };
 
 #endif

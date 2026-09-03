@@ -89,10 +89,30 @@ WorkoutGameCourseDocument sampleDocument()
         piece.startDistanceMeters = double(index) * 20.0;
         piece.lengthMeters = 20.0;
         piece.turnRadians = (index & 1) == 0 ? 0.30 : -0.30;
+        piece.relief.enabled = true;
+        piece.relief.phaseRadians = 0.15 * index;
+        piece.relief.constantCoefficientMeters = 0.75;
+        piece.relief.cosineCoefficientMeters = 0.20;
+        piece.relief.sineCoefficientMeters = 0.18;
         piece.riseMeters = index < 5 ? 1.0 : -0.8;
         piece.difficulty = index < 5 ? 0.7 : 0.2;
         piece.geometryAnchorDistanceMeters =
                 piece.startDistanceMeters + 10.0;
+        if (index == 4) {
+            piece.bank.enabled = true;
+            piece.bank.startDistanceMeters = piece.startDistanceMeters;
+            piece.bank.curveStartDistanceMeters =
+                    piece.startDistanceMeters + 2.0;
+            piece.bank.curveEndDistanceMeters =
+                    piece.startDistanceMeters + 18.0;
+            piece.bank.endDistanceMeters =
+                    piece.startDistanceMeters + 20.0;
+            piece.bank.socketHalfWidthMeters = 0.68;
+            piece.bank.activeHalfWidthMeters = 0.92;
+            piece.bank.maximumBankRadians = 0.30;
+            piece.bank.maximumLineOffsetMeters = 0.40;
+            piece.bank.designSpeedMetersPerSecond = 7.0;
+        }
         piece.entry = connector;
         piece.exit = connector;
         piece.exit.zMeters += 20.0;
@@ -156,6 +176,13 @@ private slots:
         QVERIFY(decoded.course.roadPlan);
         QCOMPARE(decoded.course.roadPlan->pieces.size(), std::size_t(15));
         QCOMPARE(decoded.course.roadPlan->pieces[4].turnRadians, 0.30);
+        QVERIFY(decoded.course.roadPlan->pieces[4].bank.enabled);
+        QCOMPARE(decoded.course.roadPlan->pieces[4].bank.maximumBankRadians,
+                 0.30);
+        QCOMPARE(decoded.course.roadPlan->pieces[4]
+                    .relief.constantCoefficientMeters, 0.75);
+        QVERIFY(encoded.contains("\"bank\""));
+        QVERIFY(encoded.contains("\"relief\""));
         QVERIFY(WorkoutGameRoadQuality::audit(
                     *decoded.course.roadPlan).accepted());
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), encoded);
@@ -295,6 +322,139 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
                     QJsonDocument(root).toJson(), decoded),
                  WorkoutGameCourseDocumentStatus::UnsupportedVersion);
+    }
+
+    void legacyRoadGenerationOneRemainsCanonicalAndReadable()
+    {
+        WorkoutGameCourseDocument legacy = sampleDocument();
+        auto plan = std::make_shared<WorkoutGameRoadPlan>(
+                *legacy.course.roadPlan);
+        plan->generationVersion =
+                WorkoutGameRoadPlan::LegacyGenerationVersion;
+        for (WorkoutGameRoadPiece &piece : plan->pieces) {
+            piece.bank = WorkoutGameRoadBankProfile();
+            piece.relief = WorkoutGameRoadReliefProfile();
+        }
+        legacy.course.roadPlan = plan;
+        const QByteArray encoded = WorkoutGameCourseDocumentCodec::encode(legacy);
+        QVERIFY(!encoded.contains("\"bank\""));
+        QVERIFY(!encoded.contains("\"relief\""));
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.course.roadPlan->generationVersion,
+                 WorkoutGameRoadPlan::LegacyGenerationVersion);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), encoded);
+    }
+
+    void savingSchemaTwoGenerationOneRegeneratesCurrentRoadMetadata()
+    {
+        WorkoutGameCourseDocument legacy = sampleDocument();
+        auto plan = std::make_shared<WorkoutGameRoadPlan>(
+                *legacy.course.roadPlan);
+        plan->generationVersion =
+                WorkoutGameRoadPlan::LegacyGenerationVersion;
+        for (WorkoutGameRoadPiece &piece : plan->pieces) {
+            piece.bank = WorkoutGameRoadBankProfile();
+            piece.relief = WorkoutGameRoadReliefProfile();
+        }
+        legacy.course.roadPlan = plan;
+        QCOMPARE(legacy.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(
+                QStringLiteral("generation-one.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, legacy, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        WorkoutGameCourseDocument loaded;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    path, loaded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QVERIFY(loaded.course.roadPlan);
+        QCOMPARE(loaded.course.roadPlan->generationVersion,
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
+        QVERIFY(std::all_of(
+                loaded.course.roadPlan->pieces.begin(),
+                loaded.course.roadPlan->pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.relief.enabled;
+                }));
+    }
+
+    void legacyBermMigratesToUnscoredPersistedBank()
+    {
+        WorkoutGameCourseDocument legacy = sampleDocument();
+        legacy.schemaVersion = 1;
+        legacy.course.sections[0].feature = WorkoutGameFeature::Trail;
+        legacy.course.sections[0].terrain = WorkoutGameTerrainKind::Berm;
+        legacy.course.sections[0].gradePercent = 0.0;
+        legacy.course.roadPlan.reset();
+        QVERIFY(WorkoutGameCourseDocumentCodec::valid(legacy));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(
+                QStringLiteral("legacy-berm.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, legacy, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        WorkoutGameCourseDocument loaded;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    path, loaded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QVERIFY(loaded.course.roadPlan);
+        const auto migrated = std::find_if(
+                loaded.course.roadPlan->pieces.begin(),
+                loaded.course.roadPlan->pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.terrain == WorkoutGameTerrainKind::Berm;
+                });
+        QVERIFY(migrated != loaded.course.roadPlan->pieces.end());
+        QVERIFY(migrated->bank.enabled);
+        QVERIFY(!migrated->challenge.enabled);
+        QVERIFY(!migrated->qualityExempt);
+    }
+
+    void malformedBankAndReliefMetadataAreRejected()
+    {
+        const QJsonObject canonical = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
+                .object();
+        WorkoutGameCourseDocument decoded;
+
+        QJsonObject invalidBank = canonical;
+        QJsonObject plan = invalidBank.value(QStringLiteral("roadPlan")).toObject();
+        QJsonArray pieces = plan.value(QStringLiteral("pieces")).toArray();
+        QJsonObject piece = pieces[4].toObject();
+        QJsonObject bank = piece.value(QStringLiteral("bank")).toObject();
+        bank.insert(QStringLiteral("maximumBankRadians"), 2.0);
+        piece.insert(QStringLiteral("bank"), bank);
+        pieces[4] = piece;
+        plan.insert(QStringLiteral("pieces"), pieces);
+        invalidBank.insert(QStringLiteral("roadPlan"), plan);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(invalidBank).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::InvalidDocument);
+
+        QJsonObject invalidRelief = canonical;
+        plan = invalidRelief.value(QStringLiteral("roadPlan")).toObject();
+        pieces = plan.value(QStringLiteral("pieces")).toArray();
+        piece = pieces[0].toObject();
+        QJsonObject relief = piece.value(QStringLiteral("relief")).toObject();
+        relief.insert(QStringLiteral("phaseRadians"), QStringLiteral("nan"));
+        piece.insert(QStringLiteral("relief"), relief);
+        pieces[0] = piece;
+        plan.insert(QStringLiteral("pieces"), pieces);
+        invalidRelief.insert(QStringLiteral("roadPlan"), plan);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(invalidRelief).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::InvalidDocument);
     }
 
     void malformedAndOversizedRoadPlansAreRejected()

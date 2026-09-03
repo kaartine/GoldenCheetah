@@ -78,6 +78,29 @@ struct WorkoutGameRoadGapJumpGate
     std::array<WorkoutGameRoadGapJumpLine, 3> lines{};
 };
 
+struct WorkoutGameRoadBankProfile
+{
+    bool enabled = false;
+    double startDistanceMeters = 0.0;
+    double curveStartDistanceMeters = 0.0;
+    double curveEndDistanceMeters = 0.0;
+    double endDistanceMeters = 0.0;
+    double socketHalfWidthMeters = 0.0;
+    double activeHalfWidthMeters = 0.0;
+    double maximumBankRadians = 0.0;
+    double maximumLineOffsetMeters = 0.0;
+    double designSpeedMetersPerSecond = 0.0;
+};
+
+struct WorkoutGameRoadReliefProfile
+{
+    bool enabled = false;
+    double phaseRadians = 0.0;
+    double constantCoefficientMeters = 0.0;
+    double cosineCoefficientMeters = 0.0;
+    double sineCoefficientMeters = 0.0;
+};
+
 struct WorkoutGameRoadPiece
 {
     std::size_t sourceSectionIndex = 0;
@@ -93,6 +116,8 @@ struct WorkoutGameRoadPiece
     bool qualityExempt = false;
     double qualityExemptionStartDistanceMeters = 0.0;
     double qualityExemptionEndDistanceMeters = 0.0;
+    WorkoutGameRoadBankProfile bank;
+    WorkoutGameRoadReliefProfile relief;
     WorkoutGameRoadConnector entry;
     WorkoutGameRoadConnector exit;
     WorkoutGameRoadChallengeGate challenge;
@@ -115,6 +140,8 @@ struct WorkoutGameRoadCourse
     double totalLengthMeters = 0.0;
     double visualLengthMeters = 0.0;
     std::vector<WorkoutGameRoadPiece> pieces;
+    bool challengePieceIndexReady = false;
+    std::vector<std::size_t> challengePieceIndices;
     std::vector<WorkoutGameRoadTimelineSection> timeline;
 };
 

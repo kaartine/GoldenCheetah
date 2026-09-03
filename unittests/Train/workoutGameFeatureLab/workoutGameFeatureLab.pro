@@ -7,6 +7,7 @@ SOURCES = testWorkoutGameFeatureLab.cpp \
           ../../../src/Train/WorkoutGameCourse.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameFeatureLab.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \
           ../../../src/Train/WorkoutGameRoadQuality.cpp \

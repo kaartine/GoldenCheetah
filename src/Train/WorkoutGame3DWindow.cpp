@@ -224,6 +224,7 @@ void WorkoutGame3DWindow::setCourse(
     hasPresentedVisualState = false;
     frameNumber = 0;
     lastTracePublishMs = -1;
+    lastFpsPublishMs = -1;
     coldStartCompletePublished = false;
     hasFrame = false;
     viewModel->setCourse(course, ftpWatts);
@@ -294,6 +295,7 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
         viewModel->setDiagnostics(publishedDiagnostics);
         frameNumber = 0;
         lastTracePublishMs = -1;
+        lastFpsPublishMs = -1;
         coldStartCompletePublished = false;
     }
     sessionRunning = running;
@@ -309,7 +311,6 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
         requestUpdate();
     } else {
         coldStartFrameCapture.stop();
-        requestRendererPrewarm();
     }
 }
 
@@ -340,6 +341,12 @@ void WorkoutGame3DWindow::handlePresentedFrame(
 {
     if (!sessionRunning) return;
     frameRateCounter.frameRenderedNanoseconds(presentationTimeNs);
+    const std::int64_t presentationTimeMs = presentationTimeNs / 1000000;
+    if (lastFpsPublishMs < 0
+            || presentationTimeMs - lastFpsPublishMs >= 250) {
+        lastFpsPublishMs = presentationTimeMs;
+        viewModel->setFps(frameRateCounter.framesPerSecond());
+    }
     QElapsedTimer presentationWork;
     presentationWork.start();
     presentFrame();

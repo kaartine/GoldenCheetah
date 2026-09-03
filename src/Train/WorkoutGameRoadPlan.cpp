@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameRoadPlan.h"
+#include "WorkoutGameChallengeGeometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,7 +19,10 @@ constexpr double DistanceToleranceMeters = 1.0e-6;
 constexpr double MaximumCourseDistanceMeters = 250000.0;
 constexpr double MaximumPieceLengthMeters = 500.0;
 constexpr double MaximumTurnRadians = 1.4835298641951802; // 85 degrees
+constexpr double MaximumLegacyBermTurnRadians = 1.7453292519943295; // 100 degrees
+constexpr double MaximumReliefGradePercent = 120.0;
 constexpr std::uint64_t MaximumExactJsonInteger = 9007199254740991ULL;
+constexpr double Pi = 3.14159265358979323846;
 
 bool finiteValue(double value)
 {
@@ -64,6 +68,153 @@ bool validAnimation(WorkoutGameRoadAnimation animation)
 {
     return animation >= WorkoutGameRoadAnimation::None
             && animation <= WorkoutGameRoadAnimation::LeanRight;
+}
+
+bool decisionMustPrecedeObstacle(WorkoutGameTerrainKind terrain)
+{
+    switch (terrain) {
+    case WorkoutGameTerrainKind::BunnyHop:
+    case WorkoutGameTerrainKind::Drop:
+    case WorkoutGameTerrainKind::LogOver:
+    case WorkoutGameTerrainKind::Tabletop:
+    case WorkoutGameTerrainKind::GapJump:
+        return true;
+    default:
+        return false;
+    }
+}
+
+double latestChallengeDecisionDistance(const WorkoutGameRoadPiece &piece)
+{
+    if (piece.terrain == WorkoutGameTerrainKind::BunnyHop
+            || piece.terrain == WorkoutGameTerrainKind::LogOver
+            || piece.terrain == WorkoutGameTerrainKind::Tabletop) {
+        const WorkoutGameFeatureGeometryProfile geometry =
+                WorkoutGameFeatureGeometry::profile(
+                    piece.terrain, piece.difficulty);
+        if (geometry.ready) {
+            const double takeoffOffset = piece.terrain
+                    == WorkoutGameTerrainKind::Tabletop
+                ? geometry.plateauStartMeters : geometry.startMeters;
+            return piece.challenge.obstacleDistanceMeters + takeoffOffset;
+        }
+    }
+    return piece.challenge.obstacleDistanceMeters;
+}
+
+bool zeroBank(const WorkoutGameRoadBankProfile &bank)
+{
+    return !bank.enabled
+            && bank.startDistanceMeters == 0.0
+            && bank.curveStartDistanceMeters == 0.0
+            && bank.curveEndDistanceMeters == 0.0
+            && bank.endDistanceMeters == 0.0
+            && bank.socketHalfWidthMeters == 0.0
+            && bank.activeHalfWidthMeters == 0.0
+            && bank.maximumBankRadians == 0.0
+            && bank.maximumLineOffsetMeters == 0.0
+            && bank.designSpeedMetersPerSecond == 0.0;
+}
+
+bool validBank(const WorkoutGameRoadPiece &piece)
+{
+    const WorkoutGameRoadBankProfile &bank = piece.bank;
+    if (!finiteValue(bank.startDistanceMeters)
+            || !finiteValue(bank.curveStartDistanceMeters)
+            || !finiteValue(bank.curveEndDistanceMeters)
+            || !finiteValue(bank.endDistanceMeters)
+            || !finiteValue(bank.socketHalfWidthMeters)
+            || !finiteValue(bank.activeHalfWidthMeters)
+            || !finiteValue(bank.maximumBankRadians)
+            || !finiteValue(bank.maximumLineOffsetMeters)
+            || !finiteValue(bank.designSpeedMetersPerSecond)) {
+        return false;
+    }
+    if (!bank.enabled) return zeroBank(bank);
+    const double pieceEnd = piece.startDistanceMeters + piece.lengthMeters;
+    return !piece.challenge.enabled
+            && !piece.gapJump.enabled
+            && std::abs(piece.turnRadians) >= 0.20
+            && bank.startDistanceMeters >= piece.startDistanceMeters
+                - DistanceToleranceMeters
+            && bank.startDistanceMeters
+                <= bank.curveStartDistanceMeters
+                    + DistanceToleranceMeters
+            && bank.curveStartDistanceMeters + DistanceToleranceMeters
+                < bank.curveEndDistanceMeters
+            && bank.curveEndDistanceMeters
+                <= bank.endDistanceMeters + DistanceToleranceMeters
+            && bank.endDistanceMeters <= pieceEnd + DistanceToleranceMeters
+            && bank.socketHalfWidthMeters >= 0.4
+            && bank.socketHalfWidthMeters <= 2.0
+            && std::abs(bank.socketHalfWidthMeters
+                        - piece.entry.halfWidthMeters)
+                <= DistanceToleranceMeters
+            && std::abs(bank.socketHalfWidthMeters
+                        - piece.exit.halfWidthMeters)
+                <= DistanceToleranceMeters
+            && bank.activeHalfWidthMeters >= bank.socketHalfWidthMeters
+            && bank.activeHalfWidthMeters <= 2.0
+            && bank.maximumBankRadians > 0.0
+            && bank.maximumBankRadians <= Pi * 0.25
+            && bank.maximumLineOffsetMeters >= 0.0
+            && bank.maximumLineOffsetMeters
+                <= bank.activeHalfWidthMeters - 0.2
+            && bank.designSpeedMetersPerSecond >= 1.0
+            && bank.designSpeedMetersPerSecond <= 30.0;
+}
+
+bool zeroRelief(const WorkoutGameRoadReliefProfile &relief)
+{
+    return !relief.enabled
+            && relief.phaseRadians == 0.0
+            && relief.constantCoefficientMeters == 0.0
+            && relief.cosineCoefficientMeters == 0.0
+            && relief.sineCoefficientMeters == 0.0;
+}
+
+bool validRelief(const WorkoutGameRoadPiece &piece)
+{
+    const WorkoutGameRoadReliefProfile &relief = piece.relief;
+    if (!relief.enabled
+            || !finiteValue(relief.phaseRadians)
+            || !finiteValue(relief.constantCoefficientMeters)
+            || !finiteValue(relief.cosineCoefficientMeters)
+            || !finiteValue(relief.sineCoefficientMeters)) {
+        return false;
+    }
+    if (!(relief.phaseRadians >= -Pi
+            && relief.phaseRadians <= Pi
+            && std::abs(relief.constantCoefficientMeters) <= 5.0
+            && std::abs(relief.cosineCoefficientMeters) <= 5.0
+            && std::abs(relief.sineCoefficientMeters) <= 5.0
+            && std::abs(relief.constantCoefficientMeters)
+                + std::abs(relief.cosineCoefficientMeters)
+                + std::abs(relief.sineCoefficientMeters) <= 8.0)) {
+        return false;
+    }
+    constexpr int DerivativeSamples = 128;
+    for (int index = 0; index <= DerivativeSamples; ++index) {
+        const double progress = double(index) / DerivativeSamples;
+        const double envelope = std::pow(std::sin(Pi * progress), 2.0);
+        const double envelopeDerivative = Pi * std::sin(2.0 * Pi * progress);
+        const double angle = 2.0 * Pi * progress + relief.phaseRadians;
+        const double inner = relief.constantCoefficientMeters
+                + relief.cosineCoefficientMeters * std::cos(angle)
+                + relief.sineCoefficientMeters * std::sin(angle);
+        const double innerDerivative = 2.0 * Pi
+                * (-relief.cosineCoefficientMeters * std::sin(angle)
+                   + relief.sineCoefficientMeters * std::cos(angle));
+        const double gradePercent = 100.0
+                * (envelopeDerivative * inner
+                   + envelope * innerDerivative)
+                / piece.lengthMeters;
+        if (!finiteValue(gradePercent)
+                || std::abs(gradePercent) > MaximumReliefGradePercent) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool validChallengeProfile(
@@ -113,11 +264,19 @@ bool validChallenge(
     }
     const bool ordered = gate.prepareDistanceMeters
                 <= gate.decisionDistanceMeters + DistanceToleranceMeters
-            && gate.decisionDistanceMeters
-                <= gate.obstacleDistanceMeters + DistanceToleranceMeters
+            && (!decisionMustPrecedeObstacle(piece.terrain)
+                || gate.decisionDistanceMeters
+                    <= latestChallengeDecisionDistance(piece)
+                        + DistanceToleranceMeters)
             && gate.bypassStartDistanceMeters
                 <= gate.bypassEndDistanceMeters + DistanceToleranceMeters;
     const bool distancesValid = gate.prepareDistanceMeters >= 0.0
+            && gate.prepareDistanceMeters
+                <= courseEndMeters + DistanceToleranceMeters
+            && gate.decisionDistanceMeters >= 0.0
+            && gate.decisionDistanceMeters
+                <= courseEndMeters + DistanceToleranceMeters
+            && gate.obstacleDistanceMeters >= 0.0
             && gate.obstacleDistanceMeters <= courseEndMeters
                 + DistanceToleranceMeters
             && gate.bypassStartDistanceMeters >= 0.0
@@ -186,6 +345,8 @@ bool validGapJump(
                 || !finiteValue(line.lipHeightMeters)
                 || !finiteValue(line.landingDropMeters)
                 || line.takeoffDistanceMeters < 0.0
+                || gap.lockDistanceMeters
+                    > line.takeoffDistanceMeters + DistanceToleranceMeters
                 || line.landingDistanceMeters
                     > courseEndMeters + DistanceToleranceMeters
                 || line.landingDistanceMeters <= line.takeoffDistanceMeters
@@ -215,7 +376,9 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
         std::size_t sourceSectionCount)
 {
     if (plan.generationVersion
-            != WorkoutGameRoadPlan::CurrentGenerationVersion) {
+                != WorkoutGameRoadPlan::LegacyGenerationVersion
+            && plan.generationVersion
+                != WorkoutGameRoadPlan::CurrentGenerationVersion) {
         return WorkoutGameRoadPlanValidationStatus::UnsupportedVersion;
     }
     if (plan.pieces.size() > WorkoutGameRoadPlan::MaximumPieces) {
@@ -252,7 +415,10 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
                 || piece.lengthMeters > MaximumPieceLengthMeters
                 || std::abs(piece.startDistanceMeters - expectedStartMeters)
                     > DistanceToleranceMeters
-                || std::abs(piece.turnRadians) > MaximumTurnRadians + 1.0e-9
+                || std::abs(piece.turnRadians)
+                    > (piece.terrain == WorkoutGameTerrainKind::Berm
+                        ? MaximumLegacyBermTurnRadians
+                        : MaximumTurnRadians) + 1.0e-9
                 || std::abs(piece.riseMeters) > piece.lengthMeters
                 || piece.difficulty < 0.0 || piece.difficulty > 1.0
                 || piece.reliefScale < 0.0 || piece.reliefScale > 2.5
@@ -269,6 +435,12 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
                 || (previousExit && !sameConnector(*previousExit, piece.entry))
                 || !validChallenge(piece, courseEndMeters)
                 || !validGapJump(piece.gapJump, courseEndMeters)
+                || (plan.generationVersion
+                        == WorkoutGameRoadPlan::LegacyGenerationVersion
+                    ? (!zeroBank(piece.bank) || !zeroRelief(piece.relief))
+                    : (!validBank(piece) || !validRelief(piece)
+                       || (piece.terrain == WorkoutGameTerrainKind::Berm
+                           && !piece.bank.enabled)))
                 || (piece.gapJump.enabled && !piece.challenge.enabled)) {
             return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
         }
@@ -284,6 +456,18 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
             || plan.pieces.back().sourceSectionIndex + 1
                 != sourceSectionCount) {
         return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+    }
+    for (const WorkoutGameRoadPiece &banked : plan.pieces) {
+        if (!banked.bank.enabled) continue;
+        for (const WorkoutGameRoadPiece &feature : plan.pieces) {
+            if (!feature.challenge.enabled) continue;
+            const auto [protectedStart, protectedEnd] =
+                    workoutGameChallengeProtectedSpan(feature);
+            if (banked.bank.startDistanceMeters < protectedEnd
+                    && banked.bank.endDistanceMeters > protectedStart) {
+                return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+            }
+        }
     }
     return WorkoutGameRoadPlanValidationStatus::Ready;
 }
