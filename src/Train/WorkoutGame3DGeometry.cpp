@@ -87,7 +87,8 @@ std::pair<double, double> challengeGeometrySpan(
 
 bool overlapsChallengeCorridor(
         const WorkoutGameRoadCourse &course,
-        double distanceMeters)
+        double distanceMeters,
+        double halfExtentMeters = 0.0)
 {
     constexpr double DressingClearanceMeters = 2.0;
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
@@ -103,7 +104,10 @@ bool overlapsChallengeCorridor(
                 piece.challenge.obstacleDistanceMeters,
                 piece.challenge.obstacleDistanceMeters + featureEnd})
                 + DressingClearanceMeters;
-        if (distanceMeters >= start && distanceMeters <= end) return true;
+        if (distanceMeters + halfExtentMeters >= start
+                && distanceMeters - halfExtentMeters <= end) {
+            return true;
+        }
     }
     return false;
 }
@@ -676,12 +680,13 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
         double endDistanceMeters)
 {
     constexpr int RowsPerSide = 2;
-    constexpr int VerticesPerTree = 20;
-    constexpr int TrianglesPerTree = 8;
+    constexpr int MaximumVerticesPerTree = 30;
+    constexpr int MaximumTrianglesPerTree = 18;
     constexpr int MaximumVerticesPerProp = 18;
     constexpr int MaximumTrianglesPerProp = 18;
     constexpr double EdgeInsetMeters = 1.5;
     constexpr double CameraCorridorHalfWidthMeters = 9.0;
+    constexpr double PropFootprintHalfLengthMeters = 1.5;
     const int firstSlot = int(std::floor(
             (startDistanceMeters + EdgeInsetMeters)
             / ForestDressingSpacingMeters)) - 1;
@@ -694,8 +699,8 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
             0, (lastSlot - firstSlot + 1) * 2 * RowsPerSide);
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
-    vertices.reserve(std::size_t(maximumTrees * VerticesPerTree));
-    indices.reserve(std::size_t(maximumTrees * TrianglesPerTree * 3));
+    vertices.reserve(std::size_t(maximumTrees * MaximumVerticesPerTree));
+    indices.reserve(std::size_t(maximumTrees * MaximumTrianglesPerTree * 3));
     QVector3D boundsMin(
             std::numeric_limits<float>::max(),
             std::numeric_limits<float>::max(),
@@ -804,6 +809,73 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
         appendGrounded(0.0, crownHeight + 0.28 * scale,
                        0.0, crownColor);
         indices.insert(indices.end(), {upper, upper + 1u, upper + 2u});
+    };
+    const auto appendBirch = [&](double distance, double lateral,
+                                 double scale) {
+        const TerrainColor trunkColor{0.82f, 0.83f, 0.75f};
+        const TerrainColor barkColor{0.18f, 0.17f, 0.14f};
+        const TerrainColor crownColor{0.31f, 0.49f, 0.18f};
+        const auto appendBirchCard = [&](double axisForward,
+                                         double axisLateral) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        course, distance);
+            const double rightX = std::cos(sample.center.headingRadians);
+            const double rightZ = -std::sin(sample.center.headingRadians);
+            const double forwardX = std::sin(sample.center.headingRadians);
+            const double forwardZ = std::cos(sample.center.headingRadians);
+            const double axisX = axisForward * forwardX
+                    + axisLateral * rightX;
+            const double axisZ = axisForward * forwardZ
+                    + axisLateral * rightZ;
+            QVector3D normal(float(-axisZ), 0.0f, float(axisX));
+            normal.normalize();
+            const auto appendGrounded = [&](double offset, double height,
+                                            double embed,
+                                            const TerrainColor &color) {
+                const GroundedPoint point = groundedPoint(
+                        distance + offset * axisForward,
+                        lateral + offset * axisLateral, embed);
+                appendVertex(point.x, point.y + height, point.z,
+                             normal, color);
+            };
+            const double trunkHalfWidth = 0.11 * scale;
+            const double trunkHeight = 2.35 * scale;
+            const std::uint32_t trunk = std::uint32_t(vertices.size());
+            appendGrounded(-trunkHalfWidth, 0.0, 0.02 * scale, trunkColor);
+            appendGrounded(trunkHalfWidth, 0.0, 0.02 * scale, trunkColor);
+            appendGrounded(trunkHalfWidth, trunkHeight, 0.0, trunkColor);
+            appendGrounded(-trunkHalfWidth, trunkHeight, 0.0, trunkColor);
+            indices.insert(indices.end(), {
+                trunk, trunk + 1u, trunk + 2u,
+                trunk, trunk + 2u, trunk + 3u
+            });
+
+            const std::uint32_t crown = std::uint32_t(vertices.size());
+            appendGrounded(-0.52 * scale, 1.80 * scale, 0.0, crownColor);
+            appendGrounded(0.52 * scale, 1.80 * scale, 0.0, crownColor);
+            appendGrounded(0.94 * scale, 2.75 * scale, 0.0, crownColor);
+            appendGrounded(0.0, 4.45 * scale, 0.0, crownColor);
+            appendGrounded(-0.94 * scale, 2.75 * scale, 0.0, crownColor);
+            indices.insert(indices.end(), {
+                crown, crown + 1u, crown + 2u,
+                crown, crown + 2u, crown + 3u,
+                crown, crown + 3u, crown + 4u
+            });
+
+            const double barkHalfWidth = 0.125 * scale;
+            const std::uint32_t bark = std::uint32_t(vertices.size());
+            appendGrounded(-barkHalfWidth, 0.62 * scale, 0.0, barkColor);
+            appendGrounded(barkHalfWidth, 0.62 * scale, 0.0, barkColor);
+            appendGrounded(barkHalfWidth, 0.82 * scale, 0.0, barkColor);
+            appendGrounded(-barkHalfWidth, 0.82 * scale, 0.0, barkColor);
+            indices.insert(indices.end(), {
+                bark, bark + 1u, bark + 2u,
+                bark, bark + 2u, bark + 3u
+            });
+        };
+        appendBirchCard(0.0, 1.0);
+        appendBirchCard(1.0, 0.0);
     };
     const auto appendRock = [&](double distance, double lateral,
                                 double scale) {
@@ -933,6 +1005,146 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
         appendShrubCard(0.0, 1.0);
         appendShrubCard(1.0, 0.0);
     };
+    const auto appendSapling = [&](double distance, double lateral,
+                                   double scale) {
+        const TerrainColor stemColor{0.34f, 0.23f, 0.11f};
+        const TerrainColor leafColor{0.18f, 0.43f, 0.16f};
+        const auto appendSaplingCard = [&](double axisForward,
+                                           double axisLateral) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        course, distance);
+            const double rightX = std::cos(sample.center.headingRadians);
+            const double rightZ = -std::sin(sample.center.headingRadians);
+            const double forwardX = std::sin(sample.center.headingRadians);
+            const double forwardZ = std::cos(sample.center.headingRadians);
+            const double axisX = axisForward * forwardX
+                    + axisLateral * rightX;
+            const double axisZ = axisForward * forwardZ
+                    + axisLateral * rightZ;
+            QVector3D normal(float(-axisZ), 0.0f, float(axisX));
+            normal.normalize();
+            const auto appendGrounded = [&](double offset, double height,
+                                            double embed,
+                                            const TerrainColor &color) {
+                const GroundedPoint point = groundedPoint(
+                        distance + offset * axisForward,
+                        lateral + offset * axisLateral, embed);
+                appendVertex(point.x, point.y + height, point.z,
+                             normal, color);
+            };
+            const double stemHalfWidth = 0.045 * scale;
+            const std::uint32_t stem = std::uint32_t(vertices.size());
+            appendGrounded(-stemHalfWidth, 0.0, 0.012 * scale, stemColor);
+            appendGrounded(stemHalfWidth, 0.0, 0.012 * scale, stemColor);
+            appendGrounded(stemHalfWidth, 1.30 * scale, 0.0, stemColor);
+            appendGrounded(-stemHalfWidth, 1.30 * scale, 0.0, stemColor);
+            indices.insert(indices.end(), {
+                stem, stem + 1u, stem + 2u,
+                stem, stem + 2u, stem + 3u
+            });
+
+            const std::uint32_t leaves = std::uint32_t(vertices.size());
+            appendGrounded(-0.34 * scale, 0.64 * scale, 0.0, leafColor);
+            appendGrounded(0.34 * scale, 0.64 * scale, 0.0, leafColor);
+            appendGrounded(0.48 * scale, 1.24 * scale, 0.0, leafColor);
+            appendGrounded(0.0, 1.92 * scale, 0.0, leafColor);
+            appendGrounded(-0.48 * scale, 1.24 * scale, 0.0, leafColor);
+            indices.insert(indices.end(), {
+                leaves, leaves + 1u, leaves + 2u,
+                leaves, leaves + 2u, leaves + 3u,
+                leaves, leaves + 3u, leaves + 4u
+            });
+        };
+        appendSaplingCard(0.0, 1.0);
+        appendSaplingCard(1.0, 0.0);
+    };
+    const auto appendFallenTimber = [&](double distance, double lateral,
+                                        double scale) {
+        const TerrainColor deadWoodColor{0.31f, 0.20f, 0.11f};
+        const TerrainColor cutWoodColor{0.52f, 0.37f, 0.19f};
+        constexpr double AxisForward = 0.92;
+        constexpr double AxisLateral = 0.38;
+        const double halfLength = 0.92 * scale;
+        const double radius = 0.14 * scale;
+        const double height = 0.24 * scale;
+        const QVector3D up(0.0f, 1.0f, 0.0f);
+        std::array<GroundedPoint, 4> ground;
+        int pointIndex = 0;
+        for (const double end : {-1.0, 1.0}) {
+            for (const double side : {-1.0, 1.0}) {
+                ground[std::size_t(pointIndex++)] = groundedPoint(
+                        distance + end * halfLength * AxisForward
+                            - side * radius * AxisLateral,
+                        lateral + end * halfLength * AxisLateral
+                            + side * radius * AxisForward,
+                        0.012 * scale);
+            }
+        }
+        const std::uint32_t body = std::uint32_t(vertices.size());
+        for (const GroundedPoint &point : ground) {
+            appendVertex(point.x, point.y, point.z, up, deadWoodColor);
+        }
+        for (const GroundedPoint &point : ground) {
+            appendVertex(point.x, point.y + height, point.z,
+                         up, deadWoodColor);
+        }
+        indices.insert(indices.end(), {
+            body, body + 2u, body + 3u, body, body + 3u, body + 1u,
+            body + 4u, body + 5u, body + 7u,
+            body + 4u, body + 7u, body + 6u,
+            body, body + 1u, body + 5u, body, body + 5u, body + 4u,
+            body + 2u, body + 6u, body + 7u,
+            body + 2u, body + 7u, body + 3u
+        });
+        for (int end = 0; end < 2; ++end) {
+            const int first = end * 2;
+            const std::uint32_t cap = std::uint32_t(vertices.size());
+            appendVertex(ground[std::size_t(first)].x,
+                         ground[std::size_t(first)].y,
+                         ground[std::size_t(first)].z, up, cutWoodColor);
+            appendVertex(ground[std::size_t(first + 1)].x,
+                         ground[std::size_t(first + 1)].y,
+                         ground[std::size_t(first + 1)].z, up, cutWoodColor);
+            appendVertex(ground[std::size_t(first + 1)].x,
+                         ground[std::size_t(first + 1)].y + height,
+                         ground[std::size_t(first + 1)].z, up, cutWoodColor);
+            appendVertex(ground[std::size_t(first)].x,
+                         ground[std::size_t(first)].y + height,
+                         ground[std::size_t(first)].z, up, cutWoodColor);
+            indices.insert(indices.end(), {
+                cap, cap + 1u, cap + 2u,
+                cap, cap + 2u, cap + 3u
+            });
+        }
+    };
+    const auto appendGroundVegetation = [&](double distance, double lateral,
+                                            double scale) {
+        const TerrainColor leafColor{0.16f, 0.38f, 0.10f};
+        const QVector3D up(0.0f, 1.0f, 0.0f);
+        for (int leaf = 0; leaf < 4; ++leaf) {
+            const double angle = Pi * double(leaf) / 4.0;
+            const double axisForward = std::cos(angle);
+            const double axisLateral = std::sin(angle);
+            const double halfWidth = 0.10 * scale;
+            const double reach = 0.40 * scale;
+            const std::uint32_t base = std::uint32_t(vertices.size());
+            const GroundedPoint left = groundedPoint(
+                    distance - halfWidth * axisLateral,
+                    lateral + halfWidth * axisForward, 0.008 * scale);
+            const GroundedPoint right = groundedPoint(
+                    distance + halfWidth * axisLateral,
+                    lateral - halfWidth * axisForward, 0.008 * scale);
+            const GroundedPoint tip = groundedPoint(
+                    distance + reach * axisForward,
+                    lateral + reach * axisLateral, 0.0);
+            appendVertex(left.x, left.y, left.z, up, leafColor);
+            appendVertex(right.x, right.y, right.z, up, leafColor);
+            appendVertex(tip.x, tip.y + 0.30 * scale, tip.z,
+                         up, leafColor);
+            indices.insert(indices.end(), {base, base + 1u, base + 2u});
+        }
+    };
 
     vertices.reserve(vertices.capacity()
             + std::size_t(maximumTrees / RowsPerSide)
@@ -977,10 +1189,14 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
                     0.19f + shade,
                     0.095f + shade * 0.45f
                 };
-                appendCard(distance, lateral, 0.0, 1.0, scale,
-                           trunkColor, crownColor);
-                appendCard(distance, lateral, 1.0, 0.0, scale,
-                           trunkColor, crownColor);
+                if (((random >> 20) % 5u) == 0u) {
+                    appendBirch(distance, lateral, scale);
+                } else {
+                    appendCard(distance, lateral, 0.0, 1.0, scale,
+                               trunkColor, crownColor);
+                    appendCard(distance, lateral, 1.0, 0.0, scale,
+                               trunkColor, crownColor);
+                }
                 ++treeCount;
 
                 if (row != 0) continue;
@@ -997,7 +1213,11 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
                         || propDistance > endDistanceMeters - EdgeInsetMeters) {
                     continue;
                 }
-                if (overlapsChallengeCorridor(course, propDistance)) continue;
+                if (overlapsChallengeCorridor(
+                            course, propDistance,
+                            PropFootprintHalfLengthMeters)) {
+                    continue;
+                }
                 const WorkoutGameRoadSample propSample =
                         WorkoutGameRoadCourseBuilder::sampleVisual(
                             course, propDistance);
@@ -1008,15 +1228,31 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
                 if (!propTerrain.ready) continue;
                 const double propScale = 0.72
                         + double((propRandom >> 16) & 255u) / 255.0 * 0.56;
-                switch ((propRandom >> 24) % 3u) {
+                switch ((propRandom >> 24) % 6u) {
                 case 0u:
                     appendRock(propDistance, propLateral, propScale);
                     break;
                 case 1u:
                     appendStump(propDistance, propLateral, propScale);
                     break;
-                default:
+                case 2u:
                     appendShrub(propDistance, propLateral, propScale);
+                    break;
+                case 3u: {
+                    const double saplingLateral = side * (
+                            CameraCorridorHalfWidthMeters + 0.8
+                            + double((propRandom >> 4) & 255u) / 255.0
+                                * 1.4);
+                    appendSapling(propDistance, saplingLateral, propScale);
+                    break;
+                }
+                case 4u:
+                    appendFallenTimber(
+                            propDistance, propLateral, propScale);
+                    break;
+                default:
+                    appendGroundVegetation(
+                            propDistance, propLateral, propScale);
                     break;
                 }
                 ++propCount;

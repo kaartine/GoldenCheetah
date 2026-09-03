@@ -1203,6 +1203,250 @@ private slots:
                  "forest variety exceeds the bounded batch budget");
     }
 
+    void forestDressingIncludesRecognizableBirchVariation()
+    {
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    straightCourse(160.0), 0.0, 145.0);
+        QVERIFY(dressing.ready);
+
+        constexpr float BirchTrunk[] = {0.82f, 0.83f, 0.75f};
+        constexpr float BirchBark[] = {0.18f, 0.17f, 0.14f};
+        constexpr float BirchCrown[] = {0.31f, 0.49f, 0.18f};
+        const int stride = 12 * int(sizeof(float));
+        const int vertexCount = dressing.vertexData.size() / stride;
+        int trunkVertices = 0;
+        int barkVertices = 0;
+        int crownVertices = 0;
+        float minimumY = std::numeric_limits<float>::max();
+        float maximumY = std::numeric_limits<float>::lowest();
+        for (int vertex = 0; vertex < vertexCount; ++vertex) {
+            const auto matches = [&](const float color[3]) {
+                return std::abs(vertexFloat(
+                            dressing.vertexData, stride, vertex, 24)
+                        - color[0]) < 0.002f
+                        && std::abs(vertexFloat(
+                            dressing.vertexData, stride, vertex, 28)
+                        - color[1]) < 0.002f
+                        && std::abs(vertexFloat(
+                            dressing.vertexData, stride, vertex, 32)
+                        - color[2]) < 0.002f;
+            };
+            if (!matches(BirchTrunk) && !matches(BirchBark)
+                    && !matches(BirchCrown)) {
+                continue;
+            }
+            QCOMPARE(vertexFloat(
+                    dressing.vertexData, stride, vertex, 36), 1.0f);
+            const float x = vertexFloat(
+                    dressing.vertexData, stride, vertex, 0);
+            const float y = vertexFloat(
+                    dressing.vertexData, stride, vertex, 4);
+            QVERIFY2(std::abs(x) >= 9.0f,
+                     "birch entered the protected camera corridor");
+            minimumY = std::min(minimumY, y);
+            maximumY = std::max(maximumY, y);
+            trunkVertices += matches(BirchTrunk) ? 1 : 0;
+            barkVertices += matches(BirchBark) ? 1 : 0;
+            crownVertices += matches(BirchCrown) ? 1 : 0;
+        }
+        QVERIFY2(trunkVertices >= 16, "forest batch has no birch trunks");
+        QVERIFY2(barkVertices >= 8, "birch trunks have no dark bark marks");
+        QVERIFY2(crownVertices >= 16, "forest batch has no birch crowns");
+        QVERIFY2(maximumY - minimumY >= 3.0f,
+                 "birch silhouette is not recognizably tree-sized");
+        QVERIFY(dressing.triangleCount() <= 5200);
+    }
+
+    void forestDressingIncludesGroundedSaplings()
+    {
+        const WorkoutGameRoadCourse course = straightCourse(160.0);
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    course, 0.0, 145.0);
+        QVERIFY(dressing.ready);
+
+        constexpr float SaplingTrunk[] = {0.34f, 0.23f, 0.11f};
+        constexpr float SaplingLeaves[] = {0.18f, 0.43f, 0.16f};
+        const int stride = 12 * int(sizeof(float));
+        const int vertexCount = dressing.vertexData.size() / stride;
+        int trunkVertices = 0;
+        int leafVertices = 0;
+        float minimumY = std::numeric_limits<float>::max();
+        float maximumY = std::numeric_limits<float>::lowest();
+        for (int vertex = 0; vertex < vertexCount; ++vertex) {
+            const auto matches = [&](const float color[3]) {
+                return std::abs(vertexFloat(
+                            dressing.vertexData, stride, vertex, 24)
+                        - color[0]) < 0.002f
+                        && std::abs(vertexFloat(
+                            dressing.vertexData, stride, vertex, 28)
+                        - color[1]) < 0.002f
+                        && std::abs(vertexFloat(
+                            dressing.vertexData, stride, vertex, 32)
+                        - color[2]) < 0.002f;
+            };
+            if (!matches(SaplingTrunk) && !matches(SaplingLeaves)) continue;
+            QCOMPARE(vertexFloat(
+                    dressing.vertexData, stride, vertex, 36), 1.0f);
+            const float x = vertexFloat(
+                    dressing.vertexData, stride, vertex, 0);
+            const float y = vertexFloat(
+                    dressing.vertexData, stride, vertex, 4);
+            QVERIFY2(std::abs(x) >= 9.0f,
+                     "sapling entered the protected camera corridor");
+            minimumY = std::min(minimumY, y);
+            maximumY = std::max(maximumY, y);
+            trunkVertices += matches(SaplingTrunk) ? 1 : 0;
+            leafVertices += matches(SaplingLeaves) ? 1 : 0;
+        }
+        QVERIFY2(trunkVertices >= 8, "forest batch has no sapling stems");
+        QVERIFY2(leafVertices >= 12, "forest batch has no sapling foliage");
+        QVERIFY2(maximumY - minimumY >= 1.0f,
+                 "saplings have no measurable upright silhouette");
+        QVERIFY2(maximumY - minimumY <= 3.0f,
+                 "saplings are indistinguishable from mature trees");
+        QVERIFY(dressing.triangleCount() <= 5200);
+    }
+
+    void forestDressingIncludesFallenDeadTimber()
+    {
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    straightCourse(160.0), 0.0, 145.0);
+        QVERIFY(dressing.ready);
+
+        constexpr float DeadWood[] = {0.31f, 0.20f, 0.11f};
+        constexpr float CutWood[] = {0.52f, 0.37f, 0.19f};
+        const int stride = 12 * int(sizeof(float));
+        const int vertexCount = dressing.vertexData.size() / stride;
+        int woodVertices = 0;
+        int cutVertices = 0;
+        float minimumZ = std::numeric_limits<float>::max();
+        float maximumZ = std::numeric_limits<float>::lowest();
+        float minimumY = std::numeric_limits<float>::max();
+        float maximumY = std::numeric_limits<float>::lowest();
+        for (int vertex = 0; vertex < vertexCount; ++vertex) {
+            const auto matches = [&](const float color[3]) {
+                return std::abs(vertexFloat(
+                            dressing.vertexData, stride, vertex, 24)
+                        - color[0]) < 0.002f
+                        && std::abs(vertexFloat(
+                            dressing.vertexData, stride, vertex, 28)
+                        - color[1]) < 0.002f
+                        && std::abs(vertexFloat(
+                            dressing.vertexData, stride, vertex, 32)
+                        - color[2]) < 0.002f;
+            };
+            if (!matches(DeadWood) && !matches(CutWood)) continue;
+            QCOMPARE(vertexFloat(
+                    dressing.vertexData, stride, vertex, 36), 1.0f);
+            const float y = vertexFloat(
+                    dressing.vertexData, stride, vertex, 4);
+            const float z = vertexFloat(
+                    dressing.vertexData, stride, vertex, 8);
+            minimumY = std::min(minimumY, y);
+            maximumY = std::max(maximumY, y);
+            minimumZ = std::min(minimumZ, z);
+            maximumZ = std::max(maximumZ, z);
+            woodVertices += matches(DeadWood) ? 1 : 0;
+            cutVertices += matches(CutWood) ? 1 : 0;
+        }
+        QVERIFY2(woodVertices >= 12, "forest batch has no fallen timber");
+        QVERIFY2(cutVertices >= 4,
+                 "fallen timber has no recognizable cut ends");
+        QVERIFY2(maximumZ - minimumZ >= 2.0f,
+                 "fallen timber has no measurable horizontal extent");
+        QVERIFY2(maximumY - minimumY <= 1.5f,
+                 "fallen timber is not a low ground prop");
+        QVERIFY(dressing.triangleCount() <= 5200);
+    }
+
+    void forestDressingIncludesSparseGroundVegetation()
+    {
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    straightCourse(160.0), 0.0, 145.0);
+        QVERIFY(dressing.ready);
+
+        constexpr float GroundLeaves[] = {0.16f, 0.38f, 0.10f};
+        const int stride = 12 * int(sizeof(float));
+        const int vertexCount = dressing.vertexData.size() / stride;
+        int vegetationVertices = 0;
+        float minimumY = std::numeric_limits<float>::max();
+        float maximumY = std::numeric_limits<float>::lowest();
+        for (int vertex = 0; vertex < vertexCount; ++vertex) {
+            const bool vegetation =
+                    std::abs(vertexFloat(
+                        dressing.vertexData, stride, vertex, 24)
+                            - GroundLeaves[0]) < 0.002f
+                    && std::abs(vertexFloat(
+                        dressing.vertexData, stride, vertex, 28)
+                            - GroundLeaves[1]) < 0.002f
+                    && std::abs(vertexFloat(
+                        dressing.vertexData, stride, vertex, 32)
+                            - GroundLeaves[2]) < 0.002f;
+            if (!vegetation) continue;
+            QCOMPARE(vertexFloat(
+                    dressing.vertexData, stride, vertex, 36), 1.0f);
+            const float y = vertexFloat(
+                    dressing.vertexData, stride, vertex, 4);
+            minimumY = std::min(minimumY, y);
+            maximumY = std::max(maximumY, y);
+            ++vegetationVertices;
+        }
+        QVERIFY2(vegetationVertices >= 12,
+                 "forest batch has no sparse ground vegetation");
+        QVERIFY2(vegetationVertices < vertexCount / 8,
+                 "ground vegetation is no longer sparse");
+        QVERIFY2(maximumY - minimumY <= 1.0f,
+                 "ground vegetation is too tall for forest-floor dressing");
+        QVERIFY(dressing.triangleCount() <= 5200);
+    }
+
+    void forestDressingKeepsStreamingOverlapByteStable()
+    {
+        const WorkoutGameRoadCourse course = straightCourse(170.0);
+        const WorkoutGame3DMeshData first =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    course, 0.0, 110.0);
+        const WorkoutGame3DMeshData second =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    course, 40.0, 145.0);
+        QVERIFY(first.ready);
+        QVERIFY(second.ready);
+
+        constexpr float InteriorStartMeters = 55.0f;
+        constexpr float InteriorEndMeters = 95.0f;
+        const int stride = 12 * int(sizeof(float));
+        const auto overlapVertices = [&](const WorkoutGame3DMeshData &mesh) {
+            QByteArray overlap;
+            const int vertexCount = mesh.vertexData.size() / stride;
+            for (int vertex = 0; vertex < vertexCount; ++vertex) {
+                const float z = vertexFloat(
+                        mesh.vertexData, stride, vertex, 8);
+                if (z < InteriorStartMeters || z > InteriorEndMeters) {
+                    continue;
+                }
+                overlap.append(mesh.vertexData.constData() + vertex * stride,
+                               stride);
+            }
+            return overlap;
+        };
+        const QByteArray firstOverlap = overlapVertices(first);
+        const QByteArray secondOverlap = overlapVertices(second);
+        QVERIFY(!firstOverlap.isEmpty());
+        QCOMPARE(firstOverlap, secondOverlap);
+        QVERIFY(first.triangleCount() <= 5200);
+        QVERIFY(second.triangleCount() <= 5200);
+    }
+
     void forestDressingBasesFollowTheGroundSurface()
     {
         const WorkoutGameRoadCourse course = straightCourse(160.0, 9.0);
@@ -1259,6 +1503,12 @@ private slots:
                 verifyBase(vertex + 1, 0.04);
                 groundedBaseVertices += 2;
                 vertex += 4;
+            } else if (hasColor(vertex, 0.82f, 0.83f, 0.75f)) {
+                QVERIFY(vertex + 3 < vertexCount);
+                verifyBase(vertex, 0.04);
+                verifyBase(vertex + 1, 0.04);
+                groundedBaseVertices += 2;
+                vertex += 4;
             } else if (hasColor(vertex, 0.34f, 0.35f, 0.31f)) {
                 QVERIFY(vertex + 4 < vertexCount);
                 for (int corner = 0; corner < 4; ++corner) {
@@ -1280,6 +1530,25 @@ private slots:
                     ++groundedBaseVertices;
                 }
                 vertex += 10;
+            } else if (hasColor(vertex, 0.34f, 0.23f, 0.11f)) {
+                QVERIFY(vertex + 3 < vertexCount);
+                verifyBase(vertex, 0.03);
+                verifyBase(vertex + 1, 0.03);
+                groundedBaseVertices += 2;
+                vertex += 4;
+            } else if (hasColor(vertex, 0.31f, 0.20f, 0.11f)) {
+                QVERIFY(vertex + 7 < vertexCount);
+                for (int corner = 0; corner < 4; ++corner) {
+                    verifyBase(vertex + corner, 0.03);
+                    ++groundedBaseVertices;
+                }
+                vertex += 8;
+            } else if (hasColor(vertex, 0.16f, 0.38f, 0.10f)) {
+                QVERIFY(vertex + 2 < vertexCount);
+                verifyBase(vertex, 0.02);
+                verifyBase(vertex + 1, 0.02);
+                groundedBaseVertices += 2;
+                vertex += 3;
             } else {
                 ++vertex;
             }
@@ -1393,7 +1662,22 @@ private slots:
                         && std::abs(blue - 0.08f) < 0.002f)
                     || (std::abs(red - 0.09f) < 0.002f
                         && std::abs(green - 0.29f) < 0.002f
-                        && std::abs(blue - 0.12f) < 0.002f);
+                        && std::abs(blue - 0.12f) < 0.002f)
+                    || (std::abs(red - 0.34f) < 0.002f
+                        && std::abs(green - 0.23f) < 0.002f
+                        && std::abs(blue - 0.11f) < 0.002f)
+                    || (std::abs(red - 0.18f) < 0.002f
+                        && std::abs(green - 0.43f) < 0.002f
+                        && std::abs(blue - 0.16f) < 0.002f)
+                    || (std::abs(red - 0.31f) < 0.002f
+                        && std::abs(green - 0.20f) < 0.002f
+                        && std::abs(blue - 0.11f) < 0.002f)
+                    || (std::abs(red - 0.52f) < 0.002f
+                        && std::abs(green - 0.37f) < 0.002f
+                        && std::abs(blue - 0.19f) < 0.002f)
+                    || (std::abs(red - 0.16f) < 0.002f
+                        && std::abs(green - 0.38f) < 0.002f
+                        && std::abs(blue - 0.10f) < 0.002f);
             if (!prop) continue;
             ++propVertices;
             const double distance = vertexFloat(
@@ -1446,7 +1730,22 @@ private slots:
                         && std::abs(blue - 0.08f) < 0.002f)
                     || (std::abs(red - 0.09f) < 0.002f
                         && std::abs(green - 0.29f) < 0.002f
-                        && std::abs(blue - 0.12f) < 0.002f);
+                        && std::abs(blue - 0.12f) < 0.002f)
+                    || (std::abs(red - 0.34f) < 0.002f
+                        && std::abs(green - 0.23f) < 0.002f
+                        && std::abs(blue - 0.11f) < 0.002f)
+                    || (std::abs(red - 0.18f) < 0.002f
+                        && std::abs(green - 0.43f) < 0.002f
+                        && std::abs(blue - 0.16f) < 0.002f)
+                    || (std::abs(red - 0.31f) < 0.002f
+                        && std::abs(green - 0.20f) < 0.002f
+                        && std::abs(blue - 0.11f) < 0.002f)
+                    || (std::abs(red - 0.52f) < 0.002f
+                        && std::abs(green - 0.37f) < 0.002f
+                        && std::abs(blue - 0.19f) < 0.002f)
+                    || (std::abs(red - 0.16f) < 0.002f
+                        && std::abs(green - 0.38f) < 0.002f
+                        && std::abs(blue - 0.10f) < 0.002f);
         };
 
         for (const WorkoutGameTerrainKind terrain : {
