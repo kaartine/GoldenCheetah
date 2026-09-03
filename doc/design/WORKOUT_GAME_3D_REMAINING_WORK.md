@@ -77,6 +77,11 @@ and live gates also pass.
 - `7bb32cd` makes the selected trail trajectory authoritative for rider
   position and heading, fixes the feature-height datum and expands complete
   rider-and-bicycle frustum coverage.
+- `edb203e` closes the automated B1-B3 implementation pass: persisted road
+  continuity, route-following camera and rider motion, integrated feature and
+  forest presentation, bounded asynchronous geometry, cold-start diagnostics
+  and the release UI workflow are all covered by the current focused and
+  aggregate gates.
 
 The completed B1/B2 focused gate covers road plan, document, source adapter,
 runtime, road course, conversion dialog, geometry, world physics and the 3D
@@ -107,10 +112,14 @@ immutable-action and private-OAuth gates, passes without any other source
 change. This dependency-scoped rerun completes the current 173-project
 unit/integration inventory.
 
-Work now in progress is B3: build the clean reproducible AppImage, exercise
-its isolated packaged UI and cold-start workflow, and publish it. The
-real-trainer and user A/B gates remain deliberately separate and cannot be
-replaced with generated telemetry.
+The B3 implementation and pre-package test gates are complete. Work now in
+progress is B4: build the clean reproducible AppImage, exercise its isolated
+Painter, Scene Graph and Quick 3D workflows, verify the exact package and
+publish it. B4 also requires a post-cold-start Quick 3D motion capture, exact
+saved-activity identity, process-group ownership and complete XDG isolation.
+The real-trainer and user A/B gates remain deliberately separate in B5 and
+cannot be replaced with generated telemetry. Legacy renderer retirement stays
+blocked until that physical acceptance is recorded.
 
 | ID | Priority | Status | Consolidated work | Done when | Source requirements |
 | --- | --- | --- | --- | --- | --- |

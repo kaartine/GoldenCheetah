@@ -117,6 +117,8 @@ LTMSidebarView::dateRangeChanged(DateRange dr)
 AnalysisView::AnalysisView(Context *context, QStackedWidget *controls) :
         AbstractView(context, VIEW_ANALYSIS, "analysis", tr("Compare Activities and Intervals"))
 {
+    setAccessibleName(tr("Activities view"));
+    setAccessibleDescription(tr("No activity selected"));
     analSidebar = new AnalysisSidebar(context);
     BlankStateAnalysisPage *b = new BlankStateAnalysisPage(context);
 
@@ -154,6 +156,9 @@ AnalysisView::~AnalysisView()
 void
 AnalysisView::setRide(RideItem *ride)
 {
+    setAccessibleDescription(ride
+            ? tr("Selected activity %1").arg(ride->fileName)
+            : tr("No activity selected"));
     // when ride selected, but not from the sidebar.
     static_cast<AnalysisSidebar*>(sidebar())->setRide(ride); // save settings
 
@@ -419,4 +424,3 @@ void
 TrainView::notifyViewPerspectiveAdded(Perspective* page) {
     page->styleChanged(2);
 }
-

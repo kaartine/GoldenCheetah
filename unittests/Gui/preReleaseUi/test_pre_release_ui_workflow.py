@@ -193,12 +193,16 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             activity.write_text("{}\n", encoding="ascii")
             table = object()
             row = object()
+            view = object()
             driver = object.__new__(UI.UiDriver)
             driver.activate_named = mock.Mock()
+            driver.activate_view = mock.Mock()
             driver.find = mock.Mock(return_value=object())
             driver.find_all = mock.Mock(
-                side_effect=lambda role=None, showing=None: (
-                    [table] if role == "table" else []
+                side_effect=lambda name=None, role=None, showing=None: (
+                    [view]
+                    if name == "Activities view" and driver.activate.called
+                    else [table] if role == "table" else []
                 )
             )
             driver.all_nodes = mock.Mock(return_value=[table, row])
@@ -213,18 +217,158 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             driver.activate = mock.Mock()
             driver.selected = mock.Mock(return_value=True)
             driver.name = mock.Mock(return_value="saved activity row")
+            driver.description = mock.Mock(
+                return_value="Selected activity saved.json"
+            )
 
             selected = driver.reopen_saved_activity(activity, timeout=0.1)
 
-            self.assertEqual(selected, "saved activity row")
+            self.assertEqual(selected, "Selected activity saved.json")
             self.assertEqual(
                 driver.activate_named.call_args_list,
-                [
-                    mock.call("Train", "menu item"),
-                    mock.call("Activities", "menu item"),
-                ],
+                [mock.call("Train", "menu item", timeout=0.1)],
+            )
+            driver.activate_view.assert_called_once_with(
+                "Activities",
+                timeout=0.1,
+                ready_names=("Activities view",),
             )
             driver.activate.assert_called_once_with(row)
+
+    def test_reopen_accepts_the_exact_automatically_selected_activity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            activity = Path(directory) / "saved.json"
+            activity.write_text("{}\n", encoding="ascii")
+            driver = object.__new__(UI.UiDriver)
+            driver.activate_named = mock.Mock()
+            driver.activate_view = mock.Mock()
+            view = object()
+            driver.find_all = mock.Mock(
+                side_effect=lambda name=None, role=None, showing=None: (
+                    [view] if name == "Activities view" else []
+                )
+            )
+            driver.description = mock.Mock(
+                return_value="Selected activity saved.json"
+            )
+
+            selected = driver.reopen_saved_activity(activity, timeout=0.1)
+
+            self.assertEqual(selected, "Selected activity saved.json")
+            driver.activate_view.assert_called_once_with(
+                "Activities",
+                timeout=0.1,
+                ready_names=("Activities view",),
+            )
+
+    def test_reopen_rejects_an_ambiguous_activity_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            activity = root / "saved.json"
+            activity.write_text("{}\n", encoding="ascii")
+            (root / "other.json").write_text("{}\n", encoding="ascii")
+            driver = object.__new__(UI.UiDriver)
+
+            with self.assertRaisesRegex(UI.UiFailure, "exactly one isolated"):
+                driver.reopen_saved_activity(activity, timeout=0.1)
+
+    def test_activate_view_retries_until_the_destination_is_visible(self):
+        control = object()
+        destination = object()
+        driver = object.__new__(UI.UiDriver)
+        activations = 0
+
+        def activate(node):
+            nonlocal activations
+            self.assertIs(node, control)
+            activations += 1
+
+        def find_all(name=None, role=None, showing=None):
+            if role == "menu item":
+                return [control]
+            return [destination] if activations >= 2 else []
+
+        driver.find_all = mock.Mock(side_effect=find_all)
+        driver.role = mock.Mock(
+            side_effect=lambda node: "menu item" if node is control else "label"
+        )
+        driver.enabled = mock.Mock(return_value=True)
+        driver.showing = mock.Mock(return_value=True)
+        driver.activate = mock.Mock(side_effect=activate)
+        driver.selected = mock.Mock(return_value=False)
+        driver.checked = mock.Mock(return_value=False)
+
+        with mock.patch.object(UI.time, "sleep"):
+            driver.activate_view("Activities", timeout=1.0)
+
+        self.assertEqual(driver.activate.call_args_list, [mock.call(control)] * 2)
+
+    def test_activate_view_does_not_accept_its_navigation_control_as_content(self):
+        control = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[control])
+        driver.role = mock.Mock(return_value="menu item")
+        driver.enabled = mock.Mock(return_value=True)
+        driver.showing = mock.Mock(return_value=True)
+        driver.activate = mock.Mock()
+        driver.selected = mock.Mock(return_value=False)
+        driver.checked = mock.Mock(return_value=False)
+
+        with mock.patch.object(UI.time, "sleep"), self.assertRaises(
+            UI.UiFailure
+        ):
+            driver.activate_view("Activities", timeout=0.01)
+
+    def test_activate_view_accepts_a_checked_navigation_control(self):
+        control = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[control])
+        driver.enabled = mock.Mock(return_value=True)
+        driver.showing = mock.Mock(return_value=True)
+        driver.activate = mock.Mock()
+        driver.selected = mock.Mock(return_value=False)
+        driver.checked = mock.Mock(return_value=True)
+
+        driver.activate_view(
+            "Activities", timeout=1.0, ready_names=("Activities", "Overview")
+        )
+
+        driver.activate.assert_called_once_with(control)
+
+    def test_quick3d_visual_capture_runs_after_the_cold_start_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            recording = Path(directory) / "recording.csv"
+            recording.write_text("secs,watts\n0,190\n", encoding="ascii")
+            driver = mock.Mock()
+            driver.find.side_effect = [object(), object()]
+            driver.changed_pixels.return_value = 2000
+            workflow = object.__new__(UI.WorkoutGameUiWorkflow)
+            workflow.driver = driver
+            workflow.capture_screenshots = False
+            workflow.run_delays = (0.0, 0.0, 0.0)
+            workflow.canvas = object()
+
+            with mock.patch.object(UI.time, "sleep"), mock.patch.dict(
+                os.environ, {"GC_UI_REQUIRE_QUICK3D_EVIDENCE": "1"}
+            ):
+                workflow.stop_and_continue(recording)
+
+            self.assertEqual(
+                driver.screenshot.call_args_list,
+                [
+                    mock.call(
+                        "04-workout-game-quick3d-post-cold-start-first",
+                        workflow.canvas,
+                    ),
+                    mock.call(
+                        "04-workout-game-quick3d-post-cold-start-second",
+                        workflow.canvas,
+                    ),
+                ],
+            )
+            driver.changed_pixels.assert_called_once_with(
+                driver.screenshot.return_value, driver.screenshot.return_value
+            )
 
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ class WorkoutGame3DWindow : public QQuickView
     Q_OBJECT
 
 public:
+    static constexpr std::uint32_t RendererPrewarmFrameCount = 8;
+
     explicit WorkoutGame3DWindow(
             bool rendererEnabled,
             QWindow *parent = nullptr);
@@ -99,10 +101,11 @@ private:
     std::atomic<std::int64_t> pendingPresentationTimeNs{0};
     std::atomic_bool presentationDispatchPending{false};
     std::atomic<std::uint64_t> presentedVisualRevision{0};
+    std::atomic<std::uint64_t> presentedFrameSequence{0};
     std::atomic_bool sessionRunningAtomic{false};
     std::atomic_bool prewarmPending{false};
-    std::atomic_bool prewarmSwapSeen{false};
     std::atomic_bool prewarmCompleted{false};
+    std::atomic<std::uint64_t> prewarmStartSequence{0};
     std::uint64_t frameNumber = 0;
     std::int64_t lastTracePublishMs = -1;
     std::int64_t lastFpsPublishMs = -1;

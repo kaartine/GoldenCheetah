@@ -65,10 +65,26 @@ python3 "$SCRIPT_DIR/pre_release_ui.py" prepare "$TEST_ROOT"
 export HOME=$TEST_ROOT/home
 export XDG_CONFIG_HOME=$HOME/.config
 export XDG_CACHE_HOME=$HOME/.cache
+export XDG_DATA_HOME=$HOME/.local/share
+export XDG_STATE_HOME=$HOME/.local/state
+export XDG_RUNTIME_DIR=$HOME/.runtime
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" \
+    "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
 export APPIMAGE_EXTRACT_AND_RUN=${APPIMAGE_EXTRACT_AND_RUN:-1}
 export GC_WORKOUT_GAME_TRACE=1
 export GC_WORKOUT_GAME_DIAGNOSTICS=${GC_WORKOUT_GAME_DIAGNOSTICS:-1}
 export GC_WORKOUT_GAME_3D=1
+if [ "${GC_UI_USE_HARDWARE_GL:-0}" = 1 ]; then
+    export QT_OPENGL=${QT_OPENGL:-desktop}
+    export QSG_INFO=1
+    unset LIBGL_ALWAYS_SOFTWARE
+fi
+if [ -n "${GC_UI_EXPECTED_GPU_PATTERN:-}" ] && \
+    [ "${GC_UI_USE_HARDWARE_GL:-0}" != 1 ]; then
+    echo "GC_UI_EXPECTED_GPU_PATTERN requires GC_UI_USE_HARDWARE_GL=1" >&2
+    exit 2
+fi
 export QT_ACCESSIBILITY=1
 export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 export GC_UI_RENDERER_CANVAS_EVIDENCE_FILE=$CANVAS_NAME_FILE
@@ -128,6 +144,17 @@ CANVAS_OBSERVER_PID=
     echo "No training recording was captured" >&2
     exit 1
 }
+
+if [ -n "${GC_UI_EXPECTED_GPU_PATTERN:-}" ]; then
+    grep -Ei \
+        'qt\.(scenegraph|rhi)|OpenGL|GL_RENDERER|Driver Info|Graphics API' \
+        "$ARTIFACT_DIR/application.log" | \
+        grep -Eim1 -- "$GC_UI_EXPECTED_GPU_PATTERN" \
+        >"$ARTIFACT_DIR/gpu-evidence.txt" || {
+        echo "Expected GPU was not reported by the application" >&2
+        exit 1
+    }
+fi
 
 if [ -f "$TEST_ROOT/library/goldencheetah.log" ]; then
     cp -f -- "$TEST_ROOT/library/goldencheetah.log" \

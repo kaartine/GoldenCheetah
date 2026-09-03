@@ -60,6 +60,14 @@ def game_run_seconds_from_environment() -> float:
         raise ValueError(
             "GC_UI_GAME_RUN_SECONDS must be between 1 and 120 seconds"
         )
+    if (
+        os.environ.get("GC_UI_REQUIRE_QUICK3D_EVIDENCE") == "1"
+        and seconds < 10.5
+    ):
+        raise ValueError(
+            "Quick3D evidence requires at least 10.5 seconds so visual "
+            "capture follows the cold-start window"
+        )
     return seconds
 
 
@@ -74,6 +82,8 @@ def trainer_acceptance_shift_delays(seconds: float) -> tuple[float, float, float
 
 
 def ui_screenshots_enabled_from_environment() -> bool:
+    if os.environ.get("GC_UI_REQUIRE_QUICK3D_EVIDENCE") == "1":
+        return False
     return not (
         validate_trainer_acceptance_from_environment()
         and bool(os.environ.get("GC_UI_EXISTING_DISPLAY"))
@@ -228,7 +238,7 @@ class UiFailure(RuntimeError):
 
 
 class UiDriver:
-    def __init__(self, root: Path, artifacts: Path):
+    def __init__(self, root: Path, artifacts: Path, app_pgid: int):
         import pyatspi
         from Xlib import X, display
         from Xlib.ext import xtest
@@ -239,6 +249,7 @@ class UiDriver:
         self.xtest = xtest
         self.root_path = root
         self.artifacts = artifacts
+        self.app_pgid = app_pgid
         self.app = self.wait_for_application()
 
     def all_nodes(self, node=None):
@@ -265,6 +276,13 @@ class UiDriver:
         except Exception:
             return ""
 
+    @staticmethod
+    def description(node) -> str:
+        try:
+            return node.description or ""
+        except Exception:
+            return ""
+
     def showing(self, node) -> bool:
         try:
             return node.getState().contains(self.pyatspi.STATE_SHOWING)
@@ -283,6 +301,12 @@ class UiDriver:
         except Exception:
             return False
 
+    def checked(self, node) -> bool:
+        try:
+            return node.getState().contains(self.pyatspi.STATE_CHECKED)
+        except Exception:
+            return False
+
     def selectable(self, node) -> bool:
         try:
             return node.getState().contains(self.pyatspi.STATE_SELECTABLE)
@@ -295,6 +319,10 @@ class UiDriver:
             desktop = self.pyatspi.Registry.getDesktop(0)
             for app in desktop:
                 try:
+                    if not process_belongs_to_group(
+                        int(app.get_process_id()), self.app_pgid
+                    ):
+                        continue
                     if any(
                         child.getRoleName() == "frame"
                         and child.name == ATHLETE
@@ -351,6 +379,21 @@ class UiDriver:
                 time.sleep(0.15)
         if missing:
             raise UiFailure(f"Missing accessible controls: {', '.join(missing)}")
+
+    def require_visible_names(self, names, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        missing = list(names)
+        while missing and time.monotonic() < deadline:
+            missing = [
+                name for name in names
+                if not self.find_all(name=name, showing=True)
+            ]
+            if missing:
+                time.sleep(0.15)
+        if missing:
+            raise UiFailure(
+                f"Missing visible accessible content: {', '.join(missing)}"
+            )
 
     def activate(self, node):
         if not self.enabled(node):
@@ -409,6 +452,42 @@ class UiDriver:
                 last_error = error
                 time.sleep(0.2)
         raise UiFailure(f"Cannot activate {role or 'control'} {name!r}") from last_error
+
+    def activate_view(self, name, timeout=30.0, ready_names=None):
+        deadline = time.monotonic() + timeout
+        last_error = None
+        ready_names = tuple(ready_names or (name,))
+        while time.monotonic() < deadline:
+            try:
+                controls = [
+                    node for node in self.find_all(
+                        name=name, role="menu item"
+                    )
+                    if self.enabled(node)
+                ]
+                if not controls:
+                    raise UiFailure(f"Enabled view control is unavailable: {name!r}")
+                controls.sort(key=self.showing, reverse=True)
+                for control in controls:
+                    self.activate(control)
+                    if self.selected(control) or self.checked(control):
+                        return
+                    for ready_name in ready_names:
+                        destinations = [
+                            node for node in self.find_all(
+                                name=ready_name, showing=True
+                            )
+                            if self.role(node) != "menu item"
+                        ]
+                        if destinations:
+                            return
+                raise UiFailure(
+                    f"View destination is not visible for {name!r}"
+                )
+            except Exception as error:
+                last_error = error
+            time.sleep(0.2)
+        raise UiFailure(f"Cannot open view {name!r}") from last_error
 
     def select_named(self, name, timeout=10.0):
         nodes = self.find_all(name=name, showing=True)
@@ -647,12 +726,39 @@ class UiDriver:
     def reopen_saved_activity(self, activity: Path, timeout=20.0) -> str:
         if not activity.is_file() or activity.stat().st_size == 0:
             raise UiFailure(f"Saved activity is unavailable: {activity}")
+        activities = {
+            path.resolve()
+            for path in activity.parent.glob("*.json")
+            if path.is_file() and path.stat().st_size > 0
+        }
+        if activities != {activity.resolve()}:
+            raise UiFailure(
+                "Saved-activity UI verification requires exactly one isolated "
+                "activity"
+            )
 
-        self.activate_named("Train", "menu item")
-        self.activate_named("Activities", "menu item")
-        self.find("Activities", "label", showing=True, timeout=timeout)
+        self.activate_named("Train", "menu item", timeout=timeout)
+        self.activate_view(
+            "Activities", timeout=timeout, ready_names=("Activities view",)
+        )
+        expected_description = f"Selected activity {activity.name}"
+
+        def matching_activity_description() -> str:
+            activities_views = self.find_all(
+                name="Activities view", showing=True
+            )
+            if any(
+                self.description(node) == expected_description
+                for node in activities_views
+            ):
+                return expected_description
+            return ""
+
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            selected_activity = matching_activity_description()
+            if selected_activity:
+                return selected_activity
             candidates = []
             for role in ("table", "tree table"):
                 for table in self.find_all(role=role, showing=True):
@@ -672,7 +778,10 @@ class UiDriver:
                 selected_deadline = min(deadline, time.monotonic() + 2.0)
                 while time.monotonic() < selected_deadline:
                     if self.selected(node):
-                        return self.name(node)
+                        selected_activity = matching_activity_description()
+                        if selected_activity:
+                            return selected_activity
+                        break
                     time.sleep(0.1)
             time.sleep(0.2)
         raise UiFailure(
@@ -798,6 +907,22 @@ class WorkoutGameUiWorkflow:
                         "Workout Game appears static: "
                         f"only {changed} sampled pixels changed"
                     )
+        elif os.environ.get("GC_UI_REQUIRE_QUICK3D_EVIDENCE") == "1":
+            # Synchronous X11 readback can perturb the measured cold-start
+            # window, so capture visual evidence only after that window ends.
+            first = self.driver.screenshot(
+                "04-workout-game-quick3d-post-cold-start-first", self.canvas
+            )
+            time.sleep(0.4)
+            second = self.driver.screenshot(
+                "04-workout-game-quick3d-post-cold-start-second", self.canvas
+            )
+            changed = self.driver.changed_pixels(first, second)
+            if changed < 1200:
+                raise UiFailure(
+                    "Quick3D scene appears frozen after cold start: "
+                    f"only {changed} sampled pixels changed"
+                )
 
         self.driver.activate(
             self.driver.find("Stop training", "push button", showing=True)
@@ -886,6 +1011,13 @@ def process_group_exists(pgid: int) -> bool:
         return False
 
 
+def process_belongs_to_group(pid: int, pgid: int) -> bool:
+    try:
+        return os.getpgid(pid) == pgid
+    except (OSError, ValueError):
+        return False
+
+
 def observe_renderer_canvas(output: Path, app_pgid: int) -> int:
     import pyatspi
 
@@ -900,7 +1032,20 @@ def observe_renderer_canvas(output: Path, app_pgid: int) -> int:
 
     while process_group_exists(app_pgid):
         desktop = pyatspi.Registry.getDesktop(0)
-        for node in nodes(desktop):
+        applications = []
+        for app in desktop:
+            try:
+                if process_belongs_to_group(
+                    int(app.get_process_id()), app_pgid
+                ):
+                    applications.append(app)
+            except Exception:
+                continue
+        for node in (
+            descendant
+            for app in applications
+            for descendant in nodes(app)
+        ):
             try:
                 name = node.name or ""
                 showing = node.getState().contains(pyatspi.STATE_SHOWING)
@@ -917,7 +1062,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
     artifacts.mkdir(parents=True, exist_ok=True)
     suite = None
     try:
-        driver = UiDriver(root, artifacts)
+        driver = UiDriver(root, artifacts, app_pgid)
         suite = Suite(driver, artifacts)
         capture_screenshots = ui_screenshots_enabled_from_environment()
 
@@ -962,8 +1107,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
 
         def views():
             for view in ("Plan", "Trends", "Activities", "Train"):
-                driver.activate_named(view, "menu item")
-                driver.find(view, "label", showing=True, timeout=30.0)
+                driver.activate_view(view)
                 time.sleep(0.5)
             if capture_screenshots:
                 driver.screenshot("02-train")
@@ -1111,7 +1255,10 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     )
                 )
             except Exception:
-                os.killpg(app_pgid, signal.SIGTERM)
+                try:
+                    os.killpg(app_pgid, signal.SIGTERM)
+                except ProcessLookupError:
+                    return
             deadline = time.monotonic() + 8.0
             while time.monotonic() < deadline:
                 if not process_group_exists(app_pgid):

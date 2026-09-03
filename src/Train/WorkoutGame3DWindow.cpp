@@ -163,10 +163,7 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
         coldStartFrameCapture.recordFrame(
                 presentationTimeNs,
                 presentedVisualRevision.load(std::memory_order_acquire));
-        if (!sessionRunningAtomic.load(std::memory_order_acquire)
-                && prewarmPending.load(std::memory_order_acquire)) {
-            prewarmSwapSeen.store(true, std::memory_order_release);
-        }
+        presentedFrameSequence.fetch_add(1, std::memory_order_acq_rel);
         pendingPresentationTimeNs.store(
                 presentationTimeNs, std::memory_order_release);
         if (!presentationDispatchPending.exchange(
@@ -194,13 +191,32 @@ WorkoutGame3DWindow::~WorkoutGame3DWindow()
 bool WorkoutGame3DWindow::event(QEvent *event)
 {
     if (event->type() == presentationEventType()) {
-        if (prewarmSwapSeen.exchange(false, std::memory_order_acq_rel)) {
-            finishRendererPrewarm();
-        }
-        presentationDispatchPending.store(false, std::memory_order_release);
         const std::int64_t presentationTimeNs =
                 pendingPresentationTimeNs.exchange(
                     0, std::memory_order_acq_rel);
+        presentationDispatchPending.store(false, std::memory_order_release);
+
+        // A swap can land after the timestamp exchange but before the pending
+        // flag is released. Re-arm the coalesced event in that window.
+        if (pendingPresentationTimeNs.load(std::memory_order_acquire) > 0
+                && !presentationDispatchPending.exchange(
+                    true, std::memory_order_acq_rel)) {
+            QCoreApplication::postEvent(
+                    this, new QEvent(presentationEventType()),
+                    Qt::NormalEventPriority);
+        }
+
+        const std::uint64_t presentedFrames =
+                presentedFrameSequence.load(std::memory_order_acquire);
+        const std::uint64_t prewarmStart =
+                prewarmStartSequence.load(std::memory_order_acquire);
+        if (prewarmPending.load(std::memory_order_acquire)
+                && presentedFrames - prewarmStart
+                    >= RendererPrewarmFrameCount) {
+            finishRendererPrewarm();
+        } else if (prewarmPending.load(std::memory_order_acquire)) {
+            requestUpdate();
+        }
         if (presentationTimeNs > 0) {
             handlePresentedFrame(presentationTimeNs);
         }
@@ -452,6 +468,9 @@ void WorkoutGame3DWindow::requestRendererPrewarm()
         return;
     }
     prewarmCompleted.store(false, std::memory_order_release);
+    prewarmStartSequence.store(
+            presentedFrameSequence.load(std::memory_order_acquire),
+            std::memory_order_release);
     prewarmPending.store(true, std::memory_order_release);
     rootObject()->setProperty("rendererPrewarming", true);
     requestUpdate();

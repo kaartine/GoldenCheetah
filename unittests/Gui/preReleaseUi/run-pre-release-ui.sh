@@ -140,14 +140,26 @@ done
 export HOME=$TEST_ROOT/home
 export XDG_CONFIG_HOME=$HOME/.config
 export XDG_CACHE_HOME=$HOME/.cache
+export XDG_DATA_HOME=$HOME/.local/share
+export XDG_STATE_HOME=$HOME/.local/state
+export XDG_RUNTIME_DIR=$HOME/.runtime
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" \
+    "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
 export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 export QT_ACCESSIBILITY=1
 if [ "${GC_UI_USE_HARDWARE_GL:-0}" = 1 ]; then
     export QT_OPENGL=${QT_OPENGL:-desktop}
+    export QSG_INFO=1
     unset LIBGL_ALWAYS_SOFTWARE
 else
     export QT_OPENGL=${QT_OPENGL:-software}
     export LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}
+fi
+if [ -n "${GC_UI_EXPECTED_GPU_PATTERN:-}" ] && \
+    [ "${GC_UI_USE_HARDWARE_GL:-0}" != 1 ]; then
+    echo "GC_UI_EXPECTED_GPU_PATTERN requires GC_UI_USE_HARDWARE_GL=1" >&2
+    exit 2
 fi
 export QTWEBENGINE_DISABLE_SANDBOX=1
 export APPIMAGE_EXTRACT_AND_RUN=1
@@ -261,6 +273,17 @@ if [ "$STATUS" -ne 0 ] && [ "$REQUIRE_QUICK3D_EVIDENCE" = 1 ] && \
         --accessible-canvas-name-file "$TEST_ROOT/renderer-canvas-name.txt" \
         --appimage "$IMAGE" \
         --renderer-evidence-only >/dev/null 2>&1 || true
+fi
+
+if [ "$STATUS" -eq 0 ] && [ -n "${GC_UI_EXPECTED_GPU_PATTERN:-}" ]; then
+    if ! grep -Ei \
+        'qt\.(scenegraph|rhi)|OpenGL|GL_RENDERER|Driver Info|Graphics API' \
+        "$ARTIFACT_DIR/application.log" | \
+        grep -Eim1 -- "$GC_UI_EXPECTED_GPU_PATTERN" \
+        >"$ARTIFACT_DIR/gpu-evidence.txt"; then
+        echo "Expected GPU was not reported by the application" >&2
+        STATUS=1
+    fi
 fi
 
 if [ "$STATUS" -eq 0 ]; then

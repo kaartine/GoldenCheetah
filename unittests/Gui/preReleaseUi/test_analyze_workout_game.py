@@ -225,6 +225,14 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
         self.assertEqual(matrix.count("GC_WORKOUT_GAME_3D=0"), 2)
 
+    def test_target_gpu_runs_require_application_reported_identity(self):
+        for runner_path in (RUNNER_PATH, REAL_TRAINER_RUNNER_PATH):
+            runner = runner_path.read_text(encoding="utf-8")
+            self.assertIn("GC_UI_EXPECTED_GPU_PATTERN", runner)
+            self.assertIn("QSG_INFO=1", runner)
+            self.assertIn('"$ARTIFACT_DIR/gpu-evidence.txt"', runner)
+            self.assertIn('"$ARTIFACT_DIR/application.log"', runner)
+
     def test_real_trainer_acceptance_requires_renderer_evidence(self):
         runner = REAL_TRAINER_RUNNER_PATH.read_text(encoding="utf-8")
 
@@ -319,6 +327,30 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             UI.os, "killpg", side_effect=ProcessLookupError
         ):
             self.assertFalse(UI.process_group_exists(1234))
+
+    def test_accessible_application_must_belong_to_the_app_process_group(self):
+        with mock.patch.object(UI.os, "getpgid", return_value=1234):
+            self.assertTrue(UI.process_belongs_to_group(5678, 1234))
+        with mock.patch.object(UI.os, "getpgid", return_value=9999):
+            self.assertFalse(UI.process_belongs_to_group(5678, 1234))
+        with mock.patch.object(
+            UI.os, "getpgid", side_effect=ProcessLookupError
+        ):
+            self.assertFalse(UI.process_belongs_to_group(5678, 1234))
+
+    def test_ui_runner_isolates_every_xdg_persistence_location(self):
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+        trainer_runner = REAL_TRAINER_RUNNER_PATH.read_text(encoding="utf-8")
+
+        for variable in (
+            "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "XDG_RUNTIME_DIR",
+        ):
+            self.assertIn(f"export {variable}=", runner)
+            self.assertIn(f"export {variable}=", trainer_runner)
 
     def test_native_quick_3d_canvas_uses_trace_for_motion_gate(self):
         self.assertFalse(
@@ -547,6 +579,28 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             "GC_UI_EXISTING_DISPLAY": "",
         }):
             self.assertTrue(UI.ui_screenshots_enabled_from_environment())
+
+    def test_quick3d_continuity_uses_trace_instead_of_gpu_readback(self):
+        with mock.patch.dict(
+            os.environ, {"GC_UI_REQUIRE_QUICK3D_EVIDENCE": "1"}, clear=True
+        ):
+            self.assertFalse(UI.ui_screenshots_enabled_from_environment())
+        with mock.patch.dict(
+            os.environ, {"GC_UI_REQUIRE_QUICK3D_EVIDENCE": "0"}, clear=True
+        ):
+            self.assertTrue(UI.ui_screenshots_enabled_from_environment())
+
+    def test_quick3d_visual_capture_cannot_enter_the_cold_start_window(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GC_UI_REQUIRE_QUICK3D_EVIDENCE": "1",
+                "GC_UI_GAME_RUN_SECONDS": "9.9",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "at least 10.5 seconds"):
+                UI.game_run_seconds_from_environment()
 
     def test_save_as_gate_can_be_split_from_renderer_gate(self):
         with mock.patch.dict(os.environ, {"GC_UI_SKIP_SAVE_AS": "1"}):

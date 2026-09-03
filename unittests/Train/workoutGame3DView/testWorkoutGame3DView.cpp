@@ -602,6 +602,46 @@ private slots:
         QCOMPARE(window.format().swapInterval(), 0);
     }
 
+    void rendererPrewarmCoversSeveralPresentedFrames()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.setCourse(sampleCourse(), FtpWatts);
+        window.setCourse(sampleCourse(), FtpWatts);
+        window.resize(960, 540);
+        QSignalSpy swaps(&window, &QQuickWindow::frameSwapped);
+
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.rendererPrewarmed(), 5000);
+
+        QVERIFY(swaps.count()
+                >= int(WorkoutGame3DWindow::RendererPrewarmFrameCount));
+
+        const int firstCycleSwaps = swaps.count();
+        window.setCourse(sampleCourse(), FtpWatts);
+        QVERIFY(!window.rendererPrewarmed());
+        QTRY_VERIFY_WITH_TIMEOUT(window.rendererPrewarmed(), 5000);
+        QVERIFY(swaps.count() - firstCycleSwaps
+                >= int(WorkoutGame3DWindow::RendererPrewarmFrameCount));
+
+        window.setCourse(sampleCourse(), FtpWatts);
+        QVERIFY(!window.rendererPrewarmed());
+        window.setSessionRunning(true);
+        QCoreApplication::processEvents();
+        QVERIFY(!window.rendererPrewarmed());
+
+        window.setSessionRunning(false);
+        const int restartSwaps = swaps.count();
+        window.setCourse(sampleCourse(), FtpWatts);
+        QTRY_VERIFY_WITH_TIMEOUT(window.rendererPrewarmed(), 5000);
+        QVERIFY(swaps.count() - restartSwaps
+                >= int(WorkoutGame3DWindow::RendererPrewarmFrameCount));
+    }
+
     void coldStartCaptureKeepsEverySwapAndVisualRevision()
     {
         WorkoutGameColdStartFrameCapture capture;

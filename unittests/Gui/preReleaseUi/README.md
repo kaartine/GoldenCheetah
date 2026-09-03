@@ -18,9 +18,13 @@ The Workout Game lifecycle is verified through its filesystem effects as well
 as its visible controls. One isolated Data Generator session starts in Game
 mode, shifts the virtual gear up and down, stops and continues the same raw
 recording, then stops and saves it. The workflow finishes by leaving and
-returning to Activities and selecting the saved activity row. The saved file
-and selected row are recorded in `reopened-activity.txt`. All paths run only
-inside the temporary athlete library.
+returning to Activities. It selects the saved activity row when the current
+Activities implementation exposes one through AT-SPI; otherwise it verifies
+the automatically selected activity. In both cases the Activities view's
+accessible description must identify the exact new activity file in the
+single-activity isolated library. The saved file and reopen result are recorded
+in `reopened-activity.txt`. All application and XDG persistence paths run only
+inside the temporary athlete library and test home.
 
 Set `GC_UI_GENERATOR_MODE` to `on-target`, `over-target`, `under-target`,
 `cadence-low`, `cadence-high` or `follow-target` to select the isolated Data
@@ -51,10 +55,13 @@ Python process keeps using its normal system libraries.
 The matrix runs three times against separate temporary athletes. The first run
 forces the QPainter fallback, the second exercises the packaged Scene Graph
 path with trace validation, and the third selects the production Qt Quick 3D
-renderer and requires renderer and cold-start trace evidence. The harness uses
-the visible Data Generator and perspective controls; it does not require
-Feature Lab or another hidden course-selection switch. To run only the Scene
-Graph leg:
+renderer and requires renderer and cold-start trace evidence. The Quick 3D leg
+defers synchronous pixel readback until after the measured ten-second
+cold-start window, then requires a nonblank canvas image. This avoids
+distorting the frame intervals while still detecting a blank renderer. The
+harness uses the visible Data Generator and perspective controls; it does not
+require Feature Lab or another hidden course-selection switch. To run only the
+Scene Graph leg:
 
 ```bash
 GC_WORKOUT_GAME_FORCE_PAINTER=0 \
@@ -82,8 +89,12 @@ created by the runner.
 
 To exercise the target desktop GPU instead of Xvfb, set
 `GC_UI_EXISTING_DISPLAY` to an accessible display such as `:1`, set the matching
-`XAUTHORITY`, and enable `GC_UI_USE_HARDWARE_GL=1`. The application remains on
-the isolated athlete library, but its test window is visible on that desktop.
+`XAUTHORITY`, enable `GC_UI_USE_HARDWARE_GL=1`, and set
+`GC_UI_EXPECTED_GPU_PATTERN` to a case-insensitive extended regular expression
+matching the intended adapter. The runner requires that adapter in the same
+application log and saves the matching line as `gpu-evidence.txt`. The
+application remains on the isolated athlete library, but its test window is
+visible on that desktop.
 The desktop must remain unlocked for the complete run; a screen lock hides the
 window and removes its visible controls from AT-SPI. The runner starts the
 AppImage in an owned process group and terminates that complete group on every
