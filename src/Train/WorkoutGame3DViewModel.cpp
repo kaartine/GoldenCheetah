@@ -51,10 +51,14 @@ constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double CameraCorridorClearanceMeters = 0.85;
 constexpr double CameraIntegrationStepSeconds = 0.05;
 constexpr double MaximumCameraCatchupSeconds = 0.25;
-constexpr double MaximumCameraSpeedMetersPerSecond = 17.0;
-constexpr double MaximumCameraYawVelocityRadiansPerSecond = 0.68;
-constexpr double MaximumCameraYawAccelerationRadiansPerSecondSquared = 4.0;
+constexpr double MaximumCameraSpeedMetersPerSecond = 16.0;
+constexpr double MaximumCameraYawVelocityRadiansPerSecond = 1.1;
+constexpr double MaximumCameraYawAccelerationRadiansPerSecondSquared = 3.0;
 constexpr double MaximumCameraTargetDistanceMeters = 23.95;
+constexpr double MaximumStalledCameraYawStepRadians = 0.18;
+constexpr double MaximumDesiredRiderHorizontalOffsetRadians =
+        10.0 * Pi / 180.0;
+constexpr double MaximumRiderVerticalFramingRadians = 12.0 * Pi / 180.0;
 constexpr double MaximumRiderBankRollDegreesPerSecond = 75.0;
 
 double finiteOrZero(double value)
@@ -320,7 +324,9 @@ void WorkoutGame3DViewModel::setCourse(
     slabCompressionInitialized = false;
     lastRiderPoseTimeMs = -1;
     cameraPresentationController.reset();
-    cameraPresentationSnapshot = {};
+    cameraPresentationSnapshot = {
+        WorkoutGame3DCameraPresentationMode::OpeningSide, 1.0
+    };
     cameraPoseInitialized = false;
     cameraYawRadians = 0.0;
     cameraYawVelocityRadiansPerSecond = 0.0;
@@ -329,6 +335,25 @@ void WorkoutGame3DViewModel::setCourse(
     sceneReady = roadCourse.ready && trail->ready()
             && floorBuffers[std::size_t(activeFloorBuffer)]->ready();
     rebuildFeatures(0.0);
+    if (sceneReady) {
+        const WorkoutGameRoadSample initial =
+                WorkoutGameRoadCourseBuilder::sample(roadCourse, 0.0);
+        if (initial.ready) {
+            riderPositionX = initial.center.xMeters;
+            riderPositionY = initial.visualGroundElevationMeters();
+            riderPositionZ = initial.center.zMeters;
+            cameraGroundY = riderPositionY;
+            riderHeadingDegrees =
+                    initial.center.headingRadians * 180.0 / Pi;
+            updateCameraPose(0.0, 0.0, 0);
+        }
+        rebuildTrees(0.0);
+        cameraPoseInitialized = false;
+        cameraYawVelocityRadiansPerSecond = 0.0;
+        lastCameraPoseTimeMs = 0;
+    } else {
+        emit treesChanged();
+    }
     emit courseChanged();
     emit sceneChanged();
 }
@@ -861,9 +886,21 @@ void WorkoutGame3DViewModel::updateCameraPose(
         const std::int64_t now = std::max<std::int64_t>(0, workoutTimeMs);
         const double desiredTargetX = cameraTargetPositionX;
         const double desiredTargetZ = cameraTargetPositionZ;
-        const double desiredYaw = std::atan2(
+        double desiredYaw = std::atan2(
                 desiredTargetX - cameraPositionX,
                 desiredTargetZ - cameraPositionZ);
+        const double desiredRiderYaw = std::atan2(
+                riderPositionX - cameraPositionX,
+                riderPositionZ - cameraPositionZ);
+        const double desiredRiderYawError = normalizedRadians(
+                desiredRiderYaw - desiredYaw);
+        if (std::abs(desiredRiderYawError)
+                > MaximumDesiredRiderHorizontalOffsetRadians) {
+            desiredYaw = normalizedRadians(
+                    desiredRiderYaw - std::copysign(
+                        MaximumDesiredRiderHorizontalOffsetRadians,
+                        desiredRiderYawError));
+        }
         if (!cameraPoseInitialized || now < lastCameraPoseTimeMs) {
             cameraPoseInitialized = true;
             cameraYawRadians = desiredYaw;
@@ -898,6 +935,7 @@ void WorkoutGame3DViewModel::updateCameraPose(
             cameraPositionZ = constrainedZ;
         }
 
+        const double yawBeforeIntegration = cameraYawRadians;
         double remainingSeconds = elapsedSeconds;
         while (remainingSeconds > 1.0e-9) {
             const double stepSeconds = std::min(
@@ -925,6 +963,19 @@ void WorkoutGame3DViewModel::updateCameraPose(
                     cameraYawRadians + yawStep);
             remainingSeconds -= stepSeconds;
         }
+        const double maximumYawStep = std::min(
+                MaximumStalledCameraYawStepRadians,
+                MaximumCameraYawVelocityRadiansPerSecond * elapsedSeconds);
+        const double integratedYawStep = normalizedRadians(
+                cameraYawRadians - yawBeforeIntegration);
+        if (std::abs(integratedYawStep) > maximumYawStep) {
+            cameraYawRadians = normalizedRadians(
+                    yawBeforeIntegration
+                    + std::copysign(maximumYawStep, integratedYawStep));
+            cameraYawVelocityRadiansPerSecond = std::copysign(
+                    maximumYawStep / elapsedSeconds,
+                    integratedYawStep);
+        }
         const double targetDistance = std::clamp(
                 std::hypot(desiredTargetX - cameraPositionX,
                            desiredTargetZ - cameraPositionZ),
@@ -935,6 +986,22 @@ void WorkoutGame3DViewModel::updateCameraPose(
                 + std::cos(cameraYawRadians) * targetDistance;
         cameraPositionY = std::max(
                 cameraPositionY, minimumCameraPositionY);
+        const double targetPitch = std::atan2(
+                cameraTargetPositionY - cameraPositionY, targetDistance);
+        const double riderHorizontalDistance = std::hypot(
+                riderPositionX - cameraPositionX,
+                riderPositionZ - cameraPositionZ);
+        const double riderPitch = std::atan2(
+                riderPositionY + 0.9 - cameraPositionY,
+                riderHorizontalDistance);
+        const double riderPitchError = riderPitch - targetPitch;
+        if (std::abs(riderPitchError)
+                > MaximumRiderVerticalFramingRadians) {
+            const double constrainedPitch = riderPitch - std::copysign(
+                    MaximumRiderVerticalFramingRadians, riderPitchError);
+            cameraTargetPositionY = cameraPositionY
+                    + std::tan(constrainedPitch) * targetDistance;
+        }
         lastCameraPoseTimeMs = now;
     };
     const double cameraDistance = std::max(

@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <utility>
@@ -150,25 +151,33 @@ void appendFeatureSamples(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
         double endDistanceMeters,
-        std::vector<double> &distances)
+        std::vector<double> &optionalDistances,
+        std::vector<double> &mandatoryDistances)
 {
     const auto append = [&](double distance) {
         if (distance >= startDistanceMeters
                 && distance <= endDistanceMeters
                 && std::isfinite(distance)) {
-            distances.push_back(distance);
+            optionalDistances.push_back(distance);
+        }
+    };
+    const auto appendMandatory = [&](double distance) {
+        if (distance >= startDistanceMeters
+                && distance <= endDistanceMeters
+                && std::isfinite(distance)) {
+            mandatoryDistances.push_back(distance);
         }
     };
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
         if (!piece.challenge.enabled) continue;
         if (piece.gapJump.enabled) {
-            append(piece.gapJump.splitStartDistanceMeters);
+            appendMandatory(piece.gapJump.splitStartDistanceMeters);
             append(piece.gapJump.lines.front().takeoffDistanceMeters);
             for (const WorkoutGameRoadGapJumpLine &line
                     : piece.gapJump.lines) {
                 append(line.landingDistanceMeters);
             }
-            append(piece.gapJump.mergeEndDistanceMeters);
+            appendMandatory(piece.gapJump.mergeEndDistanceMeters);
             continue;
         }
         if (piece.terrain == WorkoutGameTerrainKind::RockSlab) {
@@ -188,10 +197,13 @@ void appendFeatureSamples(
                     WorkoutGameSkinnyGeometry::profile(piece.difficulty);
             const double center = piece.challenge.obstacleDistanceMeters;
             append(center + skinny.startMeters);
-            append(center + skinny.activeStartMeters);
+            appendMandatory(center + skinny.activeStartMeters);
+            appendMandatory(center
+                    + (skinny.activeStartMeters
+                       + skinny.activeEndMeters) * 0.5);
             append(center + skinny.deckStartMeters);
             append(center + skinny.deckEndMeters);
-            append(center + skinny.activeEndMeters);
+            appendMandatory(center + skinny.activeEndMeters);
             append(center + skinny.endMeters);
             continue;
         }
@@ -225,7 +237,11 @@ void appendFeatureSamples(
         append(center + profile.plateauEndMeters);
         append(center + profile.endMeters);
         if (profile.shape == WorkoutGameFeatureGeometryShape::DropLedge) {
-            append(center + profile.landingStartMeters);
+            appendMandatory(center + profile.plateauStartMeters);
+            appendMandatory(center
+                    + (profile.plateauStartMeters
+                       + profile.landingStartMeters) * 0.5);
+            appendMandatory(center + profile.landingStartMeters);
             append(center + profile.recoveryStartMeters);
         }
         if (profile.shape
@@ -259,7 +275,7 @@ void appendFeatureSamples(
         const auto append = [&](double distance) {
             if (distance >= startDistanceMeters
                     && distance <= endDistanceMeters) {
-                distances.push_back(distance);
+                optionalDistances.push_back(distance);
             }
         };
         append(center + profile.startMeters);
@@ -380,31 +396,97 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
     const double rangeMeters = endDistanceMeters - startDistanceMeters;
 
     std::vector<double> sampleDistances;
+    std::vector<double> mandatorySampleDistances;
     appendFeatureSamples(
-            course, startDistanceMeters, endDistanceMeters, sampleDistances);
+            course, startDistanceMeters, endDistanceMeters,
+            sampleDistances, mandatorySampleDistances);
     std::sort(sampleDistances.begin(), sampleDistances.end());
     sampleDistances.erase(std::unique(
             sampleDistances.begin(), sampleDistances.end(),
             [](double left, double right) {
                 return std::abs(left - right) < 1e-6;
             }), sampleDistances.end());
-    if (sampleDistances.size() > std::size_t(MaximumSamples - 2)) {
-        sampleDistances.resize(std::size_t(MaximumSamples - 2));
+    std::sort(mandatorySampleDistances.begin(),
+              mandatorySampleDistances.end());
+    mandatorySampleDistances.erase(std::unique(
+            mandatorySampleDistances.begin(),
+            mandatorySampleDistances.end(),
+            [](double left, double right) {
+                return std::abs(left - right) < 1e-6;
+            }), mandatorySampleDistances.end());
+    const auto nearMandatory = [&](double distance) {
+        const auto upper = std::lower_bound(
+                mandatorySampleDistances.begin(),
+                mandatorySampleDistances.end(), distance);
+        if (upper != mandatorySampleDistances.end()
+                && std::abs(*upper - distance) < 1e-6) {
+            return true;
+        }
+        return upper != mandatorySampleDistances.begin()
+                && std::abs(*std::prev(upper) - distance) < 1e-6;
+    };
+    sampleDistances.erase(std::remove_if(
+            sampleDistances.begin(), sampleDistances.end(), nearMandatory),
+            sampleDistances.end());
+    constexpr int PreferredUniformSamples = MaximumSamples / 2;
+    if (mandatorySampleDistances.size()
+            > std::size_t(MaximumSamples - 2)) {
+        return {};
     }
-    const int uniformBudget = std::max(
-            2, MaximumSamples - int(sampleDistances.size()));
+    const int remainingCapacity = MaximumSamples
+            - int(mandatorySampleDistances.size());
+    const auto uniformCountForCapacity = [&](int capacity) {
+        const double spacing = std::max(
+                MinimumSampleSpacingMeters,
+                rangeMeters / double(capacity - 1));
+        return std::clamp(
+                int(std::ceil(rangeMeters / spacing)) + 1,
+                2, capacity);
+    };
+    const int preferredUniformCapacity = std::min(
+            PreferredUniformSamples,
+            remainingCapacity);
+    const int preferredUniformCount = uniformCountForCapacity(
+            preferredUniformCapacity);
+    const int optionalFeatureBudget = remainingCapacity
+            - preferredUniformCount;
+    if (optionalFeatureBudget <= 0) {
+        sampleDistances.clear();
+    } else if (optionalFeatureBudget == 1 && !sampleDistances.empty()) {
+        const double middleSample =
+                sampleDistances[sampleDistances.size() / 2];
+        sampleDistances.assign(1, middleSample);
+    } else if (sampleDistances.size()
+            > std::size_t(optionalFeatureBudget)) {
+        std::vector<double> evenlySpacedFeatures;
+        evenlySpacedFeatures.reserve(optionalFeatureBudget);
+        const double sourceSpan = double(sampleDistances.size() - 1);
+        const double destinationSpan = double(optionalFeatureBudget - 1);
+        for (int index = 0; index < optionalFeatureBudget; ++index) {
+            const std::size_t sourceIndex = std::size_t(std::llround(
+                    double(index) * sourceSpan / destinationSpan));
+            evenlySpacedFeatures.push_back(sampleDistances[sourceIndex]);
+        }
+        sampleDistances = std::move(evenlySpacedFeatures);
+    }
+    const int uniformCapacity = remainingCapacity
+            - int(sampleDistances.size());
     const double spacing = std::max(
             MinimumSampleSpacingMeters,
-            rangeMeters / double(uniformBudget - 1));
-    const int uniformCount = std::clamp(
-            int(std::ceil(rangeMeters / spacing)) + 1,
-            2, uniformBudget);
+            rangeMeters / double(uniformCapacity - 1));
+    const int uniformCount = uniformCountForCapacity(uniformCapacity);
     for (int index = 0; index < uniformCount; ++index) {
         sampleDistances.push_back(index + 1 == uniformCount
                 ? endDistanceMeters
                 : std::min(endDistanceMeters,
                     startDistanceMeters + double(index) * spacing));
     }
+    sampleDistances.erase(std::remove_if(
+            sampleDistances.begin(), sampleDistances.end(), nearMandatory),
+            sampleDistances.end());
+    sampleDistances.insert(
+            sampleDistances.end(),
+            mandatorySampleDistances.begin(), mandatorySampleDistances.end());
     std::sort(sampleDistances.begin(), sampleDistances.end());
     sampleDistances.erase(std::unique(
             sampleDistances.begin(), sampleDistances.end(),

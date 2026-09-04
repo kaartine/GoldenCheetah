@@ -83,6 +83,19 @@ and live gates also pass.
   and the release UI workflow are all covered by the current focused and
   aggregate gates.
 
+The current B4 hardening pass reproduces and closes the case where the HUD
+remained visible but the rider, trail and near world disappeared on a long
+course. Camera framing is bounded against the authoritative rider direction,
+the opening forest is prepared before the first live frame, and trail sampling
+preserves topology boundaries before optional feature detail. A 4.3 km
+Quick 3D sweep verifies the rider and trail at 2.23 km, the finish and a
+200-metre runout. Maximum-size 4096-piece berm and drop plans remain renderable
+and no drop air gap is bridged. The pre-package gates pass 46 geometry tests,
+78 offscreen ViewModel tests, 98 X11/OpenGL ViewModel tests and 88 Python UI
+harness tests; the changed C++ suites also pass under ASan/UBSan with no
+reported sanitizer error. Packaged-AppImage and physical B5 evidence remain
+separate gates.
+
 The completed B1/B2 focused gate covers road plan, document, source adapter,
 runtime, road course, conversion dialog, geometry, world physics and the 3D
 ViewModel. The ViewModel run has 34 expected skips

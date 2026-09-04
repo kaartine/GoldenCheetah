@@ -60,10 +60,10 @@ Status values are `open`, `in progress`, `verified` and `deferred`.
 | LIVE-GAME-01 | open | Power/cadence preparation and feature commitment have felt unreliable. | HUD separately explains distance, target power, cadence readiness and committed result, using the same target authority as the Data Generator and trainer. |
 | LIVE-GAME-02 | open | Jump, drop, bypass and other actions have at times looked like teleports or been unreadable. | Recorded position is forward-only and each action has a continuous, bounded motion trace matching its trail geometry. |
 | LIVE-GAME-03 | open | A test workout must expose all features and useful route shapes quickly. | A short deterministic lab route contains every scored feature plus ordinary banked turns, humps, climbs and descents. |
-| LIVE-GAME-04 | open | Visual regressions have escaped launch-only smoke tests. | Pre-release automation records trace counters, stills and video, checks world progress/framing, and runs an interactive isolated-data UI ride without touching production athlete data. |
+| LIVE-GAME-04 | in progress | Visual regressions have escaped launch-only smoke tests. | Pre-release automation records trace counters, stills and video, checks world progress/framing, and runs an interactive isolated-data UI ride without touching production athlete data. |
 | LIVE-GAME-05 | open | Testing without a trainer must not require hidden environment knowledge. | A visible, isolated Data Generator follows the workout with controlled over/under-target variation, responds to virtual gears and cannot write production athlete data. |
-| LIVE-GAME-06 | open | Earlier builds made workout saving, virtual-gear controls and entry to the Game view difficult to discover or unreliable. | An isolated UI test creates and saves a workout, starts it in Game mode, changes gears through visible controls and keyboard bindings, stops/continues, saves the activity and reopens it. |
-| LIVE-GAME-07 | open | The picture visibly stutters when a Workout Game training session starts, even when the later ride becomes smooth. | A cold packaged-AppImage test measures the first ten seconds from the Start command separately from steady state on the target Intel and NVIDIA paths. Presented-frame p99 stays at or below 25 ms, no frame interval exceeds 50 ms, and there are no consecutive over-25-ms frames, backward movement, unexplained world pause, skipped simulation ticks or missed trainer/recording deadlines. Required QML, shader, asset and scene preparation completes outside the priority trainer-control and recording paths. |
+| LIVE-GAME-06 | in progress | Earlier builds made workout saving, virtual-gear controls and entry to the Game view difficult to discover or unreliable. | An isolated UI test creates and saves a workout, starts it in Game mode, changes gears through visible controls and keyboard bindings, stops/continues, saves the activity and reopens it. |
+| LIVE-GAME-07 | in progress | The picture visibly stutters when a Workout Game training session starts, even when the later ride becomes smooth. | A cold packaged-AppImage test measures the first ten seconds from the Start command separately from steady state on the target Intel and NVIDIA paths. Presented-frame p99 stays at or below 25 ms, no frame interval exceeds 50 ms, and there are no consecutive over-25-ms frames, backward movement, unexplained world pause, skipped simulation ticks or missed trainer/recording deadlines. Required QML, shader, asset and scene preparation completes outside the priority trainer-control and recording paths. |
 
 ## Evidence Log
 
@@ -104,3 +104,12 @@ Status values are `open`, `in progress`, `verified` and `deferred`.
   The configured-course audit also projects the top, bottom, front and back of
   both wheel rims on every captured frame instead of accepting jersey pixels
   alone.
+- 2026-09-04 Dell-screen evidence reproduced a live rendering failure with a
+  valid HUD but no rider, trail, trees or near terrain. The camera now limits
+  target yaw relative to the rider, integrates long frame intervals with a
+  bounded yaw step and constrains vertical framing. A 4.3 km X11/OpenGL sweep
+  saves and validates frames at 2.23 km, finish and 200 m beyond the course;
+  each frame contains projected positive-depth rider bounds, jersey pixels in
+  that tight region and ordinary trail pixels. Dense 20 km and maximum-size
+  4096-piece geometry regressions also preserve uniform coverage and every
+  mandatory drop/gap boundary without drawing a triangle over open air.

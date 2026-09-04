@@ -11,6 +11,7 @@
 #include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
+#include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
@@ -1825,6 +1826,207 @@ private slots:
         QCOMPARE(geometry.sampleCount(), 16000);
         QVERIFY(geometry.vertexData().size() < 2 * 1024 * 1024);
         QVERIFY(geometry.indexData().size() < 512 * 1024);
+    }
+
+    void denseFeatureCourseKeepsTrailSamplesContinuous()
+    {
+        constexpr int PieceCount = 4000;
+        constexpr double PieceLengthMeters = 5.0;
+        constexpr int GapPieceIndex = 3000;
+        constexpr double GapStartMeters =
+                GapPieceIndex * PieceLengthMeters + 1.0;
+        constexpr double GapEndMeters =
+                GapPieceIndex * PieceLengthMeters + 4.0;
+        WorkoutGameRoadCourse course;
+        course.ready = true;
+        course.seed = 0x51a17u;
+        course.totalLengthMeters = PieceCount * PieceLengthMeters;
+        course.visualLengthMeters = course.totalLengthMeters;
+        course.pieces.reserve(PieceCount);
+        for (int index = 0; index < PieceCount; ++index) {
+            const double start = double(index) * PieceLengthMeters;
+            WorkoutGameRoadPiece piece;
+            piece.terrain = WorkoutGameTerrainKind::LogOver;
+            piece.startDistanceMeters = start;
+            piece.lengthMeters = PieceLengthMeters;
+            piece.difficulty = 1.0;
+            piece.geometryAnchorDistanceMeters = start
+                    + PieceLengthMeters * 0.5;
+            piece.entry.zMeters = start;
+            piece.exit.zMeters = start + PieceLengthMeters;
+            piece.challenge.enabled = true;
+            piece.challenge.obstacleDistanceMeters =
+                    piece.geometryAnchorDistanceMeters;
+            if (index == GapPieceIndex) {
+                piece.gapJump.enabled = true;
+                piece.gapJump.splitStartDistanceMeters = GapStartMeters;
+                piece.gapJump.mergeEndDistanceMeters = GapEndMeters;
+                piece.gapJump.lines.front().takeoffDistanceMeters =
+                        GapStartMeters + 0.5;
+                for (WorkoutGameRoadGapJumpLine &line
+                        : piece.gapJump.lines) {
+                    line.landingDistanceMeters = GapEndMeters - 0.5;
+                }
+            }
+            course.pieces.push_back(piece);
+        }
+
+        WorkoutGame3DGeometry geometry(
+                WorkoutGame3DGeometry::Layer::Trail);
+        geometry.setCourse(course);
+
+        QVERIFY(geometry.ready());
+        QVERIFY(geometry.sampleCount() <= 16000);
+        QVERIFY(geometry.sampleCount() >= 15000);
+        double maximumGapMeters = 0.0;
+        bool sampledGapStart = false;
+        bool sampledGapEnd = false;
+        double previousDistanceMeters = vertexFloat(
+                geometry.vertexData(), geometry.stride(), 0, 8);
+        for (int sample = 1; sample < geometry.sampleCount(); ++sample) {
+            const double distanceMeters = vertexFloat(
+                    geometry.vertexData(), geometry.stride(), sample * 2, 8);
+            maximumGapMeters = std::max(
+                    maximumGapMeters,
+                    distanceMeters - previousDistanceMeters);
+            sampledGapStart = sampledGapStart
+                    || std::abs(distanceMeters - GapStartMeters) < 0.001;
+            sampledGapEnd = sampledGapEnd
+                    || std::abs(distanceMeters - GapEndMeters) < 0.001;
+            previousDistanceMeters = distanceMeters;
+        }
+        QVERIFY2(maximumGapMeters <= 3.0,
+                 qPrintable(QStringLiteral(
+                     "dense feature sampling left a %1 m trail gap")
+                     .arg(maximumGapMeters)));
+        QVERIFY(sampledGapStart);
+        QVERIFY(sampledGapEnd);
+        const int indexCount = geometry.indexData().size()
+                / int(sizeof(quint32));
+        for (int index = 0; index < indexCount; index += 3) {
+            double minimumDistanceMeters =
+                    std::numeric_limits<double>::infinity();
+            double maximumDistanceMeters =
+                    -std::numeric_limits<double>::infinity();
+            for (int corner = 0; corner < 3; ++corner) {
+                const int vertex = int(indexValue(
+                        geometry.indexData(), index + corner));
+                const double distanceMeters = vertexFloat(
+                        geometry.vertexData(), geometry.stride(), vertex, 8);
+                minimumDistanceMeters = std::min(
+                        minimumDistanceMeters, distanceMeters);
+                maximumDistanceMeters = std::max(
+                        maximumDistanceMeters, distanceMeters);
+            }
+            QVERIFY2(!(minimumDistanceMeters < GapStartMeters
+                       && maximumDistanceMeters >= GapEndMeters),
+                     "trail triangles bridged the gap-jump opening");
+        }
+    }
+
+    void maximumPieceBermCourseStillBuildsTrailGeometry()
+    {
+        constexpr int PieceCount = 4096;
+        constexpr double PieceLengthMeters = 5.0;
+        WorkoutGameRoadCourse course;
+        course.ready = true;
+        course.seed = 0xb3a5u;
+        course.totalLengthMeters = PieceCount * PieceLengthMeters;
+        course.visualLengthMeters = course.totalLengthMeters;
+        course.pieces.reserve(PieceCount);
+        for (int index = 0; index < PieceCount; ++index) {
+            const double start = double(index) * PieceLengthMeters;
+            WorkoutGameRoadPiece piece;
+            piece.terrain = WorkoutGameTerrainKind::Berm;
+            piece.startDistanceMeters = start;
+            piece.lengthMeters = PieceLengthMeters;
+            piece.geometryAnchorDistanceMeters =
+                    start + PieceLengthMeters * 0.5;
+            piece.entry.zMeters = start;
+            piece.exit.zMeters = start + PieceLengthMeters;
+            piece.turnRadians = index % 2 == 0 ? 0.55 : -0.55;
+            piece.bank.enabled = true;
+            piece.bank.startDistanceMeters = start + 0.20;
+            piece.bank.curveStartDistanceMeters = start + 0.75;
+            piece.bank.curveEndDistanceMeters =
+                    start + PieceLengthMeters - 0.75;
+            piece.bank.endDistanceMeters = start + PieceLengthMeters - 0.20;
+            piece.bank.maximumBankRadians = 0.30;
+            course.pieces.push_back(piece);
+        }
+
+        WorkoutGame3DGeometry trail(WorkoutGame3DGeometry::Layer::Trail);
+        trail.setCourse(course);
+
+        QVERIFY2(trail.ready(),
+                 "maximum valid berm plan produced no trail geometry");
+        QVERIFY(trail.sampleCount() <= 16000);
+        QVERIFY(trail.boundsMax().z() > course.totalLengthMeters - 1.0);
+    }
+
+    void maximumPieceDropCourseDoesNotBridgeAirGaps()
+    {
+        constexpr int PieceCount = 4096;
+        constexpr double PieceLengthMeters = 30.0;
+        WorkoutGameRoadCourse course;
+        course.ready = true;
+        course.seed = 0xd20fu;
+        course.totalLengthMeters = PieceCount * PieceLengthMeters;
+        course.visualLengthMeters = course.totalLengthMeters;
+        course.pieces.reserve(PieceCount);
+        for (int index = 0; index < PieceCount; ++index) {
+            const double start = double(index) * PieceLengthMeters;
+            WorkoutGameRoadPiece piece;
+            piece.terrain = WorkoutGameTerrainKind::Drop;
+            piece.startDistanceMeters = start;
+            piece.lengthMeters = PieceLengthMeters;
+            piece.difficulty = 0.65;
+            piece.geometryAnchorDistanceMeters =
+                    start + PieceLengthMeters * 0.5;
+            piece.entry.zMeters = start;
+            piece.exit.zMeters = start + PieceLengthMeters;
+            piece.challenge.enabled = true;
+            piece.challenge.obstacleDistanceMeters =
+                    piece.geometryAnchorDistanceMeters;
+            course.pieces.push_back(piece);
+        }
+
+        WorkoutGame3DGeometry trail(WorkoutGame3DGeometry::Layer::Trail);
+        trail.setCourse(course);
+
+        QVERIFY2(trail.ready(),
+                 "maximum valid drop plan produced no trail geometry");
+        QVERIFY(trail.sampleCount() <= 16000);
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::Drop, 0.65);
+        QVERIFY(profile.ready);
+        int bridgedOpenings = 0;
+        const int indexCount = trail.indexData().size()
+                / int(sizeof(quint32));
+        for (int index = 0; index + 2 < indexCount; index += 3) {
+            double minimumDistance = std::numeric_limits<double>::infinity();
+            double maximumDistance =
+                    -std::numeric_limits<double>::infinity();
+            for (int corner = 0; corner < 3; ++corner) {
+                const int vertex = int(indexValue(
+                        trail.indexData(), index + corner));
+                const double distance = vertexFloat(
+                        trail.vertexData(), trail.stride(), vertex, 44) / 0.22;
+                minimumDistance = std::min(minimumDistance, distance);
+                maximumDistance = std::max(maximumDistance, distance);
+            }
+            const int pieceIndex = std::clamp(
+                    int(minimumDistance / PieceLengthMeters),
+                    0, PieceCount - 1);
+            const double center =
+                    (double(pieceIndex) + 0.5) * PieceLengthMeters;
+            const double openingStart = center + profile.plateauStartMeters;
+            const double openingEnd = center + profile.landingStartMeters;
+            bridgedOpenings += minimumDistance <= openingStart + 1e-4
+                    && maximumDistance >= openingEnd - 1e-4;
+        }
+        QCOMPARE(bridgedOpenings, 0);
     }
 
     void authoredObstacleDoesNotRaiseTheRenderedTrailBase()

@@ -501,7 +501,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertIn("FTP = 190\n", workout)
             self.assertIn("0.10 100\n0.10 220\n", workout)
             self.assertIn("1.00 100\n", workout)
-            self.assertIn("3.00 100\n", workout)
+            self.assertIn("30.00 100\n", workout)
 
     def test_prepare_selects_a_validated_generator_mode(self):
         with tempfile.TemporaryDirectory() as directory:

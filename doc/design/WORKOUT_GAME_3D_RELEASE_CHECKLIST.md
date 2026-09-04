@@ -1341,4 +1341,19 @@ cases. A fresh X11/OpenGL capture from the changed test binary is nonblank at
 1280 by 720 and has SHA-256
 `1e127ac3b4036f08bc5fcc663fa2a802bd5f913ba83259e716a267914152ff5b`.
 
+The 2026-09-04 B4 pre-package hardening pass reproduces the later Dell-screen
+failure where only the HUD and distant clear remained. Long-course camera
+framing now follows the authoritative rider heading with bounded yaw velocity,
+acceleration and stalled-frame catch-up, while course setup prepares the first
+forest batch before live input begins. Trail mesh sampling gives discontinuity
+boundaries priority over decorative samples, retains full uniform density when
+capacity is available and keeps maximum-size 4096-piece berm/drop plans
+renderable without bridging drop air gaps. Focused red tests reproduced 3772
+bridged drop openings before the fix. Final source-level gates pass 46/46
+geometry, 78/78 offscreen ViewModel, 98/98 X11/OpenGL ViewModel and 88/88
+Python UI harness tests. ASan/UBSan repeats pass all 46 geometry and 78
+ViewModel cases with zero sanitizer findings, and both focused builds compile
+without warnings. Stable AppImage publication and its isolated packaged UI
+matrix remain the next B4 gate; this evidence does not replace `REL-04`.
+
 The build is not a release candidate while any P0 task remains open.

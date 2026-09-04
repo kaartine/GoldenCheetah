@@ -494,9 +494,28 @@ int riderBluePixels(const QImage &image, const QRect &region)
     for (int y = bounded.top(); y <= bounded.bottom(); ++y) {
         for (int x = bounded.left(); x <= bounded.right(); ++x) {
             const QColor color(image.pixel(x, y));
-            if (color.blue() >= color.red() + 20
-                    && color.blue() >= color.green() + 15
-                    && color.blue() >= 55) {
+            if (color.blue() >= color.red() + 30
+                    && color.blue() >= color.green() + 20
+                    && color.red() <= 110
+                    && color.green() <= 145
+                    && color.blue() >= 90) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+int trailDirtPixels(const QImage &image, const QRect &region)
+{
+    int count = 0;
+    const QRect bounded = region.intersected(image.rect());
+    for (int y = bounded.top(); y <= bounded.bottom(); y += 2) {
+        for (int x = bounded.left(); x <= bounded.right(); x += 2) {
+            const QColor color(image.pixel(x, y));
+            if (color.red() >= 105
+                    && color.red() >= color.green() + 12
+                    && color.green() >= color.blue() + 15) {
                 ++count;
             }
         }
@@ -611,12 +630,19 @@ private slots:
         QVERIFY(window.rendererAvailable());
         window.setCourse(sampleCourse(), FtpWatts);
         window.setCourse(sampleCourse(), FtpWatts);
+        auto *viewModel = window.findChild<WorkoutGame3DViewModel *>();
+        QVERIFY(viewModel);
+        QVERIFY(viewModel->trees().size() >= 12);
         window.resize(960, 540);
         QSignalSpy swaps(&window, &QQuickWindow::frameSwapped);
 
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
         QTRY_VERIFY_WITH_TIMEOUT(window.rendererPrewarmed(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                window.rootObject()->findChildren<QObject *>(
+                    QStringLiteral("workoutGameTree")).size() >= 12,
+                5000);
 
         QVERIFY(swaps.count()
                 >= int(WorkoutGame3DWindow::RendererPrewarmFrameCount));
@@ -640,6 +666,133 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(window.rendererPrewarmed(), 5000);
         QVERIFY(swaps.count() - restartSwaps
                 >= int(WorkoutGame3DWindow::RendererPrewarmFrameCount));
+    }
+
+    void longCourseRemainsVisibleAtMidpointAndFinish()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+        QVERIFY(road.ready);
+        QVERIFY(road.totalLengthMeters > 3000.0);
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.resize(1280, 720);
+        window.setCourse(course, 250.0);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.rendererPrewarmed(), 5000);
+
+        double currentDistanceMeters = 0.0;
+        constexpr double SimulationStepMeters = 10.0 / 60.0;
+        const auto advanceTo = [&](double requestedDistanceMeters) {
+            const double destination = std::min(
+                    road.totalLengthMeters, requestedDistanceMeters);
+            int frames = 0;
+            while (currentDistanceMeters + 1.0e-9 < destination) {
+                currentDistanceMeters = std::min(
+                        destination,
+                        currentDistanceMeters + SimulationStepMeters);
+                WorkoutGameVisualSnapshot frame = frameAt(
+                        road, currentDistanceMeters);
+                frame.simulation.workoutTimeMs = qint64(std::llround(
+                        currentDistanceMeters / 10.0 * 1000.0));
+                frame.presentationTimeMs = frame.simulation.workoutTimeMs;
+                window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+                if (++frames % 120 == 0) {
+                    QCoreApplication::processEvents();
+                }
+            }
+            QTest::qWait(250);
+            window.update();
+            QTest::qWait(100);
+        };
+        const auto verifyVisibleScene = [&](const QString &name) {
+            const QImage rendered = window.grabWindow();
+            QVERIFY2(!rendered.isNull(), qPrintable(name));
+            QVERIFY2(sampledColorCount(rendered) > 35,
+                     qPrintable(name + QStringLiteral(" appears blank")));
+            const QRect lowerScene(
+                    0, rendered.height() * 2 / 5,
+                    rendered.width(), rendered.height() * 3 / 5);
+            const int clearPixels = nearColorPixels(
+                    rendered, QColor(QStringLiteral("#78a9bf")),
+                    lowerScene, 8);
+            const int sampledPixels =
+                    ((lowerScene.width() + 1) / 2)
+                    * ((lowerScene.height() + 1) / 2);
+            QVERIFY2(clearPixels < sampledPixels * 2 / 3,
+                     qPrintable(name
+                         + QStringLiteral(" is dominated by clear color")));
+            const QVariantList riderPoints = window.rootObject()->property(
+                    "riderWheelFrustumScreenPoints").toList();
+            QVERIFY2(riderPoints.size() >= 17, qPrintable(name));
+            QRectF riderBounds;
+            for (const QVariant &pointValue : riderPoints) {
+                const QVector3D point = pointValue.value<QVector3D>();
+                QVERIFY(std::isfinite(point.x()));
+                QVERIFY(std::isfinite(point.y()));
+                QVERIFY(std::isfinite(point.z()));
+                QVERIFY2(point.z() > 0.0f,
+                         qPrintable(name + QStringLiteral(
+                             " projects the rider behind the camera")));
+                QVERIFY2(point.x() >= 2.0f
+                                && point.x() <= rendered.width() - 2.0f
+                                && point.y() >= 2.0f
+                                && point.y() <= rendered.height() - 2.0f,
+                         qPrintable(name + QStringLiteral(
+                             " projects the rider outside the frame")));
+                riderBounds |= QRectF(point.x(), point.y(), 1.0, 1.0);
+            }
+            const QRect riderRegion = riderBounds.adjusted(
+                    -16.0, -32.0, 16.0, 16.0).toAlignedRect();
+            QVERIFY2(riderBluePixels(rendered, riderRegion) > 20,
+                     qPrintable(name
+                         + QStringLiteral(" does not show the rider")));
+            const int trailTop = std::clamp(
+                    int(std::floor(riderBounds.bottom() - 8.0)),
+                    lowerScene.top(), rendered.height() - 1);
+            const QRect trailRegion(
+                    rendered.width() * 3 / 10, trailTop,
+                    rendered.width() * 4 / 10,
+                    rendered.height() - trailTop);
+            QVERIFY2(trailDirtPixels(rendered, trailRegion) > 120,
+                     qPrintable(name
+                         + QStringLiteral(" does not show the trail")));
+            const QString outputDirectory = qEnvironmentVariable(
+                    "GC_WORKOUT_GAME_3D_LONG_AUDIT_DIR");
+            if (!outputDirectory.isEmpty()) {
+                QVERIFY(QDir().mkpath(outputDirectory));
+                QVERIFY(rendered.save(QDir(outputDirectory).filePath(
+                        name + QStringLiteral(".png"))));
+            }
+        };
+
+        advanceTo(2230.0);
+        verifyVisibleScene(QStringLiteral("long-course-2230m"));
+        advanceTo(road.totalLengthMeters);
+        verifyVisibleScene(QStringLiteral("long-course-finish"));
+
+        WorkoutGameVisualSnapshot beyondFinish = frameAt(
+                road, road.totalLengthMeters);
+        beyondFinish.world.rider.distanceMeters =
+                road.totalLengthMeters + 200.0;
+        beyondFinish.simulation.workoutTimeMs = qint64(std::llround(
+                road.totalLengthMeters / 10.0 * 1000.0)) + 20000;
+        beyondFinish.presentationTimeMs =
+                beyondFinish.simulation.workoutTimeMs;
+        window.setFrame(beyondFinish, 220.0, 220.0, 88, 150, 7);
+        auto *viewModel = qobject_cast<WorkoutGame3DViewModel *>(
+                window.rootContext()->contextProperty(
+                    QStringLiteral("workoutGame3D")).value<QObject *>());
+        QVERIFY(viewModel);
+        QCOMPARE(viewModel->distanceMeters(), road.totalLengthMeters);
+        QTest::qWait(350);
+        verifyVisibleScene(QStringLiteral("long-course-runout"));
     }
 
     void coldStartCaptureKeepsEverySwapAndVisualRevision()
@@ -1659,6 +1812,53 @@ private slots:
                  "the visible forest does not enclose both sides of the trail");
     }
 
+    void coursePrewarmPublishesForestBeforeTheFirstLiveFrame()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+
+        viewModel.setCourse(course, FtpWatts);
+
+        QVERIFY2(viewModel.trees().size() >= 12,
+                 "course prewarm leaves the expensive forest repeater empty");
+        QVERIFY(viewModel.trees().size() <= 18);
+
+        QSignalSpy changes(&viewModel, &WorkoutGame3DViewModel::treesChanged);
+        WorkoutGameVisualSnapshot first = frameAt(road, 0.0);
+        first.simulation.workoutTimeMs = 0;
+        viewModel.setFrame(first, 100.0, 100.0, 80, 130, 6);
+        QCOMPARE(changes.count(), 0);
+
+        WorkoutGameCourse invalid;
+        viewModel.setCourse(invalid, FtpWatts);
+        QVERIFY(viewModel.trees().isEmpty());
+        QCOMPARE(changes.count(), 1);
+    }
+
+    void featureCriticalFirstFrameKeepsThePrewarmedForest()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        QVERIFY(viewModel.trees().size() >= 12);
+        QSignalSpy changes(&viewModel, &WorkoutGame3DViewModel::treesChanged);
+
+        WorkoutGameVisualSnapshot first = frameAt(road, 0.0);
+        first.simulation.workoutTimeMs = 0;
+        first.feature.ready = true;
+        first.feature.phase = WorkoutGameFeaturePhase::Action;
+        viewModel.setFrame(first, 260.0, 220.0, 90, 150, 7);
+
+        QCOMPARE(viewModel.cameraPresentation(), QStringLiteral("chase"));
+        QCOMPARE(changes.count(), 0);
+    }
+
     void treesAreAnchoredToGeneratedTerrain()
     {
         const WorkoutGameCourse course = cameraMotionCourse();
@@ -1917,6 +2117,72 @@ private slots:
                          .arg(maximumYawAcceleration)));
     }
 
+    void cameraKeepsTheRiderFramedThroughTheLongCourse()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+        QVERIFY(road.ready);
+        QVERIFY(road.totalLengthMeters > 3000.0);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, 250.0);
+
+        constexpr double FrameSeconds = 1.0 / 60.0;
+        constexpr double SpeedMetersPerSecond = 10.0;
+        const int frameCount = int(std::ceil(
+                (road.totalLengthMeters + 200.0)
+                    / (SpeedMetersPerSecond * FrameSeconds)));
+        double maximumHorizontalAngleDegrees = 0.0;
+        double maximumVerticalAngleDegrees = 0.0;
+
+        for (int frameIndex = 0; frameIndex <= frameCount; ++frameIndex) {
+            const double requestedDistance = double(frameIndex)
+                    * SpeedMetersPerSecond * FrameSeconds;
+            const double distance = std::min(
+                    road.totalLengthMeters, requestedDistance);
+            WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+            frame.simulation.workoutTimeMs = qint64(std::llround(
+                    double(frameIndex) * FrameSeconds * 1000.0));
+            viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+
+            const double viewX = viewModel.cameraTargetX()
+                    - viewModel.cameraX();
+            const double viewY = viewModel.cameraTargetY()
+                    - viewModel.cameraY();
+            const double viewZ = viewModel.cameraTargetZ()
+                    - viewModel.cameraZ();
+            const double riderX = viewModel.riderX() - viewModel.cameraX();
+            const double riderY = viewModel.riderY() + 0.9
+                    - viewModel.cameraY();
+            const double riderZ = viewModel.riderZ() - viewModel.cameraZ();
+            const double viewHorizontal = std::hypot(viewX, viewZ);
+            const double riderHorizontal = std::hypot(riderX, riderZ);
+            QVERIFY(viewHorizontal > 1.0e-6);
+            QVERIFY(riderHorizontal > 1.0e-6);
+            const double horizontalAngle = std::acos(std::clamp(
+                    (viewX * riderX + viewZ * riderZ)
+                        / (viewHorizontal * riderHorizontal),
+                    -1.0, 1.0)) * 180.0 / std::acos(-1.0);
+            const double verticalAngle = std::abs(
+                    std::atan2(riderY, riderHorizontal)
+                    - std::atan2(viewY, viewHorizontal))
+                        * 180.0 / std::acos(-1.0);
+            maximumHorizontalAngleDegrees = std::max(
+                    maximumHorizontalAngleDegrees, horizontalAngle);
+            maximumVerticalAngleDegrees = std::max(
+                    maximumVerticalAngleDegrees, verticalAngle);
+        }
+
+        QVERIFY2(maximumHorizontalAngleDegrees <= 18.0,
+                 qPrintable(QStringLiteral(
+                     "rider left horizontal framing by %1 degrees")
+                     .arg(maximumHorizontalAngleDegrees)));
+        QVERIFY2(maximumVerticalAngleDegrees <= 16.0,
+                 qPrintable(QStringLiteral(
+                     "rider left vertical framing by %1 degrees")
+                     .arg(maximumVerticalAngleDegrees)));
+    }
+
     void cameraYawUsesElapsedTimeThroughIrregularSharpTurns()
     {
         const WorkoutGameCourse course = sharpTurningCameraCourse();
@@ -1937,8 +2203,7 @@ private slots:
             16, 33, 8, 24, 50, 17, 41, 12, 29
         }};
         constexpr double SpeedMetersPerSecond = 9.0;
-        constexpr double MaximumYawStepRadians = 0.035;
-        constexpr double MaximumYawVelocityRadiansPerSecond = 0.72;
+        constexpr double MaximumYawVelocityRadiansPerSecond = 1.12;
         constexpr double MaximumYawAccelerationRadiansPerSecondSquared = 4.5;
         std::int64_t timeMs = 5000;
         double distanceMeters = 4.0;
@@ -1968,7 +2233,9 @@ private slots:
                 const double elapsedSeconds = double(intervalMs) / 1000.0;
                 const double yawVelocity = yawStep / elapsedSeconds;
                 yawTravel += std::abs(yawStep);
-                QVERIFY2(std::abs(yawStep) <= MaximumYawStepRadians + 1.0e-9,
+                QVERIFY2(std::abs(yawStep)
+                                <= MaximumYawVelocityRadiansPerSecond
+                                    * elapsedSeconds + 1.0e-9,
                          qPrintable(QStringLiteral(
                              "irregular camera yaw step reached %1 rad")
                              .arg(std::abs(yawStep))));
@@ -1987,8 +2254,12 @@ private slots:
                                     <= MaximumYawAccelerationRadiansPerSecondSquared
                                         + 1.0e-6,
                              qPrintable(QStringLiteral(
-                                 "camera yaw acceleration reached %1 rad/s^2")
-                                 .arg(std::abs(acceleration))));
+                                 "camera yaw acceleration reached %1 rad/s^2 "
+                                 "at frame %2 (%3 ms after %4 ms, %5 -> %6 rad/s)")
+                                 .arg(std::abs(acceleration))
+                                 .arg(frameIndex).arg(intervalMs)
+                                 .arg(priorElapsedSeconds * 1000.0)
+                                 .arg(priorYawVelocity).arg(yawVelocity)));
                 }
                 priorYawVelocity = yawVelocity;
                 priorElapsedSeconds = elapsedSeconds;
@@ -2066,25 +2337,44 @@ private slots:
                 road, std::max(2.0, sharp->startDistanceMeters - 8.0));
         before.simulation.workoutTimeMs = 5000;
         viewModel.setFrame(before, 225.0, 225.0, 88, 150, 7);
+
+        WorkoutGameVisualSnapshot after = frameAt(
+                road, sharp->geometryAnchorDistanceMeters);
+        for (int frame = 1; frame <= 20; ++frame) {
+            after.simulation.workoutTimeMs = 5000 + frame * 16;
+            viewModel.setFrame(after, 225.0, 225.0, 88, 150, 7);
+        }
         const double priorYaw = std::atan2(
                 viewModel.cameraTargetX() - viewModel.cameraX(),
                 viewModel.cameraTargetZ() - viewModel.cameraZ());
 
-        WorkoutGameVisualSnapshot after = frameAt(
-                road, sharp->geometryAnchorDistanceMeters);
-        after.simulation.workoutTimeMs = 5250;
+        after.simulation.workoutTimeMs += 250;
         viewModel.setFrame(after, 225.0, 225.0, 88, 150, 7);
         const double yaw = std::atan2(
                 viewModel.cameraTargetX() - viewModel.cameraX(),
                 viewModel.cameraTargetZ() - viewModel.cameraZ());
         const double step = std::abs(normalizedRadians(yaw - priorYaw));
-        QVERIFY2(step >= 0.04,
+        QVERIFY2(step >= 0.17,
                  qPrintable(QStringLiteral(
-                     "camera discarded stalled frame time; yaw step %1 rad")
+                     "camera did not reach the stalled-frame yaw cap; "
+                     "yaw step %1 rad")
                      .arg(step)));
-        QVERIFY2(step <= 0.18,
+        QVERIFY2(step <= 0.180001,
                  qPrintable(QStringLiteral(
                      "camera stall catch-up jumped %1 rad").arg(step)));
+
+        const double stalledYaw = yaw;
+        after.simulation.workoutTimeMs += 16;
+        viewModel.setFrame(after, 225.0, 225.0, 88, 150, 7);
+        const double recoveredYaw = std::atan2(
+                viewModel.cameraTargetX() - viewModel.cameraX(),
+                viewModel.cameraTargetZ() - viewModel.cameraZ());
+        const double recoveryStep = std::abs(normalizedRadians(
+                recoveredYaw - stalledYaw));
+        QVERIFY2(recoveryStep <= 0.018,
+                 qPrintable(QStringLiteral(
+                     "camera recovery frame jumped %1 rad")
+                     .arg(recoveryStep)));
     }
 
     void longBermCourseKeepsVisibleGeometryChunkBounded()
@@ -4621,7 +4911,8 @@ private slots:
         QVERIFY(bypassGeometry->sampleCount() >= 20);
         QVERIFY(forestDressingGeometry->ready());
         QVERIFY(forestDressingGeometry->sampleCount() >= 70);
-        QVERIFY(viewModel.trees().size() <= 10);
+        QVERIFY(viewModel.trees().size() >= 12);
+        QVERIFY(viewModel.trees().size() <= 18);
         QVERIFY(viewModel.features().size() <= 32);
         viewModel.setFrame(
                 frameAt(road, 12.0), 215.0, 220.0, 87, 148, 7);

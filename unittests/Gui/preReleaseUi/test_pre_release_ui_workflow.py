@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import shutil
@@ -104,7 +106,9 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
             self.assertTrue((athlete / "activities").is_dir())
             self.assertTrue((athlete / "records").is_dir())
-            self.assertTrue((athlete / "workouts" / "ui-test.erg").is_file())
+            workout = athlete / "workouts" / "ui-test.erg"
+            self.assertTrue(workout.is_file())
+            self.assertIn("30.00 100\n", workout.read_text(encoding="utf-8"))
             self.assertIn("devicename1=Data Generator\n", train_settings)
             self.assertNotIn(str(Path.home() / ".goldencheetah"), train_settings)
 
@@ -115,11 +119,12 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             stop = object()
             continue_button = object()
             driver = mock.Mock()
-            driver.find.side_effect = [stop, continue_button]
+            driver.find.side_effect = [continue_button]
             workflow = object.__new__(UI.WorkoutGameUiWorkflow)
             workflow.driver = driver
             workflow.capture_screenshots = False
             workflow.run_delays = (0.0, 0.0, 0.0)
+            workflow.stop_training_button = stop
 
             with mock.patch.object(UI.time, "sleep"):
                 workflow.stop_and_continue(recording)
@@ -127,9 +132,6 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             self.assertEqual(
                 driver.find.call_args_list,
                 [
-                    mock.call(
-                        "Stop training", "push button", showing=True
-                    ),
                     mock.call(
                         "Continue Training",
                         "push button",
@@ -160,7 +162,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             save = object()
             finish = object()
             driver = mock.Mock()
-            driver.find.side_effect = [stop, save, finish]
+            driver.find.side_effect = [save, finish]
             driver.wait_new_file.return_value = activity
             driver.reopen_saved_activity.return_value = "saved activity row"
             workflow = object.__new__(UI.WorkoutGameUiWorkflow)
@@ -169,6 +171,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             workflow.existing_activities = set()
             workflow.artifacts = artifacts
             workflow.capture_screenshots = False
+            workflow.stop_training_button = stop
 
             with mock.patch.object(UI.time, "sleep"), mock.patch.dict(
                 os.environ, {"GC_UI_VALIDATE_TRAINER_ACCEPTANCE": "0"}
@@ -186,6 +189,56 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                 ),
                 "saved.json\nsaved activity row\n",
             )
+
+    def test_require_names_indexes_the_accessibility_tree_once(self):
+        first = object()
+        second = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.all_nodes = mock.Mock(return_value=iter((first, second)))
+        driver.name = mock.Mock(
+            side_effect=lambda node: "Start" if node is first else "Stop"
+        )
+        driver.role = mock.Mock(return_value="push button")
+
+        driver.require_names(("Start", "Stop"), role="push button")
+
+        driver.all_nodes.assert_called_once_with()
+
+    def test_stop_training_recovers_from_a_stale_cached_button(self):
+        stale = object()
+        replacement = object()
+        driver = mock.Mock()
+        driver.activate.side_effect = [UI.UiFailure("stale"), None]
+        driver.find.return_value = replacement
+        workflow = object.__new__(UI.WorkoutGameUiWorkflow)
+        workflow.driver = driver
+        workflow.stop_training_button = stale
+
+        workflow.activate_stop_training()
+
+        driver.find.assert_called_once_with(
+            "Stop training", "push button", showing=True
+        )
+        self.assertEqual(driver.activate.call_args_list,
+                         [mock.call(stale), mock.call(replacement)])
+        self.assertIs(workflow.stop_training_button, replacement)
+
+    def test_suite_captures_a_best_effort_failure_screenshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            driver = mock.Mock()
+            suite = UI.Suite(driver, Path(directory))
+
+            def fail():
+                raise UI.UiFailure("expected failure")
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                suite.run("Workout Game lifecycle", fail)
+
+            driver.screenshot.assert_called_once_with(
+                "failure-workout-game-lifecycle"
+            )
+            self.assertEqual(len(suite.results), 1)
+            self.assertIn("expected failure", suite.results[0][2])
 
     def test_reopen_selects_an_activity_row_after_leaving_game_mode(self):
         with tempfile.TemporaryDirectory() as directory:

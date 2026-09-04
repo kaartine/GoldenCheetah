@@ -227,7 +227,7 @@ MINUTES WATTS
 0.18 220
 0.18 100
 1.00 100
-3.00 100
+30.00 100
 [END COURSE DATA]
 """,
     )
@@ -374,7 +374,12 @@ class UiDriver:
         deadline = time.monotonic() + timeout
         missing = list(names)
         while missing and time.monotonic() < deadline:
-            missing = [name for name in names if not self.find_all(name, role)]
+            found = {
+                self.name(node)
+                for node in self.all_nodes()
+                if (role is None or self.role(node) == role)
+            }
+            missing = [name for name in names if name not in found]
             if missing:
                 time.sleep(0.15)
         if missing:
@@ -813,6 +818,7 @@ class WorkoutGameUiWorkflow:
         self.canvas = None
         self.first_frame = None
         self.initial_gear = 0.0
+        self.stop_training_button = None
         run_seconds = game_run_seconds_from_environment()
         self.run_delays = (
             run_seconds / 4.0,
@@ -844,6 +850,9 @@ class WorkoutGameUiWorkflow:
         self.driver.select_named("Data Generator")
         self.gear = self.driver.find(
             "Virtual gear", "spin button", showing=True
+        )
+        self.stop_training_button = self.driver.find(
+            "Stop training", "push button", showing=True
         )
         if not self.driver.enabled(self.gear):
             self.driver.activate(
@@ -894,6 +903,19 @@ class WorkoutGameUiWorkflow:
         self.driver.send_key("s")
         self.driver.wait_value(self.gear, self.initial_gear)
 
+    def activate_stop_training(self) -> None:
+        cached = getattr(self, "stop_training_button", None)
+        if cached is not None:
+            try:
+                self.driver.activate(cached)
+                return
+            except UiFailure:
+                self.stop_training_button = None
+        self.stop_training_button = self.driver.find(
+            "Stop training", "push button", showing=True
+        )
+        self.driver.activate(self.stop_training_button)
+
     def stop_and_continue(self, recording: Path) -> None:
         time.sleep(self.run_delays[2])
         if self.capture_screenshots:
@@ -924,9 +946,7 @@ class WorkoutGameUiWorkflow:
                     f"only {changed} sampled pixels changed"
                 )
 
-        self.driver.activate(
-            self.driver.find("Stop training", "push button", showing=True)
-        )
+        self.activate_stop_training()
         continue_button = self.driver.find(
             "Continue Training", "push button", showing=True, timeout=8.0
         )
@@ -938,9 +958,7 @@ class WorkoutGameUiWorkflow:
 
     def stop_save_and_reopen(self, recording: Path) -> Path:
         time.sleep(1.0)
-        self.driver.activate(
-            self.driver.find("Stop training", "push button", showing=True)
-        )
+        self.activate_stop_training()
         self.driver.activate(
             self.driver.find("Save", "push button", showing=True, timeout=8.0)
         )
@@ -979,6 +997,14 @@ class Suite:
             print(f"PASS {name}", flush=True)
         except Exception:
             error = traceback.format_exc()
+            try:
+                safe_name = "".join(
+                    character if character.isalnum() else "-"
+                    for character in name.lower()
+                ).strip("-")
+                self.driver.screenshot(f"failure-{safe_name or 'ui-test'}")
+            except Exception:
+                pass
             print(f"FAIL {name}\n{error}", file=sys.stderr, flush=True)
         self.results.append((name, time.monotonic() - started, error))
 
