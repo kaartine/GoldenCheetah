@@ -15,7 +15,6 @@
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameVisualSmoother.h"
 
-#include <QElapsedTimer>
 #include <QQuickView>
 
 #include <atomic>
@@ -92,7 +91,6 @@ private:
     WorkoutGameRoadCourse roadCourse;
     WorkoutGameVisualSnapshot sourceFrame;
     WorkoutGameVisualSnapshot presentedFrame;
-    QElapsedTimer monotonicClock;
     double watts = 0.0;
     double targetWatts = 0.0;
     int cadenceRpm = 0;

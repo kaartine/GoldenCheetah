@@ -50,6 +50,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cmath>
 #include <functional>
@@ -818,6 +819,40 @@ private slots:
         QCOMPARE(snapshot.swapFramesPerSecond, 50.0);
         QCOMPARE(snapshot.uniqueVisualFramesPerSecond, 25.0);
         QCOMPARE(snapshot.longestUnchangedVisualIntervalMs, 32.0);
+    }
+
+    void fixedStepPresentationUsesRunnerClockEpoch()
+    {
+        WorkoutGame3DWindow window(false);
+        window.setCourse(sampleCourse(), FtpWatts);
+        window.setSessionRunning(true);
+
+        const std::int64_t baseTimeMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        for (int tick = 0; tick < 3; ++tick) {
+            WorkoutGameVisualSnapshot frame;
+            frame.presentationTimeMs = baseTimeMs + tick * 20;
+            frame.simulation.ready = true;
+            frame.simulation.workoutTimeMs = tick * 20;
+            frame.world.ready = true;
+            frame.world.generation = 1;
+            frame.world.rider.distanceMeters = 10.0 + tick * 0.2;
+            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        }
+
+        QTest::qWait(60);
+        QVERIFY(QMetaObject::invokeMethod(
+                &window, "presentFrame", Qt::DirectConnection));
+        auto *viewModel = qobject_cast<WorkoutGame3DViewModel *>(
+                window.rootContext()->contextProperty(
+                    QStringLiteral("workoutGame3D")).value<QObject *>());
+        QVERIFY(viewModel);
+        QVERIFY2(viewModel->distanceMeters() > 10.0,
+                 "the renderer sampled a clock epoch before the runner frames");
+        QVERIFY(viewModel->distanceMeters() <= 10.4);
+        window.setSessionRunning(false);
     }
 
     void coldStartCaptureIncludesStartAndConsecutiveLateFrames()

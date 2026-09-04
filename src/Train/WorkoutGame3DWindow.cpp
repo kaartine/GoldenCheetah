@@ -31,6 +31,12 @@ QEvent::Type presentationEventType()
     return static_cast<QEvent::Type>(type);
 }
 
+std::int64_t monotonicMilliseconds()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 bool visuallyDifferent(
         const WorkoutGameVisualSnapshot &left,
         const WorkoutGameVisualSnapshot &right)
@@ -175,7 +181,6 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
     }, Qt::DirectConnection);
     connect(this, &QQuickWindow::sceneGraphError,
             this, &WorkoutGame3DWindow::handleSceneGraphError);
-    monotonicClock.start();
     if (rendererEnabled) {
         setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
     }
@@ -267,7 +272,7 @@ void WorkoutGame3DWindow::setFrame(
     }
     const bool firstFrame = !hasFrame;
     visualSmoother.setTarget(
-            frame, monotonicClock.elapsed());
+            frame, monotonicMilliseconds());
     hasFrame = true;
     if (!sessionRunning || firstFrame) presentFrame();
     if (sessionRunning) requestUpdate();
@@ -339,7 +344,7 @@ void WorkoutGame3DWindow::presentFrame()
 {
     if (!hasFrame) return;
     const WorkoutGameVisualSnapshot nextFrame =
-            visualSmoother.sample(monotonicClock.elapsed());
+            visualSmoother.sample(monotonicMilliseconds());
     const bool changed = !hasPresentedVisualState
             || visuallyDifferent(presentedFrame, nextFrame);
     presentedFrame = nextFrame;
