@@ -1396,7 +1396,9 @@ private slots:
                 && window.diagnosticsSnapshot().input
                     .p95FrameIntervalMs > 0.0
                 && window.diagnosticsSnapshot().input
-                    .p99FrameIntervalMs > 0.0,
+                    .p99FrameIntervalMs > 0.0
+                && window.diagnosticsSnapshot().input.coldStart
+                    .uniqueVisualFramesPerSecond > 0.0,
                 5000);
         const WorkoutGameDiagnosticsSnapshot first =
                 window.diagnosticsSnapshot();

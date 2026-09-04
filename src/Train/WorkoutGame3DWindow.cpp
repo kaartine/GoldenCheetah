@@ -296,6 +296,7 @@ void WorkoutGame3DWindow::setTelemetry(
 
 void WorkoutGame3DWindow::setSessionRunning(bool running)
 {
+    const bool stateChanged = running != sessionRunning;
     const bool starting = running && !sessionRunning;
     const bool stopping = !running && sessionRunning;
     if (starting) {
@@ -323,6 +324,11 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
     sessionRunningAtomic.store(running, std::memory_order_release);
     if (rootObject()) {
         rootObject()->setProperty("sessionRunning", sessionRunning);
+    }
+    if (stateChanged) {
+        // The running overlay is part of the presented scene even before the
+        // first simulation snapshot for the new session arrives.
+        presentedVisualRevision.fetch_add(1, std::memory_order_release);
     }
     if (running) {
         prewarmPending.store(false, std::memory_order_release);
