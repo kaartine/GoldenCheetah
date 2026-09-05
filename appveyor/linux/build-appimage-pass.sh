@@ -63,6 +63,7 @@ PREFIX_MAP_FLAGS="-ffile-prefix-map=$SOURCE_TREE=/usr/src/goldencheetah -fdebug-
     run_reproducible_build_tool \
         "$QT_ROOT" "$BUILD_HOME" "$BUILD_TMP" \
         "$QMAKE_COMMAND" "$SOURCE_TREE/build.pro" -r \
+        GC_BUILD_MODE=release \
         QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" \
         QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare" \
         QMAKE_CFLAGS+="$PREFIX_MAP_FLAGS" \

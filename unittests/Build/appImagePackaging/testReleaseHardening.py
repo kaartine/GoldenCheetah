@@ -655,6 +655,15 @@ class PipelineIsolationTests(unittest.TestCase):
             self.assertNotIn("GC_APPIMAGE_CCACHE", source, relative)
             self.assertNotIn("QMAKE_CC=$CCACHE", source, relative)
 
+    def test_reproducible_build_explicitly_selects_release_mode(self):
+        source = (
+            REPOSITORY_ROOT / "appveyor/linux/build-appimage-pass.sh"
+        ).read_text(encoding="utf-8")
+        qmake = source.index('"$QMAKE_COMMAND" "$SOURCE_TREE/build.pro" -r')
+        release_mode = source.index("GC_BUILD_MODE=release", qmake)
+        make = source.index('"$MAKE_COMMAND"', qmake)
+        self.assertLess(release_mode, make)
+
     def test_reproduction_builds_and_packages_two_independent_trees(self):
         self.assertTrue(REPRODUCE_APPIMAGE.is_file(), "reproduction driver is missing")
         with tempfile.TemporaryDirectory() as temporary:
