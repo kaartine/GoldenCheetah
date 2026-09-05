@@ -179,11 +179,17 @@ source and stable seed. Each comparison row shows:
 - nominal duration and total-duration deviation;
 - estimated distance;
 - estimated load points and load deviation;
-- work-duration and recovery-duration deviation;
+- preserved/total key efforts and preserved/total recoveries as separate,
+  explicit retention values;
+- work-duration and recovery/rest-duration deviation as separate values;
 - grade scale, elevation/terrain signature and technical terrain exposure;
 - feature count/density and curvature; and
 - every per-interval duration change, its signed amount and authorized metadata
   role (or an explicit `no prescription changes` result).
+
+Key-effort and recovery retention must never be inferred only from aggregate
+work/rest percentages: both preserved/total counts are first-class preview
+values in the selected-mode detail and in every all-three comparison row.
 
 Selecting a mode changes the elevation/power preview, terrain/flow summary and
 detailed ETA. Switching away and back reproduces identical course, summary and

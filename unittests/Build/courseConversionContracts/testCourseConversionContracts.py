@@ -10,6 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 HEADER = ROOT / "src/Train/WorkoutGameCoursePrescription.h"
 CONVERSION_HEADER = ROOT / "src/Train/WorkoutGameCourseConversion.h"
 DOCUMENT_HEADER = ROOT / "src/Train/WorkoutGameCourseDocument.h"
+DIALOG_SOURCE = ROOT / "src/Train/WorkoutGameCourseConversionDialog.cpp"
 DESIGN = ROOT / "doc/design/WORKOUT_GAME_COURSE_CONVERSION_MODES.md"
 FIXTURE = (ROOT / "unittests/Train/workoutGameCourseConversion/fixtures"
            / "mode_contract.json")
@@ -148,12 +149,33 @@ class CourseConversionContractTest(unittest.TestCase):
             "Prescribed recovery never receives a scored challenge",
             "feature count/density and curvature",
             "Create/Save",
+            "preserved/total key efforts and preserved/total recoveries",
+            "must never be inferred only from aggregate work/rest percentages",
             "schema version 3",
             "Schema-1 and schema-2 documents remain readable and canonical",
         )
         for phrase in required:
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized_design)
+
+    def test_preview_exposes_explicit_key_and_recovery_retention(self):
+        conversion = CONVERSION_HEADER.read_text(encoding="utf-8")
+        dialog = DIALOG_SOURCE.read_text(encoding="utf-8")
+        for token in (
+                "preservedKeyEffortCount",
+                "keyEffortCount",
+                "preservedRecoveryCount",
+                "recoveryCount"):
+            with self.subTest(token=token):
+                self.assertIn(token, conversion)
+        for object_name in (
+                "keyEffortRetentionValue",
+                "recoveryRetentionValue",
+                "workoutFirstComparisonValue",
+                "balancedComparisonValue",
+                "rideFirstComparisonValue"):
+            with self.subTest(object_name=object_name):
+                self.assertIn(object_name, dialog)
 
     def test_production_contract_header_and_api_exist(self):
         self.assertTrue(

@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 namespace {
 
@@ -31,7 +32,11 @@ void appendInterval(
 std::vector<WorkoutGameInterval> sampleWorkout()
 {
     std::vector<WorkoutGameInterval> intervals;
-    appendInterval(intervals, 8 * 60000, 140.0);
+    // Ten equal palette-eligible intervals make the published per-ten terrain
+    // density bands directly measurable without changing the prescription.
+    for (int index = 0; index < 8; ++index) {
+        appendInterval(intervals, 60000, 140.0);
+    }
     for (int repetition = 0; repetition < 2; ++repetition) {
         appendInterval(intervals, 4 * 60000, 205.0 + repetition * 3.0);
         appendInterval(intervals, 10000, 250.0 + repetition * 5.0);
@@ -43,11 +48,12 @@ std::vector<WorkoutGameInterval> sampleWorkout()
     appendInterval(intervals, 4 * 60000, 211.0);
     appendInterval(intervals, 10000, 260.0);
     appendInterval(intervals, 3 * 60000, 110.0);
-    appendInterval(intervals, 2 * 60000, 140.0);
+    appendInterval(intervals, 60000, 140.0);
+    appendInterval(intervals, 60000, 140.0);
     return intervals;
 }
 
-constexpr std::size_t FiveMinuteRecoveryIndex = 7;
+constexpr std::size_t FiveMinuteRecoveryIndex = 14;
 
 }
 
@@ -67,6 +73,33 @@ private slots:
 
         QCOMPARE(result.status, WorkoutGameCourseConversionStatus::InvalidInput);
         QVERIFY(result.course.sections.empty());
+    }
+
+    void prescriptionMetadataValidationFailsClosed()
+    {
+        WorkoutGameCourseConversionRequest request;
+        request.intervals = sampleWorkout();
+        request.ftpWatts = 190.0;
+        request.prescriptionMetadata.version = 99;
+        request.prescriptionMetadata.intervalRoles.assign(
+                request.intervals.size(),
+                WorkoutGameCourseIntervalRole::Prescribed);
+
+        QCOMPARE(WorkoutGameCourseConverter::convert(request).status,
+                 WorkoutGameCourseConversionStatus::GenerationFailed);
+
+        request.prescriptionMetadata.version = 1;
+        request.prescriptionMetadata.intervalRoles.pop_back();
+        QCOMPARE(WorkoutGameCourseConverter::convert(request).status,
+                 WorkoutGameCourseConversionStatus::GenerationFailed);
+
+        request.prescriptionMetadata.intervalRoles.assign(
+                request.intervals.size(),
+                WorkoutGameCourseIntervalRole::Prescribed);
+        request.prescriptionMetadata.intervalRoles[FiveMinuteRecoveryIndex] =
+                WorkoutGameCourseIntervalRole::NonPrescriptiveTransition;
+        QCOMPARE(WorkoutGameCourseConverter::convert(request).status,
+                 WorkoutGameCourseConversionStatus::GenerationFailed);
     }
 
     void balancedPresetProducesCompletePreviewSummary()
@@ -96,6 +129,9 @@ private slots:
         QCOMPARE(result.summary.totalDurationDeviationPercent, 0.0);
         QCOMPARE(result.summary.preservedKeyEffortCount,
                  result.summary.keyEffortCount);
+        QVERIFY(result.summary.recoveryCount > 0);
+        QCOMPARE(result.summary.preservedRecoveryCount,
+                 result.summary.recoveryCount);
         QVERIFY(result.summary.distanceMeters > 5000.0);
         QVERIFY(result.summary.elevationGainMeters > 0.0);
         QVERIFY(result.summary.nominalEstimate.finished);
@@ -180,6 +216,20 @@ private slots:
             QVERIFY(section.terrain != WorkoutGameTerrainKind::GapJump);
         }
         QVERIFY(workoutFirstHasTechnicalPlay);
+        const std::set<WorkoutGameTerrainKind> expectedWorkoutFirstTerrain {
+            WorkoutGameTerrainKind::Roots,
+            WorkoutGameTerrainKind::Rollers,
+            WorkoutGameTerrainKind::RockGarden,
+            WorkoutGameTerrainKind::LogOver
+        };
+        std::set<WorkoutGameTerrainKind> actualWorkoutFirstTerrain;
+        for (const WorkoutGameDistanceCourseSection &section
+                : workoutFirst.course.sections) {
+            if (expectedWorkoutFirstTerrain.count(section.terrain) != 0) {
+                actualWorkoutFirstTerrain.insert(section.terrain);
+            }
+        }
+        QVERIFY(actualWorkoutFirstTerrain == expectedWorkoutFirstTerrain);
 
         for (std::size_t index = 0; index < balanced.course.sections.size(); ++index) {
             QCOMPARE(workoutFirst.course.sections[index].targetStartWatts,

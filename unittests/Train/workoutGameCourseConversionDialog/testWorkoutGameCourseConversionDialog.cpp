@@ -90,6 +90,10 @@ private slots:
         QVERIFY(requiredChild<QLabel>(dialog, "workDeviationValue")->text().contains("%"));
         QVERIFY(requiredChild<QLabel>(dialog, "recoveryDeviationValue")->text().contains("%"));
         QVERIFY(requiredChild<QLabel>(dialog, "totalDeviationValue")->text().contains("%"));
+        QVERIFY(requiredChild<QLabel>(dialog, "keyEffortRetentionValue")
+                        ->text().contains("/"));
+        QVERIFY(requiredChild<QLabel>(dialog, "recoveryRetentionValue")
+                        ->text().contains("/"));
         QVERIFY(!requiredChild<QLabel>(dialog, "terrainSignatureValue")
                         ->text().isEmpty());
         QVERIFY(requiredChild<QLabel>(dialog, "technicalExposureValue")
@@ -114,6 +118,14 @@ private slots:
                         ->text()
                 != requiredChild<QLabel>(dialog, "rideFirstComparisonValue")
                         ->text());
+        for (const char *name : {
+                "workoutFirstComparisonValue",
+                "balancedComparisonValue",
+                "rideFirstComparisonValue"}) {
+            const QString text = requiredChild<QLabel>(dialog, name)->text();
+            QVERIFY2(text.contains("key", Qt::CaseInsensitive), name);
+            QVERIFY2(text.contains("recovery", Qt::CaseInsensitive), name);
+        }
         QVERIFY(requiredChild<QPushButton>(dialog, "createCourseButton")
                         ->isEnabled());
 
@@ -271,6 +283,28 @@ private slots:
                     coursePath, loaded, error),
                  WorkoutGameCourseDocumentStatus::Ready);
         QCOMPARE(loaded.title, QStringLiteral("Thursday MTB"));
+    }
+
+    void createPersistsExactPreviewApartFromEditedTitle()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString coursePath = directory.filePath("exact-preview.crs");
+        WorkoutGameCourseConversionDialog dialog(sampleRequest(), coursePath);
+        WorkoutGameCourseDocument expected = dialog.currentResult().document;
+        expected.title = QStringLiteral("Exact preview title");
+
+        requiredChild<QLineEdit>(dialog, "courseTitleEdit")
+                ->setText(expected.title);
+        requiredChild<QPushButton>(dialog, "createCourseButton")->click();
+
+        WorkoutGameCourseDocument loaded;
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    coursePath, loaded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(loaded),
+                 WorkoutGameCourseDocumentCodec::encode(expected));
     }
 
     void conflictLeavesDialogOpenAndShowsError()
