@@ -8,7 +8,7 @@ Node {
     PrincipledMaterial {
         id: mat_BunnyHopBar_Grey_material
         objectName: "MAT_BunnyHopBar_Grey"
-        baseColor: "#ffb87a1f"
+        baseColor: "#ffe0ab40"
         roughness: 1
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque
@@ -16,7 +16,7 @@ Node {
     PrincipledMaterial {
         id: mat_BunnyHopSupport_Grey_material
         objectName: "MAT_BunnyHopSupport_Grey"
-        baseColor: "#ff472912"
+        baseColor: "#ff3d1f0b"
         roughness: 1
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque

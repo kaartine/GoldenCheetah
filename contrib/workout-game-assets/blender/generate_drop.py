@@ -25,7 +25,7 @@ SOCKET_HALF_WIDTH_M = 0.68
 TILE_LENGTH_M = 24.0
 LIP_Z_M = 10.0
 SOURCE_HEIGHT_M = 0.70
-FACE_HALF_WIDTH_M = 1.30
+FACE_HALF_WIDTH_M = 1.45
 
 MAT_FACE = "MAT_DropFace_Grey"
 MAT_EDGE = "MAT_DropEdge_Grey"
@@ -62,8 +62,8 @@ def create_drop_face(root, materials):
     x_values = (-FACE_HALF_WIDTH_M, -0.78, -0.26, 0.26, 0.78,
                 FACE_HALF_WIDTH_M)
     top_z = (9.96, 10.01, 9.98, 10.02, 9.97, 10.00)
-    middle_z = (10.07, 10.02, 10.10, 10.04, 10.11, 10.06)
-    bottom_z = (10.14, 10.19, 10.11, 10.20, 10.13, 10.18)
+    middle_z = (10.00, 10.03, 10.01, 10.04, 10.02, 10.03)
+    bottom_z = (10.03, 10.06, 10.02, 10.07, 10.04, 10.06)
     vertices: list[tuple[float, float, float]] = []
     for row_y, row_z in (
         (0.025, top_z),
@@ -89,6 +89,47 @@ def create_drop_face(root, materials):
                 (upper_left, lower_right, upper_right),
             ))
             material_indices.extend((1 if row == 0 else 0,) * 2)
+
+    def append_quad(a, b, c, d, material_index):
+        start = len(vertices)
+        vertices.extend((a, b, c, d))
+        faces.extend(((start, start + 1, start + 2),
+                      (start, start + 2, start + 3)))
+        material_indices.extend((material_index, material_index))
+
+    # A flush stone apron ends at the lip. It adds a readable leading edge
+    # without changing the authoritative tread surface or bridging the drop.
+    append_quad(
+        (-SOCKET_HALF_WIDTH_M, 0.022, 9.48),
+        (SOCKET_HALF_WIDTH_M, 0.022, 9.48),
+        (SOCKET_HALF_WIDTH_M, 0.025, 9.98),
+        (-SOCKET_HALF_WIDTH_M, 0.025, 9.98),
+        1,
+    )
+
+    # Rock shoulders sit outside the authoritative 1.36 m tread. Their
+    # tapered top planes reveal the lip early without bridging the drop.
+    for side in (-1.0, 1.0):
+        inner = side * 0.72
+        outer = side * FACE_HALF_WIDTH_M
+        inner_back = side * 0.76
+        outer_back = side * 1.40
+        top = (
+            (inner, 0.018, 9.55),
+            (outer, 0.11, 9.68),
+            (outer_back, 0.28, 10.24),
+            (inner_back, 0.055, 10.10),
+        )
+        bottom = tuple(
+            (x_value, -0.46, z_value)
+            for x_value, _, z_value in top
+        )
+        append_quad(*top, 1)
+        append_quad(bottom[1], bottom[0], bottom[3], bottom[2], 0)
+        append_quad(top[1], bottom[1], bottom[2], top[2], 1)
+        append_quad(top[0], top[3], bottom[3], bottom[0], 0)
+        append_quad(top[0], bottom[0], bottom[1], top[1], 1)
+        append_quad(top[3], top[2], bottom[2], bottom[3], 0)
 
     mesh = bpy.data.meshes.new(name=MESH_NAME)
     mesh.from_pydata(
@@ -128,8 +169,8 @@ def build_scene():
     root["physics_authority"] = "external"
 
     materials = [
-        make_material(MAT_FACE, (0.25, 0.22, 0.18, 1.0)),
-        make_material(MAT_EDGE, (0.43, 0.39, 0.31, 1.0)),
+        make_material(MAT_FACE, (0.12, 0.105, 0.09, 1.0)),
+        make_material(MAT_EDGE, (0.56, 0.50, 0.38, 1.0)),
     ]
     face, vertices = create_drop_face(root, materials)
 
@@ -173,13 +214,15 @@ def self_check(root, face, vertices) -> None:
     assert_close(SOURCE_HEIGHT_M, 0.70, "Drop source height")
     if FACE_HALF_WIDTH_M <= SOCKET_HALF_WIDTH_M + 0.30:
         raise RuntimeError("Drop face must extend beyond both trail edges")
-    if max(point[1] for point in vertices) > 0.03:
+    if max(point[1] for point in vertices[:18]) > 0.03:
         raise RuntimeError("Drop face must not rise above the upper tread")
+    if max(point[1] for point in vertices[18:]) > 0.30:
+        raise RuntimeError("Drop shoulders exceed the low rock profile")
     if min(point[1] for point in vertices) > -SOURCE_HEIGHT_M:
         raise RuntimeError("Drop face does not cover the maximum drop depth")
-    if (min(point[2] for point in vertices) < LIP_Z_M - 0.10
-            or max(point[2] for point in vertices) > LIP_Z_M + 0.25):
-        raise RuntimeError("Drop face escaped its narrow lip envelope")
+    if (min(point[2] for point in vertices) < LIP_Z_M - 0.54
+            or max(point[2] for point in vertices) > LIP_Z_M + 0.31):
+        raise RuntimeError("Drop face escaped its bounded lip envelope")
     for point in vertices:
         assert_finite(point, "Non-finite canonical mesh coordinate")
     if (face.location.length > EPSILON
@@ -191,7 +234,7 @@ def self_check(root, face, vertices) -> None:
     if any(polygon.loop_total != 3 or polygon.area <= EPSILON
            for polygon in face.data.polygons):
         raise RuntimeError("Drop face has invalid triangles")
-    if len(face.data.vertices) != 18 or len(face.data.polygons) != 20:
+    if len(face.data.vertices) != 70 or len(face.data.polygons) != 46:
         raise RuntimeError("Unexpected drop-face topology")
     if {polygon.material_index for polygon in face.data.polygons} != {0, 1}:
         raise RuntimeError("Both opaque drop materials must be used")

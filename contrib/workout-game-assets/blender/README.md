@@ -150,13 +150,15 @@ source/review package, not runtime placement or a release-checklist item.
 
 - The `24.0 m` metadata tile matches the runtime profile from `-10.0 m` to
   `+14.0 m`, with the physical lip at local `10.0 m`.
-- The asset contributes only a narrow, faceted rock face below the upper lip.
+- The asset contributes a narrow, faceted rock face, a flush `0.50 m` stone
+  apron ending at the upper lip and low rock shoulders outside the tread.
   The streamed socket trail owns the approach, actual gap, lower landing,
   recovery and safe branch, so no duplicate ground can overlap or bridge the
   drop.
 - The source face is `0.70 m` deep and scales only vertically to the
-  difficulty-dependent `0.60-1.00 m` runtime depth. Its rough edge extends
-  beyond both sides of the `1.36 m` tread.
+  difficulty-dependent `0.60-1.00 m` runtime depth. Its dark cut face and
+  lighter tapered rock shoulders extend beyond both sides of the `1.36 m`
+  tread, exposing the lip from the settled chase view without bridging it.
 - Prepare, decision, action, lip, air, land and recovery markers are visual
   metadata. Box2D remains the sole source of rider flight, pitch and landing
   impact.
@@ -194,9 +196,10 @@ source/review package, not runtime placement or a release-checklist item.
 - The `3.58 m` visual tile uses exact `0.68 m` ordinary-trail sockets and a
   self-contained project-authored obstacle. It does not duplicate trail or
   terrain geometry.
-- The crossbar is `0.20 m` high and extends to `X = +/-1.02 m`; its supports
-  remain outside the `1.36 m` tread. Runtime difficulty scales height from
-  `0.10 m` to `0.20 m` without changing the socket length.
+- The high-value crossbar is `0.20 m` high and extends to
+  `X = +/-1.02 m`; its broad grounded supports remain outside the `1.36 m`
+  tread. Runtime difficulty scales height from `0.10 m` to `0.20 m`
+  without changing the socket length.
 - Named prepare, decision, action, preload, takeoff, apex and landing markers
   are visual authoring metadata. The road gate, Box2D impulse and outcome
   remain authoritative runtime data.

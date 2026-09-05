@@ -36,6 +36,7 @@
 #include <QImageWriter>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPainter>
 #include <QPointer>
 #include <QQmlComponent>
 #include <QQmlContext>
@@ -412,6 +413,38 @@ WorkoutGameVisualSnapshot frameAt(
     return frame;
 }
 
+qint64 settleChaseCamera(
+        WorkoutGame3DWindow &window,
+        const WorkoutGameRoadCourse &road,
+        double destinationMeters,
+        double watts,
+        double targetWatts,
+        int cadenceRpm,
+        int heartRateBpm,
+        int gear)
+{
+    constexpr int SettleFrames = 313;
+    const double startMeters = std::max(0.0, destinationMeters - 18.0);
+    WorkoutGameVisualSnapshot opening = frameAt(road, startMeters);
+    opening.simulation.workoutTimeMs = 0;
+    opening.presentationTimeMs = 0;
+    window.setFrame(
+            opening, watts, targetWatts, cadenceRpm, heartRateBpm, gear);
+    for (int index = 1; index <= SettleFrames; ++index) {
+        const double progress = double(index) / double(SettleFrames);
+        WorkoutGameVisualSnapshot frame = frameAt(
+                road,
+                startMeters + (destinationMeters - startMeters) * progress);
+        frame.simulation.workoutTimeMs = index * 16;
+        frame.presentationTimeMs = frame.simulation.workoutTimeMs;
+        window.setFrame(
+                frame, watts, targetWatts, cadenceRpm, heartRateBpm, gear);
+    }
+    window.update();
+    QTest::qWait(700);
+    return SettleFrames * 16;
+}
+
 ServiceLatencyPhase measureServiceLatency(
         int durationMs,
         const std::function<void(qint64)> &framePump = {})
@@ -515,6 +548,59 @@ int changedPixels(const QImage &first, const QImage &second)
 
     }
     return changed;
+}
+
+QImage withHudMasked(const QImage &source, QQuickItem *rootItem)
+{
+    QImage masked = source;
+    if (masked.isNull() || !rootItem) return masked;
+    QPainter painter(&masked);
+    for (const QString &name : {
+             QStringLiteral("trainingHud"),
+             QStringLiteral("diagnosticHud"),
+             QStringLiteral("featureHud"),
+             QStringLiteral("terrainNameLabel")}) {
+        QQuickItem *item = rootItem->findChild<QQuickItem *>(name);
+        if (!item || !item->isVisible()) continue;
+        const QPointF topLeft = item->mapToItem(rootItem, QPointF(0.0, 0.0));
+        const QRect rect = QRectF(
+                topLeft, QSizeF(item->width(), item->height()))
+                    .toAlignedRect().adjusted(-2, -2, 2, 2)
+                    .intersected(masked.rect());
+        painter.fillRect(rect, QColor(12, 16, 17));
+    }
+    return masked;
+}
+
+QRect changedPixelBounds(
+        const QImage &first,
+        const QImage &second,
+        const QRect &region)
+{
+    const QRect bounded = region.intersected(first.rect()).intersected(
+            second.rect());
+    int minimumX = bounded.right() + 1;
+    int minimumY = bounded.bottom() + 1;
+    int maximumX = bounded.left() - 1;
+    int maximumY = bounded.top() - 1;
+    for (int y = bounded.top(); y <= bounded.bottom(); ++y) {
+        for (int x = bounded.left(); x <= bounded.right(); ++x) {
+            const QColor before(first.pixel(x, y));
+            const QColor after(second.pixel(x, y));
+            if (std::abs(before.red() - after.red())
+                    + std::abs(before.green() - after.green())
+                    + std::abs(before.blue() - after.blue()) <= 35) {
+                continue;
+            }
+            minimumX = std::min(minimumX, x);
+            minimumY = std::min(minimumY, y);
+            maximumX = std::max(maximumX, x);
+            maximumY = std::max(maximumY, y);
+        }
+    }
+    return maximumX >= minimumX && maximumY >= minimumY
+            ? QRect(QPoint(minimumX, minimumY), QPoint(maximumX, maximumY))
+            : QRect();
 }
 
 int nearColorPixels(
@@ -1344,7 +1430,7 @@ private slots:
                     viewModel.skinnyGeometry())->ready(), 3000);
         geometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.skinnyGeometry());
-        QCOMPARE(geometry->sampleCount(), 1584);
+        QCOMPARE(geometry->sampleCount(), 2352);
         QVERIFY(viewModel.visibleTriangles() > 0);
         QVERIFY(viewModel.visibleTriangles() < 30000);
         QVERIFY(std::abs(viewModel.riderRoll()) > 0.2);
@@ -5214,7 +5300,7 @@ private slots:
         QFile mesh(QStringLiteral(
                 ":/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh"));
         QVERIFY(mesh.open(QIODevice::ReadOnly));
-        QCOMPARE(mesh.size(), qint64(2004));
+        QCOMPARE(mesh.size(), qint64(3660));
     }
 
     void bypassRiderUsesTheSameBranchAndTerrainSurfaceAsItsMesh()
@@ -6088,6 +6174,146 @@ private slots:
         }
     }
 
+    void criticalFeatureSilhouettesReadAtDecisionDistance_data()
+    {
+        QTest::addColumn<int>("terrainValue");
+        QTest::addColumn<QString>("featureName");
+        QTest::addColumn<QString>("modelName");
+        QTest::addColumn<int>("minimumWidth");
+        QTest::addColumn<int>("minimumHeight");
+        QTest::newRow("skinny")
+                << int(WorkoutGameTerrainKind::Skinny)
+                << QStringLiteral("skinny")
+                << QStringLiteral("skinnyGeometryModel") << 40 << 20;
+        QTest::newRow("bunny-hop")
+                << int(WorkoutGameTerrainKind::BunnyHop)
+                << QStringLiteral("bunny-hop")
+                << QStringLiteral("GEO_BunnyHopHurdle_LOD0") << 50 << 8;
+        QTest::newRow("drop")
+                << int(WorkoutGameTerrainKind::Drop)
+                << QStringLiteral("drop")
+                << QStringLiteral("GEO_DropFace_LOD0") << 70 << 12;
+    }
+
+    void criticalFeatureSilhouettesReadAtDecisionDistance()
+    {
+        QFETCH(int, terrainValue);
+        QFETCH(QString, featureName);
+        QFETCH(QString, modelName);
+        QFETCH(int, minimumWidth);
+        QFETCH(int, minimumHeight);
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const WorkoutGameTerrainKind terrain =
+                WorkoutGameTerrainKind(terrainValue);
+        const WorkoutGameCourse course = catalogCourse(terrain);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.resize(1280, 720);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        window.setCourse(course, FtpWatts);
+        QSignalSpy frameSwaps(&window, &QQuickWindow::frameSwapped);
+        auto *rootItem = qobject_cast<QQuickItem *>(window.rootObject());
+        auto *viewModel = qobject_cast<WorkoutGame3DViewModel *>(
+                window.rootContext()->contextProperty(
+                    QStringLiteral("workoutGame3D")).value<QObject *>());
+        QVERIFY(rootItem);
+        QVERIFY(viewModel);
+        QObject *featureModel = rootItem->findChild<QObject *>(modelName);
+        QVERIFY2(featureModel, qPrintable(modelName));
+        double currentDistance =
+                piece->challenge.obstacleDistanceMeters - 10.0;
+        qint64 currentTimeMs = settleChaseCamera(
+                window, road, currentDistance, 220.0, 220.0, 88, 150, 7);
+
+        const QString outputDirectory = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_B1_SCREENSHOT_DIR");
+        if (!outputDirectory.isEmpty()) QVERIFY(QDir().mkpath(outputDirectory));
+        for (const double approachMeters : {10.0, 8.0}) {
+            const double distance =
+                    piece->challenge.obstacleDistanceMeters - approachMeters;
+            if (distance > currentDistance) {
+                constexpr int AdvanceFrames = 60;
+                for (int index = 1; index <= AdvanceFrames; ++index) {
+                    const double progress = double(index) / AdvanceFrames;
+                    WorkoutGameVisualSnapshot advance = frameAt(
+                            road,
+                            currentDistance
+                                + (distance - currentDistance) * progress);
+                    advance.simulation.workoutTimeMs =
+                            currentTimeMs + index * 16;
+                    advance.presentationTimeMs =
+                            advance.simulation.workoutTimeMs;
+                    window.setFrame(
+                            advance, 220.0, 220.0, 88, 150, 7);
+                }
+                currentTimeMs += AdvanceFrames * 16;
+                currentDistance = distance;
+            }
+            WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+            frame.simulation.workoutTimeMs = currentTimeMs;
+            frame.presentationTimeMs = frame.simulation.workoutTimeMs;
+            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+            QTest::qWait(350);
+            QCOMPARE(viewModel->cameraPresentation(), QStringLiteral("chase"));
+            QCOMPARE(viewModel->cameraPresentationBlend(), 0.0);
+            const QImage visible = withHudMasked(window.grabWindow(), rootItem);
+            QVERIFY(!visible.isNull());
+
+            const int swapsBeforeHide = frameSwaps.count();
+            QVERIFY(featureModel->property("visible").toBool());
+            QVERIFY(featureModel->setProperty("visible", false));
+            QCOMPARE(featureModel->property("visible").toBool(), false);
+            window.update();
+            QTRY_VERIFY_WITH_TIMEOUT(
+                    frameSwaps.count() > swapsBeforeHide, 2000);
+            QTest::qWait(120);
+            QCOMPARE(featureModel->property("visible").toBool(), false);
+            const QImage hidden = withHudMasked(window.grabWindow(), rootItem);
+            QVERIFY(!hidden.isNull());
+            const int swapsBeforeRestore = frameSwaps.count();
+            QVERIFY(featureModel->setProperty("visible", true));
+            window.update();
+            QTRY_VERIFY_WITH_TIMEOUT(
+                    frameSwaps.count() > swapsBeforeRestore, 2000);
+            QTest::qWait(80);
+
+            const QRect decisionCorridor(
+                    visible.width() / 5,
+                    visible.height() / 6,
+                    visible.width() * 3 / 5,
+                    visible.height() * 7 / 10);
+            const QRect silhouette = changedPixelBounds(
+                    visible, hidden, decisionCorridor);
+            if (!outputDirectory.isEmpty()) {
+                const QString stem = QStringLiteral("%1-%2m")
+                        .arg(featureName).arg(qRound(approachMeters));
+                QVERIFY(visible.save(QDir(outputDirectory).filePath(
+                        stem + QStringLiteral("-visible.png"))));
+                QVERIFY(hidden.save(QDir(outputDirectory).filePath(
+                        stem + QStringLiteral("-hidden.png"))));
+            }
+            QVERIFY2(silhouette.width() >= minimumWidth
+                         && silhouette.height() >= minimumHeight,
+                     qPrintable(QStringLiteral(
+                         "%1 silhouette at %2 m is only %3x%4 pixels")
+                         .arg(featureName).arg(approachMeters)
+                         .arg(silhouette.width()).arg(silhouette.height())));
+        }
+    }
+
     void rendersAuthoredChallengeCompletedAndBypassedLines_data()
     {
         QTest::addColumn<int>("terrainValue");
@@ -6143,8 +6369,14 @@ private slots:
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
         window.setCourse(course, FtpWatts);
+        QSignalSpy frameSwaps(&window, &QQuickWindow::frameSwapped);
+
+        const qint64 settledTimeMs = settleChaseCamera(
+                window, road, distance, 235.0, 220.0, 92, 152, 7);
 
         WorkoutGameVisualSnapshot main = frameAt(road, distance);
+        main.simulation.workoutTimeMs = settledTimeMs;
+        main.presentationTimeMs = main.simulation.workoutTimeMs;
         main.simulation.challenge = piece->challenge.profile;
         WorkoutGameFeatureChallengeMetrics mainMetrics;
         mainMetrics.averageActualWatts = 235.0;
@@ -6166,11 +6398,32 @@ private slots:
                 terrain != WorkoutGameTerrainKind::Drop;
         window.setFrame(main, 235.0, 220.0, 92, 152, 7);
         QTest::qWait(350);
-        const QImage completed = window.grabWindow();
+        auto *rootItem = qobject_cast<QQuickItem *>(window.rootObject());
+        auto *viewModel = qobject_cast<WorkoutGame3DViewModel *>(
+                window.rootContext()->contextProperty(
+                    QStringLiteral("workoutGame3D")).value<QObject *>());
+        QVERIFY(rootItem);
+        QVERIFY(viewModel);
+        QCOMPARE(viewModel->cameraPresentation(), QStringLiteral("chase"));
+        QCOMPARE(viewModel->cameraPresentationBlend(), 0.0);
+        QObject *camera = rootItem->findChild<QObject *>(
+                QStringLiteral("workoutGameCamera"));
+        QVERIFY(camera);
+        QObject *cameraTarget = camera->property("lookAtNode").value<QObject *>();
+        QVERIFY(cameraTarget);
+        const QVector3D fixedCameraPosition =
+                camera->property("position").value<QVector3D>();
+        const QVector3D fixedCameraTarget =
+                cameraTarget->property("position").value<QVector3D>();
+        const double fixedFieldOfView =
+                camera->property("fieldOfView").toDouble();
+        const QImage completed = withHudMasked(window.grabWindow(), rootItem);
         QVERIFY(!completed.isNull());
         QVERIFY(sampledColorCount(completed) > 35);
 
         WorkoutGameVisualSnapshot bypassed = frameAt(road, distance);
+        bypassed.simulation.workoutTimeMs = main.simulation.workoutTimeMs;
+        bypassed.presentationTimeMs = main.presentationTimeMs;
         bypassed.simulation.challenge = piece->challenge.profile;
         WorkoutGameFeatureChallengeMetrics bypassMetrics;
         bypassMetrics.averageActualWatts = 150.0;
@@ -6195,18 +6448,29 @@ private slots:
                     piece->challenge.bypassLateralMeters);
         QVERIFY(std::abs(bypassed.feature.lateralOffsetMeters) >= 1.67);
         bypassed.world.rider.clearanceMeters = 0.82;
-        window.setCourse(course, FtpWatts);
         window.setFrame(bypassed, 150.0, 220.0, 72, 145, 4);
         QTest::qWait(350);
-        const QImage bypass = window.grabWindow();
+        QCOMPARE(viewModel->cameraPresentation(), QStringLiteral("chase"));
+        QCOMPARE(viewModel->cameraPresentationBlend(), 0.0);
+        QVERIFY(camera->setProperty("position", fixedCameraPosition));
+        QVERIFY(cameraTarget->setProperty("position", fixedCameraTarget));
+        QVERIFY(camera->setProperty("fieldOfView", fixedFieldOfView));
+        window.update();
+        QCOMPARE(camera->property("position").value<QVector3D>(),
+                 fixedCameraPosition);
+        QCOMPARE(cameraTarget->property("position").value<QVector3D>(),
+                 fixedCameraTarget);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                std::abs(camera->property("fieldOfView").toDouble()
+                         - fixedFieldOfView) < 0.01,
+                1000);
+        const QImage bypass = withHudMasked(window.grabWindow(), rootItem);
         QVERIFY(!bypass.isNull());
         QVERIFY(sampledColorCount(bypass) > 35);
         QVERIFY2(changedPixels(completed, bypass) > 120,
                  qPrintable(featureName
                      + QStringLiteral(" completed and bypassed lines look identical")));
 
-        auto *rootItem = qobject_cast<QQuickItem *>(window.rootObject());
-        QVERIFY(rootItem);
         QObject *bypassModel = rootItem->findChild<QObject *>(
                 QStringLiteral("bypassGeometryModel"));
         QVERIFY(bypassModel);
@@ -6214,12 +6478,20 @@ private slots:
                 bypassModel->property("geometry").value<QObject *>());
         QVERIFY(renderedBypass);
         QVERIFY(renderedBypass->ready());
+        const int swapsBeforeHide = frameSwaps.count();
+        QVERIFY(bypassModel->property("visible").toBool());
         QVERIFY(bypassModel->setProperty("visible", false));
-        QTest::qWait(200);
-        const QImage withoutBypass = window.grabWindow();
+        QCOMPARE(bypassModel->property("visible").toBool(), false);
+        window.update();
+        QTRY_VERIFY_WITH_TIMEOUT(frameSwaps.count() > swapsBeforeHide, 2000);
+        QTest::qWait(120);
+        QCOMPARE(bypassModel->property("visible").toBool(), false);
+        const QImage withoutBypass = withHudMasked(
+                window.grabWindow(), rootItem);
         QVERIFY(!withoutBypass.isNull());
         const int visibleBypassPixels = changedPixels(bypass, withoutBypass);
         QVERIFY(bypassModel->setProperty("visible", true));
+        window.update();
 
         const QString outputDirectory = qEnvironmentVariable(
                 screenshotEnvironment.constData());

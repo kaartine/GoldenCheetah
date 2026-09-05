@@ -360,7 +360,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertLessEqual(manifest["technical"]["materials"], 2)
 
-    def test_drop_asset_is_only_a_narrow_face_below_the_lip(self) -> None:
+    def test_drop_asset_is_a_bounded_face_with_low_rock_shoulders(self) -> None:
         document, size = assets.read_glb(DROP_GLB_PATH)
         manifest = assets.load_json_file(DROP_MANIFEST_PATH)
         assets.validate_glb_document(document, size, manifest)
@@ -374,10 +374,10 @@ class TestWorkoutGameAssets(unittest.TestCase):
             ["GEO_DropFace_LOD0"],
         )
         bounds = manifest["technical"]["boundsMeters"]
-        self.assertLessEqual(bounds["maximum"][1], 0.03)
+        self.assertLessEqual(bounds["maximum"][1], 0.30)
         self.assertLessEqual(bounds["minimum"][1], -0.70)
         self.assertLessEqual(
-            bounds["maximum"][2] - bounds["minimum"][2], 0.25
+            bounds["maximum"][2] - bounds["minimum"][2], 0.76
         )
         self.assertEqual(
             manifest["technical"]["sockets"][1]["positionMeters"],

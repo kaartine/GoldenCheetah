@@ -761,6 +761,7 @@ Item {
     }
 
     Text {
+        objectName: "terrainNameLabel"
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: 14

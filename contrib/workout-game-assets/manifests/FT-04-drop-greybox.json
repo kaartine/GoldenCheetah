@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_drop.py",
     "retrievedAt": "2026-08-27",
     "originalFileName": "generate_drop.py",
-    "originalSha256": "e1f1c641dc5e4f0ebd532ca475507237e9dc2ae5b1d7a24c64186ba4d72a8e0d",
+    "originalSha256": "b436484413e5104c895ffb165f91e156b26173bb349a5f6e08e2ae8fbec5a764",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_drop.py"
@@ -35,22 +35,22 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_drop.py",
       "purpose": "source",
-      "sha256": "e1f1c641dc5e4f0ebd532ca475507237e9dc2ae5b1d7a24c64186ba4d72a8e0d"
+      "sha256": "b436484413e5104c895ffb165f91e156b26173bb349a5f6e08e2ae8fbec5a764"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_Drop_Greybox.glb",
       "purpose": "intermediate",
-      "sha256": "f30d4e161ef47ec90740e8392d7c21761224319e269168ba5a9724a665d04ba4"
+      "sha256": "0d933599758389c047f25b6ebd8cb39cc41b25a2cc477f5e84b489c0a48bdba0"
     },
     {
       "path": "src/Train/qml/assets/Wg_Drop_Greybox.qml",
       "purpose": "runtime",
-      "sha256": "55478d7f36fd2e6a9695a5f5a5eb93827ccfd7bc8e2873e7632fe343149e0401"
+      "sha256": "ffbb26f5f64993f47139cb460bd013684022bbb0dda29f36833bb7aca675b7e1"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "6ee78a60adb32877e993950c8166e83bb0a6df61128227907cb3ee064e3723f7"
+      "sha256": "53e3a2e304fd03e4256e10d626ed586fd405ea1a147724acbe315f3752e78388"
     }
   ],
   "processing": {
@@ -69,8 +69,8 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 4736,
-    "trianglesLod0": 20,
+    "glbBytes": 6236,
+    "trianglesLod0": 46,
     "materials": 2,
     "textureBytes": 0,
     "nodes": [
@@ -89,8 +89,8 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [-1.30, -0.74, 9.96],
-      "maximum": [1.30, 0.025, 10.20]
+      "minimum": [-1.45, -0.74, 9.48],
+      "maximum": [1.45, 0.28, 10.24]
     },
     "sockets": [
       {
@@ -118,6 +118,6 @@
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
     "reviewedAt": "2026-08-27",
-    "notes": "Approved project-authored faceted drop face with exact 24.0 m profile sockets and no duplicated trail, landing or bypass ground. Runtime trail and Box2D remain authoritative for the larger difficulty-dependent drop."
+    "notes": "Approved project-authored faceted drop face with contrasting cut edge, flush stone lip apron, tapered low rock shoulders outside the authoritative tread, exact 24.0 m profile sockets and no duplicated trail, landing or bypass ground. Runtime trail and Box2D remain authoritative for the larger difficulty-dependent drop."
   }
 }

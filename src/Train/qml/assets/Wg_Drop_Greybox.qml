@@ -8,7 +8,7 @@ Node {
     PrincipledMaterial {
         id: mat_DropFace_Grey_material
         objectName: "MAT_DropFace_Grey"
-        baseColor: "#ff40382e"
+        baseColor: "#ff1f1b17"
         roughness: 1
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque
@@ -16,7 +16,7 @@ Node {
     PrincipledMaterial {
         id: mat_DropEdge_Grey_material
         objectName: "MAT_DropEdge_Grey"
-        baseColor: "#ff6e634f"
+        baseColor: "#ff8f8061"
         roughness: 1
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque

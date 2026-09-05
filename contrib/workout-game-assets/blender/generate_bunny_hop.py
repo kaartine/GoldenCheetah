@@ -24,11 +24,11 @@ TILE_LENGTH_M = DEAD_ZONE_M * 2.0 + CORE_LENGTH_M
 HURDLE_CENTER_Z_M = TILE_LENGTH_M * 0.5
 HURDLE_HEIGHT_M = 0.20
 BAR_HALF_LENGTH_M = 1.02
-BAR_HALF_DEPTH_M = 0.07
+BAR_HALF_DEPTH_M = 0.12
 BAR_HALF_HEIGHT_M = 0.05
 SUPPORT_CENTER_X_M = 0.84
-SUPPORT_HALF_WIDTH_M = 0.07
-SUPPORT_HALF_DEPTH_M = 0.28
+SUPPORT_HALF_WIDTH_M = 0.10
+SUPPORT_HALF_DEPTH_M = 0.38
 
 MAT_BAR = "MAT_BunnyHopBar_Grey"
 MAT_SUPPORT = "MAT_BunnyHopSupport_Grey"
@@ -214,8 +214,8 @@ def build_scene():
     root["physics_authority"] = "external"
 
     materials = [
-        make_material(MAT_BAR, (0.72, 0.48, 0.12, 1.0)),
-        make_material(MAT_SUPPORT, (0.28, 0.16, 0.07, 1.0)),
+        make_material(MAT_BAR, (0.88, 0.67, 0.25, 1.0)),
+        make_material(MAT_SUPPORT, (0.24, 0.12, 0.045, 1.0)),
     ]
     hurdle, vertices = create_hurdle(root, materials)
 

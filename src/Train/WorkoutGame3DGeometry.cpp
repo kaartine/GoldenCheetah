@@ -2110,8 +2110,8 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildSkinnies(
     constexpr int BeamSegments = 8;
     constexpr int SupportCount = 9;
     constexpr int MaximumSkinnies = 12;
-    constexpr int VerticesPerSkinny = 1584;
-    constexpr int TrianglesPerSkinny = 792;
+    constexpr int VerticesPerSkinny = 2352;
+    constexpr int TrianglesPerSkinny = 1176;
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
     vertices.reserve(std::size_t(MaximumSkinnies * VerticesPerSkinny));
@@ -2227,7 +2227,7 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildSkinnies(
                                  double thickness,
                                  const TerrainColor &topColor,
                                  const TerrainColor &sideColor) {
-        std::array<QVector3D, 6> point;
+        std::array<QVector3D, 8> point;
         const bool ready =
                 worldPoint(from, -halfWidth, topFrom, point[0])
                 && worldPoint(from, halfWidth, topFrom, point[1])
@@ -2236,10 +2236,16 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildSkinnies(
                 && worldPoint(from, -halfWidth,
                               topFrom - thickness, point[4])
                 && worldPoint(from, halfWidth,
-                              topFrom - thickness, point[5]);
+                              topFrom - thickness, point[5])
+                && worldPoint(to, halfWidth,
+                              topTo - thickness, point[6])
+                && worldPoint(to, -halfWidth,
+                              topTo - thickness, point[7]);
         if (!ready) return false;
         appendFace(point[0], point[3], point[2], point[1], topColor);
         appendFace(point[0], point[1], point[5], point[4], sideColor);
+        appendFace(point[0], point[4], point[7], point[3], sideColor);
+        appendFace(point[1], point[2], point[6], point[5], sideColor);
         return true;
     };
 
@@ -2264,15 +2270,15 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildSkinnies(
             const double localTo = profile.activeStartMeters
                     + (double(board) + 0.96) * pitch;
             const TerrainColor topColor = board % 4 == 0
-                    ? TerrainColor{0.58f, 0.37f, 0.18f}
-                    : TerrainColor{0.48f, 0.29f, 0.13f};
+                    ? TerrainColor{0.76f, 0.53f, 0.24f}
+                    : TerrainColor{0.66f, 0.43f, 0.18f};
             const double topFrom = profile.deckSurfaceOffsetMeters(localFrom);
             const double topTo = profile.deckSurfaceOffsetMeters(localTo);
             if (!appendBoard(
                     center + localFrom, center + localTo,
                     profile.deckHalfWidthMeters,
                     topFrom, topTo, profile.deckThicknessMeters,
-                    topColor, {0.28f, 0.16f, 0.07f})) {
+                    topColor, {0.20f, 0.095f, 0.035f})) {
                 return {};
             }
         }
