@@ -457,6 +457,11 @@ and a runtime/geometry regression test.
 - [x] `FTR-11` Tabletop: promote the accepted vertical slice to production.
 - [ ] `FTR-12` Gap jump: complete packaged visual, motion, endurance and user
   acceptance for the implemented three-line speed-selected jump.
+- [x] `FTR-12A` Gap-jump asset package: deterministic project-authored GLB,
+  exact sockets and markers, Qt Balsam component, provenance, structural
+  validation and fixed-camera catalog audit.
+- [ ] `FTR-12B` Integrate the packaged asset as the sole gap visual surface and
+  complete packaged motion, target-GPU and interactive user acceptance.
 
 **FTR-01 evidence:** a 16-sided transverse log now extends beyond both
 trail edges, includes end-grain faces and a buried lower hull, and scales from
@@ -800,6 +805,22 @@ short, medium, long and grounded safe lines. A separate capture-free
 five-minute, 15,000-step run reports 1.90 ms p95, 15.38 ms maximum update time
 and zero queued geometry. Packaged execution and signed interactive review
 remain release gates.
+
+The `FTR-12A` asset package is complete. A pinned Blender 4.0.2 generator
+produces one original `40.70 m` three-line tile with exact `0.68 m` input and
+output half-widths. Short, Medium and Long use the runtime profile's
+`-2.30/0/+2.30 m` centres, `1.80/3.20/4.70 m` open gaps and named lip, apex and
+landing markers. One recessed forest-floor mesh, one socketed tread/shoulder
+mesh and one fascia/accent mesh use 1,112 triangles, three opaque materials,
+zero texture bytes and external physics authority. No tread triangle bridges
+an authored gap.
+
+Two clean Blender exports and two Qt Balsam 6.8.3 conversions are
+byte-identical. Khronos glTF Validator 2.0.0-dev.3.10 reports zero errors,
+warnings, infos and hints. Five content-anchored 960 by 540 audit renders cover
+the chase, overhead and individual line-side views. The package remains a
+candidate until `FTR-12B` replaces, rather than overlays, the procedural gap
+surface and passes integrated motion, target-GPU and user review.
 
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct

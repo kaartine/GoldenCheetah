@@ -10,6 +10,8 @@ mesh set, and `generate_conifer_set.py` creates a low-poly Finnish mixed-forest
 source set with four runtime groves. `generate_forest_floor_props.py` creates
 the eight-variant Finnish forest-floor prop kit, and
 `generate_distant_ridges.py` creates the bounded distant-terrain ring.
+`generate_gap_jump.py` creates the complete socketed three-line gap-jump
+visual tile.
 `generate_forest_verge_clusters.py` composes three prevalidated trail-edge
 clusters from the forest-floor source geometry. None of the generators
 downloads or embeds external assets.
@@ -161,6 +163,32 @@ source/review package, not runtime placement or a release-checklist item.
 - The generator validates exact sockets, topology, finite coordinates, two
   opaque materials, the lip envelope and applied transforms before export.
 
+## Three-line gap-jump contract
+
+- The `40.70 m` tile matches the middle-difficulty runtime gate from split at
+  local `0.0 m` through the `18.0 m` merge and exact output socket. The common
+  take-off datum is local `12.0 m`; Short, Medium and Long centres are
+  `-2.30`, `0.0` and `+2.30 m` with open gaps of `1.80`, `3.20` and `4.70 m`.
+- One broad packed-dirt fan becomes three separate sculpted take-offs. A
+  recessed forest-floor bowl remains visible between each lip and landing;
+  no tread triangle bridges a gap. Landing knuckles remain separate through
+  their recovery and then join one broad, continuously narrowing merge.
+- Sloped cut-earth shoulders meet the generated forest floor. The feature is
+  a replacement visual surface for the procedural gap layer, not an overlay;
+  integrating both at once would create duplicate coplanar surfaces.
+- `SOCKET_IN`, `SOCKET_OUT`, decision/merge/recovery markers and one lip,
+  apex and landing marker per line are exported as non-rendering metadata.
+  Every mesh records `physics_authority=external`; road selection, collision,
+  flight and scoring remain authoritative runtime data.
+- Three opaque flat-color materials, `1,112` triangles, zero texture bytes and
+  three draw-call meshes keep the source package below the FTR-12 LOD0 budget.
+  Generated geometry, marker tabs and audit views are original, logo-free
+  project output with no external or AI-generated asset input.
+- `render_gap_jump_audit.py` imports the reviewed GLB and renders a fixed
+  47-degree-FOV chase view, overhead plan and one side anatomy view per line.
+  Their hashes and camera transforms are anchored in
+  `audits/FT-12/FT-12-audit.json`.
+
 ## Bunny-hop contract
 
 - The `3.58 m` visual tile uses exact `0.68 m` ordinary-trail sockets and a
@@ -294,6 +322,27 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -- --source-asset /work/contrib/workout-game-assets/generated/WG_ForestFloorProps.glb \
   --cluster-asset /work/contrib/workout-game-assets/generated/WG_ForestVergeClusters.glb \
   --output-dir /work/contrib/workout-game-assets/audits/EN-09
+```
+
+Generate and audit the three-line gap jump:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+  --memory=2g --memory-swap=3g --cpus=2 \
+  -v "$PWD:/work" -w /work \
+  goldencheetah-workout-game-blender:ubuntu24.04 \
+  --background --factory-startup --python-exit-code 1 \
+  --python contrib/workout-game-assets/blender/generate_gap_jump.py -- \
+  --output /work/contrib/workout-game-assets/generated/WG_GapJumpThreeLine.glb
+
+docker run --rm --user "$(id -u):$(id -g)" \
+  --memory=2g --memory-swap=3g --cpus=2 \
+  -v "$PWD:/work" -w /work \
+  goldencheetah-workout-game-blender:ubuntu24.04 \
+  --background --factory-startup --python-exit-code 1 \
+  --python contrib/workout-game-assets/blender/render_gap_jump_audit.py -- \
+  --asset /work/contrib/workout-game-assets/generated/WG_GapJumpThreeLine.glb \
+  --output-dir /work/contrib/workout-game-assets/audits/FT-12
 ```
 
 Determinism is expected for the same Blender 4.x patch release and export

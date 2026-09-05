@@ -1,0 +1,92 @@
+{
+  "assetId": "FT-12-gap-jump-three-line",
+  "catalog": {
+    "heightPixels": 540,
+    "look": "Medium High Contrast",
+    "renderEngine": "CYCLES_CPU_24_SAMPLES",
+    "trailWidthScaleBarMeters": 1.36,
+    "verticalFovDegrees": 47.0,
+    "viewTransform": "Standard",
+    "widthPixels": 960
+  },
+  "format": "goldencheetah-workout-game-asset-audit-1",
+  "renders": [
+    {
+      "cameraPositionMeters": [
+        0.0,
+        6.5,
+        -11.0
+      ],
+      "cameraTargetMeters": [
+        0.0,
+        0.1,
+        16.5
+      ],
+      "path": "FT-12-chase.png",
+      "sha256": "f9a31ea31bc6aee20a42910cff1c6e33281b2423e6e2b5b77ea615cbb9df1384",
+      "view": "chase"
+    },
+    {
+      "cameraPositionMeters": [
+        0.0,
+        33.0,
+        20.0
+      ],
+      "cameraTargetMeters": [
+        0.0,
+        0.0,
+        20.0
+      ],
+      "path": "FT-12-overhead.png",
+      "sha256": "5dd52e2fc02c673579b638e6baefd26a3f2cd03680c1b300ae526ec26d07b779",
+      "view": "overhead"
+    },
+    {
+      "cameraPositionMeters": [
+        -12.0,
+        3.3,
+        13.0
+      ],
+      "cameraTargetMeters": [
+        -2.3,
+        0.15,
+        13.0
+      ],
+      "path": "FT-12-side-short.png",
+      "sha256": "2308f513d8e80d3b196d8f6a7d1e2959ddf2b5b4b9e1a566477610a0f6a8dee7",
+      "view": "side-short"
+    },
+    {
+      "cameraPositionMeters": [
+        -12.0,
+        3.7,
+        13.8
+      ],
+      "cameraTargetMeters": [
+        0.0,
+        0.2,
+        13.8
+      ],
+      "path": "FT-12-side-medium.png",
+      "sha256": "9adc70a6c3ee5b43e868688193f236819e76c5bd54042d545ec4a48b254767ea",
+      "view": "side-medium"
+    },
+    {
+      "cameraPositionMeters": [
+        13.5,
+        4.2,
+        14.4
+      ],
+      "cameraTargetMeters": [
+        2.3,
+        0.24,
+        14.4
+      ],
+      "path": "FT-12-side-long.png",
+      "sha256": "84ba22dfeb60b233548b6940effda88a7c8c5ccfa009c825cac10f1ca275d561",
+      "view": "side-long"
+    }
+  ],
+  "sourceGlb": "WG_GapJumpThreeLine.glb",
+  "sourceGlbSha256": "227de25d73c37f620c571e4f33d14df12bbb00ad268746c4e0557517d1bfe517"
+}

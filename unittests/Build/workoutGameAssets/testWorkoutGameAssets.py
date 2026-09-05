@@ -52,6 +52,18 @@ DROP_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_Drop_Greybox.glb"
 )
+GAP_JUMP_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/FT-12-gap-jump-three-line.json"
+)
+GAP_JUMP_GLB_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generated/WG_GapJumpThreeLine.glb"
+)
+GAP_JUMP_AUDIT_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/audits/FT-12/FT-12-audit.json"
+)
 RIDER_MANIFEST_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/manifests/RB-01-rider-bike.json"
@@ -202,6 +214,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "FT-02-log-over-greybox",
                 "FT-03-bunny-hop-greybox",
                 "FT-04-drop-greybox",
+                "FT-12-gap-jump-three-line",
                 "RB-01-rider-bike",
                 "TR-08-surface-atlas",
             ],
@@ -366,6 +379,111 @@ class TestWorkoutGameAssets(unittest.TestCase):
             manifest["technical"]["sockets"][1]["positionMeters"],
             [0.0, 0.0, 24.0],
         )
+
+    def test_gap_jump_has_three_open_speed_progressive_lines(self) -> None:
+        document, size = assets.read_glb(GAP_JUMP_GLB_PATH)
+        manifest = assets.load_json_file(GAP_JUMP_MANIFEST_PATH)
+        assets.validate_glb_document(document, size, manifest)
+
+        nodes = {node["name"]: node for node in document["nodes"]}
+        root = nodes["ROOT_GapJumpThreeLine"]["extras"]
+        self.assertEqual(
+            [root[f"{line}_gap_length_m"] for line in ("short", "medium", "long")],
+            [1.8, 3.2, 4.7],
+        )
+        self.assertEqual(
+            [root[f"{line}_lateral_m"] for line in ("short", "medium", "long")],
+            [-2.3, 0.0, 2.3],
+        )
+        self.assertEqual(root["physics_authority"], "external")
+        self.assertEqual(root["tile_length_m"], 40.7)
+        self.assertEqual(
+            {material["name"] for material in document["materials"]},
+            {
+                "MAT_GapJumpPackedDirt",
+                "MAT_GapJumpCutEarth",
+                "MAT_GapJumpForestFloor",
+            },
+        )
+        self.assertEqual(
+            {node["name"] for node in document["nodes"] if "mesh" in node},
+            {
+                "GEO_GapJumpGround_LOD0",
+                "GEO_GapJumpTread_LOD0",
+                "GEO_GapJumpAccents_LOD0",
+            },
+        )
+        for line in ("SHORT", "MEDIUM", "LONG"):
+            lip = nodes[f"MARKER_{line}_LIP"]["translation"]
+            land = nodes[f"MARKER_{line}_LAND"]["translation"]
+            self.assertAlmostEqual(land[2] - lip[2], root[f"{line.lower()}_gap_length_m"], places=5)
+            self.assertAlmostEqual(lip[0], land[0], places=5)
+
+        tread = next(mesh for mesh in document["meshes"]
+                     if mesh["name"] == "GEO_GapJumpTread_LOD0")
+        for primitive in tread["primitives"]:
+            positions = glb_accessor_values(
+                GAP_JUMP_GLB_PATH, document, primitive["attributes"]["POSITION"]
+            )
+            indices = [value[0] for value in glb_accessor_values(
+                GAP_JUMP_GLB_PATH, document, primitive["indices"]
+            )]
+            for offset in range(0, len(indices), 3):
+                triangle = [positions[index] for index in indices[offset:offset + 3]]
+                minimum_z = min(point[2] for point in triangle)
+                maximum_z = max(point[2] for point in triangle)
+                for gap_length in (1.8, 3.2, 4.7):
+                    self.assertFalse(
+                        minimum_z < 12.0 - 1.0e-5
+                        and maximum_z > 12.0 + gap_length + 1.0e-5,
+                        "a tread triangle bridges an authored open gap",
+                    )
+        self.assertEqual(
+            manifest["technical"]["sockets"][1]["positionMeters"],
+            [0.0, 0.0, 40.7],
+        )
+        ground = next(mesh for mesh in document["meshes"]
+                      if mesh["name"] == "GEO_GapJumpGround_LOD0")
+        ground_positions = []
+        for primitive in ground["primitives"]:
+            ground_positions.extend(glb_accessor_values(
+                GAP_JUMP_GLB_PATH, document,
+                primitive["attributes"]["POSITION"],
+            ))
+        for socket_z in (0.0, 40.7):
+            socket_row = [point for point in ground_positions
+                          if abs(point[2] - socket_z) < 1.0e-4]
+            self.assertTrue(socket_row)
+            self.assertLessEqual(
+                max(abs(point[0]) for point in socket_row), 0.68 + 1.0e-5
+            )
+        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 3600)
+        self.assertLessEqual(manifest["technical"]["materials"], 3)
+
+    def test_gap_jump_audit_is_content_anchored(self) -> None:
+        audit = assets.load_json_file(GAP_JUMP_AUDIT_PATH)
+        self.assertEqual(
+            audit["format"], "goldencheetah-workout-game-asset-audit-1"
+        )
+        self.assertEqual(audit["assetId"], "FT-12-gap-jump-three-line")
+        self.assertEqual(audit["sourceGlbSha256"], sha256(GAP_JUMP_GLB_PATH))
+        self.assertEqual(audit["catalog"]["verticalFovDegrees"], 47.0)
+        self.assertEqual(
+            [render["view"] for render in audit["renders"]],
+            ["chase", "overhead", "side-short", "side-medium", "side-long"],
+        )
+        render_hashes = []
+        for render in audit["renders"]:
+            path = GAP_JUMP_AUDIT_PATH.parent / render["path"]
+            self.assertTrue(path.is_file())
+            data = path.read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", data[16:24]), (960, 540))
+            self.assertEqual(render["sha256"], sha256(path))
+            self.assertEqual(len(render["cameraPositionMeters"]), 3)
+            self.assertEqual(len(render["cameraTargetMeters"]), 3)
+            render_hashes.append(render["sha256"])
+        self.assertEqual(len(set(render_hashes)), 5)
 
     def test_rider_bike_has_29er_dimensions_named_pivots_and_no_primitives(self) -> None:
         document, size = assets.read_glb(RIDER_GLB_PATH)
