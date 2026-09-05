@@ -14,6 +14,8 @@
 
 #include <QDialog>
 
+#include <array>
+
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -47,6 +49,7 @@ private slots:
 
 private:
     void selectPreset(WorkoutGameCoursePreset preset);
+    void generatePreviews();
     void refreshSummary();
     void showError(const QString &message);
 
@@ -54,6 +57,7 @@ private:
     WorkoutGameCourseDocument editSourceDocument;
     bool editMode = false;
     WorkoutGameCourseSourceResult previewResult;
+    std::array<WorkoutGameCourseSourceResult, 3> modePreviews;
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
     QString createdPath;
 
@@ -66,6 +70,21 @@ private:
     QLabel *distanceValue = nullptr;
     QLabel *ascentValue = nullptr;
     QLabel *featuresValue = nullptr;
+    QLabel *loadValue = nullptr;
+    QLabel *loadDeviationValue = nullptr;
+    QLabel *workDeviationValue = nullptr;
+    QLabel *recoveryDeviationValue = nullptr;
+    QLabel *totalDeviationValue = nullptr;
+    QLabel *keyEffortRetentionValue = nullptr;
+    QLabel *recoveryRetentionValue = nullptr;
+    QLabel *terrainSignatureValue = nullptr;
+    QLabel *technicalExposureValue = nullptr;
+    QLabel *featureDensityValue = nullptr;
+    QLabel *curvatureValue = nullptr;
+    QLabel *prescriptionChangesValue = nullptr;
+    QLabel *workoutFirstComparisonValue = nullptr;
+    QLabel *balancedComparisonValue = nullptr;
+    QLabel *rideFirstComparisonValue = nullptr;
     QLineEdit *titleEdit = nullptr;
     QLineEdit *outputPathEdit = nullptr;
     QLabel *errorLabel = nullptr;

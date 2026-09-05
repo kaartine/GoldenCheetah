@@ -20,6 +20,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStringList>
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -48,6 +49,94 @@ QLabel *summaryValue(const char *objectName, QWidget *parent)
     return label;
 }
 
+std::size_t presetIndex(WorkoutGameCoursePreset preset)
+{
+    switch (preset) {
+    case WorkoutGameCoursePreset::WorkoutFirst: return 0u;
+    case WorkoutGameCoursePreset::Balanced: return 1u;
+    case WorkoutGameCoursePreset::RideFirst: return 2u;
+    }
+    return 1u;
+}
+
+QString percentText(double value)
+{
+    return QStringLiteral("%1%").arg(value, 0, 'f', 1);
+}
+
+QString terrainSignatureText(const WorkoutGameCourseSourceResult &result)
+{
+    if (result.status != WorkoutGameCourseSourceStatus::Ready) return {};
+    return QStringLiteral("grade %1 | +%2 m | %3 technical / %4 total features")
+            .arg(result.document.generationParameters.gradeScale, 0, 'f', 2)
+            .arg(std::lround(result.summary.elevationGainMeters))
+            .arg(result.summary.technicalFeatureCount)
+            .arg(qulonglong(result.document.course.sections.size()));
+}
+
+QString technicalExposureText(
+        const WorkoutGameCourseConversionSummary &summary)
+{
+    return summary.technicalTerrainExposureApplicable
+            ? percentText(summary.technicalTerrainExposurePercent)
+            : QStringLiteral("N/A");
+}
+
+QString prescriptionChangesText(
+        const WorkoutGameCourseConversionSummary &summary)
+{
+    if (summary.prescriptionChanges.empty()) {
+        return QStringLiteral("No prescription changes");
+    }
+    QStringList values;
+    for (const auto &change : summary.prescriptionChanges) {
+        QString role;
+        switch (change.role) {
+        case WorkoutGameCourseIntervalRole::Prescribed:
+            role = QStringLiteral("prescribed"); break;
+        case WorkoutGameCourseIntervalRole::NonPrescriptiveWarmup:
+            role = QStringLiteral("non-prescriptive warmup"); break;
+        case WorkoutGameCourseIntervalRole::NonPrescriptiveCooldown:
+            role = QStringLiteral("non-prescriptive cooldown"); break;
+        case WorkoutGameCourseIntervalRole::NonPrescriptiveTransition:
+            role = QStringLiteral("non-prescriptive transition"); break;
+        }
+        values.append(QStringLiteral("#%1 %2: %3 ms")
+                .arg(qulonglong(change.intervalIndex + 1))
+                .arg(role)
+                .arg(change.generatedDurationMs - change.sourceDurationMs));
+    }
+    return values.join(QStringLiteral("; "));
+}
+
+QString comparisonText(const WorkoutGameCourseSourceResult &result)
+{
+    if (result.status != WorkoutGameCourseSourceStatus::Ready) {
+        return QStringLiteral("Unavailable");
+    }
+    const WorkoutGameCourseConversionSummary &value = result.summary;
+    return QStringLiteral(
+            "%1 (%2 total) | %3 km | %4 pts (%5 load) | "
+            "key %6/%7 | recovery %8/%9 | work %10 | recovery/rest %11 | "
+            "technical %12, %13/10 | curvature %14 deg/100 m | %15 | %16")
+            .arg(durationText(value.nominalDurationMs))
+            .arg(percentText(value.totalDurationDeviationPercent))
+            .arg(value.distanceMeters / 1000.0, 0, 'f', 1)
+            .arg(value.estimatedLoadPoints, 0, 'f', 1)
+            .arg(percentText(value.loadDeviationPercent))
+            .arg(value.preservedKeyEffortCount)
+            .arg(value.keyEffortCount)
+            .arg(value.preservedRecoveryCount)
+            .arg(value.recoveryCount)
+            .arg(percentText(value.workDurationDeviationPercent))
+            .arg(percentText(value.recoveryDurationDeviationPercent))
+            .arg(technicalExposureText(value))
+            .arg(value.technicalFeatureDensityPerTenSections, 0, 'f', 1)
+            .arg(value.curvatureDegreesPer100m, 0, 'f', 1)
+            .arg(terrainSignatureText(result))
+            .arg(prescriptionChangesText(value));
+}
+
 }
 
 WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
@@ -59,8 +148,8 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     setObjectName(QStringLiteral("workoutGameCourseConversionDialog"));
     setWindowTitle(tr("Create MTB Course"));
     setModal(true);
-    resize(900, 680);
-    setMinimumSize(720, 560);
+    resize(1040, 820);
+    setMinimumSize(820, 700);
 
     QVBoxLayout *layout = new QVBoxLayout(this);
     layout->setContentsMargins(20, 18, 20, 18);
@@ -120,6 +209,18 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     distanceValue = summaryValue("distanceValue", this);
     ascentValue = summaryValue("ascentValue", this);
     featuresValue = summaryValue("featuresValue", this);
+    loadValue = summaryValue("loadValue", this);
+    loadDeviationValue = summaryValue("loadDeviationValue", this);
+    workDeviationValue = summaryValue("workDeviationValue", this);
+    recoveryDeviationValue = summaryValue("recoveryDeviationValue", this);
+    totalDeviationValue = summaryValue("totalDeviationValue", this);
+    keyEffortRetentionValue = summaryValue("keyEffortRetentionValue", this);
+    recoveryRetentionValue = summaryValue("recoveryRetentionValue", this);
+    terrainSignatureValue = summaryValue("terrainSignatureValue", this);
+    technicalExposureValue = summaryValue("technicalExposureValue", this);
+    featureDensityValue = summaryValue("featureDensityValue", this);
+    curvatureValue = summaryValue("curvatureValue", this);
+    prescriptionChangesValue = summaryValue("prescriptionChangesValue", this);
     summary->addWidget(new QLabel(tr("Workout duration"), this), 0, 0);
     summary->addWidget(durationValue, 0, 1);
     summary->addWidget(new QLabel(tr("Expected ride time"), this), 0, 2);
@@ -130,9 +231,52 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     summary->addWidget(ascentValue, 1, 3);
     summary->addWidget(new QLabel(tr("Features"), this), 2, 0);
     summary->addWidget(featuresValue, 2, 1, 1, 3);
+    summary->addWidget(new QLabel(tr("Load"), this), 3, 0);
+    summary->addWidget(loadValue, 3, 1);
+    summary->addWidget(new QLabel(tr("Load deviation"), this), 3, 2);
+    summary->addWidget(loadDeviationValue, 3, 3);
+    summary->addWidget(new QLabel(tr("Key efforts preserved"), this), 4, 0);
+    summary->addWidget(keyEffortRetentionValue, 4, 1);
+    summary->addWidget(new QLabel(tr("Recoveries preserved"), this), 4, 2);
+    summary->addWidget(recoveryRetentionValue, 4, 3);
+    summary->addWidget(new QLabel(tr("Work deviation"), this), 5, 0);
+    summary->addWidget(workDeviationValue, 5, 1);
+    summary->addWidget(new QLabel(tr("Recovery/rest deviation"), this), 5, 2);
+    summary->addWidget(recoveryDeviationValue, 5, 3);
+    summary->addWidget(new QLabel(tr("Total deviation"), this), 6, 0);
+    summary->addWidget(totalDeviationValue, 6, 1);
+    summary->addWidget(new QLabel(tr("Terrain signature"), this), 6, 2);
+    summary->addWidget(terrainSignatureValue, 6, 3);
+    summary->addWidget(new QLabel(tr("Technical exposure"), this), 7, 0);
+    summary->addWidget(technicalExposureValue, 7, 1);
+    summary->addWidget(new QLabel(tr("Feature density"), this), 7, 2);
+    summary->addWidget(featureDensityValue, 7, 3);
+    summary->addWidget(new QLabel(tr("Curvature"), this), 8, 0);
+    summary->addWidget(curvatureValue, 8, 1);
+    summary->addWidget(new QLabel(tr("Prescription changes"), this), 8, 2);
+    summary->addWidget(prescriptionChangesValue, 8, 3);
     summary->setColumnStretch(1, 1);
     summary->setColumnStretch(3, 1);
     layout->addLayout(summary);
+
+    QGridLayout *comparison = new QGridLayout;
+    workoutFirstComparisonValue = summaryValue(
+            "workoutFirstComparisonValue", this);
+    balancedComparisonValue = summaryValue("balancedComparisonValue", this);
+    rideFirstComparisonValue = summaryValue("rideFirstComparisonValue", this);
+    for (QLabel *label : {workoutFirstComparisonValue,
+                          balancedComparisonValue,
+                          rideFirstComparisonValue}) {
+        label->setWordWrap(true);
+    }
+    comparison->addWidget(new QLabel(tr("Workout first"), this), 0, 0);
+    comparison->addWidget(workoutFirstComparisonValue, 0, 1);
+    comparison->addWidget(new QLabel(tr("Balanced"), this), 1, 0);
+    comparison->addWidget(balancedComparisonValue, 1, 1);
+    comparison->addWidget(new QLabel(tr("Ride first"), this), 2, 0);
+    comparison->addWidget(rideFirstComparisonValue, 2, 1);
+    comparison->setColumnStretch(1, 1);
+    layout->addLayout(comparison);
 
     QGridLayout *fields = new QGridLayout;
     fields->setHorizontalSpacing(10);
@@ -176,6 +320,7 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     layout->addWidget(buttons);
 
+    generatePreviews();
     selectPreset(WorkoutGameCoursePreset::Balanced);
     if (previewResult.status == WorkoutGameCourseSourceStatus::Ready) {
         titleEdit->setText(previewResult.document.title);
@@ -203,6 +348,7 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
         browse->setEnabled(false);
     }
     createButton->setText(tr("Save Course"));
+    generatePreviews();
     selectPreset(document.preset);
 }
 
@@ -244,18 +390,30 @@ void WorkoutGameCourseConversionDialog::selectPreset(
     workoutFirstButton->setChecked(preset == WorkoutGameCoursePreset::WorkoutFirst);
     balancedButton->setChecked(preset == WorkoutGameCoursePreset::Balanced);
     rideFirstButton->setChecked(preset == WorkoutGameCoursePreset::RideFirst);
-    if (editMode) {
-        const QString title = titleEdit->text().trimmed().isEmpty()
-                ? editSourceDocument.title
-                : titleEdit->text().trimmed();
-        previewResult = WorkoutGameCourseSourceAdapter::regenerate(
-                editSourceDocument, preset, title);
-    } else {
-        sourceRequest.preset = preset;
-        previewResult = WorkoutGameCourseSourceAdapter::convert(sourceRequest);
-    }
+    previewResult = modePreviews[presetIndex(preset)];
     preview->setResult(previewResult);
     refreshSummary();
+}
+
+void WorkoutGameCourseConversionDialog::generatePreviews()
+{
+    const WorkoutGameCoursePreset presets[] = {
+        WorkoutGameCoursePreset::WorkoutFirst,
+        WorkoutGameCoursePreset::Balanced,
+        WorkoutGameCoursePreset::RideFirst
+    };
+    for (WorkoutGameCoursePreset mode : presets) {
+        if (editMode) {
+            modePreviews[presetIndex(mode)] =
+                    WorkoutGameCourseSourceAdapter::regenerate(
+                        editSourceDocument, mode, editSourceDocument.title);
+        } else {
+            WorkoutGameCourseSourceRequest request = sourceRequest;
+            request.preset = mode;
+            modePreviews[presetIndex(mode)] =
+                    WorkoutGameCourseSourceAdapter::convert(request);
+        }
+    }
 }
 
 void WorkoutGameCourseConversionDialog::refreshSummary()
@@ -268,6 +426,18 @@ void WorkoutGameCourseConversionDialog::refreshSummary()
         distanceValue->clear();
         ascentValue->clear();
         featuresValue->clear();
+        loadValue->clear();
+        loadDeviationValue->clear();
+        workDeviationValue->clear();
+        recoveryDeviationValue->clear();
+        totalDeviationValue->clear();
+        keyEffortRetentionValue->clear();
+        recoveryRetentionValue->clear();
+        terrainSignatureValue->clear();
+        technicalExposureValue->clear();
+        featureDensityValue->clear();
+        curvatureValue->clear();
+        prescriptionChangesValue->clear();
         showError(tr("This workout cannot be converted to an MTB course."));
         return;
     }
@@ -286,6 +456,29 @@ void WorkoutGameCourseConversionDialog::refreshSummary()
             .arg(value.climbCount)
             .arg(value.jumpCount)
             .arg(value.descentCount));
+    loadValue->setText(QStringLiteral("%1 pts")
+            .arg(value.estimatedLoadPoints, 0, 'f', 1));
+    loadDeviationValue->setText(percentText(value.loadDeviationPercent));
+    workDeviationValue->setText(
+            percentText(value.workDurationDeviationPercent));
+    recoveryDeviationValue->setText(
+            percentText(value.recoveryDurationDeviationPercent));
+    totalDeviationValue->setText(
+            percentText(value.totalDurationDeviationPercent));
+    keyEffortRetentionValue->setText(QStringLiteral("%1/%2")
+            .arg(value.preservedKeyEffortCount).arg(value.keyEffortCount));
+    recoveryRetentionValue->setText(QStringLiteral("%1/%2")
+            .arg(value.preservedRecoveryCount).arg(value.recoveryCount));
+    terrainSignatureValue->setText(terrainSignatureText(previewResult));
+    technicalExposureValue->setText(technicalExposureText(value));
+    featureDensityValue->setText(QStringLiteral("%1/10 sections")
+            .arg(value.technicalFeatureDensityPerTenSections, 0, 'f', 1));
+    curvatureValue->setText(QStringLiteral("%1 deg/100 m")
+            .arg(value.curvatureDegreesPer100m, 0, 'f', 1));
+    prescriptionChangesValue->setText(prescriptionChangesText(value));
+    workoutFirstComparisonValue->setText(comparisonText(modePreviews[0]));
+    balancedComparisonValue->setText(comparisonText(modePreviews[1]));
+    rideFirstComparisonValue->setText(comparisonText(modePreviews[2]));
 }
 
 void WorkoutGameCourseConversionDialog::browseOutput()
@@ -299,15 +492,13 @@ void WorkoutGameCourseConversionDialog::browseOutput()
 void WorkoutGameCourseConversionDialog::createCourse()
 {
     showError({});
-    if (editMode) {
-        previewResult = WorkoutGameCourseSourceAdapter::regenerate(
-                editSourceDocument, preset, titleEdit->text().trimmed());
-    } else {
-        sourceRequest.title = titleEdit->text().trimmed();
-        sourceRequest.preset = preset;
-        previewResult = WorkoutGameCourseSourceAdapter::convert(sourceRequest);
-    }
     if (previewResult.status != WorkoutGameCourseSourceStatus::Ready) {
+        showError(tr("Check the course title and workout settings."));
+        return;
+    }
+    WorkoutGameCourseDocument document = previewResult.document;
+    document.title = titleEdit->text().trimmed();
+    if (!WorkoutGameCourseDocumentCodec::valid(document)) {
         showError(tr("Check the course title and workout settings."));
         return;
     }
@@ -324,9 +515,9 @@ void WorkoutGameCourseConversionDialog::createCourse()
     QString error;
     const WorkoutGameCourseDocumentStatus status = editMode
             ? WorkoutGameCourseDocumentStore::replaceArtifact(
-                path, previewResult.document, error)
+                path, document, error)
             : WorkoutGameCourseDocumentStore::saveNewArtifact(
-                path, previewResult.document, error);
+                path, document, error);
     if (status != WorkoutGameCourseDocumentStatus::Ready) {
         showError(error.isEmpty() ? tr("Could not create the MTB course.") : error);
         return;
