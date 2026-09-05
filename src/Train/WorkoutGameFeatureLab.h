@@ -21,6 +21,14 @@ enum class WorkoutGameFeatureLabScenario
     Bypass
 };
 
+enum class WorkoutGameFeatureLabGapScenario : std::uint8_t
+{
+    Short,
+    Medium,
+    Long,
+    Safe
+};
+
 class WorkoutGameFeatureLab
 {
 public:
@@ -34,6 +42,14 @@ public:
             const WorkoutGameCourse &course,
             std::int64_t workoutTimeMs,
             WorkoutGameFeatureLabScenario scenario);
+    static bool parseGapScenario(
+            const char *value,
+            WorkoutGameFeatureLabGapScenario &scenario);
+    static bool applyGapScenario(
+            const WorkoutGameCourse &course,
+            std::int64_t workoutTimeMs,
+            WorkoutGameFeatureLabGapScenario scenario,
+            WorkoutGameSimulationInput &input);
 };
 
 #endif

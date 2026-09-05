@@ -9,8 +9,11 @@
 
 #include "WorkoutGameFeatureLab.h"
 
+#include "WorkoutGameGapJumpGeometry.h"
+
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <iterator>
 
 namespace {
@@ -141,6 +144,28 @@ const WorkoutGameSection *sectionAt(
     return nullptr;
 }
 
+double gapScenarioSpeedMetersPerSecond(
+        const WorkoutGameGapJumpGeometryProfile &profile,
+        WorkoutGameFeatureLabGapScenario scenario)
+{
+    const double shortThreshold =
+            profile.lines[0].coldThresholdMetersPerSecond;
+    const double mediumThreshold =
+            profile.lines[1].coldThresholdMetersPerSecond;
+    const double longThreshold =
+            profile.lines[2].coldThresholdMetersPerSecond;
+    switch (scenario) {
+    case WorkoutGameFeatureLabGapScenario::Short:
+        return 0.5 * (shortThreshold + mediumThreshold);
+    case WorkoutGameFeatureLabGapScenario::Medium:
+        return 0.5 * (mediumThreshold + longThreshold);
+    case WorkoutGameFeatureLabGapScenario::Long:
+    case WorkoutGameFeatureLabGapScenario::Safe:
+        return longThreshold + 0.5 * (longThreshold - mediumThreshold);
+    }
+    return -1.0;
+}
+
 }
 
 WorkoutGameCourse WorkoutGameFeatureLab::course(
@@ -254,4 +279,64 @@ WorkoutGameSimulationInput WorkoutGameFeatureLab::input(
         result.virtualGear = 2;
     }
     return result;
+}
+
+bool WorkoutGameFeatureLab::parseGapScenario(
+        const char *value,
+        WorkoutGameFeatureLabGapScenario &scenario)
+{
+    if (!value) return false;
+
+    WorkoutGameFeatureLabGapScenario parsed;
+    if (std::strcmp(value, "short") == 0) {
+        parsed = WorkoutGameFeatureLabGapScenario::Short;
+    } else if (std::strcmp(value, "medium") == 0) {
+        parsed = WorkoutGameFeatureLabGapScenario::Medium;
+    } else if (std::strcmp(value, "long") == 0) {
+        parsed = WorkoutGameFeatureLabGapScenario::Long;
+    } else if (std::strcmp(value, "safe") == 0) {
+        parsed = WorkoutGameFeatureLabGapScenario::Safe;
+    } else {
+        return false;
+    }
+
+    scenario = parsed;
+    return true;
+}
+
+bool WorkoutGameFeatureLab::applyGapScenario(
+        const WorkoutGameCourse &course,
+        std::int64_t workoutTimeMs,
+        WorkoutGameFeatureLabGapScenario scenario,
+        WorkoutGameSimulationInput &input)
+{
+    const WorkoutGameSection *section = sectionAt(course, workoutTimeMs);
+    if (!section || section->terrain != WorkoutGameTerrainKind::GapJump) {
+        return false;
+    }
+    const WorkoutGameGapJumpGeometryProfile profile =
+            WorkoutGameGapJumpGeometry::profile(section->difficulty);
+    if (!profile.ready || !std::isfinite(section->targetWatts)
+            || section->targetWatts <= 0.0) {
+        return false;
+    }
+
+    const double speedMetersPerSecond =
+            gapScenarioSpeedMetersPerSecond(profile, scenario);
+    if (!std::isfinite(speedMetersPerSecond)
+            || speedMetersPerSecond <= 0.0) {
+        return false;
+    }
+
+    WorkoutGameSimulationInput result = input;
+    result.workoutTimeMs = workoutTimeMs;
+    result.targetWatts = section->targetWatts;
+    result.actualWatts = scenario == WorkoutGameFeatureLabGapScenario::Safe
+            ? section->targetWatts * 0.5 : section->targetWatts;
+    result.cadenceRpm = 88.0;
+    result.authoritativeSpeedKph = speedMetersPerSecond * 3.6;
+    result.drivetrainSpeedLimitKph = -1.0;
+    result.virtualGear = 8;
+    input = result;
+    return true;
 }

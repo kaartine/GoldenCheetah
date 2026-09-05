@@ -295,9 +295,15 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     ftpWatts = currentFtp(workout);
     featureLabEnabled = qEnvironmentVariableIntValue(
             "GC_WORKOUT_GAME_FEATURE_LAB") != 0;
+    featureLabGapScenarioEnabled = false;
     if (featureLabEnabled) {
         if (ftpWatts <= 0.0) ftpWatts = 200.0;
         currentCourse = WorkoutGameFeatureLab::course(ftpWatts);
+        const QByteArray requestedGapScenario = qgetenv(
+                "GC_WORKOUT_GAME_FEATURE_LAB_GAP_SCENARIO");
+        featureLabGapScenarioEnabled =
+                WorkoutGameFeatureLab::parseGapScenario(
+                    requestedGapScenario.constData(), featureLabGapScenario);
     } else if (workout
             && workout->format() == ErgFileFormat::crs
             && distanceRuntime.configure(workout->filename())
@@ -538,6 +544,11 @@ void WorkoutGameWindow::updateRunnerTelemetry()
         }
         input.simulation.virtualGear = latestTelemetry.getVirtualGear();
         input.heartRate = heartRateValue(latestTelemetry.getHr());
+    }
+    if (featureLabEnabled && featureLabGapScenarioEnabled) {
+        WorkoutGameFeatureLab::applyGapScenario(
+                currentCourse, currentWorkoutTimeMs,
+                featureLabGapScenario, input.simulation);
     }
     runner.setTelemetry(input);
 }
