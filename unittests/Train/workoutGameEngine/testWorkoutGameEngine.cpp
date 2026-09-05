@@ -140,7 +140,19 @@ private slots:
     void featureLabGapScenariosExerciseEveryLineAndPowerGate()
     {
         constexpr double FtpWatts = 200.0;
+        constexpr double MaximumLateralStepMeters = 0.07;
+        constexpr double MainTrailMergeToleranceMeters = 0.08;
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(FtpWatts);
+        const int gapSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::GapJump);
+        QVERIFY(gapSection >= 0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const WorkoutGameRoadPiece *gapPiece = challengePieceFor(
+                road, gapSection);
+        QVERIFY(gapPiece != nullptr);
+        QVERIFY(gapPiece->gapJump.enabled);
         struct Case {
             WorkoutGameFeatureLabGapScenario scenario;
             WorkoutGameGapJumpLine expectedLine;
@@ -162,16 +174,27 @@ private slots:
         };
 
         for (const Case &testCase : cases) {
+            enum class JumpStage {
+                Approach,
+                Takeoff,
+                Airborne,
+                Landed,
+                GroundedRecovery
+            };
             WorkoutGameEngine engine;
             QVERIFY(engine.configure(course, FtpWatts, true));
             bool observedLock = false;
-            bool observedTakeoff = false;
-            bool observedAirborne = false;
-            bool observedLanding = false;
-            bool observedGroundedMerge = false;
             bool leftGapSection = false;
+            bool observedSafeRecovery = false;
+            bool hasPriorGapPosition = false;
+            bool movedBackTowardMainTrail = false;
+            double priorForwardDistanceMeters = 0.0;
+            double priorLateralMeters = 0.0;
+            double maximumAbsoluteLateralMeters = 0.0;
+            double finalGapLateralMeters = 0.0;
             WorkoutGameGapJumpLine lockedLine =
                     WorkoutGameGapJumpLine::None;
+            JumpStage jumpStage = JumpStage::Approach;
             for (std::int64_t timeMs = 0; timeMs < course.durationMs;
                  timeMs += 20) {
                 WorkoutGameEngineInput input;
@@ -190,6 +213,37 @@ private slots:
                     continue;
                 }
 
+                const double forwardDistanceMeters =
+                        frame.visual.world.rider.distanceMeters;
+                const double lateralMeters =
+                        frame.visual.feature.lateralOffsetMeters;
+                QVERIFY(std::isfinite(forwardDistanceMeters));
+                QVERIFY(std::isfinite(lateralMeters));
+                if (hasPriorGapPosition) {
+                    QVERIFY2(forwardDistanceMeters + 1.0e-7
+                                    >= priorForwardDistanceMeters,
+                             "gap scenario moved backward");
+                    QVERIFY2(std::abs(lateralMeters - priorLateralMeters)
+                                    <= MaximumLateralStepMeters + 1.0e-9,
+                             qPrintable(QStringLiteral(
+                                 "gap scenario moved laterally %1 m in one "
+                                 "20 ms engine step")
+                                 .arg(std::abs(
+                                     lateralMeters - priorLateralMeters),
+                                      0, 'f', 6)));
+                    if (std::abs(lateralMeters)
+                            < std::abs(priorLateralMeters) - 1.0e-6) {
+                        movedBackTowardMainTrail = true;
+                    }
+                }
+                hasPriorGapPosition = true;
+                priorForwardDistanceMeters = forwardDistanceMeters;
+                priorLateralMeters = lateralMeters;
+                finalGapLateralMeters = lateralMeters;
+                maximumAbsoluteLateralMeters = std::max(
+                        maximumAbsoluteLateralMeters,
+                        std::abs(lateralMeters));
+
                 if (frame.visual.feature.gapLineLocked) {
                     if (!observedLock) {
                         observedLock = true;
@@ -202,6 +256,13 @@ private slots:
                              testCase.expectedOutcome);
                     QCOMPARE(frame.visual.simulation.featureOutcome,
                              testCase.expectedOutcome);
+                    const WorkoutGameRoute expectedRoute =
+                            testCase.expectedOutcome
+                                == WorkoutGameFeatureOutcome::Completed
+                            ? WorkoutGameRoute::MainLine
+                            : WorkoutGameRoute::SafeBypass;
+                    QCOMPARE(frame.visual.feature.route, expectedRoute);
+                    QCOMPARE(frame.visual.simulation.route, expectedRoute);
                     QCOMPARE(frame.visual.feature.launchSpeedReady, true);
                     QCOMPARE(frame.visual.feature.launchPowerReady,
                              testCase.expectedOutcome
@@ -210,34 +271,72 @@ private slots:
                     QFAIL("gap line lock was lost before leaving the section");
                 }
 
-                observedTakeoff = observedTakeoff
-                        || frame.visual.feature.triggerJump;
-                if (frame.visual.world.rider.airborne) {
-                    QVERIFY(testCase.expectedOutcome
-                            == WorkoutGameFeatureOutcome::Completed);
-                    observedAirborne = true;
-                } else if (observedAirborne) {
-                    observedLanding = true;
-                }
-                if (observedLanding
-                        && frame.visual.feature.phase
+                if (testCase.expectedOutcome
+                        == WorkoutGameFeatureOutcome::Completed) {
+                    if (frame.visual.feature.triggerJump
+                            && jumpStage == JumpStage::Approach) {
+                        jumpStage = JumpStage::Takeoff;
+                    }
+                    if (frame.visual.world.rider.airborne) {
+                        QVERIFY(jumpStage == JumpStage::Takeoff
+                                || jumpStage == JumpStage::Airborne);
+                        jumpStage = JumpStage::Airborne;
+                    } else if (jumpStage == JumpStage::Airborne) {
+                        jumpStage = JumpStage::Landed;
+                    }
+                    if (frame.visual.feature.phase
                             == WorkoutGameFeaturePhase::Recovery
-                        && !frame.visual.world.rider.airborne) {
-                    observedGroundedMerge = true;
+                            && !frame.visual.world.rider.airborne
+                            && jumpStage == JumpStage::Landed) {
+                        jumpStage = JumpStage::GroundedRecovery;
+                    }
+                } else {
+                    QVERIFY(!frame.visual.feature.triggerJump);
+                    QVERIFY2(!frame.visual.world.rider.airborne,
+                             qPrintable(QStringLiteral(
+                                 "safe gap became airborne at %1 ms, phase "
+                                 "%2, feature distance %3 m")
+                                 .arg(timeMs)
+                                 .arg(int(frame.visual.feature.phase))
+                                 .arg(frame.visual.feature.visualDistanceMeters,
+                                      0, 'f', 3)));
+                    if (frame.visual.feature.phase
+                            == WorkoutGameFeaturePhase::Recovery) {
+                        observedSafeRecovery = true;
+                    }
                 }
             }
             QVERIFY2(observedLock, "gap scenario never reached line lock");
             QVERIFY(leftGapSection);
+            QVERIFY(hasPriorGapPosition);
+            QVERIFY(std::abs(finalGapLateralMeters)
+                    <= MainTrailMergeToleranceMeters);
             if (testCase.expectedOutcome
                     == WorkoutGameFeatureOutcome::Completed) {
-                QVERIFY(observedTakeoff);
-                QVERIFY(observedAirborne);
-                QVERIFY(observedLanding);
-                QVERIFY(observedGroundedMerge);
+                QCOMPARE(jumpStage, JumpStage::GroundedRecovery);
             } else {
-                QVERIFY(!observedTakeoff);
-                QVERIFY(!observedAirborne);
-                QVERIFY(!observedLanding);
+                QVERIFY(observedSafeRecovery);
+            }
+
+            double authoredLateralMeters =
+                    gapPiece->challenge.bypassLateralMeters;
+            if (testCase.expectedLine != WorkoutGameGapJumpLine::None) {
+                const auto authoredLine = std::find_if(
+                        gapPiece->gapJump.lines.begin(),
+                        gapPiece->gapJump.lines.end(),
+                        [&testCase](const WorkoutGameRoadGapJumpLine &line) {
+                            return line.id == testCase.expectedLine;
+                        });
+                QVERIFY(authoredLine != gapPiece->gapJump.lines.end());
+                authoredLateralMeters = authoredLine->lateralMeters;
+            }
+            if (std::abs(authoredLateralMeters) > 0.1) {
+                QVERIFY(maximumAbsoluteLateralMeters
+                        >= 0.75 * std::abs(authoredLateralMeters));
+                QVERIFY(movedBackTowardMainTrail);
+            } else {
+                QVERIFY(maximumAbsoluteLateralMeters
+                        <= MainTrailMergeToleranceMeters);
             }
         }
     }
