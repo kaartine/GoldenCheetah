@@ -9,6 +9,8 @@
 
 #include "Train/WorkoutGameCourseCrsExporter.h"
 #include "Train/WorkoutGameCourseDocument.h"
+#include "Train/WorkoutGameDistancePlayback.h"
+#include "Train/WorkoutGameRoadCourse.h"
 #include "Train/WorkoutGameRoadPlan.h"
 #include "Train/WorkoutGameRoadQuality.h"
 
@@ -590,6 +592,47 @@ private slots:
                 [](const WorkoutGameRoadPiece &piece) {
                     return piece.relief.enabled;
                 }));
+    }
+
+    void savingVersionThreePreservesItsPresetRoadShape()
+    {
+        WorkoutGameCourseDocument versionThree = sampleDocument();
+        versionThree.schemaVersion = 3;
+        versionThree.preset = WorkoutGameCoursePreset::RideFirst;
+        versionThree.generationParameters =
+                WorkoutGameCourseConverter::parametersForPreset(
+                    versionThree.preset);
+        QVERIFY(WorkoutGameCourseDocumentCodec::valid(versionThree));
+
+        const WorkoutGameCourse visual =
+                WorkoutGameDistancePlayback::visualCourse(
+                    versionThree.course);
+        const WorkoutGameRoadPlan expected =
+                WorkoutGameRoadCourseBuilder::generatePlan(
+                    visual, versionThree.ftpWatts, {
+                        WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
+                        versionThree.preset
+                    });
+        QVERIFY(!expected.pieces.empty());
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(
+                QStringLiteral("version-three-ride-first.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, versionThree, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        WorkoutGameCourseDocument loaded;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    path, loaded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(loaded.preset, WorkoutGameCoursePreset::RideFirst);
+        QCOMPARE(loaded.course.roadPlan->pieces.size(), expected.pieces.size());
+        for (std::size_t index = 0; index < expected.pieces.size(); ++index) {
+            QCOMPARE(loaded.course.roadPlan->pieces[index].turnRadians,
+                     expected.pieces[index].turnRadians);
+        }
     }
 
     void legacyBermMigratesToUnscoredPersistedBank()

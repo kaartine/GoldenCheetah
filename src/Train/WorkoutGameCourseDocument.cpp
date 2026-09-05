@@ -1249,7 +1249,10 @@ bool documentForPersistence(
             WorkoutGameDistancePlayback::visualCourse(destination.course);
     const WorkoutGameRoadPlan plan =
             WorkoutGameRoadCourseBuilder::generatePlan(
-                visual, destination.ftpWatts);
+                visual, destination.ftpWatts, {
+                    WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
+                    destination.preset
+                });
     if (WorkoutGameRoadPlanValidator::validate(
                 plan, destination.course.sections.size())
             != WorkoutGameRoadPlanValidationStatus::Ready
