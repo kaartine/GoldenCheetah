@@ -24,11 +24,24 @@ AUX_CHECK_TARGET = re.compile(
     r"^\s*QMAKE_EXTRA_TARGETS\s*\+=\s*[^#\n]*\bcheck\b", re.MULTILINE
 )
 PLATFORM_SELECTORS = {"all", "linux", "macos", "windows", "nonwindows"}
+MAXIMUM_PROJECT_BUILD_JOBS = 64
 
 
 def fail(message: str, status: int = 1) -> None:
     print(message, file=sys.stderr)
     raise SystemExit(status)
+
+
+def project_build_jobs(value: str) -> int:
+    try:
+        jobs = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("jobs must be an integer") from error
+    if jobs < 1 or jobs > MAXIMUM_PROJECT_BUILD_JOBS:
+        raise argparse.ArgumentTypeError(
+            f"jobs must be between 1 and {MAXIMUM_PROJECT_BUILD_JOBS}"
+        )
+    return jobs
 
 
 def read_inventory(unit_tests: Path) -> dict[str, tuple[str, str]]:
@@ -218,6 +231,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--build-tool", default=default_tool)
     parser.add_argument("--build-tool-arg", action="append", default=[])
     parser.add_argument(
+        "--jobs",
+        type=project_build_jobs,
+        default=1,
+        help="parallel build jobs within one test project (default: 1)",
+    )
+    parser.add_argument(
         "--platform",
         choices=("linux", "macos", "windows"),
         default="windows" if os.name == "nt" else ("macos" if sys.platform == "darwin" else "linux"),
@@ -277,7 +296,7 @@ def main() -> None:
     command = [
         arguments.build_tool,
         *arguments.build_tool_arg,
-        "-j1",
+        f"-j{arguments.jobs}",
         "check",
     ]
     suites = 0

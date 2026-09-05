@@ -67,6 +67,7 @@ def run_runner(
     mode: str,
     build_root: Path | None = None,
     platform: str = "linux",
+    jobs: int | str | None = None,
     environment_updates: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
@@ -87,6 +88,8 @@ def run_runner(
         ]
     if build_root is not None:
         command.extend(("--build-root", str(build_root)))
+    if jobs is not None:
+        command.extend(("--jobs", str(jobs)))
     return subprocess.run(
         command,
         check=False,
@@ -169,7 +172,8 @@ def main() -> None:
         temporary_path = Path(temporary)
         fake_build_tool = temporary_path / "fake_build_tool.py"
         fake_build_tool.write_text(
-            """import os
+            """import json
+import os
 from pathlib import Path
 import sys
 
@@ -178,6 +182,10 @@ expected_tmpdir = os.environ.get("GC_FAKE_EXPECT_TMPDIR")
 if expected_tmpdir and os.environ.get("TMPDIR") != expected_tmpdir:
     print("unexpected TMPDIR: " + os.environ.get("TMPDIR", ""), file=sys.stderr)
     sys.exit(8)
+expected_arguments = os.environ.get("GC_FAKE_EXPECT_ARGUMENTS")
+if expected_arguments and sys.argv[1:] != json.loads(expected_arguments):
+    print("unexpected build-tool arguments: " + repr(sys.argv[1:]), file=sys.stderr)
+    sys.exit(11)
 diagnostic = os.environ.get("GC_QTTEST_PERSISTENT_LOG")
 is_auxiliary = os.path.basename(os.getcwd()) == "Aux"
 if is_auxiliary and diagnostic:
@@ -233,6 +241,28 @@ elif mode == "success":
             )
         if "Executed 2 QtTest cases across 1 suites." not in success.stderr:
             raise AssertionError(f"missing execution summary: {success.stderr}")
+
+        for jobs in (None, 1, 7, 64):
+            expected_jobs = 1 if jobs is None else jobs
+            parallel = run_runner(
+                registered,
+                fake_build_tool,
+                "success",
+                jobs=jobs,
+                environment_updates={
+                    "GC_FAKE_EXPECT_ARGUMENTS": f'["-j{expected_jobs}", "check"]'
+                },
+            )
+            if parallel.returncode != 0:
+                raise AssertionError(
+                    f"project build parallelism {expected_jobs} was not forwarded: "
+                    + parallel.stderr
+                )
+        for jobs in (0, -1, 65, "not-an-integer"):
+            invalid_jobs = run_runner(
+                registered, fake_build_tool, "success", jobs=jobs
+            )
+            expect_failure(invalid_jobs, f"invalid project build parallelism {jobs}")
 
         canonical_temp = temporary_path / "canonical-temp"
         canonical_temp.mkdir()
