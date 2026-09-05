@@ -136,7 +136,7 @@ def append_low_poly_clump(
     ))
     for side in range(sides):
         following = (side + 1) % sides
-        faces.append((lower, lower_ring + following, lower_ring + side))
+        faces.append((lower, lower_ring + side, lower_ring + following))
         faces.extend((
             (lower_ring + side, upper_ring + side, upper_ring + following),
             (lower_ring + side, upper_ring + following,

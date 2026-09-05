@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_conifer_set.py",
     "retrievedAt": "2026-09-05",
     "originalFileName": "generate_conifer_set.py",
-    "originalSha256": "84d8030a20fcfbfe160c7d3fd29d7bb40201f45a1fb4282605525184988a84ba",
+    "originalSha256": "6d823cf425dd64aad4d204f0ddaea0194760758cd27a3286ec06f1ea1e9440db",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_conifer_set.py"
@@ -31,12 +31,12 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_conifer_set.py",
       "purpose": "source",
-      "sha256": "84d8030a20fcfbfe160c7d3fd29d7bb40201f45a1fb4282605525184988a84ba"
+      "sha256": "6d823cf425dd64aad4d204f0ddaea0194760758cd27a3286ec06f1ea1e9440db"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_ConiferSet.glb",
       "purpose": "intermediate",
-      "sha256": "4c48b18bce6d4e485d8231428495a117439b16e1f4beb0a4043c9786cff75d7d"
+      "sha256": "6add71831ed5b735154e1a894788f166915077db6a2fcb3193b8524c1f2335ea"
     },
     {
       "path": "src/Train/qml/WorkoutGameConifer.qml",
@@ -66,7 +66,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_ScotsPineCrown_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "287f4fa852e696e846ebda191373dbf23f73192bd96f2021e0a4efb57b5f6034"
+      "sha256": "9db45aefa5f806803e88e2d4e7fd10930ab4ad0e839a2c5ac6f751abfd2554b9"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ScotsPineTrunk_LOD0_mesh.mesh",
