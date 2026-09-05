@@ -94,6 +94,65 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             ],
         )
 
+    def test_focus_main_window_does_not_require_an_atspi_component(self):
+        window = mock.Mock()
+        window.get_wm_name.return_value = UI.ATHLETE
+        display = mock.Mock()
+        display.screen.return_value.root = window
+        driver = object.__new__(UI.UiDriver)
+        driver.display = display
+        driver.X = mock.Mock(RevertToParent=1, CurrentTime=2)
+        driver.find = mock.Mock(
+            side_effect=AssertionError("AT-SPI frame must not be required")
+        )
+
+        driver.focus_main_window()
+
+        window.set_input_focus.assert_called_once_with(1, 2)
+        display.sync.assert_called_once_with()
+        driver.find.assert_not_called()
+
+    def test_start_refreshes_canvas_after_quick3d_initialization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            records = root / "records"
+            records.mkdir()
+            recording = records / "recording.csv"
+            recording.write_text("secs,watts\n", encoding="ascii")
+            start_button = object()
+            stale_canvas = object()
+            live_canvas = object()
+            gear = object()
+            driver = mock.Mock()
+            driver.find.return_value = start_button
+            driver.wait_new_file.return_value = recording
+            driver.find_named_any.return_value = live_canvas
+            driver.name.return_value = "Workout game 3D canvas"
+            driver.current_value.return_value = 7.0
+            workflow = object.__new__(UI.WorkoutGameUiWorkflow)
+            workflow.driver = driver
+            workflow.root = root
+            workflow.records = records
+            workflow.existing_records = set()
+            workflow.canvas = stale_canvas
+            workflow.gear = gear
+            workflow.capture_screenshots = False
+
+            result = workflow.start()
+
+            self.assertEqual(result, recording)
+            driver.find_named_any.assert_called_once_with(
+                UI.WORKOUT_GAME_CANVAS_NAMES, showing=True
+            )
+            driver.name.assert_called_once_with(live_canvas)
+            self.assertIs(workflow.canvas, live_canvas)
+            self.assertEqual(
+                (root / UI.RENDERER_CANVAS_NAME_FILE).read_text(
+                    encoding="utf-8"
+                ),
+                "Workout game 3D canvas\n",
+            )
+
     def test_prepare_uses_only_the_requested_isolated_library(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

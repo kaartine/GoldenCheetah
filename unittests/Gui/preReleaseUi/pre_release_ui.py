@@ -583,8 +583,6 @@ class UiDriver:
         raise UiFailure(f"Combo box did not select {name!r}")
 
     def focus_main_window(self):
-        frame = self.find(ATHLETE, "frame")
-        frame.queryComponent().grabFocus()
         windows = [self.display.screen().root]
         while windows:
             window = windows.pop()
@@ -883,6 +881,9 @@ class WorkoutGameUiWorkflow:
         )
         recording = self.driver.wait_new_file(
             self.records, self.existing_records, "*.csv"
+        )
+        self.canvas = self.driver.find_named_any(
+            WORKOUT_GAME_CANVAS_NAMES, showing=True
         )
         record_renderer_canvas_name(self.root, self.driver.name(self.canvas))
         self.initial_gear = self.driver.current_value(self.gear)
