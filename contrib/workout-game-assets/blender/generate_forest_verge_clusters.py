@@ -150,9 +150,9 @@ def build_cluster(component_specs):
 
 def granite_bilberry_cluster():
     return build_cluster((
-        (irregular_rock, (0.78, 0.58, 0.30, 0.4, 0.025), (0,),
+        (irregular_rock, (0.78, 0.58, 0.30, 0.4, 0.025), (0, 3),
          (0.66, 0.0, -0.34), -7.0, 1.0),
-        (irregular_rock, (0.56, 0.52, 0.67, 1.8, -0.065), (0,),
+        (irregular_rock, (0.56, 0.52, 0.67, 1.8, -0.065), (0, 3),
          (0.57, 0.0, 0.43), 11.0, 1.0),
         (bilberry_understory, (), (3,),
          (1.54, 0.0, 0.34), -9.0, 0.82),
@@ -161,9 +161,9 @@ def granite_bilberry_cluster():
 
 def stump_fern_cluster():
     return build_cluster((
-        (rooted_stump, (), (1, 2), (0.78, 0.0, 0.0), 8.0, 1.0),
+        (rooted_stump, (), (1, 2, 3), (0.78, 0.0, 0.0), 8.0, 1.0),
         (fern_understory, (), (3,), (1.52, 0.0, 0.49), -12.0, 0.72),
-        (irregular_rock, (0.78, 0.58, 0.30, 0.4, 0.025), (0,),
+        (irregular_rock, (0.78, 0.58, 0.30, 0.4, 0.025), (0, 3),
          (1.58, 0.0, -0.48), 15.0, 0.62),
         (heather_understory, (), (3,),
          (2.26, 0.0, 0.02), 7.0, 0.66),
@@ -275,13 +275,13 @@ def build_scene():
             MATERIAL_NAMES[0], GRANITE_BASE_COLOR
         ),
         MATERIAL_NAMES[1]: make_material(
-            MATERIAL_NAMES[1], (0.25, 0.14, 0.065, 1.0)
+            MATERIAL_NAMES[1], (0.36, 0.19, 0.075, 1.0)
         ),
         MATERIAL_NAMES[2]: make_material(
-            MATERIAL_NAMES[2], (0.42, 0.29, 0.15, 1.0)
+            MATERIAL_NAMES[2], (0.67, 0.40, 0.14, 1.0)
         ),
         MATERIAL_NAMES[3]: make_material(
-            MATERIAL_NAMES[3], (0.12, 0.29, 0.13, 1.0)
+            MATERIAL_NAMES[3], (0.23, 0.48, 0.13, 1.0)
         ),
     }
     geometries = {

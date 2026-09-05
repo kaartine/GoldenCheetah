@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_forest_floor_props.py",
     "retrievedAt": "2026-09-05",
     "originalFileName": "generate_forest_floor_props.py",
-    "originalSha256": "26ee68d3551279f428ac7a699d23d0b1446186022f180ec11e283564ba939564",
+    "originalSha256": "efc0b0b9ef69b238df0d9e2d941a4a1856b2d38239d26947c093b1ecb8ebf4af",
     "generator": "Blender Python",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_forest_floor_props.py"
@@ -30,7 +30,7 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
       "purpose": "source",
-      "sha256": "26ee68d3551279f428ac7a699d23d0b1446186022f180ec11e283564ba939564"
+      "sha256": "efc0b0b9ef69b238df0d9e2d941a4a1856b2d38239d26947c093b1ecb8ebf4af"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_forest_floor_prop_audit.py",
@@ -40,12 +40,12 @@
     {
       "path": "contrib/workout-game-assets/generated/WG_ForestFloorProps.glb",
       "purpose": "intermediate",
-      "sha256": "ae8b553382ab6d69c2f00306fe0896e32ad761124e7af358641e29e86c540be2"
+      "sha256": "7e1f793cb6e9c1128f833a334ca70bffd1230e44982b2e0b435fe99e3c2c0d06"
     },
     {
       "path": "src/Train/qml/WorkoutGameForestFloorProp.qml",
       "purpose": "runtime",
-      "sha256": "c88d076a93d47db3c848302e8788110520c12b9f084cde25d41c592f97e5a7fa"
+      "sha256": "478885ee083d9c0b8c18b094842c056628ccf6a2c44141a7189fa818481f1360"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DeadwoodFallen_LOD0_mesh.mesh",
@@ -55,22 +55,22 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_GraniteLow_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "eddf42ab34c960faf738073e50e8ac531cf588db4435e79630b9614d58102b83"
+      "sha256": "fb7f4d7fee25c1c318f6047664b4605a1bfc4a4d1a8cc21d5fe3a1073f75d707"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_GraniteSlab_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "83221df15f4bc30d58229c447761afab2891b065449766c32b33d55d9da38a6a"
+      "sha256": "ba195fd89642773fd7965b34f7b5deb67a17c77c9db1f8b5d620354ffab90a8d"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_GraniteUpright_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "a639a20190ad7508585d99293d15cac9ae2a5d96cbdf0bd2e9a3a45732b8eade"
+      "sha256": "eb52aa87e32258b4f70dcca6cf07d200afb8ed835b463ab861e017f71345e0cb"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_StumpRooted_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "6c6e41fd7f67a41ed06bbd79ac9cc228128b2c8266f8ffdda6827a8dff389d29"
+      "sha256": "44766ab3edd0c1e258d7f0ce489a3843e6170e3fd669c1ce465727172b320be7"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_UnderstoryBilberry_LOD0_mesh.mesh",
@@ -90,22 +90,22 @@
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-audit.json",
       "purpose": "reference",
-      "sha256": "076caf5ebd45b63bdaa797d4f9b720f04b04a9cd5ecde1967c8e6e54214fe827"
+      "sha256": "ee434d7cb3b8bafadddec59a1a9a03a47e135c0cc250d57870dbfc884bf09425"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-front.png",
       "purpose": "preview",
-      "sha256": "11d16f5b9883a49280b85936a68b8e7484ff3f41e1dd0caa692a6b62d965212f"
+      "sha256": "673d0ad20db80e9017619cbf2ee54cf5eea7b773710068544078c40ad36aee14"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-left-three-quarter.png",
       "purpose": "preview",
-      "sha256": "7f7bf4f39421b41134a36eacbdb23aff9c509d64c0e3c69c2c48c211e14e6c8e"
+      "sha256": "43cc527c1c5b358c39497e2e27456b20ed1ba3239fd005d24210bf650e6d8d30"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-rear-three-quarter.png",
       "purpose": "preview",
-      "sha256": "cb18d8e973db8f0cddd03a3b05026e18bd87c2aee4d5ed37acf2c7c4c1cdbc0d"
+      "sha256": "67a7024735ace97e2197b4a1786ebc304fa621fac7403135ea25bc9f0bec85b6"
     }
   ],
   "processing": {
@@ -113,7 +113,7 @@
     "toolVersion": "Blender 4.0.2; Qt Balsam 6.8.3",
     "steps": [
       "Start pinned Blender 4.0.2 with --background --factory-startup.",
-      "Generate eight original ground-anchored prop meshes with applied transforms, explicit per-variant triangle contracts and four shared materials, including cool mid-grey granite.",
+      "Generate eight original ground-anchored prop meshes with applied transforms, explicit per-variant triangle contracts and four shared materials, including readable cool granite and contiguous moss facets.",
       "Generate UV0 on every primitive for later shared-atlas use; embed no image or external URI.",
       "Export one self-contained glTF 2.0 GLB with no cameras, lights, animations or collision authority.",
       "Reproduce the GLB byte for byte and validate its manifest, bounds, topology, pivots, materials and budgets.",
@@ -127,7 +127,7 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 38892,
+    "glbBytes": 41520,
     "trianglesLod0": 320,
     "materials": 4,
     "textureBytes": 0,
@@ -169,7 +169,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering asset audit",
-    "reviewedAt": "2026-09-05",
-    "notes": "Approved for deterministic AppImage runtime packaging as scenery-only geometry. Static policy checks, packaged Qt Quick 3D catalog renders and production chase-scene renders verify all eight variants, terrain anchoring, trail and camera-corridor clearance, resident-edge fading and rider/trail readability. The unchanged 80-draw-call scene budget passes under Xvfb software OpenGL; no target-GPU performance claim is made."
+    "reviewedAt": "2026-09-06",
+    "notes": "Approved for deterministic AppImage runtime packaging as scenery-only geometry. Fixed-camera before/after catalogs verify the brighter original palette and moss facets while preserving every silhouette, triangle count, pivot, bound and physics contract. Runtime Qt Quick 3D tests verify all eight variants and rider/trail readability; the bounded floor-prop set adds at most one material pass to a visible rock or stump. No target-GPU performance claim is made."
   }
 }

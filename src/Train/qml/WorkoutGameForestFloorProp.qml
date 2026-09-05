@@ -8,25 +8,43 @@ Node {
 
     PrincipledMaterial {
         id: graniteMaterial
-        baseColor: "#1f2426"
+        baseColor: "#52636b"
         roughness: 1
         cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: barkMaterial
-        baseColor: "#402411"
+        baseColor: "#6b3d1f"
         roughness: 1
         cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: endGrainMaterial
-        baseColor: "#6b4a26"
+        baseColor: "#d18b3f"
         roughness: 1
         cullMode: Material.NoCulling
     }
     PrincipledMaterial {
-        id: understoryMaterial
-        baseColor: "#1f4a21"
+        id: mossMaterial
+        baseColor: "#4e8135"
+        roughness: 1
+        cullMode: Material.NoCulling
+    }
+    PrincipledMaterial {
+        id: fernMaterial
+        baseColor: "#45a34b"
+        roughness: 1
+        cullMode: Material.NoCulling
+    }
+    PrincipledMaterial {
+        id: bilberryMaterial
+        baseColor: "#296b4a"
+        roughness: 1
+        cullMode: Material.NoCulling
+    }
+    PrincipledMaterial {
+        id: heatherMaterial
+        baseColor: "#87567f"
         roughness: 1
         cullMode: Material.NoCulling
     }
@@ -34,28 +52,28 @@ Node {
     Model {
         visible: root.variant === 0
         source: "assets/meshes/geo_GraniteLow_LOD0_mesh.mesh"
-        materials: graniteMaterial
+        materials: [graniteMaterial, mossMaterial]
         castsShadows: false
         receivesShadows: false
     }
     Model {
         visible: root.variant === 1
         source: "assets/meshes/geo_GraniteUpright_LOD0_mesh.mesh"
-        materials: graniteMaterial
+        materials: [graniteMaterial, mossMaterial]
         castsShadows: false
         receivesShadows: false
     }
     Model {
         visible: root.variant === 2
         source: "assets/meshes/geo_GraniteSlab_LOD0_mesh.mesh"
-        materials: graniteMaterial
+        materials: [graniteMaterial, mossMaterial]
         castsShadows: false
         receivesShadows: false
     }
     Model {
         visible: root.variant === 3
         source: "assets/meshes/geo_StumpRooted_LOD0_mesh.mesh"
-        materials: [barkMaterial, endGrainMaterial]
+        materials: [barkMaterial, endGrainMaterial, mossMaterial]
         castsShadows: false
         receivesShadows: false
     }
@@ -69,21 +87,21 @@ Node {
     Model {
         visible: root.variant === 5
         source: "assets/meshes/geo_UnderstoryFern_LOD0_mesh.mesh"
-        materials: understoryMaterial
+        materials: fernMaterial
         castsShadows: false
         receivesShadows: false
     }
     Model {
         visible: root.variant === 6
         source: "assets/meshes/geo_UnderstoryBilberry_LOD0_mesh.mesh"
-        materials: understoryMaterial
+        materials: bilberryMaterial
         castsShadows: false
         receivesShadows: false
     }
     Model {
         visible: root.variant === 7
         source: "assets/meshes/geo_UnderstoryHeather_LOD0_mesh.mesh"
-        materials: understoryMaterial
+        materials: heatherMaterial
         castsShadows: false
         receivesShadows: false
     }

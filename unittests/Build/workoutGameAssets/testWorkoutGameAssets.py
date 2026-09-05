@@ -833,9 +833,16 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 maximum_y = max(maximum_y, position["max"][1])
             self.assertEqual(minimum_y, 0.0)
             self.assertLessEqual(maximum_y, 0.70 + 1.0e-6)
-            expected_passes = 2 if name in {
-                "GEO_StumpRooted_LOD0", "GEO_DeadwoodFallen_LOD0"
-            } else 1
+            expected_passes = {
+                "GEO_GraniteLow_LOD0": 2,
+                "GEO_GraniteUpright_LOD0": 2,
+                "GEO_GraniteSlab_LOD0": 2,
+                "GEO_StumpRooted_LOD0": 3,
+                "GEO_DeadwoodFallen_LOD0": 2,
+                "GEO_UnderstoryFern_LOD0": 1,
+                "GEO_UnderstoryBilberry_LOD0": 1,
+                "GEO_UnderstoryHeather_LOD0": 1,
+            }[name]
             self.assertEqual(len(mesh["primitives"]), expected_passes)
             pivot = name.replace("GEO_", "PIVOT_").replace("_LOD0", "_BASE")
             self.assertIn(pivot, nodes)
@@ -924,7 +931,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertGreater(max(p[0] for p in left) - min(p[0] for p in left), 0.04)
         self.assertGreater(max(p[0] for p in right) - min(p[0] for p in right), 0.04)
 
-    def test_forest_floor_granite_is_cool_mid_grey(self) -> None:
+    def test_forest_floor_uses_readable_moss_capped_palette(self) -> None:
         document, _ = assets.read_glb(FOREST_FLOOR_GLB_PATH)
         material = next(
             item for item in document["materials"]
@@ -934,11 +941,37 @@ class TestWorkoutGameAssets(unittest.TestCase):
             "pbrMetallicRoughness"
         ]["baseColorFactor"]
         luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        self.assertGreaterEqual(luminance, 0.10)
-        self.assertLessEqual(luminance, 0.18)
-        self.assertGreaterEqual(blue - red, 0.02)
-        self.assertLessEqual(max(red, green, blue), 0.18)
+        self.assertGreaterEqual(luminance, 0.28)
+        self.assertLessEqual(luminance, 0.40)
+        self.assertGreaterEqual(blue - red, 0.06)
+        self.assertLessEqual(max(red, green, blue), 0.40)
         self.assertEqual(alpha, 1.0)
+
+        nodes = {node["name"]: node for node in document["nodes"]}
+        for name in (
+            "GEO_GraniteLow_LOD0",
+            "GEO_GraniteUpright_LOD0",
+            "GEO_GraniteSlab_LOD0",
+        ):
+            mesh = document["meshes"][nodes[name]["mesh"]]
+            primitive_triangles = [
+                document["accessors"][primitive["indices"]]["count"] // 3
+                for primitive in mesh["primitives"]
+            ]
+            self.assertEqual(primitive_triangles, [29, 3])
+
+        stump = document["meshes"][nodes["GEO_StumpRooted_LOD0"]["mesh"]]
+        stump_triangles = [
+            document["accessors"][primitive["indices"]]["count"] // 3
+            for primitive in stump["primitives"]
+        ]
+        self.assertEqual(stump_triangles, [37, 8, 5])
+
+        runtime_qml = (
+            REPOSITORY / "src/Train/qml/WorkoutGameForestFloorProp.qml"
+        ).read_text(encoding="utf-8")
+        for color in ("#52636b", "#4e8135", "#45a34b", "#296b4a", "#87567f"):
+            self.assertIn(color, runtime_qml)
 
     def test_forest_floor_audits_use_fixed_camera_scale_and_distinct_angles(self) -> None:
         audit = assets.load_json_file(FOREST_FLOOR_AUDIT_PATH)
@@ -992,6 +1025,11 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
 
         observed_total = 0
+        expected_material_triangles = {
+            "GEO_VergeGraniteBilberry_LOD0": [58, 46],
+            "GEO_VergeStumpFern_LOD0": [29, 37, 8, 70],
+            "GEO_VergeDeadwoodHeather_LOD0": [56, 16, 62],
+        }
         for name, expected in expected_triangles.items():
             node = nodes[name]
             extras = node["extras"]
@@ -1003,6 +1041,13 @@ class TestWorkoutGameAssets(unittest.TestCase):
             observed_total += triangles
             self.assertEqual(triangles, expected)
             self.assertLessEqual(triangles, 150)
+            self.assertEqual(
+                [
+                    document["accessors"][primitive["indices"]]["count"] // 3
+                    for primitive in mesh["primitives"]
+                ],
+                expected_material_triangles[name],
+            )
             self.assertEqual(extras["placement_role"], "scenery-only")
             self.assertEqual(extras["physics_authority"], "external")
             self.assertEqual(extras["collision_role"], "none")
@@ -1071,6 +1116,8 @@ class TestWorkoutGameAssets(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("WorkoutGameForestFloorProp", production_qml)
         self.assertIn("WorkoutGameForestVergeCluster", production_qml)
+        for color in ("#52636b", "#45a34b", "#296b4a", "#87567f"):
+            self.assertIn(color, runtime_qml)
         qrc = (
             REPOSITORY / "src/Resources/workout-game-assets.qrc"
         ).read_text(encoding="utf-8")

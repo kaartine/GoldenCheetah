@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_forest_verge_clusters.py",
     "retrievedAt": "2026-09-05",
     "originalFileName": "generate_forest_verge_clusters.py",
-    "originalSha256": "30a5a36f7ee9aae4b9325120eb507e20e302341a8465ca6d1cbb4b3db6d79f96",
+    "originalSha256": "0789d967aff8297bf5746183f84ec233c7a60c9aba51360239adf0a61fef2714",
     "generator": "Blender Python",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_forest_verge_clusters.py"
@@ -30,12 +30,12 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_verge_clusters.py",
       "purpose": "source",
-      "sha256": "30a5a36f7ee9aae4b9325120eb507e20e302341a8465ca6d1cbb4b3db6d79f96"
+      "sha256": "0789d967aff8297bf5746183f84ec233c7a60c9aba51360239adf0a61fef2714"
     },
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
       "purpose": "source",
-      "sha256": "26ee68d3551279f428ac7a699d23d0b1446186022f180ec11e283564ba939564"
+      "sha256": "efc0b0b9ef69b238df0d9e2d941a4a1856b2d38239d26947c093b1ecb8ebf4af"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_forest_verge_cluster_audit.py",
@@ -45,12 +45,12 @@
     {
       "path": "contrib/workout-game-assets/generated/WG_ForestVergeClusters.glb",
       "purpose": "intermediate",
-      "sha256": "68aa907039386f964f356e6bada42f1007bf013233843cf8ec65bfa0448fe42d"
+      "sha256": "ac550bcc05eba93f5402941f3b4ee8070bc153dff8d26b5d18d16c2331a8fe76"
     },
     {
       "path": "src/Train/qml/WorkoutGameForestVergeCluster.qml",
       "purpose": "runtime",
-      "sha256": "99f6126cd10e3659b0914688614fb923c2cab587f93c4abe826c0e6d1a6eff00"
+      "sha256": "d827d45ca7fb092d50133db1a5f7ec4b4582109634b4c8ef7e91bae1630d5d0a"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeDeadwoodHeather_LOD0_mesh.mesh",
@@ -60,32 +60,32 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeGraniteBilberry_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "b2e1e24141222beb274f5df58909608bc2cdbffc5ea2445419d852f9803b7dcd"
+      "sha256": "ec036fbe32318eb4cc468785442093fce2e5dcb809c3670e7442c0e1cd3fe6d9"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeStumpFern_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "f46842609dd9e2d41d5f6eb9f53f9c0a968e87b7c6b89ebb3d1e4275ec28f2ac"
+      "sha256": "cd831efc9ed7c6437ab7c39b227ef5fc23ede76dcd2dd2be8cb3605f1d2d4b58"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-audit.json",
       "purpose": "reference",
-      "sha256": "23b66d331928610b7a31c24204071dc2a27a03ef215d148720475020b75b3b7b"
+      "sha256": "e9f05c6b5ee4f16cd31e6d835b6d257c6dcf089cc12a28db6fbe230123295ec0"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-front.png",
       "purpose": "preview",
-      "sha256": "57d198a12317c7c07a74b9ca393b69b25ea9e89bb8558342979b995bfd22498e"
+      "sha256": "09aa965ba7a3e96dcf7f11d370e347aebff811ed4816e538ade8bc936eb0e9f5"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-left-three-quarter.png",
       "purpose": "preview",
-      "sha256": "3c5a53041b2e287cac0e980ec0d85b1cc7f77add9869d34248e232cfafb8c05d"
+      "sha256": "3c87ef267fc92e2e83daf535cea10a5f1c213738c3406aa03f1aa7c2c2f54a91"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-rear-three-quarter.png",
       "purpose": "preview",
-      "sha256": "1f62eefb51b36b796efb2bbaa12f6ffb6140b49ffc0304f539028c3f1d604440"
+      "sha256": "f04c62ae8c4d12af5bd720128cf078e076e05ee0c8b44deb01ccb69310f97a8e"
     }
   ],
   "processing": {
@@ -107,7 +107,7 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 44964,
+    "glbBytes": 45488,
     "trianglesLod0": 382,
     "materials": 4,
     "textureBytes": 0,
@@ -139,7 +139,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering asset audit",
-    "reviewedAt": "2026-09-05",
-    "notes": "Approved for deterministic AppImage runtime packaging as scenery-only geometry. Static policy checks, packaged Qt Quick 3D catalog renders and production chase-scene renders verify all three clusters, terrain anchoring, trail and camera-corridor clearance, resident-edge fading and rider/trail readability. The unchanged 80-draw-call scene budget passes under Xvfb software OpenGL; no target-GPU performance claim is made."
+    "reviewedAt": "2026-09-06",
+    "notes": "Approved for deterministic AppImage runtime packaging as scenery-only geometry. Fixed-camera before/after catalogs verify the brighter original palette and moss details while all three cluster triangle counts, pivots, bounds, clearances and material-pass counts remain unchanged. Runtime Qt Quick 3D tests verify terrain anchoring and rider/trail readability. No target-GPU performance claim is made."
   }
 }

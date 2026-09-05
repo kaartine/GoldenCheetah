@@ -50,9 +50,14 @@ EXPECTED_TRIANGLES = {
     "GEO_UnderstoryHeather_LOD0": 42,
 }
 EXPECTED_MATERIAL_PASSES = {
-    name: 2 if name in {"GEO_StumpRooted_LOD0", "GEO_DeadwoodFallen_LOD0"}
-    else 1
-    for name in VARIANT_NAMES
+    "GEO_GraniteLow_LOD0": 2,
+    "GEO_GraniteUpright_LOD0": 2,
+    "GEO_GraniteSlab_LOD0": 2,
+    "GEO_StumpRooted_LOD0": 3,
+    "GEO_DeadwoodFallen_LOD0": 2,
+    "GEO_UnderstoryFern_LOD0": 1,
+    "GEO_UnderstoryBilberry_LOD0": 1,
+    "GEO_UnderstoryHeather_LOD0": 1,
 }
 MAXIMUM_TRIANGLES = 480
 MAXIMUM_VARIANT_TRIANGLES = 96
@@ -62,7 +67,7 @@ MAXIMUM_HEIGHT_METERS = 0.70
 DEADWOOD_MAXIMUM_HEIGHT_METERS = 0.34
 DEADWOOD_CROSS_SECTION_SIDES = 7
 DEADWOOD_BRANCH_STUB_COUNT = 2
-GRANITE_BASE_COLOR = (0.12, 0.14, 0.15, 1.0)
+GRANITE_BASE_COLOR = (0.30, 0.36, 0.39, 1.0)
 EPSILON = 1.0e-7
 
 
@@ -105,8 +110,12 @@ def irregular_rock(width, depth, height, phase, lean_x=0.0):
                  (lower + side, shoulder + side, shoulder + following))
         add_face(faces, material_indices,
                  (lower + side, shoulder + following, lower + following))
+        # Reuse three contiguous top facets as a graphic moss cap. This keeps
+        # the silhouette and triangle budget fixed while making the rocks
+        # readable against the dark forest floor.
+        top_material = 1 if side in {0, 1, 2} else 0
         add_face(faces, material_indices,
-                 (shoulder + side, top, shoulder + following))
+                 (shoulder + side, top, shoulder + following), top_material)
         add_face(faces, material_indices,
                  (bottom_center, lower + following, lower + side))
     return vertices, faces, material_indices
@@ -163,9 +172,12 @@ def rooted_stump():
             (direction_x * outer_radius, 0.0, direction_z * outer_radius),
             (direction_x * 0.21, 0.13, direction_z * 0.21),
         ))
-        for indices in ((0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)):
+        for face_index, indices in enumerate(
+            ((0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0))
+        ):
             add_face(faces, material_indices,
-                     tuple(base + index for index in indices), 0)
+                     tuple(base + index for index in indices),
+                     2 if face_index == 1 else 0)
     return vertices, faces, material_indices
 
 
@@ -448,24 +460,25 @@ def build_scene():
         MATERIAL_NAMES[0]: make_material(MATERIAL_NAMES[0],
                                          GRANITE_BASE_COLOR),
         MATERIAL_NAMES[1]: make_material(MATERIAL_NAMES[1],
-                                         (0.25, 0.14, 0.065, 1.0)),
+                                         (0.36, 0.19, 0.075, 1.0)),
         MATERIAL_NAMES[2]: make_material(MATERIAL_NAMES[2],
-                                         (0.42, 0.29, 0.15, 1.0)),
+                                         (0.67, 0.40, 0.14, 1.0)),
         MATERIAL_NAMES[3]: make_material(MATERIAL_NAMES[3],
-                                         (0.12, 0.29, 0.13, 1.0)),
+                                         (0.23, 0.48, 0.13, 1.0)),
     }
     geometries = {
         VARIANT_NAMES[0]: (irregular_rock(0.78, 0.58, 0.30, 0.4, 0.025),
-                           (MATERIAL_NAMES[0],),
+                           (MATERIAL_NAMES[0], MATERIAL_NAMES[3]),
                            {"silhouette": "low-rounded-granite"}),
         VARIANT_NAMES[1]: (irregular_rock(0.56, 0.52, 0.67, 1.8, -0.065),
-                           (MATERIAL_NAMES[0],),
+                           (MATERIAL_NAMES[0], MATERIAL_NAMES[3]),
                            {"silhouette": "upright-granite"}),
         VARIANT_NAMES[2]: (irregular_rock(1.04, 0.68, 0.41, 3.2, 0.085),
-                           (MATERIAL_NAMES[0],),
+                           (MATERIAL_NAMES[0], MATERIAL_NAMES[3]),
                            {"silhouette": "slab-granite"}),
         VARIANT_NAMES[3]: (rooted_stump(),
-                           (MATERIAL_NAMES[1], MATERIAL_NAMES[2]),
+                           (MATERIAL_NAMES[1], MATERIAL_NAMES[2],
+                            MATERIAL_NAMES[3]),
                            {"silhouette": "rooted-broken-stump"}),
         VARIANT_NAMES[4]: (fallen_deadwood(),
                            (MATERIAL_NAMES[1], MATERIAL_NAMES[2]),
@@ -584,8 +597,8 @@ def self_check(root):
     granite_luminance = (
         0.2126 * granite[0] + 0.7152 * granite[1] + 0.0722 * granite[2]
     )
-    if not 0.10 <= granite_luminance <= 0.18 or granite[2] - granite[0] < 0.02:
-        raise RuntimeError("Granite is outside the cool mid-grey contract")
+    if not 0.28 <= granite_luminance <= 0.40 or granite[2] - granite[0] < 0.06:
+        raise RuntimeError("Granite is outside the cool readable-grey contract")
     if len({material.name for material in bpy.data.materials}) != 4:
         raise RuntimeError("Forest-floor shared material inventory changed")
     if total_triangles > MAXIMUM_TRIANGLES:
