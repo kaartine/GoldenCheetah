@@ -137,6 +137,65 @@ class TestWorkoutGameEngine : public QObject
     Q_OBJECT
 
 private slots:
+    void featureLabGapScenariosExerciseEveryLineAndPowerGate()
+    {
+        constexpr double FtpWatts = 200.0;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(FtpWatts);
+        struct Case {
+            WorkoutGameFeatureLabGapScenario scenario;
+            WorkoutGameGapJumpLine expectedLine;
+            WorkoutGameFeatureOutcome expectedOutcome;
+        };
+        const Case cases[] = {
+            {WorkoutGameFeatureLabGapScenario::Short,
+             WorkoutGameGapJumpLine::Short,
+             WorkoutGameFeatureOutcome::Completed},
+            {WorkoutGameFeatureLabGapScenario::Medium,
+             WorkoutGameGapJumpLine::Medium,
+             WorkoutGameFeatureOutcome::Completed},
+            {WorkoutGameFeatureLabGapScenario::Long,
+             WorkoutGameGapJumpLine::Long,
+             WorkoutGameFeatureOutcome::Completed},
+            {WorkoutGameFeatureLabGapScenario::Safe,
+             WorkoutGameGapJumpLine::None,
+             WorkoutGameFeatureOutcome::Bypassed}
+        };
+
+        for (const Case &testCase : cases) {
+            WorkoutGameEngine engine;
+            QVERIFY(engine.configure(course, FtpWatts, true));
+            bool observedLock = false;
+            for (std::int64_t timeMs = 0; timeMs < course.durationMs;
+                 timeMs += 20) {
+                WorkoutGameEngineInput input;
+                input.simulation = WorkoutGameFeatureLab::input(
+                        course, timeMs, WorkoutGameFeatureLabScenario::Pass);
+                WorkoutGameFeatureLab::applyGapScenario(
+                        course, timeMs, testCase.scenario, input.simulation);
+                const WorkoutGameEngineFrame frame = engine.update(
+                        input, 100000 + timeMs);
+                if (frame.visual.feature.terrain
+                            != WorkoutGameTerrainKind::GapJump
+                        || !frame.visual.feature.gapLineLocked) {
+                    continue;
+                }
+
+                observedLock = true;
+                QCOMPARE(frame.visual.feature.lockedGapLine,
+                         testCase.expectedLine);
+                QCOMPARE(frame.visual.feature.outcome,
+                         testCase.expectedOutcome);
+                QCOMPARE(frame.visual.simulation.featureOutcome,
+                         testCase.expectedOutcome);
+                QCOMPARE(frame.visual.feature.launchSpeedReady, true);
+                QCOMPARE(frame.visual.feature.launchPowerReady,
+                         testCase.expectedOutcome
+                            == WorkoutGameFeatureOutcome::Completed);
+            }
+            QVERIFY2(observedLock, "gap scenario never reached line lock");
+        }
+    }
+
     void gapJumpUsesSectionTargetAndPublishesOneCommittedOutcome()
     {
         const WorkoutGameCourse course = gapJumpCourse();

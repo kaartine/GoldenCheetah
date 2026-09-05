@@ -15,6 +15,7 @@
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameAudio.h"
 #include "WorkoutGameCourseRuntime.h"
+#include "WorkoutGameFeatureLab.h"
 #include "WorkoutGamePositionRate.h"
 #include "WorkoutGameRunner.h"
 #include "WorkoutGameSessionState.h"
@@ -92,6 +93,9 @@ private:
     bool sessionActive = false;
     bool presentationSuspended = false;
     bool featureLabEnabled = false;
+    bool featureLabGapScenarioEnabled = false;
+    WorkoutGameFeatureLabGapScenario featureLabGapScenario =
+            WorkoutGameFeatureLabGapScenario::Safe;
     WorkoutGamePositionRate positionRate;
     std::int64_t currentWorkoutTimeMs = 0;
     std::int64_t lastTelemetryMonotonicTimeMs = -1;

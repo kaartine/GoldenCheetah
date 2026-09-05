@@ -9,6 +9,7 @@
 
 #include "Train/WorkoutGameFeatureLab.h"
 #include "Train/WorkoutGameBermGeometry.h"
+#include "Train/WorkoutGameGapJumpGeometry.h"
 #include "Train/WorkoutGameRoadCourse.h"
 #include "Train/WorkoutGameSkinnyGeometry.h"
 
@@ -22,6 +23,89 @@ class TestWorkoutGameFeatureLab : public QObject
     Q_OBJECT
 
 private slots:
+    void gapScenarioParserAcceptsOnlyCanonicalNames()
+    {
+        WorkoutGameFeatureLabGapScenario scenario =
+                WorkoutGameFeatureLabGapScenario::Safe;
+
+        QVERIFY(WorkoutGameFeatureLab::parseGapScenario("short", scenario));
+        QCOMPARE(scenario, WorkoutGameFeatureLabGapScenario::Short);
+        QVERIFY(WorkoutGameFeatureLab::parseGapScenario("medium", scenario));
+        QCOMPARE(scenario, WorkoutGameFeatureLabGapScenario::Medium);
+        QVERIFY(WorkoutGameFeatureLab::parseGapScenario("long", scenario));
+        QCOMPARE(scenario, WorkoutGameFeatureLabGapScenario::Long);
+        QVERIFY(WorkoutGameFeatureLab::parseGapScenario("safe", scenario));
+        QCOMPARE(scenario, WorkoutGameFeatureLabGapScenario::Safe);
+
+        const WorkoutGameFeatureLabGapScenario prior = scenario;
+        QVERIFY(!WorkoutGameFeatureLab::parseGapScenario(nullptr, scenario));
+        QCOMPARE(scenario, prior);
+        QVERIFY(!WorkoutGameFeatureLab::parseGapScenario("", scenario));
+        QCOMPARE(scenario, prior);
+        QVERIFY(!WorkoutGameFeatureLab::parseGapScenario("SHORT", scenario));
+        QCOMPARE(scenario, prior);
+        QVERIFY(!WorkoutGameFeatureLab::parseGapScenario("medium ", scenario));
+        QCOMPARE(scenario, prior);
+        QVERIFY(!WorkoutGameFeatureLab::parseGapScenario("unsafe", scenario));
+        QCOMPARE(scenario, prior);
+    }
+
+    void gapScenarioInputsStayInsideCanonicalSpeedBands()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const auto gap = std::find_if(
+                course.sections.begin(), course.sections.end(),
+                [](const WorkoutGameSection &section) {
+                    return section.terrain == WorkoutGameTerrainKind::GapJump;
+                });
+        QVERIFY(gap != course.sections.end());
+        const WorkoutGameGapJumpGeometryProfile profile =
+                WorkoutGameGapJumpGeometry::profile(gap->difficulty);
+        QVERIFY(profile.ready);
+
+        WorkoutGameSimulationInput unchanged;
+        unchanged.actualWatts = 123.0;
+        QVERIFY(!WorkoutGameFeatureLab::applyGapScenario(
+                course, gap->startMs - 1,
+                WorkoutGameFeatureLabGapScenario::Short, unchanged));
+        QCOMPARE(unchanged.actualWatts, 123.0);
+
+        WorkoutGameSimulationInput shortInput;
+        WorkoutGameSimulationInput mediumInput;
+        WorkoutGameSimulationInput longInput;
+        WorkoutGameSimulationInput safeInput;
+        QVERIFY(WorkoutGameFeatureLab::applyGapScenario(
+                course, gap->startMs + 1000,
+                WorkoutGameFeatureLabGapScenario::Short, shortInput));
+        QVERIFY(WorkoutGameFeatureLab::applyGapScenario(
+                course, gap->startMs + 1000,
+                WorkoutGameFeatureLabGapScenario::Medium, mediumInput));
+        QVERIFY(WorkoutGameFeatureLab::applyGapScenario(
+                course, gap->startMs + 1000,
+                WorkoutGameFeatureLabGapScenario::Long, longInput));
+        QVERIFY(WorkoutGameFeatureLab::applyGapScenario(
+                course, gap->startMs + 1000,
+                WorkoutGameFeatureLabGapScenario::Safe, safeInput));
+
+        const double shortSpeed = shortInput.authoritativeSpeedKph / 3.6;
+        const double mediumSpeed = mediumInput.authoritativeSpeedKph / 3.6;
+        const double longSpeed = longInput.authoritativeSpeedKph / 3.6;
+        QVERIFY(shortSpeed > profile.lines[0].coldThresholdMetersPerSecond);
+        QVERIFY(shortSpeed < profile.lines[1].coldThresholdMetersPerSecond);
+        QVERIFY(mediumSpeed > profile.lines[1].coldThresholdMetersPerSecond);
+        QVERIFY(mediumSpeed < profile.lines[2].coldThresholdMetersPerSecond);
+        QVERIFY(longSpeed > profile.lines[2].coldThresholdMetersPerSecond);
+        QCOMPARE(safeInput.authoritativeSpeedKph,
+                 longInput.authoritativeSpeedKph);
+
+        QCOMPARE(shortInput.actualWatts, gap->targetWatts);
+        QCOMPARE(mediumInput.actualWatts, gap->targetWatts);
+        QCOMPARE(longInput.actualWatts, gap->targetWatts);
+        QVERIFY(safeInput.actualWatts < gap->targetWatts);
+        QCOMPARE(shortInput.targetWatts, gap->targetWatts);
+        QCOMPARE(safeInput.targetWatts, gap->targetWatts);
+    }
+
     void courseContainsEveryTechnicalFeatureInOrder()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(
