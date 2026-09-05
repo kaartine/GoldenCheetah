@@ -10,8 +10,11 @@
 #include "WorkoutGameCourseTerrain.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iterator>
+#include <limits>
+#include <set>
 
 namespace {
 
@@ -65,6 +68,67 @@ double technicalShare(WorkoutGameCoursePreset preset)
     return 0.0;
 }
 
+std::uint32_t selectionHash(std::uint32_t seed, std::size_t index)
+{
+    std::uint32_t value = seed ^ std::uint32_t(index * 0x9e3779b9u);
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return value;
+}
+
+struct TerrainCandidate
+{
+    double distanceMeters = 0.0;
+    std::uint32_t tieBreaker = 0u;
+    std::size_t index = 0u;
+};
+
+struct TerrainCandidateLess
+{
+    bool operator()(const TerrainCandidate &left,
+                    const TerrainCandidate &right) const
+    {
+        if (left.distanceMeters != right.distanceMeters) {
+            return left.distanceMeters < right.distanceMeters;
+        }
+        if (left.tieBreaker != right.tieBreaker) {
+            return left.tieBreaker < right.tieBreaker;
+        }
+        return left.index < right.index;
+    }
+};
+
+std::array<std::size_t, 3> nestedTechnicalCounts(std::size_t count)
+{
+    if (count < 2u) return {0u, 0u, 0u};
+    const auto desired = [count](double share) {
+        return std::size_t(std::llround(share * double(count)));
+    };
+    const std::size_t calm = std::min(
+            desired(technicalShare(WorkoutGameCoursePreset::WorkoutFirst)),
+            count - 2u);
+    const std::size_t varied = std::clamp(
+            desired(technicalShare(WorkoutGameCoursePreset::Balanced)),
+            calm + 1u, count - 1u);
+    const std::size_t technical = std::clamp(
+            desired(technicalShare(WorkoutGameCoursePreset::RideFirst)),
+            varied + 1u, count);
+    return {calm, varied, technical};
+}
+
+std::size_t presetIndex(WorkoutGameCoursePreset preset)
+{
+    switch (preset) {
+    case WorkoutGameCoursePreset::WorkoutFirst: return 0u;
+    case WorkoutGameCoursePreset::Balanced: return 1u;
+    case WorkoutGameCoursePreset::RideFirst: return 2u;
+    }
+    return 0u;
+}
+
 void applyChallengeCount(WorkoutGameSection &section, bool sourceRecovery)
 {
     if (sourceRecovery || section.feature == WorkoutGameFeature::RecoveryDescent
@@ -85,23 +149,94 @@ bool WorkoutGameCourseTerrain::paletteEligible(WorkoutGameFeature feature)
             || feature == WorkoutGameFeature::FlowTrail;
 }
 
+std::vector<WorkoutGameCourseTerrainSelection>
+WorkoutGameCourseTerrain::selectTechnicalTerrain(
+        const std::vector<double> &eligibleDistancesMeters,
+        WorkoutGameCoursePreset preset,
+        std::uint32_t seed)
+{
+    const std::size_t count = eligibleDistancesMeters.size();
+    std::vector<WorkoutGameCourseTerrainSelection> result(count);
+    if (count < 2u) return result;
+
+    double totalDistance = 0.0;
+    for (double distance : eligibleDistancesMeters) {
+        if (!std::isfinite(distance) || distance <= 0.0) return {};
+        totalDistance += distance;
+    }
+    if (!std::isfinite(totalDistance) || totalDistance <= 0.0) return {};
+
+    const std::array<std::size_t, 3> counts = nestedTechnicalCounts(count);
+    const std::array<double, 3> targets {0.35, 0.60, 0.90};
+    std::set<TerrainCandidate, TerrainCandidateLess> candidates;
+    for (std::size_t index = 0; index < count; ++index) {
+        candidates.insert({eligibleDistancesMeters[index],
+                           selectionHash(seed, index), index});
+    }
+    std::vector<std::size_t> order;
+    order.reserve(counts.back());
+    double selectedDistance = 0.0;
+    std::size_t selectedCount = 0u;
+    for (std::size_t stage = 0; stage < counts.size(); ++stage) {
+        while (selectedCount < counts[stage]) {
+            if (candidates.empty()) return {};
+            const std::size_t remainingPicks = counts[stage] - selectedCount;
+            const double remainingTarget = targets[stage] * totalDistance
+                    - selectedDistance;
+            const double desiredDistance = std::max(
+                    0.0, remainingTarget / double(remainingPicks));
+            const TerrainCandidate probe {desiredDistance, 0u, 0u};
+            auto upper = candidates.lower_bound(probe);
+            auto best = candidates.end();
+            double bestError = std::numeric_limits<double>::infinity();
+            std::uint32_t bestTie = std::numeric_limits<std::uint32_t>::max();
+            const auto consider = [&](auto candidate) {
+                if (candidate == candidates.end()) return;
+                const double error = std::abs(
+                        candidate->distanceMeters - desiredDistance);
+                if (error < bestError - 1.0e-12
+                        || (std::abs(error - bestError) <= 1.0e-12
+                            && candidate->tieBreaker < bestTie)) {
+                    best = candidate;
+                    bestError = error;
+                    bestTie = candidate->tieBreaker;
+                }
+            };
+            consider(upper);
+            if (upper != candidates.begin()) consider(std::prev(upper));
+            if (best == candidates.end()) return {};
+            selectedDistance += best->distanceMeters;
+            order.push_back(best->index);
+            candidates.erase(best);
+            ++selectedCount;
+        }
+    }
+
+    const std::size_t requestedCount = counts[presetIndex(preset)];
+    std::vector<bool> requested(count, false);
+    for (std::size_t orderIndex = 0; orderIndex < requestedCount;
+            ++orderIndex) {
+        requested[order[orderIndex]] = true;
+    }
+    std::size_t ordinal = 0u;
+    for (std::size_t index = 0; index < count; ++index) {
+        if (requested[index]) {
+            result[index] = {true, ordinal++};
+        }
+    }
+    return result;
+}
+
 void WorkoutGameCourseTerrain::apply(
         WorkoutGameSection &section,
         WorkoutGameCoursePreset preset,
-        std::size_t paletteIndex,
-        std::size_t paletteCount,
+        const WorkoutGameCourseTerrainSelection &selection,
         std::uint32_t seed,
         bool sourceRecovery)
 {
-    if (section.feature == WorkoutGameFeature::RecoveryDescent
+    if (sourceRecovery
+            || section.feature == WorkoutGameFeature::RecoveryDescent
             || section.feature == WorkoutGameFeature::CooldownDescent) {
-        section.terrain = preset == WorkoutGameCoursePreset::RideFirst
-                ? WorkoutGameTerrainKind::Berm
-                : section.terrain;
-        section.challengeCount = 0;
-        return;
-    }
-    if (sourceRecovery) {
         section.terrain = WorkoutGameTerrainKind::SmoothTrail;
         section.challengeCount = 0;
         return;
@@ -123,34 +258,20 @@ void WorkoutGameCourseTerrain::apply(
     }
     if (!paletteEligible(section.feature)) return;
 
-    if (paletteCount == 0u) {
+    if (!selection.technical) {
         section.terrain = WorkoutGameTerrainKind::SmoothTrail;
         section.challengeCount = 0;
         return;
     }
-    const std::size_t technicalCount = std::min(
-            paletteCount,
-            std::size_t(std::llround(
-                technicalShare(preset) * double(paletteCount))));
-    const std::size_t rotated = (paletteIndex
-            + std::size_t(seed % std::uint32_t(paletteCount))) % paletteCount;
-    const std::size_t before = rotated * technicalCount / paletteCount;
-    const std::size_t after = (rotated + 1u) * technicalCount / paletteCount;
-    if (after == before) {
-        section.terrain = WorkoutGameTerrainKind::SmoothTrail;
-        section.challengeCount = 0;
-        return;
-    }
-    const std::size_t technicalOrdinal = after - 1u;
     switch (preset) {
     case WorkoutGameCoursePreset::WorkoutFirst:
-        section.terrain = workoutFirstTerrain(technicalOrdinal);
+        section.terrain = workoutFirstTerrain(selection.ordinal);
         break;
     case WorkoutGameCoursePreset::Balanced:
-        section.terrain = balancedTerrain(technicalOrdinal);
+        section.terrain = balancedTerrain(selection.ordinal);
         break;
     case WorkoutGameCoursePreset::RideFirst:
-        section.terrain = rideFirstTerrain(technicalOrdinal);
+        section.terrain = rideFirstTerrain(selection.ordinal);
         break;
     }
     applyChallengeCount(section, false);

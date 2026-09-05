@@ -12,7 +12,8 @@ The workout prescription is authoritative. In decreasing priority, conversion
 preserves the training stimulus, key efforts, recovery safety and only then
 optimizes ride flow. Terrain, feature density, grade scale and the estimated
 distance are the primary ways in which the modes differ. Route curvature also
-increases deterministically from Workout first through Balanced to Ride first,
+increases deterministically from Calm training trail through Varied training
+trail to Technical game trail,
 while every result remains inside the common road-quality contract.
 
 The prescription transform audits every duration or power change before the
@@ -171,8 +172,11 @@ climbs, sprint challenges and safety-exempt challenge branches are excluded
 from its denominator and audited separately. `Technical feature density` is
 the count of those technical sections per ten palette-eligible sections. Its
 2--4 / 5--7 / 8--10 bands deliberately keep all three modes playful while
-providing increasing technical intensity and variety. A mode with no
-palette-eligible distance reports exposure and density as `N/A`, not zero.
+providing increasing technical intensity and variety. A fully recovery-only
+workout is SmoothTrail in every mode and never gains technical terrain or a
+scored challenge. A workout with fewer than two palette-eligible work sections
+does not have enough granularity for three honest exposure levels; it also uses
+the safe smooth fallback and reports exposure as `N/A`.
 
 | Terrain/flow metric | Workout first | Balanced | Ride first |
 | --- | ---: | ---: | ---: |
@@ -181,7 +185,7 @@ palette-eligible distance reports exposure and density as `N/A`, not zero.
 | deterministic route-turn scale | 1.00 | 1.30 | 2.60 |
 | Palette-eligible technical terrain exposure target | 25--45% | 50--75% | 75--100% |
 | Technical feature density | 2--4 / 10 sections | 5--7 / 10 sections | 8--10 / 10 sections |
-| Palette | roots, rollers, easy rock garden and log-over mixed with smooth trail; climbs retained; no gap jump | roots, rollers, rock garden, log-over and skinny mixed with smooth trail; no gap jump | skinny, rock garden or rock slab trail; berm recovery; log-over, tabletop or gated gap jump sprint |
+| Palette | roots, rollers, easy rock garden and log-over mixed with smooth trail; climbs retained; no gap jump | roots, rollers, rock garden, log-over and skinny mixed with smooth trail; no gap jump | skinny, rock garden or rock slab trail; smooth recovery; log-over, tabletop or gated gap jump sprint |
 | Scored challenge on a suitable prescribed work/key-effort section | allowed without changing start/end power, interval time or minimum exposure | allowed without changing start/end power, interval time or minimum exposure | allowed without changing start/end power, interval time or minimum exposure |
 | Scored challenge on a prescribed recovery | never | never | never |
 
@@ -195,19 +199,20 @@ increase technical difficulty and variety through the existing safe feature
 catalog; their distinction from Workout first is technical intensity, density,
 `gradeScale` and flow, not game versus no-game.
 
-For the same source and seed, technical-section density must strictly increase.
-Distance-weighted exposure normally increases too. If a short, highly uneven or
-structurally uniform workout makes an
-aggregate band inapplicable, the preview still has to show a different terrain
-signature and the exact grade/technicality anchors. A generator unable to meet
-both the technical-section density band and the common safety envelope fails
-closed instead of changing the prescription.
+For the same source and seed with at least two palette-eligible work sections,
+both technical-section density and distance-weighted technical exposure must
+strictly increase. The generator constructs nested technical sets: Calm is a
+subset of Varied and Varied is a subset of Technical. Within those density
+counts it greedily selects the next section by generated distance toward the
+35/60/90 percent targets, with a stable seed-derived tie break. Consequently a
+long section cannot reverse the ordering. A generator unable to preserve the
+strict ordering and the common safety envelope fails closed instead of changing
+the prescription.
 
-Technical-section density is the enforceable generation contract. Exposure is
-also shown as a distance-weighted diagnostic, but highly unequal source
-intervals can make its target band mathematically unreachable without changing
-the workout. In that case conversion preserves the workout and reports the
-actual exposure instead of failing or silently changing an interval.
+The discrete section boundaries can still make an exact target band
+mathematically unreachable. Conversion preserves the workout and reports the
+actual strictly ordered exposure instead of splitting or changing a prescribed
+interval.
 
 Gap jumps remain Ride-first-only and deterministic. They retain the existing
 safe line, power, geometry and road-quality gates. A recovery section never
@@ -217,33 +222,36 @@ and `WorkoutGameRoadQuality`; fast, nominal and slow estimates must all finish.
 ## Preview and persistence contract
 
 Before saving, the dialog computes all three modes from the same immutable
-source and stable seed. Each comparison row shows:
+source and stable seed. A compact three-row comparison is visible above the
+long selected-mode details at 900x700 and shows:
 
-- nominal duration and total-duration deviation;
+- nominal duration;
 - estimated distance;
-- estimated load points and load deviation;
-- preserved/total key efforts and preserved/total recoveries as separate,
-  explicit retention values;
-- work-duration and recovery/rest-duration deviation as separate values;
-- grade scale, elevation/terrain signature, actual road-plan bend count,
-  accumulated turn and technical terrain exposure;
-- feature count and density; and
-- every per-interval duration change, its signed amount and authorized metadata
-  role (or an explicit `no prescription changes` result).
+- ascent and technical terrain exposure; and
+- preserved/total hard and easy segments.
+
+The selected-mode details retain load and duration deviations, generation
+anchors, feature count and density, and every authorized per-interval duration
+change.
+`Hard segment` and `easy segment` are deliberately used in the UI because the
+underlying ERG point-to-point segments are not authored workout step groups.
 
 The dialog states once that all three presets preserve prescribed targets and
-timing. Each concise preset description leads with rider-facing trail character:
-calmer and easier, flowing and mixed, or technical and intense. Supporting
-detail quantifies those differences with the 0.82/1.00/1.18 grade scales,
+timing. Primary labels and descriptions use the rider-purpose concepts Calm
+training trail, Varied training trail and Technical game trail. A separate
+secondary detail line retains the 0.82/1.00/1.18 grade scales,
 1.00/1.30/2.60 curvature scales and 2--4/5--7/8--10 technical sections per ten
 eligible sections.
 
-Key-effort and recovery retention must never be inferred only from aggregate
+Hard- and easy-segment retention must never be inferred only from aggregate
 work/rest percentages: both preserved/total counts are first-class preview
 values in the selected-mode detail and in every all-three comparison row.
 
-Selecting a mode changes the elevation/power preview, terrain/flow summary and
-detailed ETA. Switching away and back reproduces identical course, summary and
+The preview keeps the immutable original workout power profile on a time axis,
+so interval width always represents authored duration. Generated elevation is a
+separate distance-axis chart. Selecting a mode changes only that terrain chart,
+the terrain/flow summary and detailed ETA. Switching away and back reproduces
+identical course, summary and
 road-plan bytes. Mode selection and preview generation are side-effect free:
 neither the course nor its sidecar exists or changes before the user invokes
 Create/Save. Create/Save persists the already-previewed deterministic result,

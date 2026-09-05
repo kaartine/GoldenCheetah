@@ -12,6 +12,8 @@ CONVERSION_HEADER = ROOT / "src/Train/WorkoutGameCourseConversion.h"
 SUMMARY_HEADER = ROOT / "src/Train/WorkoutGameCourseSummary.h"
 DOCUMENT_HEADER = ROOT / "src/Train/WorkoutGameCourseDocument.h"
 DIALOG_SOURCE = ROOT / "src/Train/WorkoutGameCourseConversionDialog.cpp"
+PREVIEW_SOURCE = ROOT / "src/Train/WorkoutGameCoursePreviewWidget.cpp"
+TERRAIN_SOURCE = ROOT / "src/Train/WorkoutGameCourseTerrain.cpp"
 DESIGN = ROOT / "doc/design/WORKOUT_GAME_COURSE_CONVERSION_MODES.md"
 FIXTURE = (ROOT / "unittests/Train/workoutGameCourseConversion/fixtures"
            / "mode_contract.json")
@@ -156,8 +158,12 @@ class CourseConversionContractTest(unittest.TestCase):
             "Prescribed recovery never receives a scored challenge",
             "feature count and density",
             "Create/Save",
-            "preserved/total key efforts and preserved/total recoveries",
+            "preserved/total hard and easy segments",
             "must never be inferred only from aggregate work/rest percentages",
+            "strictly increase",
+            "nested technical sets",
+            "SmoothTrail in every mode",
+            "original workout power profile on a time axis",
             "schema version 4",
             "original workout's ordered lap markers and timed text instructions",
             "Schema 1 through 3 documents remain readable and canonical",
@@ -166,7 +172,7 @@ class CourseConversionContractTest(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized_design)
 
-    def test_preview_exposes_explicit_key_and_recovery_retention(self):
+    def test_preview_exposes_accurate_segment_retention(self):
         conversion = (CONVERSION_HEADER.read_text(encoding="utf-8")
                       + SUMMARY_HEADER.read_text(encoding="utf-8"))
         dialog = DIALOG_SOURCE.read_text(encoding="utf-8")
@@ -185,6 +191,23 @@ class CourseConversionContractTest(unittest.TestCase):
                 "rideFirstComparisonValue"):
             with self.subTest(object_name=object_name):
                 self.assertIn(object_name, dialog)
+        for label in ("Hard segments preserved", "Easy segments preserved"):
+            with self.subTest(label=label):
+                self.assertIn(label, dialog)
+        self.assertNotIn("Key efforts preserved", dialog)
+        self.assertNotIn("Recoveries preserved", dialog)
+
+    def test_preview_and_terrain_implement_audited_semantics(self):
+        preview = PREVIEW_SOURCE.read_text(encoding="utf-8")
+        terrain = TERRAIN_SOURCE.read_text(encoding="utf-8")
+        dialog = DIALOG_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("workoutPowerProfile", preview)
+        self.assertIn("Original workout power - time", preview)
+        self.assertIn("Generated terrain - distance", preview)
+        self.assertIn("selectTechnicalTerrain", terrain)
+        self.assertIn("WorkoutGameTerrainKind::SmoothTrail", terrain)
+        self.assertIn("courseModeComparison", dialog)
+        self.assertIn("curve events", dialog)
 
     def test_production_contract_header_and_api_exist(self):
         self.assertTrue(

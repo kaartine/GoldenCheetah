@@ -13,6 +13,7 @@ SOURCES = testWorkoutGameCourseConversionDialog.cpp \
           ../../../src/Train/WorkoutGameCourseCrsExporter.cpp \
           ../../../src/Train/WorkoutGameCourseDocument.cpp \
           ../../../src/Train/WorkoutGameCoursePreviewWidget.cpp \
+          ../../../src/Train/WorkoutGameCoursePreviewMetrics.cpp \
           ../../../src/Train/WorkoutGameCourseSourceAdapter.cpp \
           ../../../src/Train/WorkoutGameDistanceCourse.cpp \
           ../../../src/Train/WorkoutGameDistancePlayback.cpp \
@@ -33,6 +34,7 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameCourseCrsExporter.h \
           ../../../src/Train/WorkoutGameCourseDocument.h \
           ../../../src/Train/WorkoutGameCoursePreviewWidget.h \
+          ../../../src/Train/WorkoutGameCoursePreviewMetrics.h \
           ../../../src/Train/WorkoutGameCourseSourceAdapter.h \
           ../../../src/Train/WorkoutGameDistanceCourse.h \
           ../../../src/Train/WorkoutGameDistancePlayback.h \

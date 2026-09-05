@@ -246,19 +246,12 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
     result.sections.reserve(source.sections.size());
     std::vector<WorkoutGameSection> adaptedSections;
     adaptedSections.reserve(source.sections.size());
-    std::size_t paletteCount = 0;
     for (std::size_t index = 0; index < source.sections.size(); ++index) {
         const WorkoutGameInterval &interval = intervals[index];
         adaptedSections.push_back(adaptSection(
             source.sections[index], interval, ftpWatts, parameters,
             index == 0, index + 1 == source.sections.size()));
-        if (averageWatts(interval) / ftpWatts > 0.65
-                && WorkoutGameCourseTerrain::paletteEligible(
-                    adaptedSections.back().feature)) {
-            ++paletteCount;
-        }
     }
-    std::size_t paletteIndex = 0;
     const WorkoutGameCoursePreset terrainPreset = parameters.technicality <= 0.25
             ? WorkoutGameCoursePreset::WorkoutFirst
             : parameters.technicality >= 0.85
@@ -268,12 +261,6 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
         const WorkoutGameInterval &interval = intervals[index];
         WorkoutGameSection adapted = adaptedSections[index];
         const bool sourceRecovery = averageWatts(interval) / ftpWatts <= 0.65;
-        const bool paletteEligible = !sourceRecovery
-                && WorkoutGameCourseTerrain::paletteEligible(adapted.feature);
-        WorkoutGameCourseTerrain::apply(
-                adapted, terrainPreset, paletteIndex, paletteCount, source.seed,
-                sourceRecovery);
-        if (paletteEligible) ++paletteIndex;
         const WorkoutGameRoadPhysicsSnapshot before = physics.update({}, 0);
 
         WorkoutGameDistanceCourseSection section;
@@ -331,6 +318,41 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
         result.elevationGainMeters += std::max(0.0, elevationChange);
         result.elevationLossMeters += std::max(0.0, -elevationChange);
         result.sections.push_back(section);
+    }
+
+    std::vector<double> eligibleDistances;
+    eligibleDistances.reserve(result.sections.size());
+    for (std::size_t index = 0; index < result.sections.size(); ++index) {
+        const bool sourceRecovery = averageWatts(intervals[index]) / ftpWatts
+                <= parameters.recoveryIntensity;
+        if (!sourceRecovery && WorkoutGameCourseTerrain::paletteEligible(
+                    adaptedSections[index].feature)) {
+            eligibleDistances.push_back(result.sections[index].lengthMeters);
+        }
+    }
+    const std::vector<WorkoutGameCourseTerrainSelection> selections =
+            WorkoutGameCourseTerrain::selectTechnicalTerrain(
+                eligibleDistances, terrainPreset, source.seed);
+    if (selections.size() != eligibleDistances.size()) {
+        result.status = WorkoutGameDistanceCourseStatus::InvalidParameters;
+        result.sections.clear();
+        return result;
+    }
+    std::size_t paletteIndex = 0u;
+    for (std::size_t index = 0; index < result.sections.size(); ++index) {
+        const bool sourceRecovery = averageWatts(intervals[index]) / ftpWatts
+                <= parameters.recoveryIntensity;
+        const bool paletteEligible = !sourceRecovery
+                && WorkoutGameCourseTerrain::paletteEligible(
+                    adaptedSections[index].feature);
+        const WorkoutGameCourseTerrainSelection selection = paletteEligible
+                ? selections[paletteIndex++]
+                : WorkoutGameCourseTerrainSelection();
+        WorkoutGameCourseTerrain::apply(
+                adaptedSections[index], terrainPreset, selection,
+                source.seed, sourceRecovery);
+        result.sections[index].feature = adaptedSections[index].feature;
+        result.sections[index].terrain = adaptedSections[index].terrain;
     }
 
     result.totalDistanceMeters = result.sections.back().startDistanceMeters

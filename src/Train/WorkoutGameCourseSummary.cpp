@@ -61,8 +61,8 @@ bool WorkoutGameCourseSummary::build(
     }
 
     summary.technicalTerrainExposureApplicable =
-            eligibleSections > 0 && eligibleDistance > 0.0;
-    if (eligibleSections > 0 && eligibleDistance > 0.0) {
+            eligibleSections >= 2 && eligibleDistance > 0.0;
+    if (summary.technicalTerrainExposureApplicable) {
         summary.technicalTerrainExposurePercent =
                 100.0 * technicalDistance / eligibleDistance;
         summary.technicalFeatureDensityPerTenSections =

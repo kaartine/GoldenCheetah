@@ -10,7 +10,8 @@ SOURCES = testWorkoutGameCourseConversion.cpp \
           ../../../src/Train/WorkoutGameCourseSummary.cpp \
           ../../../src/Train/WorkoutGameCourseTerrain.cpp \
           ../../../src/Train/WorkoutGameDistanceCourse.cpp \
-          ../../../src/Train/WorkoutGameRoadPhysics.cpp
+          ../../../src/Train/WorkoutGameRoadPhysics.cpp \
+          ../../../src/Train/WorkoutGameWorkoutAdapter.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameCourseConversion.h \
@@ -18,7 +19,8 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameCourseSummary.h \
           ../../../src/Train/WorkoutGameCourseTerrain.h \
           ../../../src/Train/WorkoutGameDistanceCourse.h \
-          ../../../src/Train/WorkoutGameRoadPhysics.h
+          ../../../src/Train/WorkoutGameRoadPhysics.h \
+          ../../../src/Train/WorkoutGameWorkoutAdapter.h
 
 include(../../unittests.pri)
 

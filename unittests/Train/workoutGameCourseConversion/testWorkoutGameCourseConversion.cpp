@@ -12,10 +12,12 @@
 #include "Train/WorkoutGameCoursePrescription.h"
 #include "Train/WorkoutGameCourseTerrain.h"
 #include "Train/WorkoutGameFeatureCatalog.h"
+#include "Train/WorkoutGameWorkoutAdapter.h"
 
 #include <QTest>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <set>
 
@@ -58,6 +60,84 @@ std::vector<WorkoutGameInterval> sampleWorkout()
 
 constexpr std::size_t FiveMinuteRecoveryIndex = 14;
 
+struct RepresentativeWorkout
+{
+    const char *name;
+    std::vector<WorkoutGamePowerPoint> points;
+};
+
+void appendSegment(
+        std::vector<WorkoutGamePowerPoint> &points,
+        double durationMinutes,
+        double startWatts,
+        double endWatts)
+{
+    const double startMs = points.empty() ? 0.0 : points.back().timeMs;
+    if (points.empty() || points.back().watts != startWatts) {
+        points.push_back({startMs, startWatts});
+    }
+    points.push_back({startMs + durationMinutes * 60000.0, endWatts});
+}
+
+std::vector<RepresentativeWorkout> representativeWorkouts()
+{
+    std::vector<RepresentativeWorkout> fixtures;
+
+    RepresentativeWorkout endurance{"rolling-endurance", {}};
+    appendSegment(endurance.points, 15.0, 88.0, 126.0);
+    appendSegment(endurance.points, 10.0, 134.0, 134.0);
+    appendSegment(endurance.points, 10.0, 144.0, 144.0);
+    appendSegment(endurance.points, 10.0, 134.0, 134.0);
+    appendSegment(endurance.points, 5.0, 112.0, 112.0);
+    for (int repetition = 0; repetition < 4; ++repetition) {
+        appendSegment(endurance.points, 6.0, 152.0, 152.0);
+        appendSegment(endurance.points, 4.0, 130.0, 130.0);
+    }
+    appendSegment(endurance.points, 8.0, 112.0, 112.0);
+    for (int repetition = 0; repetition < 4; ++repetition) {
+        appendSegment(endurance.points, 8.0, 137.0, 137.0);
+        appendSegment(endurance.points, 1.0, 168.0, 168.0);
+    }
+    appendSegment(endurance.points, 12.0, 124.0, 88.0);
+    fixtures.push_back(endurance);
+
+    RepresentativeWorkout classic{"five-by-four-ramp", {}};
+    appendSegment(classic.points, 15.0, 98.0, 172.0);
+    for (int repetition = 0; repetition < 5; ++repetition) {
+        appendSegment(classic.points, 4.0, 188.0, 214.0);
+        appendSegment(classic.points, 3.0, 148.0, 148.0);
+    }
+    appendSegment(classic.points, 8.0, 140.0, 96.0);
+    fixtures.push_back(classic);
+
+    RepresentativeWorkout kicks{"five-by-four-with-kicks", {}};
+    appendSegment(kicks.points, 4.0, 96.0, 116.0);
+    appendSegment(kicks.points, 4.0, 116.0, 134.0);
+    appendSegment(kicks.points, 4.0, 134.0, 152.0);
+    appendSegment(kicks.points, 4.0, 152.0, 170.0);
+    appendSegment(kicks.points, 2.0, 170.0, 174.0);
+    appendSegment(kicks.points, 1.0, 112.0, 112.0);
+    for (int repetition = 0; repetition < 5; ++repetition) {
+        const double workWatts = 202.0 + repetition * 3.0;
+        appendSegment(kicks.points, 3.8, workWatts, workWatts);
+        appendSegment(kicks.points, 0.2, 236.0 + repetition * 5.0,
+                      236.0 + repetition * 5.0);
+        appendSegment(kicks.points, 3.0, 114.0, 114.0);
+    }
+    appendSegment(kicks.points, 6.0, 118.0, 88.0);
+    fixtures.push_back(kicks);
+    return fixtures;
+}
+
+RepresentativeWorkout recoveryWorkout()
+{
+    RepresentativeWorkout recovery{"recovery-only", {}};
+    appendSegment(recovery.points, 10.0, 78.0, 104.0);
+    appendSegment(recovery.points, 25.0, 108.0, 108.0);
+    appendSegment(recovery.points, 10.0, 100.0, 78.0);
+    return recovery;
+}
+
 }
 
 class TestWorkoutGameCourseConversion : public QObject
@@ -65,6 +145,94 @@ class TestWorkoutGameCourseConversion : public QObject
     Q_OBJECT
 
 private slots:
+    void representativeProfilesStayExactAndExposureIsMonotonic()
+    {
+        for (const RepresentativeWorkout &fixture : representativeWorkouts()) {
+            const WorkoutGameWorkout workout =
+                    WorkoutGameWorkoutAdapter::normalize(fixture.points);
+            QCOMPARE(workout.status, WorkoutGameWorkoutStatus::Ready);
+
+            std::array<WorkoutGameCourseConversionResult, 3> results;
+            for (std::size_t mode = 0; mode < results.size(); ++mode) {
+                WorkoutGameCourseConversionRequest request;
+                request.intervals = workout.intervals;
+                request.ftpWatts = 190.0;
+                request.preset = static_cast<WorkoutGameCoursePreset>(mode);
+                results[mode] = WorkoutGameCourseConverter::convert(request);
+                const QByteArray context = QByteArray(fixture.name)
+                        + " mode=" + QByteArray::number(int(mode));
+                QVERIFY2(results[mode].status
+                                == WorkoutGameCourseConversionStatus::Ready,
+                         context.constData());
+                QCOMPARE(results[mode].course.sections.size(),
+                         workout.intervals.size());
+                for (std::size_t index = 0;
+                        index < workout.intervals.size(); ++index) {
+                    const WorkoutGameInterval &source = workout.intervals[index];
+                    const WorkoutGameDistanceCourseSection &generated =
+                            results[mode].course.sections[index];
+                    QCOMPARE(generated.targetStartWatts, source.startWatts);
+                    QCOMPARE(generated.targetEndWatts, source.endWatts);
+                    QCOMPARE(generated.nominalDurationMs, source.durationMs);
+                    QCOMPARE(generated.minimumDurationMs, source.durationMs);
+                    QCOMPARE(generated.maximumDurationMs, source.durationMs);
+                }
+                QCOMPARE(results[mode].summary.loadDeviationPercent, 0.0);
+                QVERIFY2(
+                        results[mode].summary.technicalTerrainExposureApplicable,
+                        context.constData());
+            }
+            QVERIFY2(results[0].summary.technicalTerrainExposurePercent
+                            < results[1].summary.technicalTerrainExposurePercent,
+                     fixture.name);
+            QVERIFY2(results[1].summary.technicalTerrainExposurePercent
+                            < results[2].summary.technicalTerrainExposurePercent,
+                     fixture.name);
+            QVERIFY2(results[0].summary.technicalFeatureDensityPerTenSections
+                            < results[1].summary.technicalFeatureDensityPerTenSections,
+                     fixture.name);
+            QVERIFY2(results[1].summary.technicalFeatureDensityPerTenSections
+                            < results[2].summary.technicalFeatureDensityPerTenSections,
+                     fixture.name);
+        }
+    }
+
+    void recoveryOnlyProfileStaysSmoothAndNonTechnicalInEveryPreset()
+    {
+        const RepresentativeWorkout fixture = recoveryWorkout();
+        const WorkoutGameWorkout workout =
+                WorkoutGameWorkoutAdapter::normalize(fixture.points);
+        QCOMPARE(workout.status, WorkoutGameWorkoutStatus::Ready);
+
+        for (WorkoutGameCoursePreset preset : {
+                WorkoutGameCoursePreset::WorkoutFirst,
+                WorkoutGameCoursePreset::Balanced,
+                WorkoutGameCoursePreset::RideFirst}) {
+            WorkoutGameCourseConversionRequest request;
+            request.intervals = workout.intervals;
+            request.ftpWatts = 190.0;
+            request.preset = preset;
+            const WorkoutGameCourseConversionResult result =
+                    WorkoutGameCourseConverter::convert(request);
+            QCOMPARE(result.status, WorkoutGameCourseConversionStatus::Ready);
+            QCOMPARE(result.summary.technicalFeatureCount, 0);
+            QVERIFY(!result.summary.technicalTerrainExposureApplicable);
+            QCOMPARE(result.summary.technicalFeatureDensityPerTenSections, 0.0);
+            for (std::size_t index = 0;
+                    index < result.course.sections.size(); ++index) {
+                const WorkoutGameDistanceCourseSection &section =
+                        result.course.sections[index];
+                QCOMPARE(section.terrain, WorkoutGameTerrainKind::SmoothTrail);
+                QCOMPARE(section.targetStartWatts,
+                         workout.intervals[index].startWatts);
+                QCOMPARE(section.targetEndWatts,
+                         workout.intervals[index].endWatts);
+                QCOMPARE(section.nominalDurationMs,
+                         workout.intervals[index].durationMs);
+            }
+        }
+    }
+
     void invalidInputIsRejected()
     {
         WorkoutGameCourseConversionRequest request;
@@ -143,15 +311,19 @@ private slots:
                 WorkoutGameCoursePreset::Balanced,
                 WorkoutGameCoursePreset::RideFirst}) {
             int technical = 0;
+            const std::vector<WorkoutGameCourseTerrainSelection> selections =
+                    WorkoutGameCourseTerrain::selectTechnicalTerrain(
+                        std::vector<double>(10u, 100.0), preset, 42u);
+            QCOMPARE(selections.size(), std::size_t(10));
             for (std::size_t index = 0; index < 10; ++index) {
                 WorkoutGameSection first;
                 first.feature = WorkoutGameFeature::Trail;
                 first.challengeCount = 1;
                 WorkoutGameSection second = first;
                 WorkoutGameCourseTerrain::apply(
-                        first, preset, index, 10u, 42u, false);
+                        first, preset, selections[index], 42u, false);
                 WorkoutGameCourseTerrain::apply(
-                        second, preset, index, 10u, 42u, false);
+                        second, preset, selections[index], 42u, false);
                 QCOMPARE(first.terrain, second.terrain);
                 QCOMPARE(first.challengeCount, second.challengeCount);
                 technical += WorkoutGameFeatureCatalog::definition(
@@ -169,10 +341,47 @@ private slots:
             recovery.feature = WorkoutGameFeature::WarmupTrail;
             recovery.challengeCount = 3;
             WorkoutGameCourseTerrain::apply(
-                    recovery, preset, 0u, 10u, 42u, true);
+                    recovery, preset, {}, 42u, true);
             QCOMPARE(recovery.challengeCount, 0);
-            QVERIFY(recovery.terrain != WorkoutGameTerrainKind::GapJump);
+            QCOMPARE(recovery.terrain, WorkoutGameTerrainKind::SmoothTrail);
         }
+    }
+
+    void terrainExposureUsesDistanceWeightedNestedSelections()
+    {
+        const std::vector<double> distances {50.0, 100.0, 150.0,
+                                             200.0, 250.0, 250.0};
+        std::array<std::vector<WorkoutGameCourseTerrainSelection>, 3> modes;
+        for (std::size_t mode = 0; mode < modes.size(); ++mode) {
+            const WorkoutGameCoursePreset preset =
+                    static_cast<WorkoutGameCoursePreset>(mode);
+            modes[mode] = WorkoutGameCourseTerrain::selectTechnicalTerrain(
+                    distances, preset, 91u);
+            const auto repeated =
+                    WorkoutGameCourseTerrain::selectTechnicalTerrain(
+                        distances, preset, 91u);
+            QCOMPARE(modes[mode].size(), distances.size());
+            QCOMPARE(repeated.size(), modes[mode].size());
+            for (std::size_t index = 0; index < distances.size(); ++index) {
+                QCOMPARE(repeated[index].technical,
+                         modes[mode][index].technical);
+                QCOMPARE(repeated[index].ordinal, modes[mode][index].ordinal);
+            }
+        }
+
+        std::array<double, 3> exposure {};
+        for (std::size_t index = 0; index < distances.size(); ++index) {
+            QVERIFY(!modes[0][index].technical || modes[1][index].technical);
+            QVERIFY(!modes[1][index].technical || modes[2][index].technical);
+            for (std::size_t mode = 0; mode < modes.size(); ++mode) {
+                if (modes[mode][index].technical) {
+                    exposure[mode] += distances[index];
+                }
+            }
+        }
+        QVERIFY(std::abs(exposure[0] / 1000.0 - 0.35) < 1.0e-12);
+        QVERIFY(exposure[0] < exposure[1]);
+        QVERIFY(exposure[1] < exposure[2]);
     }
 
     void rideFirstKeepsLowIntensityWarmupInsideRecoveryExposureLimit()
@@ -197,7 +406,7 @@ private slots:
                  request.intervals.front().durationMs);
     }
 
-    void recoveryBermsRemainNormalUnscoredRoadSections()
+    void recoverySectionsRemainSmoothAndUnscored()
     {
         WorkoutGameCourseConversionRequest request;
         request.intervals = {
@@ -218,9 +427,9 @@ private slots:
         QCOMPARE(workoutFirst.status, WorkoutGameCourseConversionStatus::Ready);
         QCOMPARE(rideFirst.status, WorkoutGameCourseConversionStatus::Ready);
         QCOMPARE(rideFirst.course.sections[1].terrain,
-                 WorkoutGameTerrainKind::Berm);
-        QVERIFY(rideFirst.course.sections[1].terrain
-                != workoutFirst.course.sections[1].terrain);
+                 WorkoutGameTerrainKind::SmoothTrail);
+        QCOMPARE(rideFirst.course.sections[1].terrain,
+                 workoutFirst.course.sections[1].terrain);
         QCOMPARE(rideFirst.course.sections[1].feature,
                  WorkoutGameFeature::RecoveryDescent);
         QCOMPARE(rideFirst.course.sections[1].nominalDurationMs,

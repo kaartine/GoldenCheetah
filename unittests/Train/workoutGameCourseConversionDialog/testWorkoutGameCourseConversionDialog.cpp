@@ -9,6 +9,7 @@
 
 #include "Train/WorkoutGameCourseConversionDialog.h"
 #include "Train/WorkoutGameCoursePreviewWidget.h"
+#include "Train/WorkoutGameCoursePreviewMetrics.h"
 #include "Train/WorkoutGameRoadPlan.h"
 
 #include <QFileInfo>
@@ -43,7 +44,8 @@ WorkoutGameCourseSourceRequest sampleRequest()
         timeMs += durationMs;
         request.points.push_back({timeMs, watts});
     };
-    append(8 * 60000.0, 135.0);
+    append(4 * 60000.0, 135.0);
+    append(4 * 60000.0, 145.0);
     for (int repetition = 0; repetition < 3; ++repetition) {
         append(4 * 60000.0, 205.0 + repetition * 3.0);
         append(10000.0, 250.0 + repetition * 5.0);
@@ -137,12 +139,13 @@ class TestWorkoutGameCourseConversionDialog : public QObject
 
         const char *scrollableControls[] = {
             "presetDescriptionLabel",
-            "coursePreview",
-            "durationValue",
-            "prescriptionChangesValue",
+            "presetMetricsLabel",
             "workoutFirstComparisonValue",
             "balancedComparisonValue",
-            "rideFirstComparisonValue"
+            "rideFirstComparisonValue",
+            "coursePreview",
+            "durationValue",
+            "prescriptionChangesValue"
         };
         QWidget *previous = nullptr;
         for (const char *name : scrollableControls) {
@@ -187,7 +190,7 @@ private slots:
         QVERIFY(directory.isValid());
         WorkoutGameCourseConversionDialog dialog(
                 sampleRequest(), directory.filePath("intervals-mtb.crs"));
-        dialog.resize(900, 680);
+        dialog.resize(900, 700);
         dialog.show();
         QVERIFY(QTest::qWaitForWindowExposed(&dialog));
 
@@ -215,7 +218,7 @@ private slots:
         QVERIFY(!requiredChild<QLabel>(dialog, "terrainSignatureValue")
                         ->text().isEmpty());
         QVERIFY(requiredChild<QLabel>(dialog, "terrainSignatureValue")
-                        ->text().contains("bends", Qt::CaseInsensitive));
+                        ->text().contains("curve events", Qt::CaseInsensitive));
         QVERIFY(requiredChild<QLabel>(dialog, "technicalExposureValue")
                         ->text().contains("%"));
         QVERIFY(requiredChild<QLabel>(dialog, "featureDensityValue")
@@ -245,9 +248,9 @@ private slots:
             const QString text = requiredChild<QLabel>(dialog, name)->text();
             const QByteArray details = QStringLiteral("%1: %2")
                     .arg(QLatin1String(name), text).toLatin1();
-            QVERIFY2(text.contains("key", Qt::CaseInsensitive),
+            QVERIFY2(text.contains("hard segments", Qt::CaseInsensitive),
                      details.constData());
-            QVERIFY2(text.contains("recovery", Qt::CaseInsensitive),
+            QVERIFY2(text.contains("easy segments", Qt::CaseInsensitive),
                      details.constData());
         }
         QVERIFY(requiredChild<QPushButton>(dialog, "createCourseButton")
@@ -291,6 +294,9 @@ private slots:
 
         QCOMPARE(dialog.selectedPreset(), WorkoutGameCoursePreset::RideFirst);
         QVERIFY(requiredChild<QLabel>(dialog, "presetDescriptionLabel")
+                        ->text().contains("technical game trail",
+                                         Qt::CaseInsensitive));
+        QVERIFY(requiredChild<QLabel>(dialog, "presetMetricsLabel")
                         ->text().contains("2.60x", Qt::CaseInsensitive));
         QCOMPARE(requiredChild<QLabel>(dialog, "runtimeExposureValue")->text(),
                  QStringLiteral("100% of prescribed interval time"));
@@ -364,17 +370,11 @@ private slots:
         struct ExpectedPreset {
             const char *button;
             const char *character;
-            const char *grade;
-            const char *curvature;
-            const char *density;
         };
         const ExpectedPreset expected[] = {
-            {"workoutFirstPresetButton", "calmer and easier",
-             "0.82x", "1.00x", "2-4/10"},
-            {"balancedPresetButton", "flowing and mixed",
-             "1.00x", "1.30x", "5-7/10"},
-            {"rideFirstPresetButton", "technical and intense",
-             "1.18x", "2.60x", "8-10/10"}
+            {"workoutFirstPresetButton", "calm training trail"},
+            {"balancedPresetButton", "varied training trail"},
+            {"rideFirstPresetButton", "technical game trail"}
         };
         QStringList descriptions;
         for (const ExpectedPreset &preset : expected) {
@@ -386,17 +386,108 @@ private slots:
                              QLatin1String(preset.character),
                              Qt::CaseInsensitive),
                      qPrintable(description));
-            QVERIFY2(description.contains(QLatin1String(preset.grade)),
+            QVERIFY2(description.contains("prescribed", Qt::CaseInsensitive),
                      qPrintable(description));
-            QVERIFY2(description.contains(QLatin1String(preset.curvature)),
-                     qPrintable(description));
-            QVERIFY2(description.contains(QLatin1String(preset.density)),
-                     qPrintable(description));
+            QVERIFY(!description.contains("0.82x"));
+            QVERIFY(!description.contains("1.30x"));
+            QVERIFY(!description.contains("8-10/10"));
+            const QString metrics = requiredChild<QLabel>(
+                    dialog, "presetMetricsLabel")->text();
+            QVERIFY(metrics.contains("grade", Qt::CaseInsensitive));
+            QVERIFY(metrics.contains("curvature", Qt::CaseInsensitive));
+            QVERIFY(metrics.contains("technical", Qt::CaseInsensitive));
         }
         QCOMPARE(descriptions.size(), 3);
         QVERIFY(descriptions[0] != descriptions[1]);
         QVERIFY(descriptions[1] != descriptions[2]);
         QVERIFY(descriptions[0] != descriptions[2]);
+    }
+
+    void compactComparisonIsVisibleAboveScrollableDetails()
+    {
+        QTemporaryDir directory;
+        WorkoutGameCourseConversionDialog dialog(
+                sampleRequest(), directory.filePath("visible-comparison.crs"));
+        dialog.resize(900, 700);
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        QCoreApplication::processEvents();
+
+        QWidget *comparison = requiredChild<QWidget>(
+                dialog, "courseModeComparison");
+        QScrollArea *scroll = requiredChild<QScrollArea>(
+                dialog, "courseDetailsScrollArea");
+        QVERIFY(comparison->isVisibleTo(&dialog));
+        const QRect comparisonGeometry(
+                comparison->mapTo(&dialog, QPoint(0, 0)), comparison->size());
+        const QRect viewportGeometry(
+                scroll->viewport()->mapTo(&dialog, QPoint(0, 0)),
+                scroll->viewport()->size());
+        QVERIFY(viewportGeometry.contains(comparisonGeometry));
+        QCOMPARE(scroll->verticalScrollBar()->value(), 0);
+    }
+
+    void workoutPowerProfileUsesSourceTimeNotGeneratedDistance()
+    {
+        const std::vector<WorkoutGameInterval> unevenDurations {
+            {0, 60000, 100.0, 100.0},
+            {60000, 180000, 200.0, 200.0}
+        };
+        const std::vector<WorkoutGameCoursePreviewPoint> unevenPower =
+                WorkoutGameCoursePreviewMetrics::workoutPowerProfile(
+                    unevenDurations);
+        QCOMPARE(unevenPower.size(), std::size_t(4));
+        QCOMPARE(unevenPower[0].progress, 0.0);
+        QCOMPARE(unevenPower[1].progress, 0.25);
+        QCOMPARE(unevenPower[2].progress, 0.25);
+        QCOMPARE(unevenPower[3].progress, 1.0);
+
+        WorkoutGameCourseSourceRequest request = sampleRequest();
+        const WorkoutGameCourseSourceResult balanced =
+                WorkoutGameCourseSourceAdapter::convert(request);
+        request.preset = WorkoutGameCoursePreset::RideFirst;
+        const WorkoutGameCourseSourceResult rideFirst =
+                WorkoutGameCourseSourceAdapter::convert(request);
+        QCOMPARE(balanced.status, WorkoutGameCourseSourceStatus::Ready);
+        QCOMPARE(rideFirst.status, WorkoutGameCourseSourceStatus::Ready);
+
+        const std::vector<WorkoutGameCoursePreviewPoint> balancedPower =
+                WorkoutGameCoursePreviewMetrics::workoutPowerProfile(
+                    balanced.document.sourceIntervals);
+        const std::vector<WorkoutGameCoursePreviewPoint> rideFirstPower =
+                WorkoutGameCoursePreviewMetrics::workoutPowerProfile(
+                    rideFirst.document.sourceIntervals);
+        QCOMPARE(balancedPower.size(), rideFirstPower.size());
+        QVERIFY(!balancedPower.empty());
+        for (std::size_t index = 0; index < balancedPower.size(); ++index) {
+            QCOMPARE(balancedPower[index].progress, rideFirstPower[index].progress);
+            QCOMPARE(balancedPower[index].value, rideFirstPower[index].value);
+        }
+        QCOMPARE(balancedPower.front().progress, 0.0);
+        QCOMPARE(balancedPower.back().progress, 1.0);
+    }
+
+    void roadPiecesAreGroupedIntoCoherentCurveEvents()
+    {
+        WorkoutGameRoadPlan plan;
+        auto appendPiece = [&](std::size_t section, double degrees) {
+            WorkoutGameRoadPiece piece;
+            piece.sourceSectionIndex = section;
+            piece.lengthMeters = 20.0;
+            piece.turnRadians = degrees * 3.14159265358979323846 / 180.0;
+            plan.pieces.push_back(piece);
+        };
+        appendPiece(0, 8.0);
+        appendPiece(0, -9.0);
+        appendPiece(0, 7.0);
+        appendPiece(1, 4.0);
+        appendPiece(1, 3.0);
+        appendPiece(2, 13.0);
+
+        const WorkoutGameCoursePreviewRoadMetrics metrics =
+                WorkoutGameCoursePreviewMetrics::roadMetrics(plan);
+        QCOMPARE(metrics.curveEventCount, 2);
+        QCOMPARE(metrics.roadPieceCount, 6);
     }
 
     void previewWidgetRendersElevationAndPowerData()

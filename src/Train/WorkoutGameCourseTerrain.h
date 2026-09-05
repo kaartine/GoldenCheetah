@@ -15,6 +15,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
+
+struct WorkoutGameCourseTerrainSelection
+{
+    bool technical = false;
+    std::size_t ordinal = 0;
+};
 
 class WorkoutGameCourseTerrain
 {
@@ -22,11 +29,14 @@ public:
     static constexpr std::uint32_t CurrentGenerationVersion = 1;
 
     static bool paletteEligible(WorkoutGameFeature feature);
+    static std::vector<WorkoutGameCourseTerrainSelection> selectTechnicalTerrain(
+            const std::vector<double> &eligibleDistancesMeters,
+            WorkoutGameCoursePreset preset,
+            std::uint32_t seed);
     static void apply(
             WorkoutGameSection &section,
             WorkoutGameCoursePreset preset,
-            std::size_t paletteIndex,
-            std::size_t paletteCount,
+            const WorkoutGameCourseTerrainSelection &selection,
             std::uint32_t seed,
             bool sourceRecovery);
 };

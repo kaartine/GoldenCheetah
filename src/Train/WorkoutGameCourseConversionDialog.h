@@ -65,6 +65,7 @@ private:
     QToolButton *balancedButton = nullptr;
     QToolButton *rideFirstButton = nullptr;
     QLabel *presetDescriptionLabel = nullptr;
+    QLabel *presetMetricsLabel = nullptr;
     WorkoutGameCoursePreviewWidget *preview = nullptr;
     QLabel *durationValue = nullptr;
     QLabel *etaValue = nullptr;

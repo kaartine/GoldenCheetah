@@ -1134,6 +1134,13 @@ CI debt rather than being treated as a passing gate.
 - [x] `REL-05` Publish a test AppImage to the stable local/remote release path.
 - [ ] `REL-06` Remove the legacy renderer only after all acceptance gates pass.
 
+The Create MTB Course portion of `REL-01` additionally requires representative
+recovery, endurance, interval and interval-with-kicks fixtures to prove exact
+prescription retention and strictly increasing distance-weighted technical
+exposure. Its 900x700 dialog gate must keep the compact three-mode comparison
+visible, show original power against time separately from terrain against
+distance, and report coherent curve events rather than raw road-piece counts.
+
 **REL-06 retirement inventory:** the legacy game renderer is the complete
 Painter/OpenGL/Scene Graph fallback chain, not every use of `QPainter` in the
 application. Once `CAM-01`, `VS-04`, `PHY-03` and `REL-04` pass, retire
