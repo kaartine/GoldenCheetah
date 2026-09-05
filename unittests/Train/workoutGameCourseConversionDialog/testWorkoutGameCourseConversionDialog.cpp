@@ -86,8 +86,20 @@ private slots:
         QVERIFY(requiredChild<QLabel>(dialog, "ascentValue")->text().contains("m"));
         QVERIFY(requiredChild<QLabel>(dialog, "featuresValue")->text().contains("3"));
         QVERIFY(requiredChild<QLabel>(dialog, "loadValue")->text().contains("pts"));
+        QVERIFY(requiredChild<QLabel>(dialog, "loadDeviationValue")->text().contains("%"));
         QVERIFY(requiredChild<QLabel>(dialog, "workDeviationValue")->text().contains("%"));
         QVERIFY(requiredChild<QLabel>(dialog, "recoveryDeviationValue")->text().contains("%"));
+        QVERIFY(requiredChild<QLabel>(dialog, "totalDeviationValue")->text().contains("%"));
+        QVERIFY(!requiredChild<QLabel>(dialog, "terrainSignatureValue")
+                        ->text().isEmpty());
+        QVERIFY(requiredChild<QLabel>(dialog, "technicalExposureValue")
+                        ->text().contains("%"));
+        QVERIFY(requiredChild<QLabel>(dialog, "featureDensityValue")
+                        ->text().contains("/10 sections"));
+        QVERIFY(requiredChild<QLabel>(dialog, "curvatureValue")
+                        ->text().contains("deg/100 m"));
+        QVERIFY(!requiredChild<QLabel>(dialog, "prescriptionChangesValue")
+                        ->text().isEmpty());
         QVERIFY(!requiredChild<QLabel>(dialog, "workoutFirstComparisonValue")
                         ->text().isEmpty());
         QVERIFY(!requiredChild<QLabel>(dialog, "balancedComparisonValue")
@@ -151,9 +163,14 @@ private slots:
     void presetSwitchUpdatesPreviewButNotWorkoutTargets()
     {
         QTemporaryDir directory;
+        const QString coursePath = directory.filePath("intervals-mtb.crs");
         WorkoutGameCourseConversionDialog dialog(
-                sampleRequest(), directory.filePath("intervals-mtb.crs"));
+                sampleRequest(), coursePath);
         const WorkoutGameCourseSourceResult balanced = dialog.currentResult();
+        QVERIFY(!QFileInfo::exists(coursePath));
+        QVERIFY(!QFileInfo::exists(
+                WorkoutGameCourseDocumentStore::sidecarPathForCourse(
+                    coursePath)));
 
         requiredChild<QToolButton>(dialog, "rideFirstPresetButton")->click();
         const WorkoutGameCourseSourceResult rideFirst = dialog.currentResult();
@@ -162,6 +179,18 @@ private slots:
         QCOMPARE(rideFirst.status, WorkoutGameCourseSourceStatus::Ready);
         QVERIFY(rideFirst.summary.elevationGainMeters
                 > balanced.summary.elevationGainMeters);
+        QCOMPARE(rideFirst.summary.nominalDurationMs,
+                 balanced.summary.nominalDurationMs);
+        QCOMPARE(rideFirst.summary.estimatedLoadPoints,
+                 balanced.summary.estimatedLoadPoints);
+        QCOMPARE(rideFirst.summary.workDurationDeviationPercent, 0.0);
+        QCOMPARE(rideFirst.summary.recoveryDurationDeviationPercent, 0.0);
+        QVERIFY(rideFirst.summary.technicalTerrainExposurePercent
+                > balanced.summary.technicalTerrainExposurePercent);
+        QVERIFY(rideFirst.summary.technicalFeatureDensityPerTenSections
+                > balanced.summary.technicalFeatureDensityPerTenSections);
+        QVERIFY(rideFirst.summary.curvatureDegreesPer100m
+                > balanced.summary.curvatureDegreesPer100m);
         QCOMPARE(rideFirst.document.course.sections.size(),
                  balanced.document.course.sections.size());
         for (std::size_t index = 0;
@@ -171,7 +200,13 @@ private slots:
                      balanced.document.course.sections[index].targetStartWatts);
             QCOMPARE(rideFirst.document.course.sections[index].targetEndWatts,
                      balanced.document.course.sections[index].targetEndWatts);
+            QCOMPARE(rideFirst.document.course.sections[index].nominalDurationMs,
+                     balanced.document.course.sections[index].nominalDurationMs);
         }
+        QVERIFY(!QFileInfo::exists(coursePath));
+        QVERIFY(!QFileInfo::exists(
+                WorkoutGameCourseDocumentStore::sidecarPathForCourse(
+                    coursePath)));
 
         requiredChild<QToolButton>(dialog, "balancedPresetButton")->click();
         const WorkoutGameCourseSourceResult repeated = dialog.currentResult();
@@ -181,6 +216,10 @@ private slots:
                  balanced.summary.distanceMeters);
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(repeated.document),
                  WorkoutGameCourseDocumentCodec::encode(balanced.document));
+        QVERIFY(!QFileInfo::exists(coursePath));
+        QVERIFY(!QFileInfo::exists(
+                WorkoutGameCourseDocumentStore::sidecarPathForCourse(
+                    coursePath)));
     }
 
     void previewWidgetRendersElevationAndPowerData()

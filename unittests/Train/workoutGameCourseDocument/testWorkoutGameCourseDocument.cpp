@@ -339,24 +339,116 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), versionTwo);
     }
 
-    void schemaThreeAllowsSourceAndGeneratedDurationsToDiffer()
+    void schemaThreeRejectsUnannotatedSourceAndGeneratedDurationDifference()
     {
         WorkoutGameCourseDocument source = sampleDocument();
         source.sourceIntervals = {
-            {0, 15000, 150.0, 200.0},
-            {15000, 20000, 100.0, 100.0}
+            {0, 10000, 150.0, 250.0},
+            {10000, 20600, 100.0, 100.0}
         };
         QCOMPARE(source.course.nominalDurationMs, std::int64_t(30000));
 
         const QByteArray encoded = WorkoutGameCourseDocumentCodec::encode(source);
-        QVERIFY(!encoded.isEmpty());
+        QVERIFY(encoded.isEmpty());
+    }
+
+    void schemaThreeRoundTripsExplicitVersionedCooldownMetadata()
+    {
+        QJsonObject root = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
+                .object();
+        QJsonObject source = root.value(QStringLiteral("source")).toObject();
+        source.insert(QStringLiteral("intervals"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("startMs"), 0},
+                {QStringLiteral("durationMs"), 10000},
+                {QStringLiteral("startWatts"), 150.0},
+                {QStringLiteral("endWatts"), 250.0}
+            },
+            QJsonObject {
+                {QStringLiteral("startMs"), 10000},
+                {QStringLiteral("durationMs"), 20600},
+                {QStringLiteral("startWatts"), 100.0},
+                {QStringLiteral("endWatts"), 100.0}
+            }
+        });
+        source.insert(QStringLiteral("prescriptionMetadata"), QJsonObject {
+            {QStringLiteral("version"), 1},
+            {QStringLiteral("intervalRoles"), QJsonArray {
+                QStringLiteral("prescribed"),
+                QStringLiteral("non-prescriptive-cooldown")
+            }}
+        });
+        root.insert(QStringLiteral("source"), source);
+        const QByteArray encoded =
+                QJsonDocument(root).toJson(QJsonDocument::Compact) + '\n';
+
         WorkoutGameCourseDocument decoded;
         QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
                  WorkoutGameCourseDocumentStatus::Ready);
         QCOMPARE(decoded.sourceIntervals.back().startMs
                     + decoded.sourceIntervals.back().durationMs,
-                 std::int64_t(35000));
+                 std::int64_t(30600));
         QCOMPARE(decoded.course.nominalDurationMs, std::int64_t(30000));
+        const QByteArray repeated = WorkoutGameCourseDocumentCodec::encode(decoded);
+        QVERIFY(repeated.contains("\"prescriptionMetadata\""));
+        QVERIFY(repeated.contains("\"version\":1"));
+        QVERIFY(repeated.contains("\"non-prescriptive-cooldown\""));
+    }
+
+    void unknownOrMismatchedPrescriptionMetadataFailsClosed()
+    {
+        QJsonObject canonical = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
+                .object();
+        QJsonObject source = canonical.value(QStringLiteral("source")).toObject();
+        source.insert(QStringLiteral("intervals"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("startMs"), 0},
+                {QStringLiteral("durationMs"), 10000},
+                {QStringLiteral("startWatts"), 150.0},
+                {QStringLiteral("endWatts"), 250.0}
+            },
+            QJsonObject {
+                {QStringLiteral("startMs"), 10000},
+                {QStringLiteral("durationMs"), 20000},
+                {QStringLiteral("startWatts"), 100.0},
+                {QStringLiteral("endWatts"), 100.0}
+            }
+        });
+        source.insert(QStringLiteral("prescriptionMetadata"), QJsonObject {
+            {QStringLiteral("version"), 99},
+            {QStringLiteral("intervalRoles"), QJsonArray {
+                QStringLiteral("prescribed"),
+                QStringLiteral("prescribed")
+            }}
+        });
+        canonical.insert(QStringLiteral("source"), source);
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(canonical).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::UnsupportedVersion);
+
+        QJsonObject metadata = source.value(
+                QStringLiteral("prescriptionMetadata")).toObject();
+        metadata.insert(QStringLiteral("version"), 1);
+        metadata.insert(QStringLiteral("intervalRoles"), QJsonArray());
+        source.insert(QStringLiteral("prescriptionMetadata"), metadata);
+        canonical.insert(QStringLiteral("source"), source);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(canonical).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::InvalidDocument);
+
+        metadata.insert(QStringLiteral("intervalRoles"), QJsonArray {
+            QStringLiteral("prescribed"),
+            QStringLiteral("non-prescriptive-transition")
+        });
+        source.insert(QStringLiteral("prescriptionMetadata"), metadata);
+        canonical.insert(QStringLiteral("source"), source);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(canonical).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::InvalidDocument);
     }
 
     void unknownRoadGenerationVersionFailsClosed()

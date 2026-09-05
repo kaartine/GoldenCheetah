@@ -1,30 +1,76 @@
 {
+  "contractVersion": 2,
   "ftpWatts": 190.0,
+  "prescriptionMetadata": null,
   "intervals": [
-    {"durationMs": 600000, "startWatts": 140.0, "endWatts": 140.0},
-    {"durationMs": 240000, "startWatts": 205.0, "endWatts": 205.0},
-    {"durationMs": 10000, "startWatts": 250.0, "endWatts": 250.0},
-    {"durationMs": 180000, "startWatts": 110.0, "endWatts": 110.0},
-    {"durationMs": 300000, "startWatts": 100.0, "endWatts": 100.0}
+    {"id": "unannotated-opening", "durationMs": 600000, "startWatts": 140.0, "endWatts": 140.0},
+    {"id": "four-minute-key-effort", "durationMs": 240000, "startWatts": 205.0, "endWatts": 205.0},
+    {"id": "ten-second-key-effort", "durationMs": 10000, "startWatts": 250.0, "endWatts": 250.0},
+    {"id": "five-minute-recovery", "durationMs": 300000, "startWatts": 100.0, "endWatts": 100.0},
+    {"id": "unannotated-ending", "durationMs": 180000, "startWatts": 140.0, "endWatts": 140.0}
   ],
+  "contracts": {
+    "WorkoutFirst": {
+      "maximumIntervalPowerErrorWatts": 0.0,
+      "maximumKeyEffortDurationErrorMs": 0,
+      "minimumRecoveryRetention": 1.0,
+      "defaultRecoveryRetention": 1.0,
+      "maximumNonPrescriptiveChangePercent": 0.0,
+      "maximumTotalDurationDeviationPercent": 0.0,
+      "gradeScale": 0.82,
+      "technicality": 0.15,
+      "technicalTerrainExposurePercent": [0.0, 0.0],
+      "technicalFeatureDensityPerTenSections": [0.0, 0.0],
+      "curvatureDegreesPer100m": [45.0, 75.0]
+    },
+    "Balanced": {
+      "maximumIntervalPowerErrorWatts": 0.0,
+      "maximumKeyEffortDurationErrorMs": 0,
+      "minimumRecoveryRetention": 1.0,
+      "defaultRecoveryRetention": 1.0,
+      "maximumNonPrescriptiveChangePercent": 3.0,
+      "maximumTotalDurationDeviationPercent": 3.0,
+      "gradeScale": 1.0,
+      "technicality": 0.55,
+      "technicalTerrainExposurePercent": [50.0, 90.0],
+      "technicalFeatureDensityPerTenSections": [5.0, 9.0],
+      "curvatureDegreesPer100m": [60.0, 120.0]
+    },
+    "RideFirst": {
+      "maximumIntervalPowerErrorWatts": 0.0,
+      "maximumKeyEffortDurationErrorMs": 0,
+      "minimumRecoveryRetention": 0.95,
+      "defaultRecoveryRetention": 1.0,
+      "maximumNonPrescriptiveChangePercent": 8.0,
+      "maximumTotalDurationDeviationPercent": 8.0,
+      "gradeScale": 1.18,
+      "technicality": 0.95,
+      "technicalTerrainExposurePercent": [100.0, 100.0],
+      "technicalFeatureDensityPerTenSections": [10.0, 10.0],
+      "curvatureDegreesPer100m": [75.0, 170.0]
+    }
+  },
   "expected": {
     "WorkoutFirst": {
+      "outputDurationMs": [600000, 240000, 10000, 300000, 180000],
       "durationMs": 1330000,
       "workDeviationPercent": 0.0,
       "recoveryDeviationPercent": 0.0,
       "loadDeviationPercent": 0.0
     },
     "Balanced": {
-      "durationMs": 1289200,
-      "workDeviationPercent": -1.411764705882353,
-      "recoveryDeviationPercent": -6.0,
-      "loadDeviationPercent": -1.9743209519331621
+      "outputDurationMs": [600000, 240000, 10000, 300000, 180000],
+      "durationMs": 1330000,
+      "workDeviationPercent": 0.0,
+      "recoveryDeviationPercent": 0.0,
+      "loadDeviationPercent": 0.0
     },
     "RideFirst": {
-      "durationMs": 1233410,
-      "workDeviationPercent": -4.545411764705879,
-      "recoveryDeviationPercent": -12.07375,
-      "loadDeviationPercent": -4.9999815544866015
+      "outputDurationMs": [600000, 240000, 10000, 300000, 180000],
+      "durationMs": 1330000,
+      "workDeviationPercent": 0.0,
+      "recoveryDeviationPercent": 0.0,
+      "loadDeviationPercent": 0.0
     }
   }
 }

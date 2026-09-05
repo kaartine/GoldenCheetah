@@ -3,126 +3,167 @@
 import json
 import math
 import pathlib
-import re
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 HEADER = ROOT / "src/Train/WorkoutGameCoursePrescription.h"
+CONVERSION_HEADER = ROOT / "src/Train/WorkoutGameCourseConversion.h"
+DOCUMENT_HEADER = ROOT / "src/Train/WorkoutGameCourseDocument.h"
+DESIGN = ROOT / "doc/design/WORKOUT_GAME_COURSE_CONVERSION_MODES.md"
 FIXTURE = (ROOT / "unittests/Train/workoutGameCourseConversion/fixtures"
            / "mode_contract.json")
 
 
-def constant(source, name):
-    match = re.search(
-        rf"static constexpr double {name}\s*=\s*([0-9.]+);", source)
-    if not match:
-        raise AssertionError(f"missing contract constant {name}")
-    return float(match.group(1))
-
-
-def load_points(intervals, ftp, duration_key):
+def load_points(intervals, ftp, durations):
     return sum(
-        100.0 * (interval[duration_key] / 3_600_000.0)
+        100.0 * (duration / 3_600_000.0)
         * (interval["startWatts"] ** 2
            + interval["startWatts"] * interval["endWatts"]
            + interval["endWatts"] ** 2)
         / (3.0 * ftp ** 2)
-        for interval in intervals
+        for interval, duration in zip(intervals, durations)
     )
 
 
 class CourseConversionContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.header = HEADER.read_text(encoding="utf-8")
         cls.fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        cls.design = DESIGN.read_text(encoding="utf-8")
 
-    def transform(self, mode):
-        ftp = self.fixture["ftpWatts"]
-        recovery_threshold = constant(self.header, "RecoveryIntensity")
-        long_seconds = constant(self.header, "KeyLongDurationSeconds")
-        long_intensity = constant(self.header, "KeyLongIntensity")
-        hard_seconds = constant(self.header, "KeyHardDurationSeconds")
-        hard_intensity = constant(self.header, "KeyHardIntensity")
-        sprint_seconds = constant(self.header, "KeySprintDurationSeconds")
-        sprint_intensity = constant(self.header, "KeySprintIntensity")
-        work_scale = constant(self.header, mode + "OtherWorkScale")
-        recovery_scale = constant(self.header, mode + "RecoveryScale")
-        load_limit = constant(self.header, mode + "MaximumLoadDeviationPercent")
-        output = []
-        for source in self.fixture["intervals"]:
-            item = dict(source)
-            intensity = ((item["startWatts"] + item["endWatts"]) * 0.5
-                         / ftp)
-            item["recovery"] = intensity <= recovery_threshold
-            seconds = item["durationMs"] / 1000.0
-            item["key"] = (not item["recovery"] and (
-                (seconds >= long_seconds and intensity >= long_intensity)
-                or (seconds >= hard_seconds and intensity >= hard_intensity)
-                or (seconds >= sprint_seconds and intensity >= sprint_intensity)))
-            scale = (1.0 if item["key"] else
-                     recovery_scale if item["recovery"] else work_scale)
-            item["outputDurationMs"] = round(item["durationMs"] * scale)
-            output.append(item)
+    def test_unannotated_fixture_is_fail_safe_in_every_mode(self):
+        self.assertIsNone(self.fixture["prescriptionMetadata"])
+        source = [item["durationMs"] for item in self.fixture["intervals"]]
+        source_load = load_points(
+            self.fixture["intervals"], self.fixture["ftpWatts"], source)
 
-        source_load = load_points(output, ftp, "durationMs")
-        output_load = load_points(output, ftp, "outputDurationMs")
-        loss = 100.0 * (source_load - output_load) / source_load
-        if loss > load_limit:
-            fraction = load_limit / loss
-            for item in output:
-                if not item["key"]:
-                    delta = item["durationMs"] - item["outputDurationMs"]
-                    item["outputDurationMs"] = round(
-                        item["durationMs"] - delta * fraction)
-        return output
-
-    def test_fixture_matches_published_contract(self):
         for mode, expected in self.fixture["expected"].items():
-            output = self.transform(mode)
-            source_work = sum(i["durationMs"] for i in output
-                              if not i["recovery"])
-            output_work = sum(i["outputDurationMs"] for i in output
-                              if not i["recovery"])
-            source_recovery = sum(i["durationMs"] for i in output
-                                  if i["recovery"])
-            output_recovery = sum(i["outputDurationMs"] for i in output
-                                  if i["recovery"])
-            source_load = load_points(
-                output, self.fixture["ftpWatts"], "durationMs")
-            output_load = load_points(
-                output, self.fixture["ftpWatts"], "outputDurationMs")
-            self.assertEqual(sum(i["outputDurationMs"] for i in output),
-                             expected["durationMs"])
-            self.assertAlmostEqual(
-                100.0 * (output_work - source_work) / source_work,
-                expected["workDeviationPercent"], places=9)
-            self.assertAlmostEqual(
-                100.0 * (output_recovery - source_recovery) / source_recovery,
-                expected["recoveryDeviationPercent"], places=9)
-            self.assertAlmostEqual(
-                100.0 * (output_load - source_load) / source_load,
-                expected["loadDeviationPercent"], places=9)
-            for item in output:
-                if item["key"]:
-                    self.assertEqual(item["outputDurationMs"],
-                                     item["durationMs"])
-                    self.assertEqual(item["startWatts"],
-                                     self.fixture["intervals"][output.index(item)]
-                                     ["startWatts"])
+            with self.subTest(mode=mode):
+                output = expected["outputDurationMs"]
+                self.assertEqual(output, source)
+                self.assertEqual(sum(output), expected["durationMs"])
+                self.assertEqual(expected["workDeviationPercent"], 0.0)
+                self.assertEqual(expected["recoveryDeviationPercent"], 0.0)
+                self.assertEqual(expected["loadDeviationPercent"], 0.0)
+                self.assertTrue(math.isclose(
+                    load_points(self.fixture["intervals"],
+                                self.fixture["ftpWatts"], output),
+                    source_load, rel_tol=0.0, abs_tol=1.0e-12))
 
-    def test_contract_limits_are_ordered_and_safe(self):
-        self.assertLess(
-            constant(self.header, "WorkoutFirstMaximumLoadDeviationPercent"),
-            constant(self.header, "BalancedMaximumLoadDeviationPercent"))
-        self.assertLess(
-            constant(self.header, "BalancedMaximumLoadDeviationPercent"),
-            constant(self.header, "RideFirstMaximumLoadDeviationPercent"))
+    def test_five_minute_recovery_is_checked_separately(self):
+        matches = [
+            (index, interval)
+            for index, interval in enumerate(self.fixture["intervals"])
+            if interval["id"] == "five-minute-recovery"
+        ]
+        self.assertEqual(len(matches), 1)
+        index, recovery = matches[0]
+        self.assertEqual(recovery["durationMs"], 5 * 60 * 1000)
+        average_watts = (recovery["startWatts"]
+                         + recovery["endWatts"]) * 0.5
+        self.assertLessEqual(average_watts / self.fixture["ftpWatts"], 0.65)
+        self.assertGreater(index, 0)
+        self.assertLess(index + 1, len(self.fixture["intervals"]))
+
+        for mode, expected in self.fixture["expected"].items():
+            with self.subTest(mode=mode):
+                self.assertEqual(expected["outputDurationMs"][index], 300000)
+        self.assertEqual(
+            self.fixture["contracts"]["Balanced"]
+                ["minimumRecoveryRetention"],
+            1.0)
+        self.assertEqual(
+            self.fixture["contracts"]["RideFirst"]
+                ["minimumRecoveryRetention"],
+            0.95)
+        self.assertEqual(
+            self.fixture["contracts"]["RideFirst"]
+                ["defaultRecoveryRetention"],
+            1.0)
+
+    def test_prescription_limits_are_workout_first(self):
+        contracts = self.fixture["contracts"]
+        for mode in ("WorkoutFirst", "Balanced", "RideFirst"):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    contracts[mode]["maximumIntervalPowerErrorWatts"], 0.0)
+                self.assertEqual(
+                    contracts[mode]["maximumKeyEffortDurationErrorMs"], 0)
+        self.assertEqual(
+            contracts["WorkoutFirst"]["maximumTotalDurationDeviationPercent"],
+            0.0)
+        self.assertEqual(
+            contracts["Balanced"]["maximumNonPrescriptiveChangePercent"],
+            3.0)
+        self.assertEqual(
+            contracts["Balanced"]["minimumRecoveryRetention"], 1.0)
+        self.assertEqual(
+            contracts["RideFirst"]["maximumTotalDurationDeviationPercent"],
+            8.0)
         self.assertGreaterEqual(
-            constant(self.header, "RideFirstRecoveryScale"), 0.85)
-        self.assertLessEqual(
-            constant(self.header, "RideFirstMaximumLoadDeviationPercent"), 5.0)
+            contracts["RideFirst"]["minimumRecoveryRetention"], 0.95)
+
+    def test_terrain_feature_and_curvature_bands_are_distinct(self):
+        contracts = self.fixture["contracts"]
+        modes = ("WorkoutFirst", "Balanced", "RideFirst")
+        self.assertEqual(
+            [contracts[mode]["gradeScale"] for mode in modes],
+            [0.82, 1.0, 1.18])
+        self.assertEqual(
+            [contracts[mode]["technicality"] for mode in modes],
+            [0.15, 0.55, 0.95])
+        self.assertEqual(
+            [contracts[mode]["technicalTerrainExposurePercent"] for mode in modes],
+            [[0.0, 0.0], [50.0, 90.0], [100.0, 100.0]])
+        self.assertEqual(
+            [contracts[mode]["technicalFeatureDensityPerTenSections"]
+             for mode in modes],
+            [[0.0, 0.0], [5.0, 9.0], [10.0, 10.0]])
+        curvature = [
+            contracts[mode]["curvatureDegreesPer100m"] for mode in modes
+        ]
+        self.assertGreaterEqual(curvature[0][0], 45.0)
+        self.assertGreaterEqual(curvature[1][0] - curvature[0][0], 15.0)
+        self.assertGreaterEqual(curvature[2][0] - curvature[1][0], 15.0)
+        self.assertLessEqual(curvature[2][1], 2.0 * 85.0)
+
+    def test_design_records_preview_metadata_and_legacy_rules(self):
+        required = (
+            "No mode may automatically shorten any such interval",
+            "ordinary 5:00",
+            "technical terrain exposure",
+            "feature count/density and curvature",
+            "Create/Save",
+            "schema version 3",
+            "Schema-1 and schema-2 documents remain readable and canonical",
+        )
+        for phrase in required:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.design)
+
+    def test_production_contract_header_and_api_exist(self):
+        self.assertTrue(
+            HEADER.is_file(),
+            "missing production contract/header/API: "
+            "src/Train/WorkoutGameCoursePrescription.h")
+        source = HEADER.read_text(encoding="utf-8")
+        conversion = CONVERSION_HEADER.read_text(encoding="utf-8")
+        document = DOCUMENT_HEADER.read_text(encoding="utf-8")
+        for token in (
+                "WorkoutGameCourseModeContract",
+                "WorkoutGameCoursePrescriptionMetadata",
+                "WorkoutGameCourseIntervalRole",
+                "minimumRecoveryRetention",
+                "maximumNonPrescriptiveDurationChangePercent",
+                "technicalTerrainExposure",
+                "technicalFeatureDensityPerTenSections",
+                "curvatureDegreesPer100m"):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        self.assertIn("prescriptionMetadata", conversion)
+        self.assertIn("CurrentSchemaVersion = 3", document)
+        self.assertIn("conversionAlgorithmVersion", document)
 
 
 if __name__ == "__main__":
