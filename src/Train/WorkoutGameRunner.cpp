@@ -74,8 +74,18 @@ bool WorkoutGameRunner::configure(
         double ftpWatts,
         bool featureLabEnabled)
 {
+    return configure(course, ftpWatts, featureLabEnabled, std::nullopt);
+}
+
+bool WorkoutGameRunner::configure(
+        const WorkoutGameCourse &course,
+        double ftpWatts,
+        bool featureLabEnabled,
+        std::optional<WorkoutGameFeatureLabGapScenario> gapScenario)
+{
     shutdown();
     clearOutput();
+    configuredFeatureLabGapScenario.reset();
     configured = course.status == WorkoutGameCourseStatus::Ready
             && !course.sections.empty()
             && course.durationMs > 0
@@ -86,6 +96,9 @@ bool WorkoutGameRunner::configure(
     configuredCourse = course;
     configuredFtpWatts = ftpWatts;
     configuredFeatureLabEnabled = featureLabEnabled;
+    if (featureLabEnabled) {
+        configuredFeatureLabGapScenario = gapScenario;
+    }
     const std::int64_t nowMs = monotonicMilliseconds();
     inputState = InputState();
     inputState.anchorMonotonicTimeMs = nowMs;
@@ -99,6 +112,23 @@ bool WorkoutGameRunner::configure(
     stopping = false;
     ensureThread();
     return true;
+}
+
+bool WorkoutGameRunner::prepareEngineInput(
+        WorkoutGameEngineInput &input,
+        std::int64_t workoutTimeMs,
+        std::int64_t monotonicTimeMs) const
+{
+    const bool telemetryStale = expireTelemetry(input, monotonicTimeMs);
+    input.simulation.workoutTimeMs = workoutTimeMs;
+    if (configuredFeatureLabGapScenario) {
+        WorkoutGameFeatureLab::applyGapScenario(
+                configuredCourse,
+                workoutTimeMs,
+                *configuredFeatureLabGapScenario,
+                input.simulation);
+    }
+    return telemetryStale;
 }
 
 void WorkoutGameRunner::ensureThread()
@@ -366,7 +396,10 @@ void WorkoutGameRunner::run()
 
         if (state.resynchronizeRevision != seenResynchronizeRevision) {
             WorkoutGameEngineInput anchorInput = state.input;
-            anchorInput.simulation.workoutTimeMs = state.anchorWorkoutTimeMs;
+            prepareEngineInput(
+                    anchorInput,
+                    state.anchorWorkoutTimeMs,
+                    state.anchorMonotonicTimeMs);
             std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
             if (lifecycleGeneration.load(std::memory_order_acquire)
                     != state.generation) {
@@ -385,11 +418,10 @@ void WorkoutGameRunner::run()
         std::size_t firstTick = 0;
         if (advance.skippedTicks > 0 && !advance.ticks.empty()) {
             WorkoutGameEngineInput skipInput = state.input;
-            expireTelemetry(
+            prepareEngineInput(
                     skipInput,
+                    advance.ticks.front().workoutTimeMs,
                     advance.ticks.front().deadlineMonotonicMs);
-            skipInput.simulation.workoutTimeMs =
-                    advance.ticks.front().workoutTimeMs;
             {
                 std::lock_guard<std::mutex> lifecycleLock(
                         engineLifecycleMutex);
@@ -408,9 +440,10 @@ void WorkoutGameRunner::run()
              index < advance.ticks.size(); ++index) {
             const WorkoutGameClockTick &tick = advance.ticks[index];
             WorkoutGameEngineInput tickInput = state.input;
-            const bool telemetryStale = expireTelemetry(
-                    tickInput, tick.deadlineMonotonicMs);
-            tickInput.simulation.workoutTimeMs = tick.workoutTimeMs;
+            const bool telemetryStale = prepareEngineInput(
+                    tickInput,
+                    tick.workoutTimeMs,
+                    tick.deadlineMonotonicMs);
             tickInput.simulation.paused = false;
             std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
             if (lifecycleGeneration.load(std::memory_order_acquire)
