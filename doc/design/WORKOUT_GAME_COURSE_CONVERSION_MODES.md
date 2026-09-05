@@ -129,10 +129,9 @@ Palette-eligible means a section classified as `WarmupTrail`, `Trail` or
 `FlowTrail` before applying the mode palette. Prescribed recoveries, authored
 climbs, sprint challenges and safety-exempt challenge branches are excluded
 from its denominator and audited separately. `Technical feature density` is
-the count of those technical sections per ten palette-eligible sections; its
-0 / 5--9 / 10 bands follow the current low-palette suppression, middle
-six-choice palette (five technical) and all-technical high palette. `Curvature`
-is accumulated
+the count of those technical sections per ten palette-eligible sections. Its
+2--4 / 5--7 / 8--10 bands deliberately keep all three modes playful while
+providing increasing technical intensity and variety. `Curvature` is accumulated
 absolute heading change in degrees per 100 ordinary metres, excluding the same
 quality-exempt branches. A mode with no palette-eligible distance reports
 exposure and density as `N/A`, not zero.
@@ -141,11 +140,22 @@ exposure and density as `N/A`, not zero.
 | --- | ---: | ---: | ---: |
 | `gradeScale` | 0.82 | 1.00 | 1.18 |
 | `technicality` | 0.15 | 0.55 | 0.95 |
-| Palette-eligible technical terrain exposure | 0% | 50--90% | 100% |
-| Technical feature density | 0 / 10 sections | 5--9 / 10 sections | 10 / 10 sections |
-| Palette | smooth trail; climbs retained | roots, rock garden, rollers, log-over, skinny, smooth; occasional recovery berm | skinny, rock garden or rock slab trail; berm recovery; log-over, tabletop or gated gap jump sprint |
+| Palette-eligible technical terrain exposure | 25--45% | 50--75% | 75--100% |
+| Technical feature density | 2--4 / 10 sections | 5--7 / 10 sections | 8--10 / 10 sections |
+| Palette | roots, rollers, easy rock garden and log-over mixed with smooth trail; climbs retained; no gap jump | roots, rollers, rock garden, log-over and skinny mixed with smooth trail; occasional recovery berm; no gap jump | skinny, rock garden or rock slab trail; berm recovery; log-over, tabletop or gated gap jump sprint |
+| Scored challenge on a suitable prescribed work/key-effort section | allowed without changing start/end power, interval time or minimum exposure | allowed without changing start/end power, interval time or minimum exposure | allowed without changing start/end power, interval time or minimum exposure |
 | Scored challenge on a prescribed recovery | never | never | never |
 | Curvature target | 45--75 deg/100 m | 60--120 deg/100 m | 75--170 deg/100 m |
+
+Workout first is not a no-game mode: roots, rollers, an easy rock garden and a
+log-over are available inside its lower exposure and density bands. A scored
+challenge may be attached to a suitable work or key-effort section in any mode,
+provided it does not change the section's start/end target power, interval
+duration, minimum exposure or any other prescription guarantee. Prescribed
+recovery never receives a scored challenge in any mode. Balanced and Ride first
+increase technical difficulty and variety through the existing safe feature
+catalog; their distinction from Workout first is technical intensity, density,
+curvature, `gradeScale` and flow, not game versus no-game.
 
 For the same source and seed, the accepted curvature values must satisfy
 `Workout first < Balanced < Ride first`; adjacent modes differ by at least 15

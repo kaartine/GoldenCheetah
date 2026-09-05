@@ -115,11 +115,21 @@ class CourseConversionContractTest(unittest.TestCase):
             [0.15, 0.55, 0.95])
         self.assertEqual(
             [contracts[mode]["technicalTerrainExposurePercent"] for mode in modes],
-            [[0.0, 0.0], [50.0, 90.0], [100.0, 100.0]])
+            [[25.0, 45.0], [50.0, 75.0], [75.0, 100.0]])
         self.assertEqual(
             [contracts[mode]["technicalFeatureDensityPerTenSections"]
              for mode in modes],
-            [[0.0, 0.0], [5.0, 9.0], [10.0, 10.0]])
+            [[2.0, 4.0], [5.0, 7.0], [8.0, 10.0]])
+        self.assertEqual(
+            contracts["WorkoutFirst"]["allowedTechnicalTerrain"],
+            ["roots", "rollers", "easy-rock-garden", "log-over"])
+        self.assertNotIn(
+            "gap-jump", contracts["WorkoutFirst"]["allowedTechnicalTerrain"])
+        for mode in modes:
+            with self.subTest(mode=mode):
+                self.assertTrue(contracts[mode]["scoredChallengeOnWorkAllowed"])
+                self.assertFalse(
+                    contracts[mode]["scoredChallengeOnRecoveryAllowed"])
         curvature = [
             contracts[mode]["curvatureDegreesPer100m"] for mode in modes
         ]
@@ -129,10 +139,13 @@ class CourseConversionContractTest(unittest.TestCase):
         self.assertLessEqual(curvature[2][1], 2.0 * 85.0)
 
     def test_design_records_preview_metadata_and_legacy_rules(self):
+        normalized_design = " ".join(self.design.split())
         required = (
             "No mode may automatically shorten any such interval",
             "ordinary 5:00",
             "technical terrain exposure",
+            "Workout first is not a no-game mode",
+            "Prescribed recovery never receives a scored challenge",
             "feature count/density and curvature",
             "Create/Save",
             "schema version 3",
@@ -140,7 +153,7 @@ class CourseConversionContractTest(unittest.TestCase):
         )
         for phrase in required:
             with self.subTest(phrase=phrase):
-                self.assertIn(phrase, self.design)
+                self.assertIn(phrase, normalized_design)
 
     def test_production_contract_header_and_api_exist(self):
         self.assertTrue(

@@ -169,6 +169,18 @@ private slots:
         }
         QVERIFY(hasNewRideFeature);
 
+        bool workoutFirstHasTechnicalPlay = false;
+        for (const WorkoutGameDistanceCourseSection &section
+                : workoutFirst.course.sections) {
+            workoutFirstHasTechnicalPlay = workoutFirstHasTechnicalPlay
+                    || section.terrain == WorkoutGameTerrainKind::Roots
+                    || section.terrain == WorkoutGameTerrainKind::Rollers
+                    || section.terrain == WorkoutGameTerrainKind::RockGarden
+                    || section.terrain == WorkoutGameTerrainKind::LogOver;
+            QVERIFY(section.terrain != WorkoutGameTerrainKind::GapJump);
+        }
+        QVERIFY(workoutFirstHasTechnicalPlay);
+
         for (std::size_t index = 0; index < balanced.course.sections.size(); ++index) {
             QCOMPARE(workoutFirst.course.sections[index].targetStartWatts,
                      balanced.course.sections[index].targetStartWatts);
@@ -254,6 +266,14 @@ private slots:
                                 * contract.minimumRecoveryExposure - 1.0);
                     QVERIFY(output.terrain
                             != WorkoutGameTerrainKind::GapJump);
+                    if (result.course.roadPlan) {
+                        for (const WorkoutGameRoadPiece &piece
+                                : result.course.roadPlan->pieces) {
+                            if (piece.sourceSectionIndex == index) {
+                                QVERIFY(!piece.challenge.enabled);
+                            }
+                        }
+                    }
                 }
             }
 
