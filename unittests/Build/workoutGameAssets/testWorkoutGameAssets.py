@@ -582,7 +582,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertGreaterEqual(crank_extras["pedal_platform_length_m"], 0.10)
         self.assertGreaterEqual(manifest["technical"]["trianglesLod0"], 2500)
         self.assertLessEqual(manifest["technical"]["trianglesLod0"], 3600)
-        self.assertEqual(manifest["review"]["status"], "candidate")
+        self.assertEqual(manifest["review"]["status"], "approved")
         self.assertEqual(manifest["review"]["trademarkStatus"], "clear")
         self.assertEqual(manifest["review"]["personReleaseStatus"], "not-applicable")
         self.assertEqual(manifest["review"]["propertyReleaseStatus"], "not-applicable")
@@ -614,6 +614,36 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertIn('baseColor: "#2f68b2"', runtime_qml)
         self.assertIn('baseColor: "#d7dad8"', runtime_qml)
+
+    def test_rider_bike_runtime_package_matches_authored_candidate(self) -> None:
+        document, _ = assets.read_glb(RIDER_GLB_PATH)
+        manifest = assets.load_json_file(RIDER_MANIFEST_PATH)
+        runtime_qml_path = REPOSITORY / "src/Train/qml/WorkoutGameRiderBike.qml"
+        resource_path = REPOSITORY / "src/Resources/workout-game-assets.qrc"
+        runtime_qml = runtime_qml_path.read_text(encoding="utf-8")
+        resources = resource_path.read_text(encoding="utf-8")
+        manifest_files = {
+            entry["path"]: entry for entry in manifest["files"]
+        }
+
+        mesh_nodes = sorted(
+            node["name"] for node in document["nodes"]
+            if node.get("mesh") is not None
+        )
+        self.assertEqual(len(mesh_nodes), 17)
+        for node_name in mesh_nodes:
+            mesh_name = f"geo_{node_name.removeprefix('GEO_')}_mesh.mesh"
+            relative_path = f"src/Train/qml/assets/meshes/{mesh_name}"
+            mesh_path = REPOSITORY / relative_path
+            self.assertTrue(mesh_path.is_file(), relative_path)
+            self.assertIn(relative_path, manifest_files)
+            self.assertEqual(manifest_files[relative_path]["purpose"], "runtime")
+            self.assertEqual(manifest_files[relative_path]["sha256"], sha256(mesh_path))
+            self.assertIn(f'assets/meshes/{mesh_name}', runtime_qml)
+            self.assertIn(f'alias="qml/assets/meshes/{mesh_name}"', resources)
+
+        self.assertEqual(manifest["review"]["status"], "approved")
+        self.assertNotIn("deliberately unchanged", manifest["review"]["notes"])
 
     def test_rider_bike_audit_has_fixed_front_rear_side_and_chase_views(self) -> None:
         audit = assets.load_json_file(RIDER_AUDIT_PATH)

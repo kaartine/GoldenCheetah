@@ -71,6 +71,101 @@
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-chase.png",
       "purpose": "preview",
       "sha256": "561bb567543fbd889289f871da822bddef8422e670c808c63fb81a6c38ca1fde"
+    },
+    {
+      "path": "src/Train/qml/WorkoutGameRiderBike.qml",
+      "purpose": "runtime",
+      "sha256": "d4ff52ffe8ccbdcf8a5668745f7da46497071a47af286253511926a6dc8a0b6c"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_BikeComponents_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "9cbd5ee7be44c9c8cc8fd19ffbfb71f85894a66d28c1953c438e066892e37cdc"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "0731f0e33c721231c1ad1794ab1f0be4ec27f1e0f103648ccc694508b97fe056"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Eyewear_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "785bacdcc4e04ba330a48e7374c3c1b5f9e4a8be48de609919e123dc076d8abf"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Fork_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "1747be0ab177ab7868babaf935959b1588587c5abd2ae649ed0e609c928fbbc5"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "7b0105f249d1fd0b1e724037d3fcc55420a1999ab9e5d60361c403d1b517b30e"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_HairBeard_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "95994a2b0424e255697bcdd2cef6943a5c5bc977827fefba6a0231d6c33ab243"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Head_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "3a765427093f81df86edfdc8a0b61e7cf877515ab1df76bcacd088f0de313743"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "6f67265eda2eb66c9758d6ce7d120ba0d07ac59d505ff974ddb2a13d7eab2fc0"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_HelmetAccent_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "d1c1b7cee4792a075ff6b5ceedac41b7fb2fee2d4c07205df7c15e1d7888215d"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_JerseyAccent_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "d08fe252d80f3540999c4aa87a627db25327d1625142fa3a1b665a2de0cd52d6"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Limb_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "16d6f3d2b35a7b33d41be788dc75cc2adcc37d89271c43a36c8bc15f6347f5db"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "5c5e61b67251b1061c2f2ed4cb12f761f321fd34a3a32b8bc0fec27aeba5555d"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_RearShock_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "8a866687d47f2c1b4ab22f8632bed9b2afa96eb1ba585927b2566041978495d2"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "a520dc8aa242a9721ae280d39db6ea7026529ac49d4948e76f95bab56532cea0"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Shadow_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "64528a34eb93d7ee298d95b742ea2b00c246e7268769ea72c8b99c7b0918c7a7"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Swingarm_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "9bbabb385fc6c2b0cd57b736e4a0315568e18f18a99507d1585d0ba4d124bc01"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_Torso_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "831ff029230c0bf052f0876056b0c44ac59186b1ffe65a01ff8a010f77a87290"
+    },
+    {
+      "path": "src/Resources/images/workout-game-surface-rider.png",
+      "purpose": "texture",
+      "sha256": "6d7d4395be1ee3aa1b9c4f6c04fd362aede586b320280ee62abce72a9744d552"
     }
   ],
   "processing": {
@@ -84,6 +179,8 @@
       "Generate the GLB twice with Blender 4.0.2 and require byte-identical output.",
       "Validate the GLB with repository policy and the Khronos glTF validator.",
       "Convert the candidate twice with Qt Balsam 6.8.3 and compare every generated output byte.",
+      "Bind all 17 converted meshes to the existing runtime pivots and snapshot-driven animation contract.",
+      "Package the converted meshes and shared rider surface texture in workout-game-assets.qrc.",
       "Render front, rear, side and chase audit views with fixed pose, cameras, field of view and lighting.",
       "Require repeated audit renders to decode to identical image pixels."
     ]
@@ -138,12 +235,12 @@
     }
   },
   "review": {
-    "status": "candidate",
+    "status": "approved",
     "trademarkStatus": "clear",
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
-    "reviewer": "GoldenCheetah asset engineering audit",
+    "reviewer": "GoldenCheetah asset engineering and runtime integration audit",
     "reviewedAt": "2026-09-05",
-    "notes": "Asset-package candidate only. The original low-poly silhouette keeps the established runtime node and pivot contract while adding a readable open-face helmet, coherent fictional rider proportions, a generic long-travel full-suspension chassis, one-by drivetrain, crank and platform pedals, fork arch, rear linkage and large unbranded black tires. Common functional dimensions remain fixed solely for runtime compatibility; no named bicycle design, person likeness, branded tread, logo, source mesh or proprietary surface is reproduced. No endorsement is claimed or implied. Runtime QML, converted meshes and packaging are deliberately unchanged in this candidate branch."
+    "notes": "Approved original low-poly rider and generic enduro 29er runtime asset. The integrated meshes retain the established axle, crank, steering, pelvis, shadow and camera pivots plus the snapshot-driven wheel, pedal, suspension and rider-pose animation contract. The model adds a readable open-face helmet, coherent fictional rider proportions, a generic long-travel full-suspension chassis, one-by drivetrain, platform pedals, fork arch, rear linkage and large unbranded black tires. No named bicycle design, person likeness, branded tread, logo, source mesh or proprietary surface is reproduced. No endorsement is claimed or implied. Deterministic Blender generation, two byte-identical Balsam conversions, packaged-resource loading and runtime rendering are required for release."
   }
 }
