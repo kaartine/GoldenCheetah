@@ -870,6 +870,7 @@ class WorkoutGameUiWorkflow:
         self.canvas = self.driver.find_named_any(
             WORKOUT_GAME_CANVAS_NAMES, showing=True
         )
+        self.canvas_accessible_name = self.driver.name(self.canvas)
         self.existing_records = set(self.records.glob("*.csv"))
         self.existing_activities = set(self.activities.glob("*.json"))
 
@@ -882,10 +883,7 @@ class WorkoutGameUiWorkflow:
         recording = self.driver.wait_new_file(
             self.records, self.existing_records, "*.csv"
         )
-        self.canvas = self.driver.find_named_any(
-            WORKOUT_GAME_CANVAS_NAMES, showing=True
-        )
-        record_renderer_canvas_name(self.root, self.driver.name(self.canvas))
+        record_renderer_canvas_name(self.root, self.canvas_accessible_name)
         self.initial_gear = self.driver.current_value(self.gear)
         if self.capture_screenshots:
             time.sleep(1.2)
@@ -936,11 +934,11 @@ class WorkoutGameUiWorkflow:
             # Motion remains trace-authoritative: readback itself can block
             # long enough for a short Feature Lab course to finish.
             self.driver.screenshot(
-                "04-workout-game-quick3d-post-cold-start-first", self.canvas
+                "04-workout-game-quick3d-post-cold-start-first"
             )
             time.sleep(0.4)
             self.driver.screenshot(
-                "04-workout-game-quick3d-post-cold-start-second", self.canvas
+                "04-workout-game-quick3d-post-cold-start-second"
             )
 
         self.activate_stop_training()
