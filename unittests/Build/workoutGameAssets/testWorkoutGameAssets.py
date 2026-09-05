@@ -68,6 +68,18 @@ CONIFER_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_ConiferSet.glb"
 )
+FOREST_FLOOR_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/EN-08-forest-floor-props.json"
+)
+FOREST_FLOOR_GLB_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generated/WG_ForestFloorProps.glb"
+)
+FOREST_FLOOR_AUDIT_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/audits/EN-08/EN-08-audit.json"
+)
 DISTANT_MANIFEST_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/manifests/EN-03-distant-ridges.json"
@@ -135,6 +147,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
             [
                 "EN-01-conifer-set",
                 "EN-03-distant-ridges",
+                "EN-08-forest-floor-props",
                 "FT-01-tabletop-greybox",
                 "FT-02-log-over-greybox",
                 "FT-03-bunny-hop-greybox",
@@ -452,6 +465,108 @@ class TestWorkoutGameAssets(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("geo_ScotsPineTrunk_LOD0_mesh.mesh", qrc)
         self.assertIn("geo_ScotsPineCrown_LOD0_mesh.mesh", qrc)
+
+    def test_forest_floor_props_are_grounded_atlas_ready_and_non_runtime(self) -> None:
+        document, size = assets.read_glb(FOREST_FLOOR_GLB_PATH)
+        manifest = assets.load_json_file(FOREST_FLOOR_MANIFEST_PATH)
+        assets.validate_glb_document(document, size, manifest)
+
+        expected_triangles = {
+            "GEO_GraniteLow_LOD0": 32,
+            "GEO_GraniteUpright_LOD0": 32,
+            "GEO_GraniteSlab_LOD0": 32,
+            "GEO_StumpRooted_LOD0": 50,
+            "GEO_DeadwoodFallen_LOD0": 72,
+            "GEO_UnderstoryFern_LOD0": 20,
+            "GEO_UnderstoryBilberry_LOD0": 40,
+            "GEO_UnderstoryHeather_LOD0": 42,
+        }
+        nodes = {node["name"]: node for node in document["nodes"]}
+        mesh_nodes = {
+            name: node for name, node in nodes.items() if "mesh" in node
+        }
+        self.assertEqual(set(mesh_nodes), set(expected_triangles))
+        self.assertEqual(
+            {material["name"] for material in document["materials"]},
+            {
+                "MAT_ForestGranite",
+                "MAT_ForestBark",
+                "MAT_ForestEndGrain",
+                "MAT_ForestUnderstory",
+            },
+        )
+
+        observed_total = 0
+        for name, expected in expected_triangles.items():
+            node = nodes[name]
+            mesh = document["meshes"][node["mesh"]]
+            count = sum(
+                document["accessors"][primitive["indices"]]["count"] // 3
+                for primitive in mesh["primitives"]
+            )
+            observed_total += count
+            self.assertEqual(count, expected)
+            self.assertLessEqual(count, 96)
+            self.assertEqual(node["extras"]["instance_ready"], True)
+            self.assertEqual(node["extras"]["ground_contact_y_m"], 0.0)
+            minimum_y = float("inf")
+            maximum_y = float("-inf")
+            for primitive in mesh["primitives"]:
+                self.assertIn("TEXCOORD_0", primitive["attributes"])
+                position = document["accessors"][
+                    primitive["attributes"]["POSITION"]
+                ]
+                minimum_y = min(minimum_y, position["min"][1])
+                maximum_y = max(maximum_y, position["max"][1])
+            self.assertEqual(minimum_y, 0.0)
+            self.assertLessEqual(maximum_y, 0.70 + 1.0e-6)
+            expected_passes = 2 if name in {
+                "GEO_StumpRooted_LOD0", "GEO_DeadwoodFallen_LOD0"
+            } else 1
+            self.assertEqual(len(mesh["primitives"]), expected_passes)
+            pivot = name.replace("GEO_", "PIVOT_").replace("_LOD0", "_BASE")
+            self.assertIn(pivot, nodes)
+            self.assertEqual(nodes[pivot].get("translation", [0, 0, 0]), [0, 0, 0])
+
+        self.assertEqual(observed_total, 320)
+        deadwood = nodes["GEO_DeadwoodFallen_LOD0"]["extras"]
+        self.assertEqual(deadwood["placement_role"], "scenery-only")
+        self.assertEqual(deadwood["collision_role"], "none")
+        self.assertEqual(deadwood["feature_role"], "none")
+        self.assertLessEqual(
+            manifest["technical"]["boundsMeters"]["maximum"][1], 0.70 + 1.0e-6
+        )
+        self.assertEqual(manifest["review"]["status"], "candidate")
+        self.assertEqual(manifest["license"]["spdxId"], "CC0-1.0")
+        self.assertNotIn(
+            "runtime", {entry["purpose"] for entry in manifest["files"]}
+        )
+
+    def test_forest_floor_audits_use_fixed_camera_scale_and_distinct_angles(self) -> None:
+        audit = assets.load_json_file(FOREST_FLOOR_AUDIT_PATH)
+        catalog = audit["catalog"]
+        self.assertEqual((catalog["widthPixels"], catalog["heightPixels"]),
+                         (960, 540))
+        self.assertEqual(catalog["verticalFovDegrees"], 47.0)
+        self.assertEqual(catalog["cameraDistanceMeters"], 3.0)
+        self.assertEqual(catalog["trailWidthScaleBarMeters"], 1.36)
+        self.assertEqual((catalog["cellColumns"], catalog["cellRows"]), (4, 2))
+        self.assertEqual(len(catalog["cellOrder"]), 8)
+        self.assertEqual(audit["sourceGlbSha256"], sha256(FOREST_FLOOR_GLB_PATH))
+
+        render_hashes = []
+        for render in audit["renders"]:
+            path = FOREST_FLOOR_AUDIT_PATH.parent / render["path"]
+            data = path.read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", data[16:24]), (960, 540))
+            self.assertEqual(render["sha256"], sha256(path))
+            render_hashes.append(render["sha256"])
+        self.assertEqual(
+            [render["assetRotationDegrees"] for render in audit["renders"]],
+            [0.0, 45.0, 135.0],
+        )
+        self.assertEqual(len(set(render_hashes)), 3)
 
     def test_distant_ridges_are_bounded_socket_free_scenery(self) -> None:
         document, size = assets.read_glb(DISTANT_GLB_PATH)

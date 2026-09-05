@@ -1,0 +1,58 @@
+{
+  "assetId": "EN-08-forest-floor-props",
+  "catalog": {
+    "cameraDistanceMeters": 3.0,
+    "cameraPositionMeters": [
+      0.0,
+      1.25,
+      -3.0
+    ],
+    "cameraTargetMeters": [
+      0.0,
+      0.28,
+      0.0
+    ],
+    "cellColumns": 4,
+    "cellOrder": [
+      "GEO_GraniteLow_LOD0",
+      "GEO_GraniteUpright_LOD0",
+      "GEO_GraniteSlab_LOD0",
+      "GEO_StumpRooted_LOD0",
+      "GEO_DeadwoodFallen_LOD0",
+      "GEO_UnderstoryFern_LOD0",
+      "GEO_UnderstoryBilberry_LOD0",
+      "GEO_UnderstoryHeather_LOD0"
+    ],
+    "cellRows": 2,
+    "heightPixels": 540,
+    "look": "Medium High Contrast",
+    "renderEngine": "CYCLES_CPU_16_SAMPLES",
+    "trailWidthScaleBarMeters": 1.36,
+    "verticalFovDegrees": 47.0,
+    "viewTransform": "Standard",
+    "widthPixels": 960
+  },
+  "format": "goldencheetah-workout-game-asset-audit-1",
+  "renders": [
+    {
+      "assetRotationDegrees": 0.0,
+      "path": "EN-08-front.png",
+      "sha256": "52c5292c7485dc2a94c158243fb119e1d9b4d4853d9dfb681a8aef589bbbf1ed",
+      "view": "front"
+    },
+    {
+      "assetRotationDegrees": 45.0,
+      "path": "EN-08-left-three-quarter.png",
+      "sha256": "038c9aa00c93002d1ac2713c399707d0032806b949ee057d8b83c0396d42f7ac",
+      "view": "left-three-quarter"
+    },
+    {
+      "assetRotationDegrees": 135.0,
+      "path": "EN-08-rear-three-quarter.png",
+      "sha256": "9ce63f6446e52ceb649d80b37d6ebb793493a480784be9f96e0f4c45210922ac",
+      "view": "rear-three-quarter"
+    }
+  ],
+  "sourceGlb": "WG_ForestFloorProps.glb",
+  "sourceGlbSha256": "8a02afdcd9a10778de9fdb3f503e84e4a8218b3578de338984cf9d7ede43ab14"
+}

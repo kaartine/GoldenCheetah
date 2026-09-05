@@ -7,8 +7,39 @@ partly buried log-over tile, `generate_bunny_hop.py` creates a compact
 practice hurdle, `generate_drop.py` creates a faceted drop face, and
 `generate_rider_bike.py` creates the articulated low-poly rider and 29er MTB
 mesh set, and `generate_conifer_set.py` creates four low-poly Finnish forest
-groves. `generate_distant_ridges.py` creates the bounded distant-terrain
-ring. None of the generators downloads or embeds external assets.
+groves. `generate_forest_floor_props.py` creates the eight-variant Finnish
+forest-floor prop kit, and `generate_distant_ridges.py` creates the bounded
+distant-terrain ring. None of the generators downloads or embeds external
+assets.
+
+## Forest-floor prop contract
+
+- Three 32-triangle granite forms use low, upright and slab-like silhouettes.
+  The rooted stump uses 50 triangles, the low decorative deadwood uses 72, and
+  fern, bilberry and heather-like understory forms use 20, 40 and 42.
+- Every variant is a separately instancing-ready mesh with an applied
+  transform, UV0, a named base pivot at the origin and exact ground contact at
+  canonical `Y = 0`. The complete source kit is 320 triangles and 39,236 bytes.
+- Four opaque shared materials cover granite, bark, cut end grain and
+  understory. Rocks and shrubs use one material primitive each; stump and
+  deadwood use two. There is no embedded texture, external URI, animation,
+  collision or physics authority.
+- The crooked 1.95-metre deadwood is only 0.32 metres high and explicitly records
+  `scenery-only`, `collision_role=none` and `feature_role=none`. It is not the
+  taller trail-spanning `FT-02` obstacle and may only be placed off trail in a
+  later integration task.
+- Generated geometry and audit images are offered as project-generated
+  `CC0-1.0` output; the two Python generators remain part of GoldenCheetah's
+  GPL source. No external model, texture, image, scan or AI input is used.
+- `render_forest_floor_prop_audit.py` imports the reviewed GLB and renders
+  front, left-three-quarter and rear-three-quarter 960 by 540 catalogs. All
+  cells share a 47-degree vertical FOV, camera, exposure, ground datum and a
+  1.36-metre trail-width scale bar. Cell order and hashes are recorded in
+  `audits/EN-08/EN-08-audit.json`.
+
+This kit is deliberately not converted with Balsam, added to qrc or referenced
+by world generation yet. Its candidate manifest and renders approve only the
+source/review package, not runtime placement or a release-checklist item.
 
 ## Distant-ridge contract
 
@@ -191,6 +222,25 @@ docker run --rm --user "$(id -u):$(id -g)" \
 The expected output is one self-contained GLB at the requested path. Blender's
 console output reports the expected topology for the selected generator.
 No `.blend`, texture, runtime collision or physics file is produced.
+
+Generate and audit the forest-floor prop kit with the same pinned image:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD:/work" -w /work \
+  goldencheetah-workout-game-blender:ubuntu24.04 \
+  --background --factory-startup --python-exit-code 1 \
+  --python contrib/workout-game-assets/blender/generate_forest_floor_props.py \
+  -- --output /work/contrib/workout-game-assets/generated/WG_ForestFloorProps.glb
+
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD:/work" -w /work \
+  goldencheetah-workout-game-blender:ubuntu24.04 \
+  --background --factory-startup --python-exit-code 1 \
+  --python contrib/workout-game-assets/blender/render_forest_floor_prop_audit.py \
+  -- --asset /work/contrib/workout-game-assets/generated/WG_ForestFloorProps.glb \
+  --output-dir /work/contrib/workout-game-assets/audits/EN-08
+```
 
 Determinism is expected for the same Blender 4.x patch release and export
 settings. Different Blender exporter versions may serialize equivalent GLB

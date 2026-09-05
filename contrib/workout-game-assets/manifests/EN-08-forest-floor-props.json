@@ -1,0 +1,128 @@
+{
+  "assetId": "EN-08-forest-floor-props",
+  "displayName": "Workout Game Low-Poly Finnish Forest-Floor Prop Kit",
+  "role": "prop",
+  "source": {
+    "kind": "project-authored",
+    "provider": "GoldenCheetah",
+    "author": "GoldenCheetah contributors",
+    "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_forest_floor_props.py",
+    "retrievedAt": "2026-09-05",
+    "originalFileName": "generate_forest_floor_props.py",
+    "originalSha256": "8d6554fc332c49d602ca5621ef25c4e35a61df3ea857d4b7d6717c6026f574d8",
+    "generator": "Blender Python",
+    "generatorVersion": "4.0.2",
+    "promptOrScript": "contrib/workout-game-assets/blender/generate_forest_floor_props.py"
+  },
+  "license": {
+    "spdxId": "CC0-1.0",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+    "attribution": "GoldenCheetah contributors",
+    "modificationAllowed": true,
+    "redistributionAllowed": true,
+    "decision": "allow",
+    "policyVersion": "2026-08-25",
+    "distributionScopes": ["source", "screenshots-video"],
+    "conditions": [],
+    "reviewNotes": "The generated geometry and audit images are offered as CC0-1.0 project-generated output. The generator scripts remain part of the GPL-2.0-or-later GoldenCheetah source tree. No external model, texture, image, scan or AI-generated input is used."
+  },
+  "files": [
+    {
+      "path": "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
+      "purpose": "source",
+      "sha256": "8d6554fc332c49d602ca5621ef25c4e35a61df3ea857d4b7d6717c6026f574d8"
+    },
+    {
+      "path": "contrib/workout-game-assets/blender/render_forest_floor_prop_audit.py",
+      "purpose": "source",
+      "sha256": "1eaa38afd81ba98c3bc65735b2ef92c6c4ea3dbb210dd6212afaf55950b30401"
+    },
+    {
+      "path": "contrib/workout-game-assets/generated/WG_ForestFloorProps.glb",
+      "purpose": "intermediate",
+      "sha256": "8a02afdcd9a10778de9fdb3f503e84e4a8218b3578de338984cf9d7ede43ab14"
+    },
+    {
+      "path": "contrib/workout-game-assets/audits/EN-08/EN-08-audit.json",
+      "purpose": "reference",
+      "sha256": "2d5cba3acf44f1cc929e196f8a776b184101f87d05f9cc92b69fd58bbcf34187"
+    },
+    {
+      "path": "contrib/workout-game-assets/audits/EN-08/EN-08-front.png",
+      "purpose": "preview",
+      "sha256": "52c5292c7485dc2a94c158243fb119e1d9b4d4853d9dfb681a8aef589bbbf1ed"
+    },
+    {
+      "path": "contrib/workout-game-assets/audits/EN-08/EN-08-left-three-quarter.png",
+      "purpose": "preview",
+      "sha256": "038c9aa00c93002d1ac2713c399707d0032806b949ee057d8b83c0396d42f7ac"
+    },
+    {
+      "path": "contrib/workout-game-assets/audits/EN-08/EN-08-rear-three-quarter.png",
+      "purpose": "preview",
+      "sha256": "9ce63f6446e52ceb649d80b37d6ebb793493a480784be9f96e0f4c45210922ac"
+    }
+  ],
+  "processing": {
+    "tool": "Blender",
+    "toolVersion": "4.0.2",
+    "steps": [
+      "Start pinned Blender 4.0.2 with --background --factory-startup.",
+      "Generate eight original ground-anchored prop meshes with applied transforms, explicit per-variant triangle contracts and shared flat-color materials.",
+      "Generate UV0 on every primitive for later shared-atlas use; embed no image or external URI.",
+      "Export one self-contained glTF 2.0 GLB with no cameras, lights, animations or collision authority.",
+      "Reproduce the GLB byte for byte and validate its manifest, bounds, topology, pivots, materials and budgets.",
+      "Import the exported GLB and render three fixed 47-degree-FOV CPU catalogs with a 1.36-metre trail-width scale bar."
+    ]
+  },
+  "technical": {
+    "format": "glb",
+    "unitMeters": 1.0,
+    "upAxis": "+Y",
+    "forwardAxis": "+Z",
+    "glbBytes": 39236,
+    "trianglesLod0": 320,
+    "materials": 4,
+    "textureBytes": 0,
+    "nodes": [
+      "GEO_DeadwoodFallen_LOD0",
+      "GEO_GraniteLow_LOD0",
+      "GEO_GraniteSlab_LOD0",
+      "GEO_GraniteUpright_LOD0",
+      "GEO_StumpRooted_LOD0",
+      "GEO_UnderstoryBilberry_LOD0",
+      "GEO_UnderstoryFern_LOD0",
+      "GEO_UnderstoryHeather_LOD0",
+      "PIVOT_DeadwoodFallen_BASE",
+      "PIVOT_GraniteLow_BASE",
+      "PIVOT_GraniteSlab_BASE",
+      "PIVOT_GraniteUpright_BASE",
+      "PIVOT_StumpRooted_BASE",
+      "PIVOT_UnderstoryBilberry_BASE",
+      "PIVOT_UnderstoryFern_BASE",
+      "PIVOT_UnderstoryHeather_BASE",
+      "ROOT_ForestFloorProps"
+    ],
+    "animations": [],
+    "allowedExtensions": [],
+    "boundsMeters": {
+      "minimum": [-0.9800000190734863, 0.0, -0.3756673336029053],
+      "maximum": [0.9700000286102295, 0.6700000166893005, 0.3970229923725128]
+    },
+    "budgets": {
+      "maxGlbBytes": 65536,
+      "maxTrianglesLod0": 480,
+      "maxMaterials": 4,
+      "maxTextureBytes": 0
+    }
+  },
+  "review": {
+    "status": "candidate",
+    "trademarkStatus": "not-applicable",
+    "personReleaseStatus": "not-applicable",
+    "propertyReleaseStatus": "not-applicable",
+    "reviewer": "GoldenCheetah engineering asset audit",
+    "reviewedAt": "2026-09-05",
+    "notes": "Source-only review candidate. Static asset checks and fixed-camera comparison renders verify distinct low, upright and slab granite silhouettes, a rooted stump, low decorative deadwood, fern, bilberry and heather forms. This status does not approve runtime placement, packaging, collision, target-GPU cost or any release checklist item."
+  }
+}
