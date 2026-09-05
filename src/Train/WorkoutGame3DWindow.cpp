@@ -161,14 +161,18 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
             QStringLiteral("workoutGame3D"), viewModel);
     connect(this, &QQuickView::statusChanged,
             this, &WorkoutGame3DWindow::handleStatusChanged);
+    connect(this, &QQuickWindow::afterSynchronizing, this, [this]() {
+        // A pending revision becomes observable only in the frame whose QML
+        // state has actually reached the render thread.
+        visualRevision.synchronize();
+    }, Qt::DirectConnection);
     connect(this, &QQuickWindow::frameSwapped, this, [this]() {
         const std::int64_t presentationTimeNs =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now().time_since_epoch())
                 .count();
         coldStartFrameCapture.recordFrame(
-                presentationTimeNs,
-                presentedVisualRevision.load(std::memory_order_acquire));
+                presentationTimeNs, visualRevision.presented());
         presentedFrameSequence.fetch_add(1, std::memory_order_acq_rel);
         pendingPresentationTimeNs.store(
                 presentationTimeNs, std::memory_order_release);
@@ -304,13 +308,17 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now().time_since_epoch())
                 .count();
-        coldStartFrameCapture.start(
-                startTimeNs,
-                presentedVisualRevision.load(std::memory_order_acquire));
+        coldStartFrameCapture.start(startTimeNs, visualRevision.presented());
     } else if (stopping) {
         coldStartFrameCapture.stop();
     }
-    if (running != sessionRunning) {
+    if (stateChanged) {
+        sessionRunning = running;
+        sessionRunningAtomic.store(running, std::memory_order_release);
+        if (rootObject()) {
+            rootObject()->setProperty("sessionRunning", sessionRunning);
+        }
+        visualRevision.markChanged();
         diagnostics.reset();
         currentDiagnostics = {};
         publishedDiagnostics = {};
@@ -319,16 +327,6 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
         lastTracePublishMs = -1;
         lastFpsPublishMs = -1;
         coldStartCompletePublished = false;
-    }
-    sessionRunning = running;
-    sessionRunningAtomic.store(running, std::memory_order_release);
-    if (rootObject()) {
-        rootObject()->setProperty("sessionRunning", sessionRunning);
-    }
-    if (stateChanged) {
-        // The running overlay is part of the presented scene even before the
-        // first simulation snapshot for the new session arrives.
-        presentedVisualRevision.fetch_add(1, std::memory_order_release);
     }
     if (running) {
         prewarmPending.store(false, std::memory_order_release);
@@ -359,7 +357,7 @@ void WorkoutGame3DWindow::presentFrame()
             presentedFrame,
             watts, targetWatts, cadenceRpm, heartRate, virtualGear);
     if (changed) {
-        presentedVisualRevision.fetch_add(1, std::memory_order_release);
+        visualRevision.markChanged();
     }
 }
 

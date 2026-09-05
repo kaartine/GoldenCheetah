@@ -30,6 +30,18 @@ struct WorkoutGameColdStartFrameSnapshot
     double longestUnchangedVisualIntervalMs = 0.0;
 };
 
+class WorkoutGameVisualRevisionTracker
+{
+public:
+    void markChanged() noexcept;
+    void synchronize() noexcept;
+    std::uint64_t presented() const noexcept;
+
+private:
+    std::atomic<std::uint64_t> pendingRevision{0};
+    std::atomic<std::uint64_t> synchronizedRevision{0};
+};
+
 class WorkoutGameColdStartFrameCapture
 {
 public:

@@ -98,7 +98,7 @@ private:
     int virtualGear = 1;
     std::atomic<std::int64_t> pendingPresentationTimeNs{0};
     std::atomic_bool presentationDispatchPending{false};
-    std::atomic<std::uint64_t> presentedVisualRevision{0};
+    WorkoutGameVisualRevisionTracker visualRevision;
     std::atomic<std::uint64_t> presentedFrameSequence{0};
     std::atomic_bool sessionRunningAtomic{false};
     std::atomic_bool prewarmPending{false};

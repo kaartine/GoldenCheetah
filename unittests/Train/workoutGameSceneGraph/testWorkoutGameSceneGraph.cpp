@@ -394,6 +394,25 @@ private slots:
         QCOMPARE(reset.lateFrameCount, std::uint64_t(0));
     }
 
+    void coldStartCaptureUsesOnlySynchronizedVisualRevisions()
+    {
+        WorkoutGameColdStartFrameCapture capture;
+        WorkoutGameVisualRevisionTracker visualRevision;
+        constexpr std::int64_t StartNs = 1000000000ll;
+
+        capture.start(StartNs, visualRevision.presented());
+        visualRevision.markChanged();
+        capture.recordFrame(StartNs + 16000000ll, visualRevision.presented());
+        visualRevision.synchronize();
+        capture.recordFrame(StartNs + 32000000ll, visualRevision.presented());
+
+        const WorkoutGameColdStartFrameSnapshot snapshot =
+                capture.snapshot(StartNs + 32000000ll);
+        QCOMPARE(snapshot.frameCount, std::uint32_t(2));
+        QCOMPARE(snapshot.uniqueVisualFramesPerSecond, 31.25);
+        QCOMPARE(snapshot.longestUnchangedVisualIntervalMs, 32.0);
+    }
+
     void diagnosticsExcludeExplicitRendererWarmupFromFrameStalls()
     {
         WorkoutGameDiagnostics diagnostics;

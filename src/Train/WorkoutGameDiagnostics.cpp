@@ -31,6 +31,23 @@ double milliseconds(std::int64_t nanoseconds)
 
 }
 
+void WorkoutGameVisualRevisionTracker::markChanged() noexcept
+{
+    pendingRevision.fetch_add(1, std::memory_order_release);
+}
+
+void WorkoutGameVisualRevisionTracker::synchronize() noexcept
+{
+    synchronizedRevision.store(
+            pendingRevision.load(std::memory_order_acquire),
+            std::memory_order_release);
+}
+
+std::uint64_t WorkoutGameVisualRevisionTracker::presented() const noexcept
+{
+    return synchronizedRevision.load(std::memory_order_acquire);
+}
+
 void WorkoutGameColdStartFrameCapture::start(
         std::int64_t startTimeNs,
         std::uint64_t initialVisualRevision) noexcept
