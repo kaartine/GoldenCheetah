@@ -8,8 +8,6 @@
  */
 
 #include "WorkoutGameCourseConversion.h"
-#include "WorkoutGameFeatureCatalog.h"
-
 #include <cmath>
 
 namespace {
@@ -25,29 +23,22 @@ bool validPreset(WorkoutGameCoursePreset preset)
     return false;
 }
 
-void countFeatures(
-        const WorkoutGameDistanceCourse &course,
-        WorkoutGameCourseConversionSummary &summary)
+std::vector<WorkoutGameInterval> generatedIntervals(
+        const WorkoutGameDistanceCourse &course)
 {
+    std::vector<WorkoutGameInterval> intervals;
+    intervals.reserve(course.sections.size());
+    std::int64_t startMs = 0;
     for (const WorkoutGameDistanceCourseSection &section : course.sections) {
-        if (WorkoutGameFeatureCatalog::definition(section.terrain).technical) {
-            ++summary.technicalFeatureCount;
-        }
-        switch (section.feature) {
-        case WorkoutGameFeature::Climb:
-            ++summary.climbCount;
-            break;
-        case WorkoutGameFeature::SprintJump:
-            ++summary.jumpCount;
-            break;
-        case WorkoutGameFeature::RecoveryDescent:
-        case WorkoutGameFeature::CooldownDescent:
-            ++summary.descentCount;
-            break;
-        default:
-            break;
-        }
+        intervals.push_back({
+            startMs,
+            section.nominalDurationMs,
+            section.targetStartWatts,
+            section.targetEndWatts
+        });
+        startMs += section.nominalDurationMs;
     }
+    return intervals;
 }
 
 }
@@ -63,20 +54,21 @@ WorkoutGameCourseConverter::parametersForPreset(
     case WorkoutGameCoursePreset::WorkoutFirst:
         parameters.gradeScale = 0.82;
         parameters.technicality = 0.15;
-        parameters.workMinimumDurationScale = 0.95;
-        parameters.workMaximumDurationScale = 1.15;
-        parameters.recoveryMinimumDurationScale = 0.8;
-        parameters.recoveryMaximumDurationScale = 1.35;
+        parameters.workMinimumDurationScale = 1.0;
+        parameters.workMaximumDurationScale = 1.0;
+        parameters.recoveryMinimumDurationScale = 1.0;
+        parameters.recoveryMaximumDurationScale = 1.0;
         break;
     case WorkoutGameCoursePreset::Balanced:
         parameters.technicality = 0.55;
+        parameters.recoveryMinimumDurationScale = 1.0;
         break;
     case WorkoutGameCoursePreset::RideFirst:
         parameters.gradeScale = 1.18;
         parameters.technicality = 0.95;
         parameters.workMinimumDurationScale = 0.8;
         parameters.workMaximumDurationScale = 1.5;
-        parameters.recoveryMinimumDurationScale = 0.55;
+        parameters.recoveryMinimumDurationScale = 0.95;
         parameters.recoveryMaximumDurationScale = 1.9;
         break;
     }
@@ -108,20 +100,36 @@ WorkoutGameCourseConversionResult WorkoutGameCourseConverter::convert(
         return result;
     }
 
-    result.summary.nominalDurationMs = result.course.nominalDurationMs;
-    result.summary.distanceMeters = result.course.totalDistanceMeters;
-    result.summary.elevationGainMeters = result.course.elevationGainMeters;
-    result.summary.elevationLossMeters = result.course.elevationLossMeters;
-    countFeatures(result.course, result.summary);
-    result.summary.fastEstimate = WorkoutGameDistanceCourseEstimator::estimate(
-            result.course, request.roadPhysics, 1.15);
-    result.summary.nominalEstimate = WorkoutGameDistanceCourseEstimator::estimate(
-            result.course, request.roadPhysics, 1.0);
-    result.summary.slowEstimate = WorkoutGameDistanceCourseEstimator::estimate(
-            result.course, request.roadPhysics, 0.85);
-    if (!result.summary.fastEstimate.finished
-            || !result.summary.nominalEstimate.finished
-            || !result.summary.slowEstimate.finished) {
+    const WorkoutGameCoursePrescriptionAudit prescription =
+            WorkoutGameCoursePrescription::audit(
+                request.intervals,
+                generatedIntervals(result.course),
+                request.ftpWatts,
+                request.preset,
+                request.prescriptionMetadata);
+    if (prescription.status != WorkoutGameCoursePrescriptionStatus::Ready) {
+        result.course = WorkoutGameDistanceCourse();
+        result.status = WorkoutGameCourseConversionStatus::GenerationFailed;
+        return result;
+    }
+    const WorkoutGameCourseModeContract contract =
+            WorkoutGameCoursePrescription::contractFor(request.preset);
+    for (std::size_t index = 0; index < request.intervals.size(); ++index) {
+        if (WorkoutGameCoursePrescription::isRecovery(
+                    request.intervals[index], request.ftpWatts)
+                && double(result.course.sections[index].minimumDurationMs) + 1.0
+                    < double(request.intervals[index].durationMs)
+                        * contract.minimumRecoveryExposure) {
+            result.course = WorkoutGameDistanceCourse();
+            result.status = WorkoutGameCourseConversionStatus::GenerationFailed;
+            return result;
+        }
+    }
+
+    if (!WorkoutGameCourseSummary::build(
+                result.course, request.intervals, request.ftpWatts,
+                request.preset, prescription, request.roadPhysics,
+                result.summary)) {
         result.status = WorkoutGameCourseConversionStatus::EstimateFailed;
         return result;
     }

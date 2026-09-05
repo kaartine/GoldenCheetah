@@ -935,6 +935,12 @@ SOURCES += Train/TrainBottom.cpp Train/TrainDB.cpp Train/TrainSidebar.cpp \
            Train/WorkoutMenuProvider.cpp
 
 SOURCES += Train/WorkoutGameFeaturePrompt.cpp
+SOURCES += Train/WorkoutGameCoursePrescription.cpp \
+           Train/WorkoutGameCourseSummary.cpp \
+           Train/WorkoutGameCourseTerrain.cpp
+HEADERS += Train/WorkoutGameCoursePrescription.h \
+           Train/WorkoutGameCourseSummary.h \
+           Train/WorkoutGameCourseTerrain.h
 
 ## Crash Handling
 win32-msvc* {

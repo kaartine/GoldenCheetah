@@ -6,6 +6,9 @@ TARGET = testWorkoutGameCourseDocument
 SOURCES = testWorkoutGameCourseDocument.cpp \
           ../../../src/Train/WorkoutGameCourse.cpp \
           ../../../src/Train/WorkoutGameCourseConversion.cpp \
+          ../../../src/Train/WorkoutGameCoursePrescription.cpp \
+          ../../../src/Train/WorkoutGameCourseSummary.cpp \
+          ../../../src/Train/WorkoutGameCourseTerrain.cpp \
           ../../../src/Train/WorkoutGameCourseCrsExporter.cpp \
           ../../../src/Train/WorkoutGameCourseDocument.cpp \
           ../../../src/Train/WorkoutGameDistanceCourse.cpp \
@@ -19,6 +22,9 @@ SOURCES = testWorkoutGameCourseDocument.cpp \
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameCourseConversion.h \
+          ../../../src/Train/WorkoutGameCoursePrescription.h \
+          ../../../src/Train/WorkoutGameCourseSummary.h \
+          ../../../src/Train/WorkoutGameCourseTerrain.h \
           ../../../src/Train/WorkoutGameCourseCrsExporter.h \
           ../../../src/Train/WorkoutGameCourseDocument.h \
           ../../../src/Train/WorkoutGameDistanceCourse.h \

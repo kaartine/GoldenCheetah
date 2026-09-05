@@ -17,6 +17,8 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGameCourseDocument.cpp \
            ../../../src/Train/WorkoutGameCourse.cpp \
            ../../../src/Train/WorkoutGameDistanceCourse.cpp \
+           ../../../src/Train/WorkoutGameCourseTerrain.cpp \
+           ../../../src/Train/WorkoutGameCoursePrescription.cpp \
            ../../../src/Train/WorkoutGameDistancePlayback.cpp \
            ../../../src/Train/WorkoutGameDiagnostics.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
@@ -49,6 +51,8 @@ HEADERS += ../../../src/Train/WorkoutGame3DChunkBuilder.h \
            ../../../src/Train/WorkoutGameCourseDocument.h \
            ../../../src/Train/WorkoutGameCourse.h \
            ../../../src/Train/WorkoutGameDistanceCourse.h \
+           ../../../src/Train/WorkoutGameCourseTerrain.h \
+           ../../../src/Train/WorkoutGameCoursePrescription.h \
            ../../../src/Train/WorkoutGameDistancePlayback.h \
            ../../../src/Train/WorkoutGameDiagnostics.h \
            ../../../src/Train/WorkoutGameRoadCourse.h \

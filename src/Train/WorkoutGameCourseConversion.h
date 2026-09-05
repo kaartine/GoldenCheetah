@@ -10,17 +10,12 @@
 #ifndef _GC_WorkoutGameCourseConversion_h
 #define _GC_WorkoutGameCourseConversion_h
 
+#include "WorkoutGameCoursePrescription.h"
+#include "WorkoutGameCourseSummary.h"
 #include "WorkoutGameDistanceCourse.h"
 
 #include <cstdint>
 #include <vector>
-
-enum class WorkoutGameCoursePreset
-{
-    WorkoutFirst,
-    Balanced,
-    RideFirst
-};
 
 enum class WorkoutGameCourseConversionStatus
 {
@@ -36,22 +31,8 @@ struct WorkoutGameCourseConversionRequest
     double ftpWatts = 0.0;
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
     WorkoutGameRoadPhysicsParameters roadPhysics;
+    WorkoutGameCoursePrescriptionMetadata prescriptionMetadata;
     std::uint32_t seed = 0;
-};
-
-struct WorkoutGameCourseConversionSummary
-{
-    std::int64_t nominalDurationMs = 0;
-    double distanceMeters = 0.0;
-    double elevationGainMeters = 0.0;
-    double elevationLossMeters = 0.0;
-    int climbCount = 0;
-    int jumpCount = 0;
-    int descentCount = 0;
-    int technicalFeatureCount = 0;
-    WorkoutGameDistanceCourseEstimate fastEstimate;
-    WorkoutGameDistanceCourseEstimate nominalEstimate;
-    WorkoutGameDistanceCourseEstimate slowEstimate;
 };
 
 struct WorkoutGameCourseConversionResult

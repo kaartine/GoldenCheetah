@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameDistanceCourse.h"
+#include "WorkoutGameCourseTerrain.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,71 +52,6 @@ double recoveryGrade(
             90.0 / durationSeconds, 0.15, 1.50));
 }
 
-void applyTechnicalPalette(
-        WorkoutGameSection &section,
-        double technicality)
-{
-    if (technicality <= 0.25) {
-        if (section.feature != WorkoutGameFeature::Climb) {
-            section.terrain = WorkoutGameTerrainKind::SmoothTrail;
-            section.challengeCount = 0;
-        }
-        return;
-    }
-
-    if (technicality >= 0.85) {
-        if (isRecoveryFeature(section.feature)) {
-            section.terrain = WorkoutGameTerrainKind::Berm;
-        } else if (section.feature == WorkoutGameFeature::SprintJump) {
-            switch (section.visualVariant % 3u) {
-            case 0u:
-                section.terrain = WorkoutGameTerrainKind::LogOver;
-                break;
-            case 1u:
-                section.terrain = WorkoutGameTerrainKind::Tabletop;
-                break;
-            default:
-                section.terrain = WorkoutGameTerrainKind::GapJump;
-                break;
-            }
-        } else if (section.feature == WorkoutGameFeature::Trail
-                || section.feature == WorkoutGameFeature::FlowTrail) {
-            switch (section.visualVariant % 3u) {
-            case 0u: section.terrain = WorkoutGameTerrainKind::Skinny; break;
-            case 1u: section.terrain = WorkoutGameTerrainKind::RockGarden; break;
-            default: section.terrain = WorkoutGameTerrainKind::RockSlab; break;
-            }
-        }
-        return;
-    }
-
-    if (isRecoveryFeature(section.feature)) {
-        if (section.visualVariant % 3u == 0u) {
-            section.terrain = WorkoutGameTerrainKind::Berm;
-        }
-        return;
-    }
-    if (section.feature != WorkoutGameFeature::Trail
-            && section.feature != WorkoutGameFeature::FlowTrail
-            && section.feature != WorkoutGameFeature::WarmupTrail) {
-        return;
-    }
-
-    switch (section.visualVariant % 6u) {
-    case 0u: section.terrain = WorkoutGameTerrainKind::Roots; break;
-    case 1u: section.terrain = WorkoutGameTerrainKind::RockGarden; break;
-    case 2u: section.terrain = WorkoutGameTerrainKind::Rollers; break;
-    case 3u: section.terrain = WorkoutGameTerrainKind::LogOver; break;
-    case 4u: section.terrain = WorkoutGameTerrainKind::Skinny; break;
-    default: section.terrain = WorkoutGameTerrainKind::SmoothTrail; break;
-    }
-    if (section.terrain == WorkoutGameTerrainKind::LogOver
-            || section.terrain == WorkoutGameTerrainKind::Skinny
-            || section.terrain == WorkoutGameTerrainKind::RockGarden) {
-        section.challengeCount = std::max(1, section.challengeCount);
-    }
-}
-
 WorkoutGameSection adaptSection(
         const WorkoutGameSection &source,
         const WorkoutGameInterval &interval,
@@ -150,7 +86,6 @@ WorkoutGameSection adaptSection(
         result.gradePercent = recoveryGrade(
                 result.feature, interval.durationMs);
     }
-    applyTechnicalPalette(result, parameters.technicality);
     result.gradePercent *= parameters.gradeScale;
     return result;
 }
@@ -309,11 +244,36 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
     result.seed = source.seed;
     result.nominalDurationMs = source.durationMs;
     result.sections.reserve(source.sections.size());
+    std::vector<WorkoutGameSection> adaptedSections;
+    adaptedSections.reserve(source.sections.size());
+    std::size_t paletteCount = 0;
     for (std::size_t index = 0; index < source.sections.size(); ++index) {
         const WorkoutGameInterval &interval = intervals[index];
-        const WorkoutGameSection adapted = adaptSection(
-                source.sections[index], interval, ftpWatts, parameters,
-                index == 0, index + 1 == source.sections.size());
+        adaptedSections.push_back(adaptSection(
+            source.sections[index], interval, ftpWatts, parameters,
+            index == 0, index + 1 == source.sections.size()));
+        if (averageWatts(interval) / ftpWatts > 0.65
+                && WorkoutGameCourseTerrain::paletteEligible(
+                    adaptedSections.back().feature)) {
+            ++paletteCount;
+        }
+    }
+    std::size_t paletteIndex = 0;
+    const WorkoutGameCoursePreset terrainPreset = parameters.technicality <= 0.25
+            ? WorkoutGameCoursePreset::WorkoutFirst
+            : parameters.technicality >= 0.85
+                ? WorkoutGameCoursePreset::RideFirst
+                : WorkoutGameCoursePreset::Balanced;
+    for (std::size_t index = 0; index < source.sections.size(); ++index) {
+        const WorkoutGameInterval &interval = intervals[index];
+        WorkoutGameSection adapted = adaptedSections[index];
+        const bool sourceRecovery = averageWatts(interval) / ftpWatts <= 0.65;
+        const bool paletteEligible = !sourceRecovery
+                && WorkoutGameCourseTerrain::paletteEligible(adapted.feature);
+        WorkoutGameCourseTerrain::apply(
+                adapted, terrainPreset, paletteIndex, paletteCount, source.seed,
+                sourceRecovery);
+        if (paletteEligible) ++paletteIndex;
         const WorkoutGameRoadPhysicsSnapshot before = physics.update({}, 0);
 
         WorkoutGameDistanceCourseSection section;

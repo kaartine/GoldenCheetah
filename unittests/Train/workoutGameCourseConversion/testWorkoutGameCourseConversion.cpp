@@ -9,6 +9,8 @@
 
 #include "Train/WorkoutGameCourseConversion.h"
 #include "Train/WorkoutGameCoursePrescription.h"
+#include "Train/WorkoutGameCourseTerrain.h"
+#include "Train/WorkoutGameFeatureCatalog.h"
 
 #include <QTest>
 
@@ -100,6 +102,76 @@ private slots:
                 WorkoutGameCourseIntervalRole::NonPrescriptiveTransition;
         QCOMPARE(WorkoutGameCourseConverter::convert(request).status,
                  WorkoutGameCourseConversionStatus::GenerationFailed);
+    }
+
+    void explicitCooldownIsSeparateFromOrdinaryRecoveryRetention()
+    {
+        const std::vector<WorkoutGameInterval> source {
+            {0, 10000, 150.0, 250.0},
+            {10000, 20600, 100.0, 100.0}
+        };
+        const std::vector<WorkoutGameInterval> generated {
+            {0, 10000, 150.0, 250.0},
+            {10000, 20000, 100.0, 100.0}
+        };
+        WorkoutGameCoursePrescriptionMetadata metadata;
+        metadata.version = 1;
+        metadata.intervalRoles = {
+            WorkoutGameCourseIntervalRole::Prescribed,
+            WorkoutGameCourseIntervalRole::NonPrescriptiveCooldown
+        };
+
+        const WorkoutGameCoursePrescriptionAudit audit =
+                WorkoutGameCoursePrescription::audit(
+                    source, generated, 190.0,
+                    WorkoutGameCoursePreset::Balanced, metadata);
+
+        QCOMPARE(audit.status, WorkoutGameCoursePrescriptionStatus::Ready);
+        QCOMPARE(audit.recoveryCount, 0);
+        QCOMPARE(audit.preservedRecoveryCount, 0);
+        QCOMPARE(audit.recoveryDurationDeviationPercent, 0.0);
+        QCOMPARE(audit.durationChanges.size(), std::size_t(1));
+        QCOMPARE(audit.durationChanges.front().role,
+                 WorkoutGameCourseIntervalRole::NonPrescriptiveCooldown);
+    }
+
+    void terrainPaletteIsDeterministicAndRecoverySafe()
+    {
+        for (WorkoutGameCoursePreset preset : {
+                WorkoutGameCoursePreset::WorkoutFirst,
+                WorkoutGameCoursePreset::Balanced,
+                WorkoutGameCoursePreset::RideFirst}) {
+            int technical = 0;
+            for (std::size_t index = 0; index < 10; ++index) {
+                WorkoutGameSection first;
+                first.feature = WorkoutGameFeature::Trail;
+                first.challengeCount = 1;
+                WorkoutGameSection second = first;
+                WorkoutGameCourseTerrain::apply(
+                        first, preset, index, 10u, 42u, false);
+                WorkoutGameCourseTerrain::apply(
+                        second, preset, index, 10u, 42u, false);
+                QCOMPARE(first.terrain, second.terrain);
+                QCOMPARE(first.challengeCount, second.challengeCount);
+                technical += WorkoutGameFeatureCatalog::definition(
+                        first.terrain).technical ? 1 : 0;
+            }
+            const WorkoutGameCourseModeContract contract =
+                    WorkoutGameCoursePrescription::contractFor(preset);
+            QVERIFY(double(technical) + 1.0e-9
+                    >= contract.minimumTechnicalFeatureDensityPerTenSections);
+            QVERIFY(double(technical)
+                    <= contract.maximumTechnicalFeatureDensityPerTenSections
+                        + 1.0e-9);
+
+            WorkoutGameSection recovery;
+            recovery.feature = WorkoutGameFeature::WarmupTrail;
+            recovery.challengeCount = 3;
+            WorkoutGameCourseTerrain::apply(
+                    recovery, preset, 0u, 10u, 42u, true);
+            QCOMPARE(recovery.challengeCount, 0);
+            QVERIFY(recovery.terrain != WorkoutGameTerrainKind::GapJump);
+        }
     }
 
     void balancedPresetProducesCompletePreviewSummary()

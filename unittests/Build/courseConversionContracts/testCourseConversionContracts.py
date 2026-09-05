@@ -9,6 +9,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 HEADER = ROOT / "src/Train/WorkoutGameCoursePrescription.h"
 CONVERSION_HEADER = ROOT / "src/Train/WorkoutGameCourseConversion.h"
+SUMMARY_HEADER = ROOT / "src/Train/WorkoutGameCourseSummary.h"
 DOCUMENT_HEADER = ROOT / "src/Train/WorkoutGameCourseDocument.h"
 DIALOG_SOURCE = ROOT / "src/Train/WorkoutGameCourseConversionDialog.cpp"
 DESIGN = ROOT / "doc/design/WORKOUT_GAME_COURSE_CONVERSION_MODES.md"
@@ -159,7 +160,8 @@ class CourseConversionContractTest(unittest.TestCase):
                 self.assertIn(phrase, normalized_design)
 
     def test_preview_exposes_explicit_key_and_recovery_retention(self):
-        conversion = CONVERSION_HEADER.read_text(encoding="utf-8")
+        conversion = (CONVERSION_HEADER.read_text(encoding="utf-8")
+                      + SUMMARY_HEADER.read_text(encoding="utf-8"))
         dialog = DIALOG_SOURCE.read_text(encoding="utf-8")
         for token in (
                 "preservedKeyEffortCount",
@@ -182,8 +184,10 @@ class CourseConversionContractTest(unittest.TestCase):
             HEADER.is_file(),
             "missing production contract/header/API: "
             "src/Train/WorkoutGameCoursePrescription.h")
-        source = HEADER.read_text(encoding="utf-8")
-        conversion = CONVERSION_HEADER.read_text(encoding="utf-8")
+        source = (HEADER.read_text(encoding="utf-8")
+                  + SUMMARY_HEADER.read_text(encoding="utf-8"))
+        conversion = (CONVERSION_HEADER.read_text(encoding="utf-8")
+                      + SUMMARY_HEADER.read_text(encoding="utf-8"))
         document = DOCUMENT_HEADER.read_text(encoding="utf-8")
         for token in (
                 "WorkoutGameCourseModeContract",
