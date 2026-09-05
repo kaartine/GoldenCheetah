@@ -94,6 +94,26 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             ],
         )
 
+    def test_prepared_workout_selection_retries_while_library_refreshes(self):
+        driver = mock.Mock()
+        driver.click_named_item.side_effect = [
+            UI.UiFailure("not ready"),
+            UI.UiFailure("not ready"),
+            UI.UiFailure("not ready"),
+            None,
+        ]
+        workflow = object.__new__(UI.WorkoutGameUiWorkflow)
+        workflow.driver = driver
+
+        with mock.patch.object(UI.time, "sleep"):
+            workflow.select_prepared_workout(timeout=1.0)
+
+        self.assertEqual(driver.click_named_item.call_count, 4)
+        self.assertEqual(
+            driver.click_named_item.call_args,
+            mock.call("Pre-release UI test"),
+        )
+
     def test_focus_main_window_does_not_require_an_atspi_component(self):
         window = mock.Mock()
         window.get_wm_name.return_value = UI.ATHLETE

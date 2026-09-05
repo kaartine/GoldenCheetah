@@ -832,18 +832,23 @@ class WorkoutGameUiWorkflow:
         self.stop_and_continue(recording)
         return self.stop_save_and_reopen(recording)
 
+    def select_prepared_workout(self, timeout=20.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for workout_name in (
+                "Pre-release UI test", "ui-test.erg", "ui-test"
+            ):
+                try:
+                    self.driver.click_named_item(workout_name)
+                    return
+                except UiFailure:
+                    pass
+            time.sleep(0.2)
+        raise UiFailure("Prepared ui-test.erg workout was not selectable")
+
     def open_game(self) -> None:
         self.enter_train()
-        selected = False
-        for workout_name in ("Pre-release UI test", "ui-test.erg", "ui-test"):
-            try:
-                self.driver.click_named_item(workout_name)
-                selected = True
-                break
-            except UiFailure:
-                pass
-        if not selected:
-            raise UiFailure("Prepared ui-test.erg workout was not selectable")
+        self.select_prepared_workout()
 
         self.driver.select_named("Data Generator")
         self.gear = self.driver.find(
