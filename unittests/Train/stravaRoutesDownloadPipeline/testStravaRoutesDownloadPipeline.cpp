@@ -376,6 +376,7 @@ class TestStravaRoutesDownloadPipeline : public QObject
     Q_OBJECT
 
 private slots:
+    void crsParserPreservesLapNamesAndDistanceTextCues();
     void routesFollowerPostedCancellationIsPrompt();
     void completionReturnsToGuiThread();
     void cancellationStopsWorker();
@@ -423,6 +424,64 @@ private slots:
     void reentrantDataChangedCanReleaseCallerOperation();
     void productionDialogFinalizationSurvivesReentrantDeletion();
 };
+
+void TestStravaRoutesDownloadPipeline::
+crsParserPreservesLapNamesAndDistanceTextCues()
+{
+    const QString course = QStringLiteral(
+        "[COURSE HEADER]\n"
+        "VERSION=1\n"
+        "UNITS=METRIC\n"
+        "DISTANCE GRADE WIND\n"
+        "[END COURSE HEADER]\n"
+        "[COURSE DATA]\n"
+        "0.100000 2.000 0.0\n"
+        "LAP Original effort\n"
+        "0.100000 -2.000 0.0\n"
+        "[END COURSE DATA]\n"
+        "[COURSE TEXT]\n"
+        "0.100000 Hold cadence 6\n"
+        "[END COURSE TEXT]\n");
+
+    std::unique_ptr<ErgFile> parsed(ErgFile::fromContent(course, nullptr));
+    QVERIFY(parsed);
+    QVERIFY(parsed->isValid());
+    QCOMPARE(parsed->format(), ErgFileFormat::crs);
+    QCOMPARE(parsed->Laps.size(), 2);
+    QCOMPARE(parsed->Laps.front().x, 100.0);
+    QCOMPARE(parsed->Laps.front().name, QStringLiteral("Original effort"));
+    QVERIFY(!parsed->Laps.front().synthetic);
+    QCOMPARE(parsed->Laps.back().x, 200.0);
+    QVERIFY(parsed->Laps.back().synthetic);
+    QCOMPARE(parsed->Texts.size(), 1);
+    QCOMPARE(parsed->Texts.front().x, 100.0);
+    QCOMPARE(parsed->Texts.front().text, QStringLiteral("Hold cadence"));
+    QCOMPARE(parsed->Texts.front().duration, 6);
+
+    QString withoutLap = course;
+    withoutLap.remove(QStringLiteral("LAP Original effort\n"));
+    std::unique_ptr<ErgFile> bracketed(
+            ErgFile::fromContent(withoutLap, nullptr));
+    QVERIFY(bracketed);
+    QVERIFY(bracketed->isValid());
+    QCOMPARE(bracketed->Laps.size(), 1);
+    QCOMPARE(bracketed->Laps.front().x, 200.0);
+    QVERIFY(bracketed->Laps.front().synthetic);
+
+    QString withAuthoredFinish = course;
+    withAuthoredFinish.replace(
+            QStringLiteral("[END COURSE DATA]"),
+            QStringLiteral("LAP Finish\n[END COURSE DATA]"));
+    std::unique_ptr<ErgFile> finished(
+            ErgFile::fromContent(withAuthoredFinish, nullptr));
+    QVERIFY(finished);
+    QVERIFY(finished->isValid());
+    QCOMPARE(finished->Laps.size(), 2);
+    QCOMPARE(finished->Laps.back().x, 200.0);
+    QCOMPARE(finished->Laps.back().name, QStringLiteral("Finish"));
+    QVERIFY(!finished->Laps.back().synthetic);
+
+}
 
 void TestStravaRoutesDownloadPipeline::
 queuedCancellationBlocksLaterAsyncStages()

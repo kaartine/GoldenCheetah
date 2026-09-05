@@ -68,6 +68,8 @@ WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::atDistance(
             ? configuredCourse.nominalDurationMs
             : section->sourceStartMs + std::int64_t(std::llround(
                 result.sectionProgress * double(section->nominalDurationMs)));
+    result.timelineDistanceMeters = distanceAtNominalTime(
+            configuredCourse, result.nominalTimeMs);
     result.targetWatts = section->targetStartWatts
             + (section->targetEndWatts - section->targetStartWatts)
                 * result.sectionProgress;
@@ -209,6 +211,8 @@ WorkoutGameDistancePlayback::progressSnapshot() const
             ? configuredCourse.nominalDurationMs
             : section.sourceStartMs + std::int64_t(std::llround(
                 targetProgress * double(section.nominalDurationMs)));
+    result.timelineDistanceMeters = distanceAtNominalTime(
+            configuredCourse, result.nominalTimeMs);
     result.targetWatts = result.finished
             ? 0.0
             : section.targetStartWatts
@@ -216,6 +220,38 @@ WorkoutGameDistancePlayback::progressSnapshot() const
                     * targetProgress;
     result.maximumExposureExceeded = maximumExposureExceededOnLastAdvance;
     return result;
+}
+
+double WorkoutGameDistancePlayback::distanceAtNominalTime(
+        const WorkoutGameDistanceCourse &course,
+        std::int64_t nominalTimeMs)
+{
+    if (course.status != WorkoutGameDistanceCourseStatus::Ready
+            || course.sections.empty()
+            || course.nominalDurationMs <= 0
+            || !std::isfinite(course.totalDistanceMeters)
+            || course.totalDistanceMeters <= 0.0
+            || nominalTimeMs <= 0) {
+        return 0.0;
+    }
+    if (nominalTimeMs >= course.nominalDurationMs) {
+        return course.totalDistanceMeters;
+    }
+    for (const WorkoutGameDistanceCourseSection &section : course.sections) {
+        const std::int64_t sectionEndMs =
+                section.sourceStartMs + section.nominalDurationMs;
+        if (nominalTimeMs <= sectionEndMs) {
+            const double progress = section.nominalDurationMs > 0
+                    ? std::clamp(
+                        double(nominalTimeMs - section.sourceStartMs)
+                            / double(section.nominalDurationMs),
+                        0.0, 1.0)
+                    : 0.0;
+            return section.startDistanceMeters
+                    + section.lengthMeters * progress;
+        }
+    }
+    return course.totalDistanceMeters;
 }
 
 WorkoutGameCourse WorkoutGameDistancePlayback::visualCourse(

@@ -208,6 +208,7 @@ class CourseConversionContractTest(unittest.TestCase):
                 self.assertIn(token, source)
         self.assertIn("prescriptionMetadata", conversion)
         self.assertIn("CurrentSchemaVersion = 4", document)
+        self.assertIn("CurrentConversionAlgorithmVersion = 3", document)
         self.assertIn("conversionAlgorithmVersion", document)
         self.assertIn("sourceLaps", document)
         self.assertIn("sourceTexts", document)

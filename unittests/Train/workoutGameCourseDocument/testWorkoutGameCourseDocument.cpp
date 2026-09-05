@@ -169,7 +169,7 @@ private slots:
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QCOMPARE(decoded.conversionAlgorithmVersion,
                  WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
-        QVERIFY(encoded.contains("\"algorithmVersion\":2"));
+        QVERIFY(encoded.contains("\"algorithmVersion\":3"));
         QCOMPARE(decoded.title, source.title);
         QCOMPARE(decoded.sourceFileName, source.sourceFileName);
         QCOMPARE(decoded.sourceSha256, source.sourceSha256);
@@ -347,6 +347,10 @@ private slots:
                 WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
                 .object();
         root.insert(QStringLiteral("schemaVersion"), 3);
+        QJsonObject conversion =
+                root.value(QStringLiteral("conversion")).toObject();
+        conversion.insert(QStringLiteral("algorithmVersion"), 2);
+        root.insert(QStringLiteral("conversion"), conversion);
         const QByteArray versionThree =
                 QJsonDocument(root).toJson(QJsonDocument::Compact) + '\n';
 
@@ -355,13 +359,20 @@ private slots:
                     versionThree, decoded),
                  WorkoutGameCourseDocumentStatus::Ready);
         QCOMPARE(decoded.schemaVersion, 3);
-        QCOMPARE(decoded.conversionAlgorithmVersion,
-                 WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
+        QCOMPARE(decoded.conversionAlgorithmVersion, 2);
         QVERIFY(decoded.sourceLaps.empty());
         QVERIFY(decoded.sourceTexts.empty());
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), versionThree);
 
+        conversion.insert(QStringLiteral("algorithmVersion"), 3);
+        root.insert(QStringLiteral("conversion"), conversion);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(root).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::UnsupportedVersion);
+
         QJsonObject annotatedRoot = root;
+        conversion.insert(QStringLiteral("algorithmVersion"), 2);
+        annotatedRoot.insert(QStringLiteral("conversion"), conversion);
         QJsonObject source =
                 annotatedRoot.value(QStringLiteral("source")).toObject();
         source.insert(QStringLiteral("laps"), QJsonArray {
@@ -598,6 +609,7 @@ private slots:
     {
         WorkoutGameCourseDocument versionThree = sampleDocument();
         versionThree.schemaVersion = 3;
+        versionThree.conversionAlgorithmVersion = 2;
         versionThree.preset = WorkoutGameCoursePreset::RideFirst;
         versionThree.generationParameters =
                 WorkoutGameCourseConverter::parametersForPreset(

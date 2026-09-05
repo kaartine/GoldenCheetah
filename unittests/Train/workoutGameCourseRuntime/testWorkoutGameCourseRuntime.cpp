@@ -108,6 +108,7 @@ private slots:
         QVERIFY(first.ready);
         QCOMPARE(first.sectionIndex, std::size_t(0));
         QCOMPARE(first.nominalTimeMs, std::int64_t(5000));
+        QCOMPARE(first.timelineDistanceMeters, 50.0);
         QCOMPARE(first.targetWatts, 200.0);
 
         const WorkoutGameDistancePlaybackSnapshot second =
@@ -115,6 +116,12 @@ private slots:
         QCOMPARE(second.sectionIndex, std::size_t(1));
         QCOMPARE(second.nominalTimeMs, std::int64_t(20000));
         QCOMPARE(second.targetWatts, 100.0);
+
+        const WorkoutGameDistancePlaybackSnapshot slow =
+                runtime.atWorkoutProgress(20.0, 5000);
+        QCOMPARE(slow.distanceMeters, 20.0);
+        QCOMPARE(slow.timelineDistanceMeters, 50.0);
+        QCOMPARE(runtime.workoutTimelinePositionMeters(), 50.0);
     }
 
     void runtimeMaterializesThePersistedPlanInsteadOfRegeneratingFromSeed()

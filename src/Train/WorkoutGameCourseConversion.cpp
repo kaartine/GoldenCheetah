@@ -113,9 +113,8 @@ WorkoutGameCourseConversionResult WorkoutGameCourseConverter::convert(
                 || role == WorkoutGameCourseIntervalRole::Prescribed) {
             result.course.sections[index].minimumDurationMs =
                     result.course.sections[index].nominalDurationMs;
-            result.course.sections[index].maximumDurationMs = std::max(
-                    result.course.sections[index].maximumDurationMs,
-                    result.course.sections[index].nominalDurationMs);
+            result.course.sections[index].maximumDurationMs =
+                    result.course.sections[index].nominalDurationMs;
         }
     }
 

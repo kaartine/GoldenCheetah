@@ -270,10 +270,12 @@ private slots:
         QVERIFY(result.summary.nominalEstimate.finished);
         QVERIFY(result.summary.fastEstimate.finished);
         QVERIFY(result.summary.slowEstimate.finished);
-        QVERIFY(result.summary.fastEstimate.elapsedTimeMs
-                < result.summary.nominalEstimate.elapsedTimeMs);
-        QVERIFY(result.summary.nominalEstimate.elapsedTimeMs
-                < result.summary.slowEstimate.elapsedTimeMs);
+        QCOMPARE(result.summary.fastEstimate.elapsedTimeMs,
+                 result.summary.nominalDurationMs);
+        QCOMPARE(result.summary.nominalEstimate.elapsedTimeMs,
+                 result.summary.nominalDurationMs);
+        QCOMPARE(result.summary.slowEstimate.elapsedTimeMs,
+                 result.summary.nominalDurationMs);
         QCOMPARE(result.summary.climbCount, 3);
         QCOMPARE(result.summary.jumpCount, 3);
         QCOMPARE(result.summary.descentCount, 4);
@@ -459,6 +461,7 @@ private slots:
                 QCOMPARE(output.targetEndWatts, source.endWatts);
                 QCOMPARE(output.nominalDurationMs, source.durationMs);
                 QCOMPARE(output.minimumDurationMs, source.durationMs);
+                QCOMPARE(output.maximumDurationMs, source.durationMs);
                 QVERIFY(std::abs(output.gradePercent) <= 12.0 + 1.0e-9);
                 if (WorkoutGameCoursePrescription::isKeyEffort(
                             source, request.ftpWatts)) {

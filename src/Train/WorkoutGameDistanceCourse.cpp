@@ -388,9 +388,18 @@ WorkoutGameDistanceCourseEstimate WorkoutGameDistanceCourseEstimator::estimate(
         const double rawAdvance = std::max(
                 0.0, after.distanceMeters - rawDistanceMeters);
         rawDistanceMeters = after.distanceMeters;
-        // ETA assumes continuous active riding. Real stops are intentionally
-        // handled only by runtime progression and extend the actual ride.
-        sectionActiveTimeMs += stepMs;
+        // ETA assumes continuous active riding. Apply the same bounded
+        // section exposure as runtime so preview and playback agree.
+        const std::int64_t timeUntilMaximum =
+                section.maximumDurationMs - sectionActiveTimeMs;
+        const bool reachedMaximumExposure = stepMs >= timeUntilMaximum;
+        std::int64_t carriedActiveTimeMs = 0;
+        if (reachedMaximumExposure) {
+            sectionActiveTimeMs = section.maximumDurationMs;
+            carriedActiveTimeMs = stepMs - timeUntilMaximum;
+        } else {
+            sectionActiveTimeMs += stepMs;
+        }
         const double timeProgress = std::clamp(
                 double(sectionActiveTimeMs)
                     / double(section.minimumDurationMs),
@@ -404,20 +413,37 @@ WorkoutGameDistanceCourseEstimate WorkoutGameDistanceCourseEstimator::estimate(
                     - progressDistanceMeters);
         progressDistanceMeters += std::min(rawAdvance, availableAdvance);
         constexpr double BoundaryEpsilonMeters = 1.0e-9;
-        if (progressDistanceMeters >= sectionEnd - BoundaryEpsilonMeters) {
+        if (progressDistanceMeters >= sectionEnd - BoundaryEpsilonMeters
+                || reachedMaximumExposure) {
             progressDistanceMeters = sectionEnd;
-            if (sectionIndex + 1 < course.sections.size()) {
+            while (sectionIndex + 1 < course.sections.size()) {
                 ++sectionIndex;
-                sectionActiveTimeMs = 0;
+                if (!reachedMaximumExposure) {
+                    sectionActiveTimeMs = 0;
+                    break;
+                }
+                const WorkoutGameDistanceCourseSection &nextSection =
+                        course.sections[sectionIndex];
+                if (carriedActiveTimeMs < nextSection.maximumDurationMs) {
+                    sectionActiveTimeMs = carriedActiveTimeMs;
+                    break;
+                }
+                carriedActiveTimeMs -= nextSection.maximumDurationMs;
+                sectionActiveTimeMs = nextSection.maximumDurationMs;
+                progressDistanceMeters = nextSection.startDistanceMeters
+                        + nextSection.lengthMeters;
             }
         }
         result.distanceMeters = progressDistanceMeters;
+        const WorkoutGameDistanceCourseSection &positionSection =
+                course.sections[sectionIndex];
         const double sectionProgress = std::clamp(
-                (progressDistanceMeters - section.startDistanceMeters)
-                    / section.lengthMeters,
+                (progressDistanceMeters - positionSection.startDistanceMeters)
+                    / positionSection.lengthMeters,
                 0.0, 1.0);
-        result.elevationMeters = section.startElevationMeters
-                + (section.endElevationMeters - section.startElevationMeters)
+        result.elevationMeters = positionSection.startElevationMeters
+                + (positionSection.endElevationMeters
+                    - positionSection.startElevationMeters)
                     * sectionProgress;
         if (progressDistanceMeters >= course.totalDistanceMeters) {
             result.finished = true;

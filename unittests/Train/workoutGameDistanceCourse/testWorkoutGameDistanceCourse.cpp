@@ -308,6 +308,33 @@ private slots:
         QVERIFY(estimate.elapsedTimeMs >= course.nominalDurationMs);
     }
 
+    void estimateUsesTheSameMaximumSectionExposureAsRuntime()
+    {
+        WorkoutGameDistanceCourseGenerationParameters parameters;
+        WorkoutGameDistanceCourse course =
+                WorkoutGameDistanceCourseBuilder::build({
+                    {0, 10000, 150.0, 150.0}
+                }, 190.0, parameters, 118u);
+        QCOMPARE(course.status, WorkoutGameDistanceCourseStatus::Ready);
+        course.sections[0].gradePercent = 0.0;
+        course.sections[0].startElevationMeters = 0.0;
+        course.sections[0].endElevationMeters = 0.0;
+        course.sections[0].lengthMeters = 100000.0;
+        course.sections[0].minimumDurationMs = 10000;
+        course.sections[0].maximumDurationMs = 10000;
+        course.totalDistanceMeters = 100000.0;
+        course.elevationGainMeters = 0.0;
+        course.elevationLossMeters = 0.0;
+        QVERIFY(WorkoutGameDistanceCourseBuilder::validCourse(course));
+
+        const WorkoutGameDistanceCourseEstimate estimate =
+                WorkoutGameDistanceCourseEstimator::estimate(
+                    course, parameters.roadPhysics, 1.0, 100);
+        QVERIFY(estimate.finished);
+        QCOMPARE(estimate.elapsedTimeMs, std::int64_t(10000));
+        QCOMPARE(estimate.distanceMeters, course.totalDistanceMeters);
+    }
+
     void sameInputProducesTheSameCourse()
     {
         const WorkoutGameDistanceCourse first =

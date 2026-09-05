@@ -121,8 +121,9 @@ Runtime progression caps each raw trainer-distance increment with a continuous
 time-derived bound measured from active movement in the current section.
 Reaching a section's distance early cannot finish it before its minimum
 exposure. Rejected excess distance is not banked for later. Stationary time does
-not satisfy the exposure gate or push the rider forward: riding slowly or
-stopping extends the section rather than teleporting to the next one.
+not satisfy the exposure gate or push the rider forward. A moving rider may use
+the interval between the minimum and maximum exposure to finish the distance;
+at the maximum, runtime advances without banking rejected trainer distance.
 Trainer slope lookup and game position use that same bounded course distance,
 so the display and trainer cannot disagree about the active section. Paused
 time is excluded by the training session clock.
@@ -134,8 +135,10 @@ the prescribed target timeline is time-driven. The same target is published to
 the training data generator and Workout Game telemetry/HUD.
 
 Preview ETA assumes continuous active riding at 85%, 100% or 115% of the
-prescribed target. It does not predict stops; stationary time freezes runtime
-progress and therefore extends the actual ride beyond the preview estimate.
+prescribed target and applies the same maximum-section transition as runtime.
+For an entirely prescribed workout, all three estimates equal its authored
+duration. It does not predict stops; stationary time freezes runtime progress
+and therefore extends the actual ride beyond the preview estimate.
 
 Every prescribed interval has 100% minimum runtime exposure in every mode.
 Only explicitly versioned non-prescriptive roles may use a lower mode-specific
@@ -239,11 +242,15 @@ neither the course nor its sidecar exists or changes before the user invokes
 Create/Save. Create/Save persists the already-previewed deterministic result,
 apart from user-edited title/path metadata.
 
-New or explicitly regenerated documents use schema version 4, record the
-conversion algorithm version and may record prescription metadata version 1.
+New or explicitly regenerated documents use schema version 4 and conversion
+algorithm version 3, which identifies preset-scaled route curvature. They may
+also record prescription metadata version 1.
 Schema 4 also stores the original workout's ordered lap markers and timed text
 instructions; CRS export maps their source times onto generated course distance
-without changing target power or section timing. Schema 1 through 3 documents
+without changing target power or section timing. During a game ride, lap and
+text-cue lookup follows the active workout timeline rather than a slow rider's
+visual distance, so the instruction and its target remain aligned. Schema 1
+through 3 documents
 remain readable and canonical: loading never regenerates or silently adds
 metadata, and their missing metadata invokes the fail-safe prescribed role for
 every interval. An explicit save may upgrade the container while preserving

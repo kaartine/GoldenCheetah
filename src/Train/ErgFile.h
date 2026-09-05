@@ -108,15 +108,16 @@ class ErgFileText
 class ErgFileLap
 {
     public:
-        ErgFileLap() : name(""), x(0), LapNum(0), lapRangeId(0), selected(false) {}
-        ErgFileLap(double x, int LapNum, const QString& name) : name(name), x(x), LapNum(LapNum), lapRangeId(0), selected(false) {}
-        ErgFileLap(double x, int LapNum, int lapRangeId, const QString& name) : name(name), x(x), LapNum(LapNum), lapRangeId(lapRangeId), selected(false) {}
+        ErgFileLap() : name(""), x(0), LapNum(0), lapRangeId(0), selected(false), synthetic(false) {}
+        ErgFileLap(double x, int LapNum, const QString& name) : name(name), x(x), LapNum(LapNum), lapRangeId(0), selected(false), synthetic(false) {}
+        ErgFileLap(double x, int LapNum, int lapRangeId, const QString& name) : name(name), x(x), LapNum(LapNum), lapRangeId(lapRangeId), selected(false), synthetic(false) {}
 
         QString name;
         double x;      // when does this LAP marker occur? (time in msecs or distance in meters
         int LapNum;    // from 1 - n
         int lapRangeId;// for grouping lap markers into ranges. Value of zero is considered 'ungrouped'.
         bool selected; // used by the editor
+        bool synthetic; // generated boundary, not authored workout metadata
 };
 
 class ErgFile : public ErgFileBase

@@ -362,7 +362,7 @@ private slots:
         const QByteArray encoded =
                 WorkoutGameCourseDocumentCodec::encode(result.document);
         QVERIFY(encoded.contains("\"prescriptionMetadata\""));
-        QVERIFY(encoded.contains("\"algorithmVersion\":2"));
+        QVERIFY(encoded.contains("\"algorithmVersion\":3"));
     }
 
     void callerTitleAndPresetArePreserved()

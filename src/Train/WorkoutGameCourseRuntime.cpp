@@ -73,6 +73,12 @@ double WorkoutGameCourseRuntime::ftpWatts() const
     return configuredFtpWatts;
 }
 
+double WorkoutGameCourseRuntime::workoutTimelinePositionMeters() const
+{
+    return configured && latestProgress.ready
+            ? latestProgress.timelineDistanceMeters : 0.0;
+}
+
 const WorkoutGameCourse &WorkoutGameCourseRuntime::visualCourse() const
 {
     return configuredVisualCourse;

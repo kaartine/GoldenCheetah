@@ -24,6 +24,7 @@ struct WorkoutGameDistancePlaybackSnapshot
     std::int64_t nominalTimeMs = 0;
     std::int64_t sectionElapsedMs = 0;
     double distanceMeters = 0.0;
+    double timelineDistanceMeters = 0.0;
     double sectionProgress = 0.0;
     double targetWatts = 0.0;
     double gradePercent = 0.0;
@@ -47,6 +48,9 @@ public:
 
     static WorkoutGameCourse visualCourse(
             const WorkoutGameDistanceCourse &course);
+    static double distanceAtNominalTime(
+            const WorkoutGameDistanceCourse &course,
+            std::int64_t nominalTimeMs);
 
 private:
     WorkoutGameDistancePlaybackSnapshot progressSnapshot() const;

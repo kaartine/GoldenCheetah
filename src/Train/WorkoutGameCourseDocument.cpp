@@ -1390,6 +1390,8 @@ bool WorkoutGameCourseDocumentCodec::valid(
     const bool sourceAnnotationsAllowed =
             document.schemaVersion == CurrentSchemaVersion
             || (document.sourceLaps.empty() && document.sourceTexts.empty());
+    const int maximumAlgorithmVersion = document.schemaVersion == 3
+            ? 2 : WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion;
     const bool schemaValid = document.schemaVersion == 1
             ? !document.course.roadPlan
                 && !document.prescriptionMetadata.present()
@@ -1404,7 +1406,7 @@ bool WorkoutGameCourseDocumentCodec::valid(
                     : document.conversionAlgorithmVersion
                             >= WorkoutGameCourseDocument::LegacyConversionAlgorithmVersion
                         && document.conversionAlgorithmVersion
-                            <= WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
+                            <= maximumAlgorithmVersion);
     return schemaValid
             && !document.title.trimmed().isEmpty()
             && document.title.size() <= 200
@@ -1541,10 +1543,13 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
                     conversion, "algorithmVersion", algorithmVersion)) {
             return WorkoutGameCourseDocumentStatus::InvalidDocument;
         }
+        const int maximumAlgorithmVersion = document.schemaVersion == 3
+                ? 2
+                : WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion;
         if (algorithmVersion
                     < WorkoutGameCourseDocument::LegacyConversionAlgorithmVersion
                 || algorithmVersion
-                    > WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion) {
+                    > maximumAlgorithmVersion) {
             return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
         }
         document.conversionAlgorithmVersion = int(algorithmVersion);

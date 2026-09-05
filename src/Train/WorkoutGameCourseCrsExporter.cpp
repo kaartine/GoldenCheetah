@@ -10,6 +10,7 @@
 #include "WorkoutGameCourseCrsExporter.h"
 
 #include "WorkoutGameCourseDocument.h"
+#include "WorkoutGameDistancePlayback.h"
 
 #include <QString>
 
@@ -59,32 +60,6 @@ QString cueLine(const WorkoutGameDistanceCourseSection &section)
             .arg(sectionLabel(section));
 }
 
-double distanceAtSourceTime(
-        const WorkoutGameCourseDocument &document,
-        std::int64_t timeMs)
-{
-    if (timeMs <= 0) return 0.0;
-    if (timeMs >= document.course.nominalDurationMs) {
-        return document.course.totalDistanceMeters;
-    }
-    for (const WorkoutGameDistanceCourseSection &section
-            : document.course.sections) {
-        const std::int64_t endMs = section.sourceStartMs
-                + section.nominalDurationMs;
-        if (timeMs <= endMs) {
-            const double progress = section.nominalDurationMs > 0
-                    ? std::clamp(
-                        double(timeMs - section.sourceStartMs)
-                            / double(section.nominalDurationMs),
-                        0.0, 1.0)
-                    : 0.0;
-            return section.startDistanceMeters
-                    + section.lengthMeters * progress;
-        }
-    }
-    return document.course.totalDistanceMeters;
-}
-
 struct DistanceLap
 {
     double distanceMeters = 0.0;
@@ -97,7 +72,8 @@ std::vector<DistanceLap> mappedSourceLaps(
     std::vector<DistanceLap> result;
     result.reserve(document.sourceLaps.size());
     for (const WorkoutGameCourseSourceLap &lap : document.sourceLaps) {
-        result.push_back({distanceAtSourceTime(document, lap.timeMs),
+        result.push_back({WorkoutGameDistancePlayback::distanceAtNominalTime(
+                              document.course, lap.timeMs),
                           lap.name.simplified()});
     }
     std::stable_sort(result.begin(), result.end(),
@@ -170,7 +146,8 @@ QByteArray WorkoutGameCourseCrsExporter::encode(
     }
     for (const WorkoutGameCourseSourceText &text : document.sourceTexts) {
         output += QStringLiteral("%1 %2 %3\n")
-                .arg(distanceAtSourceTime(document, text.timeMs) / 1000.0,
+                .arg(WorkoutGameDistancePlayback::distanceAtNominalTime(
+                         document.course, text.timeMs) / 1000.0,
                      0, 'f', 6)
                 .arg(text.text.simplified())
                 .arg(text.durationSeconds);

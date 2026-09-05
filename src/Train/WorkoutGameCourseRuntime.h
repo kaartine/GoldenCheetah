@@ -32,6 +32,7 @@ public:
 
     bool enabled() const;
     double ftpWatts() const;
+    double workoutTimelinePositionMeters() const;
     const WorkoutGameCourse &visualCourse() const;
     WorkoutGameDistancePlaybackSnapshot atWorkoutPosition(
             double positionMeters) const;

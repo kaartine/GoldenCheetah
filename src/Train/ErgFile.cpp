@@ -611,7 +611,7 @@ void ErgFile::parseComputrainer(QString p)
                 add.x = rdist;
                 add.LapNum = ++lapcounter;
                 add.selected =false;
-                add.name = lapmarker.cap(2).simplified();
+                add.name = crslapmarker.cap(1).simplified();
                 Laps.append(add);
 
             } else if (settings.exactMatch(line)) {
@@ -740,15 +740,15 @@ void ErgFile::parseComputrainer(QString p)
             if (add.y > maxWatts()) maxWatts(add.y);
             if (add.y < minWatts()) minWatts(add.y);
 
-            // Add a final meta-lap at the end - causes the system to correctly mark off laps.
-            // An improvement would be to check for a lap marker at end, and only add this if required.
-            ErgFileLap lap;
-
-            lap.x = rdist;
-            lap.LapNum = ++lapcounter;
-            lap.selected = false;
-            lap.name = lapmarker.cap(2).simplified();
-            Laps.append(lap);
+            // Add a final boundary only when the file does not already own one.
+            if (Laps.empty() || std::abs(Laps.back().x - rdist) > 1.0e-6) {
+                ErgFileLap lap;
+                lap.x = rdist;
+                lap.LapNum = ++lapcounter;
+                lap.selected = false;
+                lap.synthetic = true;
+                Laps.append(lap);
+            }
         }
 
         // add a start point if it doesn't exist
@@ -1848,6 +1848,7 @@ void ErgFile::finalize()
         lap.LapNum = 1;
         lap.selected = false;
         lap.name = "Route Start";
+        lap.synthetic = true;
         Laps.append(lap);
 
         // End lap
@@ -1855,6 +1856,7 @@ void ErgFile::finalize()
         lap.LapNum = 2;
         lap.selected = false;
         lap.name = "Route End";
+        lap.synthetic = true;
         Laps.append(lap);
     }
 

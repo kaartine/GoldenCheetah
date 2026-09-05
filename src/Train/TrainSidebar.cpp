@@ -50,7 +50,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <limits>
 
 // Three current realtime device types supported are:
 #include "RealtimeController.h"
@@ -715,14 +714,18 @@ TrainSidebar::createMtbCourse()
     }
 
     WorkoutGameCourseSourceRequest request;
+    const double sourceDurationMs = workout->duration();
     request.points.reserve(std::size_t(workout->Points.size()));
     for (const ErgFilePoint &point : workout->Points) {
         request.points.push_back({point.x, point.val});
     }
     request.sourceLaps.reserve(std::size_t(workout->Laps.size()));
     for (const ErgFileLap &lap : workout->Laps) {
-        if (std::isfinite(lap.x) && lap.x >= 0.0
-                && lap.x <= double(std::numeric_limits<std::int64_t>::max())) {
+        if (!lap.synthetic && std::isfinite(lap.x) && lap.x >= 0.0
+                && lap.x <= sourceDurationMs
+                && lap.name.size() <= 200
+                && !lap.name.contains(QLatin1Char('\n'))
+                && !lap.name.contains(QLatin1Char('\r'))) {
             request.sourceLaps.push_back({
                 std::int64_t(std::llround(lap.x)), lap.name
             });
@@ -731,7 +734,12 @@ TrainSidebar::createMtbCourse()
     request.sourceTexts.reserve(std::size_t(workout->Texts.size()));
     for (const ErgFileText &text : workout->Texts) {
         if (std::isfinite(text.x) && text.x >= 0.0
-                && text.x <= double(std::numeric_limits<std::int64_t>::max())) {
+                && text.x <= sourceDurationMs
+                && text.duration >= 0 && text.duration <= 3600
+                && !text.text.trimmed().isEmpty()
+                && text.text.size() <= 500
+                && !text.text.contains(QLatin1Char('\n'))
+                && !text.text.contains(QLatin1Char('\r'))) {
             request.sourceTexts.push_back({
                 std::int64_t(std::llround(text.x)), text.duration, text.text
             });
@@ -1265,22 +1273,26 @@ TrainSidebar::maintainLapDistanceState()
         return;
     }
 
-    double currentpositionM = displayWorkoutDistance * 1000.;
+    const double currentpositionM = workoutGameCourseRuntime.enabled()
+            ? workoutGameCourseRuntime.workoutTimelinePositionMeters()
+            : displayWorkoutDistance * 1000.0;
     double lapmarkerM = ergFileQueryAdapter.currentLap(currentpositionM);
 
     // If no current lap then handle route as lap.
     if (lapmarkerM < 0.) {
-        displayLapDistance = displayWorkoutDistance;
-        displayLapDistanceRemaining = (ergFileQueryAdapter.Duration() / 1000.) - displayWorkoutDistance;
+        displayLapDistance = currentpositionM / 1000.0;
+        displayLapDistanceRemaining =
+                (ergFileQueryAdapter.Duration() - currentpositionM) / 1000.0;
         return;
     }
 
-    displayLapDistance = (currentpositionM - lapmarkerM) / 1000.;
+    displayLapDistance = (currentpositionM - lapmarkerM) / 1000.0;
     double nextlapmarkerM = ergFileQueryAdapter.nextLap(currentpositionM);
 
     // If no next lap then use distance to end of route.
     if (nextlapmarkerM < 0.) {
-        displayLapDistanceRemaining = (ergFileQueryAdapter.Duration() / 1000.) - displayWorkoutDistance;
+        displayLapDistanceRemaining =
+                (ergFileQueryAdapter.Duration() - currentpositionM) / 1000.0;
         return;
     }
 
@@ -2532,15 +2544,22 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
 
                 displayDistance += distanceTick;
                 rawWorkoutDistance += distanceTick;
-                const double previousWorkoutDistance = displayWorkoutDistance;
+                const double previousLapPosition =
+                        workoutGameCourseRuntime.enabled()
+                            ? workoutGameCourseRuntime
+                                .workoutTimelinePositionMeters() / 1000.0
+                            : displayWorkoutDistance;
                 updateWorkoutDistanceProgress();
                 if (workoutGameCourseRuntime.enabled()) {
                     rtData.setLoad(displayWorkoutTargetWatts);
                 }
-                const double workoutDistanceTick =
-                        displayWorkoutDistance - previousWorkoutDistance;
-                displayLapDistance += workoutDistanceTick;
-                displayLapDistanceRemaining -= workoutDistanceTick;
+                const double lapPosition = workoutGameCourseRuntime.enabled()
+                        ? workoutGameCourseRuntime
+                            .workoutTimelinePositionMeters() / 1000.0
+                        : displayWorkoutDistance;
+                const double lapPositionTick = lapPosition - previousLapPosition;
+                displayLapDistance += lapPositionTick;
+                displayLapDistanceRemaining -= lapPositionTick;
 
                 if (!(status&RT_MODE_ERGO) && (context->currentVideoSyncFile()))
                 {
@@ -2629,7 +2648,12 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
                 if (ergFile) ergTimeRemaining = ergFileQueryAdapter.currentTime() - load_msecs;
                 else ergTimeRemaining = 0;
 
-                double lapPosition = status & RT_MODE_ERGO ? load_msecs : displayWorkoutDistance * 1000;
+                const double lapPosition = status & RT_MODE_ERGO
+                        ? load_msecs
+                        : workoutGameCourseRuntime.enabled()
+                            ? workoutGameCourseRuntime
+                                .workoutTimelinePositionMeters()
+                            : displayWorkoutDistance * 1000.0;
 
                 // alert when approaching end of lap
                 if (lapAudioEnabled && lapAudioThisLap) {

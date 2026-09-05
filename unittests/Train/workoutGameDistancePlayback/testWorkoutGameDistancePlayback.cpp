@@ -86,13 +86,29 @@ private slots:
         QVERIFY(start.ready);
         QCOMPARE(start.sectionIndex, std::size_t(0));
         QCOMPARE(start.nominalTimeMs, std::int64_t(0));
+        QCOMPARE(start.timelineDistanceMeters, 0.0);
         QCOMPARE(start.targetWatts, 150.0);
         QCOMPARE(middle.sectionIndex, std::size_t(0));
         QCOMPARE(middle.nominalTimeMs, std::int64_t(5000));
+        QCOMPARE(middle.timelineDistanceMeters, 50.0);
         QCOMPARE(middle.targetWatts, 200.0);
         QCOMPARE(boundary.sectionIndex, std::size_t(1));
         QCOMPARE(boundary.nominalTimeMs, std::int64_t(10000));
+        QCOMPARE(boundary.timelineDistanceMeters, 100.0);
         QCOMPARE(boundary.targetWatts, 100.0);
+    }
+
+    void slowDistanceKeepsCueTimelineAlignedWithActiveWorkoutTime()
+    {
+        WorkoutGameDistancePlayback playback;
+        QVERIFY(playback.configure(sampleCourse()));
+
+        const WorkoutGameDistancePlaybackSnapshot slow =
+                playback.atProgress(20.0, 5000);
+        QCOMPARE(slow.distanceMeters, 20.0);
+        QCOMPARE(slow.nominalTimeMs, std::int64_t(5000));
+        QCOMPARE(slow.timelineDistanceMeters, 50.0);
+        QCOMPARE(slow.targetWatts, 200.0);
     }
 
     void distanceIsClampedAndFinishIsExplicit()
