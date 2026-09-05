@@ -187,7 +187,7 @@ void moveGapJumpLateral(
 double jumpHeight(WorkoutGameTerrainKind terrain)
 {
     if (terrain == WorkoutGameTerrainKind::Tabletop) return 1.55;
-    if (terrain == WorkoutGameTerrainKind::BunnyHop) return 0.58;
+    if (terrain == WorkoutGameTerrainKind::BunnyHop) return 0.42;
     return 0.72;
 }
 

@@ -6260,6 +6260,8 @@ private slots:
                 frame.simulation.activeSection = 0;
                 frame.simulation.sectionProgress = std::clamp(
                         distance / road.totalLengthMeters, 0.0, 1.0);
+                frame.simulation.workoutTimeMs = std::int64_t(std::llround(
+                        (distance - start) / (20.0 / 3.6) * 1000.0));
                 frame.simulation.route = WorkoutGameRoute::MainLine;
                 frame.simulation.featureOutcome =
                         WorkoutGameFeatureOutcome::None;
@@ -6294,9 +6296,15 @@ private slots:
             maximumLaterals[lineIndex] = maximumLateral;
             maximumRolls[lineIndex] = maximumRoll;
         }
-        QVERIFY(maximumLaterals[0] > 0.50);
+        QVERIFY2(maximumLaterals[0] > 0.50,
+                 qPrintable(QStringLiteral(
+                     "berm low-line maximum lateral was %1 m")
+                     .arg(maximumLaterals[0], 0, 'f', 6)));
         QCOMPARE(maximumLaterals[1], 0.0);
-        QVERIFY(maximumLaterals[2] > 0.50);
+        QVERIFY2(maximumLaterals[2] > 0.50,
+                 qPrintable(QStringLiteral(
+                     "berm high-line maximum lateral was %1 m")
+                     .arg(maximumLaterals[2], 0, 'f', 6)));
         QVERIFY(maximumRolls[0] < maximumRolls[1]);
         QVERIFY(maximumRolls[1] < maximumRolls[2]);
         QVERIFY(maximumRolls[2] <= 38.0);
@@ -7105,7 +7113,12 @@ private slots:
                          .arg(scenario).arg(changedFrames).arg(FrameCount)));
             if (!safe) {
                 QVERIFY(largestAirMeters > 0.20);
-                QVERIFY(largestAirMeters <= maximumExpectedAirMeters);
+                QVERIFY2(largestAirMeters <= maximumExpectedAirMeters,
+                         qPrintable(QStringLiteral(
+                             "%1 maximum air was %2 m (limit %3 m)")
+                             .arg(QString::fromLatin1(videoEnvironment))
+                             .arg(largestAirMeters, 0, 'f', 6)
+                             .arg(maximumExpectedAirMeters, 0, 'f', 6)));
             } else {
                 QCOMPARE(largestAirMeters, 0.0);
             }

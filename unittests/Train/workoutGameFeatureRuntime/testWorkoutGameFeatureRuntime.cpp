@@ -731,6 +731,10 @@ private slots:
 
         QVERIFY(bunny.triggerJump);
         QVERIFY(log.triggerJump);
+        QVERIFY2(bunny.verticalOffsetMeters <= 0.43,
+                 qPrintable(QStringLiteral(
+                     "bunny-hop apex was %1 m")
+                     .arg(bunny.verticalOffsetMeters, 0, 'f', 6)));
         QVERIFY(bunny.verticalOffsetMeters < log.verticalOffsetMeters);
         QVERIFY(bunny.flightDurationSeconds < log.flightDurationSeconds);
         QVERIFY(bunny.flightDurationSeconds <= 1.1);
