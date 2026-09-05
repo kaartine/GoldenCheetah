@@ -90,7 +90,7 @@ targets, feature decisions, or trainer resistance.
 
 | ID | Object | Required variants | Source strategy |
 | --- | --- | --- | --- |
-| EN-01 | Conifer trees | 5-8 silhouettes, 2-3 sizes, camera-safe near variants | Search/adapt coherent permissive pack |
+| EN-01 | Conifer trees | Project-authored spruce groves and Scots-pine silhouette with merged understory, deterministic scale variation and camera-safe near bounds | Generate from repository-owned Blender Python |
 | EN-02 | Deciduous trees | 3-5 silhouettes for visual variation | Search/adapt |
 | EN-03 | Shrubs/ferns/grass | Small atlas-driven clusters; never hide the trail | Search/adapt or author |
 | EN-04 | Rocks/debris | 8-12 irregular props distinct from physical feature rocks | Search/adapt |

@@ -4913,6 +4913,57 @@ private slots:
         }
     }
 
+    void rendersPackagedConiferGroveCatalog()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.setSource(QUrl(QStringLiteral(
+                "qrc:/qml/assets/ConiferAssetHarness.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        window.resize(1280, 720);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTest::qWait(500);
+
+        const QList<QObject *> pineTrunks = window.rootObject()->findChildren<QObject *>(
+                QStringLiteral("workoutGameScotsPineTrunk"));
+        const QList<QObject *> pineCrowns = window.rootObject()->findChildren<QObject *>(
+                QStringLiteral("workoutGameScotsPineCrown"));
+        QCOMPARE(pineTrunks.size(), 4);
+        QCOMPARE(pineCrowns.size(), 4);
+        QCOMPARE(std::count_if(
+                pineTrunks.cbegin(), pineTrunks.cend(), [](QObject *object) {
+                    return object->property("visible").toBool();
+                }), 1);
+        QCOMPARE(std::count_if(
+                pineCrowns.cbegin(), pineCrowns.cend(), [](QObject *object) {
+                    return object->property("visible").toBool();
+                }), 1);
+
+        const QImage rendered = window.grabWindow();
+        QVERIFY(!rendered.isNull());
+        QCOMPARE(rendered.size(), QSize(1280, 720));
+        QVERIFY2(sampledColorCount(rendered) > 12,
+                 "packaged conifer grove catalog appears blank");
+        const QString screenshot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_CONIFER_ASSET_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            QVERIFY2(rendered.save(screenshot), qPrintable(screenshot));
+        }
+
+        QFile pineTrunk(QStringLiteral(
+                ":/qml/assets/meshes/geo_ScotsPineTrunk_LOD0_mesh.mesh"));
+        QFile pineCrown(QStringLiteral(
+                ":/qml/assets/meshes/geo_ScotsPineCrown_LOD0_mesh.mesh"));
+        QVERIFY(pineTrunk.open(QIODevice::ReadOnly));
+        QVERIFY(pineCrown.open(QIODevice::ReadOnly));
+        QCOMPARE(pineTrunk.size(), qint64(2632));
+        QCOMPARE(pineCrown.size(), qint64(6948));
+    }
+
     void loadsRendersAndMovesScene()
     {
         if (!hasInteractiveGraphicsPlatform()) {

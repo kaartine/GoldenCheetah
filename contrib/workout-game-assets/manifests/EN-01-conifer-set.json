@@ -1,15 +1,15 @@
 {
   "assetId": "EN-01-conifer-set",
-  "displayName": "Workout Game Low-Poly Conifer Set",
+  "displayName": "Workout Game Low-Poly Finnish Conifer Grove Set",
   "role": "vegetation",
   "source": {
     "kind": "project-authored",
     "provider": "GoldenCheetah",
     "author": "GoldenCheetah contributors",
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_conifer_set.py",
-    "retrievedAt": "2026-08-26",
+    "retrievedAt": "2026-09-05",
     "originalFileName": "generate_conifer_set.py",
-    "originalSha256": "494bc63a67b1af1aec3045471ded1bb6c0838a7297f072d64c7bb001854074c1",
+    "originalSha256": "84d8030a20fcfbfe160c7d3fd29d7bb40201f45a1fb4282605525184988a84ba",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_conifer_set.py"
@@ -25,43 +25,53 @@
     "archivedLicensePath": "COPYING",
     "distributionScopes": ["source", "appimage", "screenshots-video"],
     "conditions": [],
-    "reviewNotes": "Project-authored deterministic geometry with no external model, image or texture."
+    "reviewNotes": "Project-authored deterministic spruce, Scots-pine and understory geometry with no external model, image or texture."
   },
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_conifer_set.py",
       "purpose": "source",
-      "sha256": "494bc63a67b1af1aec3045471ded1bb6c0838a7297f072d64c7bb001854074c1"
+      "sha256": "84d8030a20fcfbfe160c7d3fd29d7bb40201f45a1fb4282605525184988a84ba"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_ConiferSet.glb",
       "purpose": "intermediate",
-      "sha256": "cfd57bb0e16be2d099ea9da0620cc7d5d0e33b8b9f7fcd402454c2ce2ca44840"
+      "sha256": "4c48b18bce6d4e485d8231428495a117439b16e1f4beb0a4043c9786cff75d7d"
     },
     {
       "path": "src/Train/qml/WorkoutGameConifer.qml",
       "purpose": "runtime",
-      "sha256": "a803aade9a3993c357b5044f3d0e7075704443936f2c5e0467d4c1574cd51767"
+      "sha256": "442de9f5207badf8b1929a6d23d16ff29e105cfdbf6174fd099e9a3e7c515304"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferBrokenTop_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "b4f0e021c92e97aabb1d999f2f06ae393733d561c7c796ed58ed86962ddea1e2"
+      "sha256": "44c0f2ae9d6b5d41274ce9cd734723a8ce8d84683c48bf3abf933cf6c5f23915"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "4ea209a5bc571fa0e4849dfac915c108edb94b9656dd1cc31a3d54a085ca8a9f"
+      "sha256": "7ba73e89d3ea59be5dddd80b1e4c147859e82bac79b234cccb2812958a0fd67b"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "ffa1e80cbd2a6c8c3cd177c0f0b243040083dbfc15c9855d0e90d86fb7d330f2"
+      "sha256": "94977ebd562bb90269a55f46fad899a4db1d9442fe8cb4b9601e6a3790b2a108"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh",
       "purpose": "runtime",
       "sha256": "ff4f98f6fa083c62b99a83fbd4a93ac161828f418cef640c352a3a99448ee848"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_ScotsPineCrown_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "287f4fa852e696e846ebda191373dbf23f73192bd96f2021e0a4efb57b5f6034"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_ScotsPineTrunk_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "a911a6e85e3d2f7691f628f82229d8eadf61c12247915ddac480f7ac305fe4d0"
     }
   ],
   "processing": {
@@ -69,11 +79,12 @@
     "toolVersion": "Blender 4.0.2; Qt Balsam 6.8.3",
     "steps": [
       "Start Blender with --background --factory-startup.",
-      "Run generate_conifer_set.py with topology, transform, base-pivot and budget checks.",
+      "Run generate_conifer_set.py with topology, transform, base-pivot, camera-radius and budget checks.",
       "Export glTF 2.0 GLB with opaque materials and no cameras, lights, textures or animations.",
       "Reproduce the GLB byte for byte and validate it with the repository policy.",
       "Convert twice with Qt Balsam 6.8.3 and compare every output byte.",
-      "Select one of three crown silhouettes in WorkoutGameConifer.qml while runtime terrain owns placement and base elevation."
+      "Select one of three spruce groves or the Scots-pine grove in WorkoutGameConifer.qml while runtime terrain owns placement and base elevation.",
+      "Keep each grove to one trunk and one crown model; the two ground-level saplings are merged into the crown mesh so the 18-tree runtime cap and draw-call contract do not change."
     ]
   },
   "technical": {
@@ -81,15 +92,17 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 14616,
-    "trianglesLod0": 192,
-    "materials": 3,
+    "glbBytes": 28596,
+    "trianglesLod0": 400,
+    "materials": 4,
     "textureBytes": 0,
     "nodes": [
       "GEO_ConiferBrokenTop_LOD0",
       "GEO_ConiferLayered_LOD0",
       "GEO_ConiferNarrow_LOD0",
       "GEO_ConiferTrunk_LOD0",
+      "GEO_ScotsPineCrown_LOD0",
+      "GEO_ScotsPineTrunk_LOD0",
       "PIVOT_BASE",
       "ROOT_ConiferSet"
     ],
@@ -97,11 +110,11 @@
     "allowedExtensions": [],
     "boundsMeters": {
       "minimum": [-1.2799999713897705, 0.0, -1.2799999713897705],
-      "maximum": [1.2799999713897705, 4.769999980926514, 1.2799999713897705]
+      "maximum": [1.2799999713897705, 5.46999979019165, 1.2799999713897705]
     },
     "budgets": {
       "maxGlbBytes": 32768,
-      "maxTrianglesLod0": 320,
+      "maxTrianglesLod0": 420,
       "maxMaterials": 4,
       "maxTextureBytes": 0
     }
@@ -112,7 +125,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
-    "reviewedAt": "2026-08-26",
-    "notes": "Approved project-authored conifer set. Deterministic Blender and Balsam reproduction, policy validation, integrated X11/OpenGL rendering, terrain-base anchoring, camera-corridor exclusion and stream-edge fade tests passed."
+    "reviewedAt": "2026-09-05",
+    "notes": "Approved project-authored Finnish conifer grove set. The original asymmetric Scots-pine silhouette and merged understory add species and age variation without external content, textures, placement work or additional runtime draw calls. Deterministic Blender and Balsam reproduction, policy validation, integrated X11/OpenGL rendering, terrain-base anchoring, camera-corridor exclusion and stream-edge fade tests passed."
   }
 }

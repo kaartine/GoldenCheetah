@@ -408,15 +408,50 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "GEO_ConiferNarrow_LOD0",
                 "GEO_ConiferLayered_LOD0",
                 "GEO_ConiferBrokenTop_LOD0",
+                "GEO_ScotsPineTrunk_LOD0",
+                "GEO_ScotsPineCrown_LOD0",
             },
         )
-        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 320)
-        self.assertGreaterEqual(manifest["technical"]["boundsMeters"]["maximum"][1], 4.5)
+        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 420)
+        bounds = manifest["technical"]["boundsMeters"]
+        self.assertGreaterEqual(bounds["maximum"][1], 5.4)
+        self.assertGreaterEqual(bounds["minimum"][1], 0.0)
+        nodes = {node["name"]: node for node in document["nodes"]}
+        for name in ("GEO_ScotsPineTrunk_LOD0", "GEO_ScotsPineCrown_LOD0"):
+            self.assertIn("Pinus sylvestris-inspired original silhouette",
+                          nodes[name]["extras"]["species"])
+        triangle_counts = {}
+        for name in mesh_nodes:
+            mesh = document["meshes"][nodes[name]["mesh"]]
+            triangle_counts[name] = sum(
+                document["accessors"][primitive["indices"]]["count"] // 3
+                for primitive in mesh["primitives"]
+            )
+        self.assertLessEqual(
+            triangle_counts["GEO_ConiferTrunk_LOD0"]
+            + max(triangle_counts["GEO_ConiferNarrow_LOD0"],
+                  triangle_counts["GEO_ConiferLayered_LOD0"],
+                  triangle_counts["GEO_ConiferBrokenTop_LOD0"]),
+            136,
+        )
+        self.assertLessEqual(
+            triangle_counts["GEO_ScotsPineTrunk_LOD0"]
+            + triangle_counts["GEO_ScotsPineCrown_LOD0"],
+            136,
+        )
         runtime_qml = (
             REPOSITORY / "src/Train/qml/WorkoutGameConifer.qml"
         ).read_text(encoding="utf-8")
         for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
             self.assertNotIn(primitive, runtime_qml)
+        self.assertIn("variant === 3", runtime_qml)
+        self.assertIn("geo_ScotsPineTrunk_LOD0_mesh.mesh", runtime_qml)
+        self.assertIn("geo_ScotsPineCrown_LOD0_mesh.mesh", runtime_qml)
+        qrc = (
+            REPOSITORY / "src/Resources/workout-game-assets.qrc"
+        ).read_text(encoding="utf-8")
+        self.assertIn("geo_ScotsPineTrunk_LOD0_mesh.mesh", qrc)
+        self.assertIn("geo_ScotsPineCrown_LOD0_mesh.mesh", qrc)
 
     def test_distant_ridges_are_bounded_socket_free_scenery(self) -> None:
         document, size = assets.read_glb(DISTANT_GLB_PATH)

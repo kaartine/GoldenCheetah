@@ -6,8 +6,8 @@ low-poly tabletop socket tile, `generate_log_over.py` creates a socketed,
 partly buried log-over tile, `generate_bunny_hop.py` creates a compact
 practice hurdle, `generate_drop.py` creates a faceted drop face, and
 `generate_rider_bike.py` creates the articulated low-poly rider and 29er MTB
-mesh set, and `generate_conifer_set.py` creates three low-poly forest
-silhouettes. `generate_distant_ridges.py` creates the bounded distant-terrain
+mesh set, and `generate_conifer_set.py` creates four low-poly Finnish forest
+groves. `generate_distant_ridges.py` creates the bounded distant-terrain
 ring. None of the generators downloads or embeds external assets.
 
 ## Distant-ridge contract
@@ -27,14 +27,21 @@ ring. None of the generators downloads or embeds external assets.
 
 ## Conifer contract
 
-- One tapered trunk and three crown meshes provide narrow, layered and
-  broken-top silhouettes. Runtime selects one crown per tree instance.
+- Three spruce forms provide narrow, layered and broken-top silhouettes. A
+  fourth form uses a tall orange-barked bole and asymmetric high crown to read
+  as an original Scots-pine silhouette. Runtime deterministically selects one
+  form per tree anchor.
+- Every crown mesh also contains two low ground-level saplings inside the
+  existing `1.35 m` camera-clearance radius. The saplings turn each anchor into
+  a small grove without another runtime model, material pass or draw call.
 - Every source mesh starts at or above `Y = 0`, and `PIVOT_BASE` is exactly at
   the origin. Runtime terrain sampling remains the sole base-height authority.
-- The complete set uses 192 triangles and three opaque source materials. It
-  contains no external texture, model or built-in Quick 3D primitive.
+- The complete source set uses 400 triangles and four opaque source materials;
+  any runtime tree uses at most 136 triangles across one trunk and one crown.
+  It contains no external texture, model or built-in Quick 3D primitive.
 - Blender checks the node inventory, finite triangle topology, applied
-  transforms and 320-triangle budget before export.
+  transforms, nonnegative base height, camera-clearance radius and 420-triangle
+  source-set budget before export.
 
 ## Rider-bike contract
 

@@ -39,6 +39,9 @@ real OpenGL still and motion review.
 - Trail width remains 1.36 m and its edges are continuously socketed.
 - Terrain and trees use authored asymmetric silhouettes and terrain-anchored
   bases. Repetition must be broken without unbounded object counts.
+- A foreground tree anchor may contain merged low saplings inside its tested
+  crown-clearance radius. It must still render as only one trunk and one crown
+  model so near-ground density does not multiply draw calls.
 - The approved medium-centre camera keeps the rider low and central while
   showing the next 25-40 m. Vegetation must respect its exclusion corridor.
 - Fog, particles and shadows must remain restrained and bounded. They may add

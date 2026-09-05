@@ -26,6 +26,8 @@
         <file alias="qml/assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_ScotsPineCrown_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ScotsPineCrown_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_ScotsPineTrunk_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_ScotsPineTrunk_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_Crank_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_BikeComponents_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_BikeComponents_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh</file>

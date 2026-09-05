@@ -926,17 +926,21 @@ passes unchanged. The full production target compiles in the release build
 container.
 
 **ENV-02 evidence:** the project-authored `EN-01` set replaces the former
-built-in cone and cylinder trees with narrow, layered and broken-top conifer
-silhouettes. All source vertices are at or above a named zero-height base;
+built-in cone and cylinder trees with three narrow, layered and broken-top
+spruce groves plus an asymmetric Scots-pine grove. Every crown includes two
+merged low saplings inside the existing camera-clearance radius. All source
+vertices are at or above a named zero-height base;
 runtime placement still interpolates the authoritative terrain profile and the
 camera-to-cue corridor still rejects occluding crowns. Trees fade over the
 resident window's six-metre rear and ten-metre forward edge bands with a
-bounded 320 ms presentation transition. The complete set is 192 triangles,
+bounded 320 ms presentation transition. The complete source set is 400
+triangles, while a visible tree remains at most 136 triangles and two models,
 contains no external content, reproduces byte for byte through Blender and
 Balsam, passes manifest and primitive-rejection tests, and remains inside the
 current 18-tree/80-draw-call runtime budgets.
 
-**ENV-01 evidence:** `EN-01` supplies three deterministic conifer silhouettes,
+**ENV-01 evidence:** `EN-01` supplies four deterministic conifer grove
+silhouettes, including the orange-barked Scots pine and merged understory,
 the resident near-terrain profile supplies bounded cross-slope and forest-floor
 relief, and approved project-authored `EN-03` closes the horizon with five
 uneven radial bands. The distant mesh is 27,600 bytes, 256 triangles and one
@@ -955,7 +959,7 @@ remain one custom geometry, material and draw call. They are generated as the
 seventh layer on the existing low-priority chunk worker and installed through
 the same generation-tagged capacity-one mailbox and double buffer as the
 forest floor; no tree work enters presentation, trainer control or recording.
-The existing ten authored foreground trees retain crown-aware camera/cue
+The existing eighteen authored foreground trees retain crown-aware camera/cue
 clearance and edge fades. Geometry passes 28 cases normally and under
 ASan/UBSan, the chunk handoff passes 8 cases normally and under ASan/UBSan, and
 the complete real-X11 Quick 3D suite passes 64 cases with 13 intentional export
