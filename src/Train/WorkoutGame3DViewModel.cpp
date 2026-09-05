@@ -324,6 +324,7 @@ void WorkoutGame3DViewModel::setCourse(
     forestDressingFirstSlot = std::numeric_limits<int>::min();
     forestDressingLastSlot = std::numeric_limits<int>::min();
     visibleTrees.clear();
+    courseGapJumpFeatures.clear();
     visibleForestFloorProps.clear();
     visibleForestVergeClusters.clear();
     currentFeatureHud = {};
@@ -1760,11 +1761,11 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
     for (int slot = firstSlot; slot <= lastSlot; ++slot) {
         const double distance = (double(slot) + 0.5)
                 * ForestDressingSpacingMeters;
+        if (overlapsAuthoredGapGround(roadCourse, distance)) continue;
         const WorkoutGameRoadSample sample =
                 WorkoutGameRoadCourseBuilder::sampleVisual(
                         roadCourse, distance);
         if (!sample.ready) continue;
-        if (overlapsAuthoredGapGround(roadCourse, distance)) continue;
         const WorkoutGame3DTerrainProfileSnapshot terrain =
                 WorkoutGame3DTerrainProfile::build(
                         sample, distance, roadCourse.seed);

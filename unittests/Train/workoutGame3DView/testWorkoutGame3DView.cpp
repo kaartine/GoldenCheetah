@@ -2052,6 +2052,8 @@ private slots:
         viewModel.setFrame(
                 frameAt(road, reviewDistance), 260.0, 260.0, 92, 154, 8);
         QCOMPARE(viewModel.gapJumpFeatures().size(), 1);
+        QVERIFY(!viewModel.forestFloorProps().isEmpty());
+        QVERIFY(!viewModel.forestVergeClusters().isEmpty());
 
         const auto verifyOutside = [&gate](const QVariant &entry) {
             const double distance = entry.toMap().value(
@@ -2065,6 +2067,65 @@ private slots:
         }
         for (const QVariant &entry : viewModel.forestVergeClusters()) {
             verifyOutside(entry);
+        }
+    }
+
+    void mixedFeatureCourseInstantiatesOnlyActualGapAssets()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 2701u;
+        const std::array<WorkoutGameTerrainKind, 2> terrains = {{
+            WorkoutGameTerrainKind::GapJump,
+            WorkoutGameTerrainKind::BunnyHop
+        }};
+        std::int64_t startMs = 0;
+        for (const WorkoutGameTerrainKind terrain : terrains) {
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = terrain;
+            section.startMs = startMs;
+            section.durationMs = 30000;
+            section.lengthMeters = 80.0;
+            section.targetWatts = 250.0;
+            section.difficulty = 0.5;
+            section.challengeCount = 1;
+            course.sections.push_back(section);
+            startMs += section.durationMs;
+        }
+        course.durationMs = startMs;
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        viewModel.setFrame(
+                frameAt(road, 0.0), 250.0, 250.0, 90, 152, 8);
+
+        int expectedGapAssets = 0;
+        for (const QVariant &entry : viewModel.features()) {
+            expectedGapAssets += entry.toMap().value(
+                    QStringLiteral("kind")).toInt()
+                    == int(WorkoutGameTerrainKind::GapJump);
+        }
+        QVERIFY(viewModel.features().size() > expectedGapAssets);
+        QVERIFY(expectedGapAssets > 0);
+        QCOMPARE(viewModel.gapJumpFeatures().size(), expectedGapAssets);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        const QList<QObject *> assets =
+                window.rootObject()->findChildren<QObject *>(
+                    QStringLiteral("gapJumpAssetInstance"));
+        QCOMPARE(assets.size(), expectedGapAssets);
+        for (QObject *asset : assets) {
+            QVERIFY(asset->property("visible").toBool());
         }
     }
 

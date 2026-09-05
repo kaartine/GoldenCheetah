@@ -406,7 +406,6 @@ Item {
             delegate: WorkoutGameAssets.Wg_GapJumpThreeLine {
                 required property var modelData
                 objectName: "gapJumpAssetInstance"
-                visible: modelData.assetScaleY !== undefined
                 position: Qt.vector3d(
                     modelData.assetX || 0,
                     modelData.assetY || 0,

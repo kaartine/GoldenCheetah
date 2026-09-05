@@ -253,18 +253,23 @@ private slots:
                  floor.sampleCount() * VerticesPerRow);
 
         int rowsInsideGap = 0;
+        bool foundEntrySocket = false;
+        bool foundExitSocket = false;
+        bool foundWideAuthoredRow = false;
         for (int row = 0; row < floor.sampleCount(); ++row) {
             const int base = row * VerticesPerRow;
             const double distance = vertexFloat(
                     floor.vertexData(), floor.stride(), base, 44) / 0.22;
-            if (distance < piece->gapJump.splitStartDistanceMeters
-                    || distance > piece->gapJump.mergeEndDistanceMeters) {
+            if (distance < piece->gapJump.splitStartDistanceMeters - 0.01
+                    || distance
+                        > piece->gapJump.mergeEndDistanceMeters + 0.01) {
                 continue;
             }
             const WorkoutGameRoadSample road =
                     WorkoutGameRoadCourseBuilder::sampleVisual(course, distance);
             QVERIFY(road.ready);
             double previousLateral = -std::numeric_limits<double>::infinity();
+            std::array<double, VerticesPerRow> laterals{};
             for (int column = 0; column < VerticesPerRow; ++column) {
                 const int vertex = base + column;
                 const double x = vertexFloat(
@@ -277,11 +282,27 @@ private slots:
                             * -std::sin(road.center.headingRadians);
                 QVERIFY2(lateral > previousLateral + 1.0e-4,
                          "gap-jump terrain cross-section folded over itself");
+                laterals[std::size_t(column)] = lateral;
                 previousLateral = lateral;
+            }
+            foundWideAuthoredRow = foundWideAuthoredRow
+                    || laterals[4] - laterals[3] > 10.0;
+            const bool entry = std::abs(distance
+                    - piece->gapJump.splitStartDistanceMeters) < 0.01;
+            const bool exit = std::abs(distance
+                    - piece->gapJump.mergeEndDistanceMeters) < 0.01;
+            if (entry || exit) {
+                QVERIFY(std::abs(laterals[3] + 0.68) < 0.001);
+                QVERIFY(std::abs(laterals[4] - 0.68) < 0.001);
+                foundEntrySocket = foundEntrySocket || entry;
+                foundExitSocket = foundExitSocket || exit;
             }
             ++rowsInsideGap;
         }
         QVERIFY(rowsInsideGap > 0);
+        QVERIFY(foundEntrySocket);
+        QVERIFY(foundExitSocket);
+        QVERIFY(foundWideAuthoredRow);
     }
 
     void gapJumpBuildsThreeOpenLinesWithoutTrailBridges()
