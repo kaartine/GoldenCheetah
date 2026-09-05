@@ -382,10 +382,14 @@ void WorkoutGame3DViewModel::setCourse(
         cameraYawVelocityRadiansPerSecond = 0.0;
         lastCameraPoseTimeMs = 0;
     } else {
+        ++workCounters.treeSignals;
         emit treesChanged();
+        ++workCounters.forestSignals;
         emit forestDressingChanged();
     }
+    ++workCounters.courseSignals;
     emit courseChanged();
+    ++workCounters.sceneSignals;
     emit sceneChanged();
 }
 
@@ -397,7 +401,7 @@ void WorkoutGame3DViewModel::setFrame(
         int heartRate,
         int virtualGear)
 {
-    installReadyFloorChunk();
+    ++workCounters.frameCalls;
     setTelemetry(
             watts, targetWatts, cadenceRpm, heartRate, virtualGear);
     if (!sceneReady || !frame.world.ready) return;
@@ -842,6 +846,7 @@ void WorkoutGame3DViewModel::setFrame(
     rebuildFloor(currentDistanceMeters);
     rebuildFeatures(currentDistanceMeters);
     rebuildTrees(currentDistanceMeters);
+    ++workCounters.sceneSignals;
     emit sceneChanged();
 }
 
@@ -1256,6 +1261,7 @@ void WorkoutGame3DViewModel::setTelemetry(
     currentCadenceRpm = nextCadenceRpm;
     currentHeartRate = nextHeartRate;
     currentVirtualGear = nextVirtualGear;
+    ++workCounters.telemetrySignals;
     emit telemetryChanged();
 }
 
@@ -1302,6 +1308,24 @@ void WorkoutGame3DViewModel::setDiagnostics(
 int WorkoutGame3DViewModel::geometryQueueDepth() const
 {
     return int(chunkBuilder.pendingDepth());
+}
+
+WorkoutGame3DFrameWorkCounters
+WorkoutGame3DViewModel::frameWorkCounters() const
+{
+    WorkoutGame3DFrameWorkCounters counters = workCounters;
+    const std::uint64_t completed = chunkBuilder.completedBuildCount();
+    counters.floorChunkBuildsCompleted = completed
+            >= completedFloorBuildCounterBaseline
+        ? completed - completedFloorBuildCounterBaseline : 0;
+    return counters;
+}
+
+void WorkoutGame3DViewModel::resetFrameWorkCounters()
+{
+    workCounters = {};
+    completedFloorBuildCounterBaseline =
+            chunkBuilder.completedBuildCount();
 }
 
 void WorkoutGame3DViewModel::setGeneratorState(const QString &state)
@@ -1426,6 +1450,7 @@ void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
                 FeatureBehindMeters, FeatureRefreshAheadMeters)) {
         return;
     }
+    ++workCounters.featureModelRegenerations;
     courseFeatures.clear();
     courseGapJumpFeatures.clear();
     if (!roadCourse.ready) {
@@ -1473,6 +1498,7 @@ void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
         }
         if (courseFeatures.size() >= MaximumVisibleFeatures) break;
     }
+    ++workCounters.courseSignals;
     emit courseChanged();
 }
 
@@ -1502,6 +1528,7 @@ void WorkoutGame3DViewModel::rebuildFloor(
         requestedFloorBucket = std::numeric_limits<int>::min();
         requestedFloorCoverage = {};
         updateVisibleTriangleCount();
+        ++workCounters.floorSignals;
         emit floorGeometryChanged();
         return;
     }
@@ -1521,6 +1548,7 @@ void WorkoutGame3DViewModel::rebuildFloor(
     const int bucket = ++nextFloorBucket;
     requestedFloorBucket = bucket;
     if (!immediate) {
+        ++workCounters.floorBuildRequests;
         chunkBuilder.request(
                 roadCourseSnapshot, start, end, bucket, courseGeneration);
         emit renderWorkChanged();
@@ -1558,6 +1586,7 @@ void WorkoutGame3DViewModel::rebuildFloor(
     activeFloorBuffer = nextBuffer;
     floorBucket = bucket;
     updateVisibleTriangleCount();
+    ++workCounters.floorSignals;
     emit floorGeometryChanged();
 }
 
@@ -1588,7 +1617,9 @@ void WorkoutGame3DViewModel::installReadyFloorChunk()
     }
     activeFloorBuffer = nextBuffer;
     floorBucket = chunk.bucket;
+    ++workCounters.floorChunkInstalls;
     updateVisibleTriangleCount();
+    ++workCounters.floorSignals;
     emit floorGeometryChanged();
 }
 
@@ -1636,6 +1667,7 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
             cameraPresentationSnapshot.sideBlend > 0.0;
     bool cameraClearanceChanged = false;
     for (const QVariant &entry : visibleTrees) {
+        ++workCounters.treeClearanceEntriesVisited;
         const QVariantMap tree = entry.toMap();
         const double requiredClearance =
                 tree.value(QStringLiteral("crownRadius")).toDouble()
@@ -1658,6 +1690,7 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
                 TreeBehindMeters, TreeRefreshAheadMeters)) {
         return;
     }
+    ++workCounters.treeModelRegenerations;
     const double coverageStart = std::max(
             0.0, distanceMeters - TreeBehindMeters);
     const double coverageEnd = std::min(
@@ -1727,6 +1760,7 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
         if (visibleTrees.size() >= MaximumVisibleTrees) break;
     }
 
+    ++workCounters.treeSignals;
     emit treesChanged();
 }
 
@@ -1753,6 +1787,7 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
             && lastSlot == forestDressingLastSlot) {
         return;
     }
+    ++workCounters.forestModelRegenerations;
     forestDressingFirstSlot = firstSlot;
     forestDressingLastSlot = lastSlot;
 
@@ -1860,5 +1895,6 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
     }
     visibleForestFloorProps = floorProps;
     visibleForestVergeClusters = vergeClusters;
+    ++workCounters.forestSignals;
     emit forestDressingChanged();
 }

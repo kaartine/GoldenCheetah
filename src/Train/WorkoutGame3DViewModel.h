@@ -28,6 +28,24 @@
 #include <limits>
 #include <vector>
 
+struct WorkoutGame3DFrameWorkCounters
+{
+    std::uint64_t frameCalls = 0;
+    std::uint64_t sceneSignals = 0;
+    std::uint64_t telemetrySignals = 0;
+    std::uint64_t courseSignals = 0;
+    std::uint64_t treeSignals = 0;
+    std::uint64_t forestSignals = 0;
+    std::uint64_t floorSignals = 0;
+    std::uint64_t floorBuildRequests = 0;
+    std::uint64_t floorChunkBuildsCompleted = 0;
+    std::uint64_t floorChunkInstalls = 0;
+    std::uint64_t featureModelRegenerations = 0;
+    std::uint64_t treeModelRegenerations = 0;
+    std::uint64_t forestModelRegenerations = 0;
+    std::uint64_t treeClearanceEntriesVisited = 0;
+};
+
 class WorkoutGame3DViewModel : public QObject
 {
     Q_OBJECT
@@ -173,6 +191,8 @@ public:
     void setFps(double value);
     void setDiagnostics(const WorkoutGameDiagnosticsSnapshot &snapshot);
     void setGeneratorState(const QString &state);
+    WorkoutGame3DFrameWorkCounters frameWorkCounters() const;
+    void resetFrameWorkCounters();
 
     QObject *trailGeometry() const { return trail.get(); }
     QObject *bermGeometry() const
@@ -475,6 +495,8 @@ private:
     std::uint64_t courseGeneration = 0;
     WorkoutGame3DChunkBuilder chunkBuilder;
     std::atomic<bool> floorInstallQueued{false};
+    WorkoutGame3DFrameWorkCounters workCounters;
+    std::uint64_t completedFloorBuildCounterBaseline = 0;
 };
 
 #endif

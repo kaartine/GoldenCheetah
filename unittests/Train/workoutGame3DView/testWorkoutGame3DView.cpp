@@ -48,6 +48,7 @@
 #include <QSGRendererInterface>
 #include <QTemporaryFile>
 #include <QTest>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
@@ -58,9 +59,56 @@
 #include <memory>
 #include <vector>
 
+#if defined(Q_OS_LINUX)
+#include <sys/resource.h>
+#include <time.h>
+#endif
+
 namespace {
 
 constexpr double FtpWatts = 200.0;
+
+struct ThreadExecutionSnapshot
+{
+    qint64 cpuNanoseconds = -1;
+    long voluntaryContextSwitches = 0;
+    long involuntaryContextSwitches = 0;
+};
+
+ThreadExecutionSnapshot threadExecutionSnapshot()
+{
+    ThreadExecutionSnapshot snapshot;
+#if defined(Q_OS_LINUX)
+    timespec cpuTime{};
+    rusage usage{};
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpuTime) == 0
+            && getrusage(RUSAGE_THREAD, &usage) == 0) {
+        snapshot.cpuNanoseconds = qint64(cpuTime.tv_sec) * 1000000000LL
+                + qint64(cpuTime.tv_nsec);
+        snapshot.voluntaryContextSwitches = usage.ru_nvcsw;
+        snapshot.involuntaryContextSwitches = usage.ru_nivcsw;
+    }
+#endif
+    return snapshot;
+}
+
+struct FrameUpdateTiming
+{
+    double wallMilliseconds = 0.0;
+    double threadCpuMilliseconds = 0.0;
+    long voluntaryContextSwitches = 0;
+    long involuntaryContextSwitches = 0;
+};
+
+double percentile(std::vector<double> values, double fraction)
+{
+    if (values.empty()) return 0.0;
+    std::sort(values.begin(), values.end());
+    const std::size_t rank = std::min(
+            values.size() - 1,
+            std::size_t(std::ceil(fraction * double(values.size()))) - 1);
+    return values[rank];
+}
 
 class PerformanceTargetDevice final : public TrainerTargetDevice
 {
@@ -1323,6 +1371,121 @@ private slots:
     void initTestCase()
     {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+    }
+
+    void ordinaryResidentFramesDoNotRegenerateModels()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(road, 8.0);
+        frame.simulation.workoutTimeMs = 5000;
+        frame.presentationTimeMs = 5000;
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        QCoreApplication::processEvents();
+
+        QSignalSpy courseSignals(
+                &viewModel, &WorkoutGame3DViewModel::courseChanged);
+        QSignalSpy treeSignals(
+                &viewModel, &WorkoutGame3DViewModel::treesChanged);
+        QSignalSpy forestSignals(
+                &viewModel, &WorkoutGame3DViewModel::forestDressingChanged);
+        QSignalSpy floorSignals(
+                &viewModel, &WorkoutGame3DViewModel::floorGeometryChanged);
+        QSignalSpy telemetrySignals(
+                &viewModel, &WorkoutGame3DViewModel::telemetryChanged);
+        QSignalSpy sceneSignals(
+                &viewModel, &WorkoutGame3DViewModel::sceneChanged);
+        viewModel.resetFrameWorkCounters();
+
+        constexpr int OrdinaryFrames = 500;
+        for (int index = 0; index < OrdinaryFrames; ++index) {
+            viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        }
+
+        const WorkoutGame3DFrameWorkCounters counters =
+                viewModel.frameWorkCounters();
+        qInfo().noquote() << QStringLiteral(
+                "ordinary resident work: frames=%1 scene=%2 telemetry=%3 "
+                "course/tree/forest/floor=%4/%5/%6/%7; "
+                "regenerations=%8/%9/%10; floor requests/installs=%11/%12; "
+                "tree entries visited=%13")
+            .arg(counters.frameCalls)
+            .arg(counters.sceneSignals)
+            .arg(counters.telemetrySignals)
+            .arg(counters.courseSignals)
+            .arg(counters.treeSignals)
+            .arg(counters.forestSignals)
+            .arg(counters.floorSignals)
+            .arg(counters.featureModelRegenerations)
+            .arg(counters.treeModelRegenerations)
+            .arg(counters.forestModelRegenerations)
+            .arg(counters.floorBuildRequests)
+            .arg(counters.floorChunkInstalls)
+            .arg(counters.treeClearanceEntriesVisited);
+        QCOMPARE(counters.frameCalls, std::uint64_t(OrdinaryFrames));
+        QCOMPARE(counters.sceneSignals, std::uint64_t(OrdinaryFrames));
+        QCOMPARE(counters.telemetrySignals, std::uint64_t(0));
+        QCOMPARE(counters.floorBuildRequests, std::uint64_t(0));
+        QCOMPARE(counters.floorChunkInstalls, std::uint64_t(0));
+        QCOMPARE(counters.featureModelRegenerations, std::uint64_t(0));
+        QCOMPARE(counters.treeModelRegenerations, std::uint64_t(0));
+        QCOMPARE(counters.forestModelRegenerations, std::uint64_t(0));
+        QVERIFY(counters.treeClearanceEntriesVisited > 0);
+        QVERIFY(counters.treeClearanceEntriesVisited
+                <= std::uint64_t(OrdinaryFrames * 18));
+        QCOMPARE(courseSignals.count(), 0);
+        QCOMPARE(treeSignals.count(), 0);
+        QCOMPARE(forestSignals.count(), 0);
+        QCOMPARE(floorSignals.count(), 0);
+        QCOMPARE(telemetrySignals.count(), 0);
+        QCOMPARE(sceneSignals.count(), OrdinaryFrames);
+    }
+
+    void readyFloorChunkIsNotInstalledBySetFrame()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.resetFrameWorkCounters();
+        WorkoutGameVisualSnapshot frame = frameAt(road, 260.0);
+        frame.simulation.workoutTimeMs = 10000;
+        frame.presentationTimeMs = 10000;
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        QCOMPARE(viewModel.frameWorkCounters().floorBuildRequests,
+                 std::uint64_t(1));
+
+        QElapsedTimer completionWait;
+        completionWait.start();
+        while (viewModel.frameWorkCounters().floorChunkBuildsCompleted == 0
+                && completionWait.elapsed() < 5000) {
+            QThread::msleep(2);
+        }
+        QCOMPARE(viewModel.frameWorkCounters().floorChunkBuildsCompleted,
+                 std::uint64_t(1));
+        QCOMPARE(viewModel.frameWorkCounters().floorChunkInstalls,
+                 std::uint64_t(0));
+
+        QSignalSpy floorSignals(
+                &viewModel, &WorkoutGame3DViewModel::floorGeometryChanged);
+        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        QCOMPARE(viewModel.frameWorkCounters().floorChunkInstalls,
+                 std::uint64_t(0));
+        QCOMPARE(floorSignals.count(), 0);
+
+        QTRY_COMPARE_WITH_TIMEOUT(
+                viewModel.frameWorkCounters().floorChunkInstalls,
+                std::uint64_t(1), 3000);
+        QCOMPARE(floorSignals.count(), 1);
     }
 
     void renderWorkStaysWithinInitialBudgets()
@@ -7796,11 +7959,12 @@ private slots:
         QCOMPARE(enduranceOutput.entryList(
                     {QStringLiteral("*.png")}, QDir::Files).size(), 0);
         window.setCourse(course, FtpWatts);
+        viewModel->resetFrameWorkCounters();
         constexpr std::int64_t EnduranceDurationMs = 5 * 60 * 1000;
         constexpr std::int64_t SimulationStepMs = 20;
         constexpr std::int64_t LapDurationMs = 6000;
-        std::vector<double> updateMilliseconds;
-        updateMilliseconds.reserve(
+        std::vector<FrameUpdateTiming> updateTimings;
+        updateTimings.reserve(
                 std::size_t(EnduranceDurationMs / SimulationStepMs));
         int eventPumps = 0;
         for (std::int64_t timeMs = 0;
@@ -7814,6 +7978,10 @@ private slots:
                         - gate.splitStartDistanceMeters + 2.0) * progress;
             const WorkoutGameVisualSnapshot frame = acceptanceFrame(
                     scenario, distance, 10000 + timeMs);
+            const ThreadExecutionSnapshot executionBefore =
+                    threadExecutionSnapshot();
+            QVERIFY2(executionBefore.cpuNanoseconds >= 0,
+                     "per-thread CPU diagnostics require Linux thread clocks");
             QElapsedTimer updateTimer;
             updateTimer.start();
             window.setFrame(
@@ -7823,9 +7991,21 @@ private slots:
                     scenario.fallback ? 70 : 94,
                     152,
                     scenario.fallback ? 3 : 9);
+            const qint64 wallNanoseconds = updateTimer.nsecsElapsed();
+            const ThreadExecutionSnapshot executionAfter =
+                    threadExecutionSnapshot();
+            QVERIFY(executionAfter.cpuNanoseconds
+                    >= executionBefore.cpuNanoseconds);
             if (timeMs >= 5000) {
-                updateMilliseconds.push_back(
-                        double(updateTimer.nsecsElapsed()) / 1000000.0);
+                updateTimings.push_back({
+                    double(wallNanoseconds) / 1000000.0,
+                    double(executionAfter.cpuNanoseconds
+                            - executionBefore.cpuNanoseconds) / 1000000.0,
+                    executionAfter.voluntaryContextSwitches
+                            - executionBefore.voluntaryContextSwitches,
+                    executionAfter.involuntaryContextSwitches
+                            - executionBefore.involuntaryContextSwitches
+                });
             }
             if ((timeMs / SimulationStepMs) % 50 == 0) {
                 window.update();
@@ -7833,25 +8013,74 @@ private slots:
                 ++eventPumps;
             }
         }
-        QVERIFY(!updateMilliseconds.empty());
-        std::sort(updateMilliseconds.begin(), updateMilliseconds.end());
-        const auto percentile = [&updateMilliseconds](double fraction) {
-            const std::size_t rank = std::min(
-                    updateMilliseconds.size() - 1,
-                    std::size_t(std::ceil(
-                        fraction * double(updateMilliseconds.size()))) - 1);
-            return updateMilliseconds[rank];
-        };
-        const double p95UpdateMs = percentile(0.95);
-        const double maximumUpdateMs = updateMilliseconds.back();
-        QVERIFY2(p95UpdateMs <= 12.0,
+        QVERIFY(!updateTimings.empty());
+        std::vector<double> wallMilliseconds;
+        std::vector<double> threadCpuMilliseconds;
+        wallMilliseconds.reserve(updateTimings.size());
+        threadCpuMilliseconds.reserve(updateTimings.size());
+        double maximumUnpreemptedWallMs = 0.0;
+        int hostPreemptionSamples = 0;
+        long voluntaryContextSwitches = 0;
+        long involuntaryContextSwitches = 0;
+        for (const FrameUpdateTiming &timing : updateTimings) {
+            wallMilliseconds.push_back(timing.wallMilliseconds);
+            threadCpuMilliseconds.push_back(timing.threadCpuMilliseconds);
+            voluntaryContextSwitches += timing.voluntaryContextSwitches;
+            involuntaryContextSwitches += timing.involuntaryContextSwitches;
+            const bool hostPreempted = timing.involuntaryContextSwitches > 0
+                    && timing.wallMilliseconds
+                            - timing.threadCpuMilliseconds > 2.0;
+            if (hostPreempted) {
+                ++hostPreemptionSamples;
+            } else {
+                maximumUnpreemptedWallMs = std::max(
+                        maximumUnpreemptedWallMs,
+                        timing.wallMilliseconds);
+            }
+        }
+        const double p95WallMs = percentile(wallMilliseconds, 0.95);
+        const double p99WallMs = percentile(wallMilliseconds, 0.99);
+        const double maximumWallMs = *std::max_element(
+                wallMilliseconds.cbegin(), wallMilliseconds.cend());
+        const double p95ThreadCpuMs = percentile(
+                threadCpuMilliseconds, 0.95);
+        const double maximumThreadCpuMs = *std::max_element(
+                threadCpuMilliseconds.cbegin(),
+                threadCpuMilliseconds.cend());
+        qInfo().noquote() << QStringLiteral(
+                "setFrame endurance: wall p95=%1 ms p99=%2 ms max=%3 ms; "
+                "thread CPU p95=%4 ms max=%5 ms; unpreempted wall max=%6 "
+                "ms; host preemption samples=%7; context switches=%8/%9")
+            .arg(p95WallMs, 0, 'f', 3)
+            .arg(p99WallMs, 0, 'f', 3)
+            .arg(maximumWallMs, 0, 'f', 3)
+            .arg(p95ThreadCpuMs, 0, 'f', 3)
+            .arg(maximumThreadCpuMs, 0, 'f', 3)
+            .arg(maximumUnpreemptedWallMs, 0, 'f', 3)
+            .arg(hostPreemptionSamples)
+            .arg(voluntaryContextSwitches)
+            .arg(involuntaryContextSwitches);
+        QVERIFY2(p95WallMs <= 12.0,
                  qPrintable(QStringLiteral(
-                     "gap-jump endurance p95 update was %1 ms")
-                     .arg(p95UpdateMs, 0, 'f', 3)));
-        QVERIFY2(maximumUpdateMs <= 50.0,
+                     "gap-jump endurance wall p95 was %1 ms")
+                     .arg(p95WallMs, 0, 'f', 3)));
+        QVERIFY2(p99WallMs <= 20.0,
                  qPrintable(QStringLiteral(
-                     "gap-jump endurance maximum update was %1 ms")
-                     .arg(maximumUpdateMs, 0, 'f', 3)));
+                     "gap-jump endurance wall p99 was %1 ms")
+                     .arg(p99WallMs, 0, 'f', 3)));
+        QVERIFY2(p95ThreadCpuMs <= 12.0,
+                 qPrintable(QStringLiteral(
+                     "gap-jump endurance thread CPU p95 was %1 ms")
+                     .arg(p95ThreadCpuMs, 0, 'f', 3)));
+        QVERIFY2(maximumThreadCpuMs <= 50.0,
+                 qPrintable(QStringLiteral(
+                     "gap-jump endurance synchronous thread CPU maximum "
+                     "was %1 ms")
+                     .arg(maximumThreadCpuMs, 0, 'f', 3)));
+        QVERIFY2(maximumUnpreemptedWallMs <= 50.0,
+                 qPrintable(QStringLiteral(
+                     "gap-jump endurance unpreempted wall maximum was %1 ms")
+                     .arg(maximumUnpreemptedWallMs, 0, 'f', 3)));
         QVERIFY(viewModel->geometryQueueDepth() <= 1);
         QVERIFY(viewModel->visibleTriangles() > 0);
         QVERIFY(std::isfinite(viewModel->riderX()));
@@ -7859,6 +8088,27 @@ private slots:
         QVERIFY(std::isfinite(viewModel->riderZ()));
         QCOMPARE(enduranceOutput.entryList(
                     {QStringLiteral("*.png")}, QDir::Files).size(), 0);
+        const WorkoutGame3DFrameWorkCounters workCounters =
+                viewModel->frameWorkCounters();
+        qInfo().noquote() << QStringLiteral(
+                "setFrame work: frames=%1 scene=%2 telemetry=%3 course=%4 "
+                "trees=%5 forest=%6 floor=%7; regenerations=%8/%9/%10; "
+                "floor requests/completed/installs=%11/%12/%13; "
+                "tree entries visited=%14")
+            .arg(workCounters.frameCalls)
+            .arg(workCounters.sceneSignals)
+            .arg(workCounters.telemetrySignals)
+            .arg(workCounters.courseSignals)
+            .arg(workCounters.treeSignals)
+            .arg(workCounters.forestSignals)
+            .arg(workCounters.floorSignals)
+            .arg(workCounters.featureModelRegenerations)
+            .arg(workCounters.treeModelRegenerations)
+            .arg(workCounters.forestModelRegenerations)
+            .arg(workCounters.floorBuildRequests)
+            .arg(workCounters.floorChunkBuildsCompleted)
+            .arg(workCounters.floorChunkInstalls)
+            .arg(workCounters.treeClearanceEntriesVisited);
 
         QJsonObject report;
         report.insert(QStringLiteral("simulated_duration_ms"),
@@ -7870,8 +8120,48 @@ private slots:
         report.insert(QStringLiteral("warmup_excluded_ms"), qint64(5000));
         report.insert(QStringLiteral("render_event_pumps"), eventPumps);
         report.insert(QStringLiteral("capture_count"), 0);
-        report.insert(QStringLiteral("p95_update_ms"), p95UpdateMs);
-        report.insert(QStringLiteral("maximum_update_ms"), maximumUpdateMs);
+        report.insert(QStringLiteral("wall_p95_ms"), p95WallMs);
+        report.insert(QStringLiteral("wall_p99_ms"), p99WallMs);
+        report.insert(QStringLiteral("wall_maximum_ms"), maximumWallMs);
+        report.insert(QStringLiteral("thread_cpu_p95_ms"), p95ThreadCpuMs);
+        report.insert(QStringLiteral("thread_cpu_maximum_ms"),
+                      maximumThreadCpuMs);
+        report.insert(QStringLiteral("unpreempted_wall_maximum_ms"),
+                      maximumUnpreemptedWallMs);
+        report.insert(QStringLiteral("host_preemption_samples"),
+                      hostPreemptionSamples);
+        report.insert(QStringLiteral("voluntary_context_switches"),
+                      qint64(voluntaryContextSwitches));
+        report.insert(QStringLiteral("involuntary_context_switches"),
+                      qint64(involuntaryContextSwitches));
+        report.insert(QStringLiteral("frame_calls"),
+                      qint64(workCounters.frameCalls));
+        report.insert(QStringLiteral("scene_signals"),
+                      qint64(workCounters.sceneSignals));
+        report.insert(QStringLiteral("telemetry_signals"),
+                      qint64(workCounters.telemetrySignals));
+        report.insert(QStringLiteral("course_signals"),
+                      qint64(workCounters.courseSignals));
+        report.insert(QStringLiteral("tree_signals"),
+                      qint64(workCounters.treeSignals));
+        report.insert(QStringLiteral("forest_signals"),
+                      qint64(workCounters.forestSignals));
+        report.insert(QStringLiteral("floor_signals"),
+                      qint64(workCounters.floorSignals));
+        report.insert(QStringLiteral("feature_model_regenerations"),
+                      qint64(workCounters.featureModelRegenerations));
+        report.insert(QStringLiteral("tree_model_regenerations"),
+                      qint64(workCounters.treeModelRegenerations));
+        report.insert(QStringLiteral("forest_model_regenerations"),
+                      qint64(workCounters.forestModelRegenerations));
+        report.insert(QStringLiteral("floor_build_requests"),
+                      qint64(workCounters.floorBuildRequests));
+        report.insert(QStringLiteral("floor_chunk_builds_completed"),
+                      qint64(workCounters.floorChunkBuildsCompleted));
+        report.insert(QStringLiteral("floor_chunk_installs"),
+                      qint64(workCounters.floorChunkInstalls));
+        report.insert(QStringLiteral("tree_clearance_entries_visited"),
+                      qint64(workCounters.treeClearanceEntriesVisited));
         report.insert(QStringLiteral("geometry_queue_depth"),
                       viewModel->geometryQueueDepth());
         report.insert(QStringLiteral("visible_triangles"),

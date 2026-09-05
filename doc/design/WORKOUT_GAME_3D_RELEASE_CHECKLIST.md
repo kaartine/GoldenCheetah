@@ -801,10 +801,34 @@ No external model, image or texture was added.
 `exportsGapJumpAcceptanceMatrixAndRunsSimulatedEndurance` Quick 3D port writes
 only below `GC_WORKOUT_GAME_GAP_JUMP_ACCEPTANCE_DIR`. Its X11/Quick 3D run
 exports approach, take-off, apex, landing and 72-frame motion evidence for the
-short, medium, long and grounded safe lines. A separate capture-free
-five-minute, 15,000-step run reports 1.90 ms p95, 15.38 ms maximum update time
-and zero queued geometry. Packaged execution and signed interactive review
-remain release gates.
+short, medium, long and grounded safe lines.
+
+The 2026-09-05 source endurance hardening keeps the original `12 ms` p95 and
+`50 ms` maximum production limits, adds a `20 ms` p99 limit, and measures each
+`setFrame` call with both wall time and Linux per-thread CPU time. Involuntary
+context switches identify host preemption separately; voluntary waits and
+unattributed wall stalls still fail the `50 ms` gate. Five controlled baseline
+runs at canonical `77926aa` had worst-run wall p95/max of `1.478/14.825 ms`
+and thread-CPU p95/max of `1.478/14.711 ms`. After removing synchronous
+completed-chunk polling from `setFrame`, five more runs had worst-run wall
+p95/max of `1.570/19.645 ms` and thread-CPU p95/max of
+`1.564/19.657 ms`. The host-dependent variation is below every fixed limit;
+the optimization's invariant is that completed render data can no longer be
+installed in the trainer/telemetry call path.
+
+Production counters and signal spies prove that 500 unchanged resident frames
+perform zero feature, tree, forest-dressing or floor-list regenerations, zero
+geometry requests or installs, and emit none of their model signals. The
+remaining camera-clearance scan is bounded to the 14 resident trees, measured
+as exactly 7,000 visits over those 500 frames. Each of the five 15,000-frame
+seek-heavy endurance runs consistently recorded zero feature regenerations,
+148 tree regenerations, 250 forest-dressing regenerations and exactly two
+asynchronous floor request/completion/install cycles. The complete offscreen
+View/QML suite passes 86 cases with 39 explicit graphics/export skips, normally
+and under ASan/UBSan, and the complete GoldenCheetah application target
+compiles and links in the remote Qt 6.8.3 container. This closes the
+source-level synchronous-`setFrame` endurance blocker. Packaged execution and
+signed interactive review remain release gates.
 
 The `FTR-12A` asset package is complete. A pinned Blender 4.0.2 generator
 produces one original `40.70 m` three-line tile with exact `0.68 m` input and
