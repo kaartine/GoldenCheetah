@@ -160,6 +160,14 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
         physicsInput.gapJumpLaunchSpeedMetersPerSecond =
                 feature.launchBestSpeedMetersPerSecond > 0.0
                 ? feature.launchBestSpeedMetersPerSecond : -1.0;
+        if (feature.terrain == WorkoutGameTerrainKind::GapJump
+                && feature.lockedGapLine
+                    != WorkoutGameGapJumpLine::None) {
+            physicsInput.gapJumpTakeoffDistanceMeters =
+                    feature.physicalTakeoffDistanceMeters;
+            physicsInput.gapJumpLandingDistanceMeters =
+                    feature.actionEndDistanceMeters;
+        }
         physicsInput.forceGroundFollowing = feature.route
                 == WorkoutGameRoute::SafeBypass;
         physicsInput.followCourseSurface =

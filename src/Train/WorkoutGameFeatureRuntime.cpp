@@ -714,10 +714,12 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         const double timelineSpeedMetersPerSecond = layout->durationMs > 0
                 ? sectionLengthMeters / sectionSeconds
                 : result.predictedApproachSpeedMetersPerSecond;
-        const double courseSpeedMetersPerSecond =
-                result.launchBestSpeedMetersPerSecond > 0.0
-                    ? result.launchBestSpeedMetersPerSecond
-                    : std::max(0.1, timelineSpeedMetersPerSecond);
+        const double courseSpeedMetersPerSecond = layout->durationMs > 0
+                ? std::max(0.1, timelineSpeedMetersPerSecond)
+                : std::max(0.1,
+                    result.launchBestSpeedMetersPerSecond > 0.0
+                        ? result.launchBestSpeedMetersPerSecond
+                        : result.predictedApproachSpeedMetersPerSecond);
         result.flightDurationSeconds = line
                 ? std::clamp(
                     line->gapLengthMeters / courseSpeedMetersPerSecond,

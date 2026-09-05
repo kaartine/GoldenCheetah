@@ -280,6 +280,14 @@ private slots:
                     if (frame.visual.world.rider.airborne) {
                         QVERIFY(jumpStage == JumpStage::Takeoff
                                 || jumpStage == JumpStage::Airborne);
+                        QVERIFY2(
+                            WorkoutGameFeatureRuntime::airborneExpected(
+                                frame.visual.feature),
+                            qPrintable(QStringLiteral(
+                                "gap flight escaped its runtime action phase "
+                                "at %1 ms, phase %2")
+                                .arg(timeMs)
+                                .arg(int(frame.visual.feature.phase))));
                         jumpStage = JumpStage::Airborne;
                     } else if (jumpStage == JumpStage::Airborne) {
                         jumpStage = JumpStage::Landed;

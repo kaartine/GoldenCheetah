@@ -1521,8 +1521,10 @@ private slots:
         QCOMPARE(apex.actionEndDistanceMeters,
                  medium.landingDistanceMeters);
         QCOMPARE(apex.selectedGapLengthMeters, medium.gapLengthMeters);
+        const double timelineSpeed = road.totalLengthMeters
+                / (double(road.timeline.front().durationMs) / 1000.0);
         QCOMPARE(apex.flightDurationSeconds,
-                 medium.gapLengthMeters / 5.5);
+                 medium.gapLengthMeters / timelineSpeed);
         QVERIFY(apex.flightDurationSeconds <= profile.maximumFlightSeconds);
         QVERIFY(apex.flightDurationSeconds <= 2.0);
         QVERIFY(apex.triggerJump);

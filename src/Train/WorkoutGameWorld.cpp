@@ -219,6 +219,8 @@ struct WorkoutGamePhysics::Impl
     bool gapJumpFlightActive = false;
     std::int64_t gapJumpFlightMicroseconds = 0;
     std::int64_t gapJumpFlightDurationMicroseconds = 0;
+    double gapJumpTakeoffDistanceMeters = -1.0;
+    double gapJumpLandingDistanceMeters = -1.0;
     double gapJumpApexMeters = 0.0;
     int lastJumpTile = -1;
     std::uint64_t lastFeatureActionId = 0;
@@ -253,6 +255,8 @@ struct WorkoutGamePhysics::Impl
         gapJumpFlightActive = false;
         gapJumpFlightMicroseconds = 0;
         gapJumpFlightDurationMicroseconds = 0;
+        gapJumpTakeoffDistanceMeters = -1.0;
+        gapJumpLandingDistanceMeters = -1.0;
         gapJumpApexMeters = 0.0;
     }
 
@@ -563,11 +567,24 @@ struct WorkoutGamePhysics::Impl
             return;
         }
 
-        gapJumpFlightMicroseconds = std::min(
-                gapJumpFlightDurationMicroseconds,
-                gapJumpFlightMicroseconds + PhysicsStepMicroseconds);
-        const double progress = double(gapJumpFlightMicroseconds)
-                / double(gapJumpFlightDurationMicroseconds);
+        double progress = 0.0;
+        if (authoritativeDistanceMeters >= 0.0
+                && gapJumpTakeoffDistanceMeters >= 0.0
+                && gapJumpLandingDistanceMeters
+                    > gapJumpTakeoffDistanceMeters) {
+            progress = std::clamp(
+                    (authoritativeDistanceMeters
+                        - gapJumpTakeoffDistanceMeters)
+                    / (gapJumpLandingDistanceMeters
+                        - gapJumpTakeoffDistanceMeters),
+                    0.0, 1.0);
+        } else {
+            gapJumpFlightMicroseconds = std::min(
+                    gapJumpFlightDurationMicroseconds,
+                    gapJumpFlightMicroseconds + PhysicsStepMicroseconds);
+            progress = double(gapJumpFlightMicroseconds)
+                    / double(gapJumpFlightDurationMicroseconds);
+        }
         const double offsetMeters = gapJumpApexMeters * gapJumpArc(progress);
         const double chassisX = b2Body_GetPosition(chassis).x;
         constexpr double GroundedChassisClearanceMeters = 0.82;
@@ -584,7 +601,7 @@ struct WorkoutGamePhysics::Impl
             velocity.y = 0.0f;
             b2Body_SetLinearVelocity(body, velocity);
         }
-        if (gapJumpFlightMicroseconds >= gapJumpFlightDurationMicroseconds) {
+        if (progress >= 1.0) {
             gapJumpFlightActive = false;
             landingImpact = std::max(landingImpact, 0.18);
             wasGrounded = true;
@@ -787,6 +804,10 @@ struct WorkoutGamePhysics::Impl
                                     std::int64_t(std::llround(
                                         durationSeconds * 1000000.0));
                             gapJumpFlightMicroseconds = 0;
+                            gapJumpTakeoffDistanceMeters =
+                                    input.gapJumpTakeoffDistanceMeters;
+                            gapJumpLandingDistanceMeters =
+                                    input.gapJumpLandingDistanceMeters;
                             gapJumpApexMeters = std::min(
                                     2.4,
                                     line->lipHeightMeters
@@ -896,6 +917,8 @@ void WorkoutGamePhysics::reset()
     impl->gapJumpFlightActive = false;
     impl->gapJumpFlightMicroseconds = 0;
     impl->gapJumpFlightDurationMicroseconds = 0;
+    impl->gapJumpTakeoffDistanceMeters = -1.0;
+    impl->gapJumpLandingDistanceMeters = -1.0;
     impl->gapJumpApexMeters = 0.0;
     impl->lastJumpTile = -1;
     impl->lastFeatureActionId = 0;
@@ -997,6 +1020,15 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
                 && input.courseSpeedMetersPerSecond >= 0.0
             ? std::clamp(input.courseSpeedMetersPerSecond, 0.0, 16.0)
             : -1.0;
+    input.gapJumpTakeoffDistanceMeters =
+            std::isfinite(input.gapJumpTakeoffDistanceMeters)
+                && input.gapJumpTakeoffDistanceMeters >= 0.0
+            ? input.gapJumpTakeoffDistanceMeters : -1.0;
+    input.gapJumpLandingDistanceMeters =
+            std::isfinite(input.gapJumpLandingDistanceMeters)
+                && input.gapJumpLandingDistanceMeters
+                    > input.gapJumpTakeoffDistanceMeters
+            ? input.gapJumpLandingDistanceMeters : -1.0;
     impl->authoritativeDistanceMeters = input.courseDistanceMeters;
     if (!impl->initialized && input.courseDistanceMeters >= 0.0) {
         impl->distanceBase = input.courseDistanceMeters;

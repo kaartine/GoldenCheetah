@@ -1289,6 +1289,48 @@ private slots:
         QVERIFY(!retriggered);
     }
 
+    void gapJumpWithAuthoritativeDistanceLandsAtAuthoredLanding()
+    {
+        const auto profile = WorkoutGameGapJumpGeometry::canonicalProfile();
+        const auto *line = WorkoutGameGapJumpGeometry::line(
+                profile, WorkoutGameGapJumpLine::Short);
+        QVERIFY(line != nullptr);
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(997u));
+        WorkoutGamePhysicsInput input;
+        input.terrain = WorkoutGameTerrainKind::GapJump;
+        input.desiredSpeedMetersPerSecond = 4.8;
+        input.courseSpeedMetersPerSecond = 7.0;
+        input.gapJumpLaunchSpeedMetersPerSecond = 4.8;
+        input.gapJumpTakeoffDistanceMeters = 80.0;
+        input.gapJumpLandingDistanceMeters =
+                input.gapJumpTakeoffDistanceMeters + line->gapLengthMeters;
+        input.courseDistanceMeters = input.gapJumpTakeoffDistanceMeters;
+        input.difficulty = profile.difficulty;
+        input.effortRatio = 1.0;
+        input.jumpRequested = true;
+        input.gapJumpLine = WorkoutGameGapJumpLine::Short;
+        input.featureActionId = 42u;
+        physics.update(input);
+
+        bool observedAirborne = false;
+        for (int time = 20; time <= 400; time += 20) {
+            input.workoutTimeMs = time;
+            input.courseDistanceMeters = input.gapJumpTakeoffDistanceMeters
+                    + input.courseSpeedMetersPerSecond * time / 1000.0;
+            const WorkoutGameWorldSnapshot frame = physics.update(input);
+            if (input.courseDistanceMeters
+                    < input.gapJumpLandingDistanceMeters) {
+                observedAirborne = observedAirborne || frame.rider.airborne;
+            } else {
+                QVERIFY2(!frame.rider.airborne,
+                         "gap flight continued beyond its authored landing");
+            }
+        }
+        QVERIFY(observedAirborne);
+    }
+
     void gapJumpSafeBypassAlwaysFollowsTheGround()
     {
         WorkoutGamePhysics physics;

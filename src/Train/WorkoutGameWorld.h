@@ -94,6 +94,8 @@ struct WorkoutGamePhysicsInput
     double desiredSpeedMetersPerSecond = 0.0;
     double courseSpeedMetersPerSecond = -1.0;
     double gapJumpLaunchSpeedMetersPerSecond = -1.0;
+    double gapJumpTakeoffDistanceMeters = -1.0;
+    double gapJumpLandingDistanceMeters = -1.0;
     double courseDistanceMeters = -1.0;
     double gradePercent = 0.0;
     double difficulty = 0.0;
