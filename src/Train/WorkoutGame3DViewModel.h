@@ -126,6 +126,8 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(double powerProfileMaximumWatts READ powerProfileMaximumWatts
                NOTIFY courseChanged)
     Q_PROPERTY(QVariantList features READ features NOTIFY courseChanged)
+    Q_PROPERTY(QVariantList gapJumpFeatures READ gapJumpFeatures
+               NOTIFY courseChanged)
     Q_PROPERTY(QVariantList trees READ trees NOTIFY treesChanged)
     Q_PROPERTY(QVariantList forestFloorProps READ forestFloorProps
                NOTIFY forestDressingChanged)
@@ -303,6 +305,7 @@ public:
         return currentPowerProfileMaximumWatts;
     }
     QVariantList features() const { return courseFeatures; }
+    QVariantList gapJumpFeatures() const { return courseGapJumpFeatures; }
     QVariantList trees() const { return visibleTrees; }
     QVariantList forestFloorProps() const { return visibleForestFloorProps; }
     QVariantList forestVergeClusters() const
@@ -386,6 +389,7 @@ private:
     QVariantList currentPowerProfile;
     double currentPowerProfileMaximumWatts = 1.0;
     QVariantList courseFeatures;
+    QVariantList courseGapJumpFeatures;
     QVariantList visibleTrees;
     QVariantList visibleForestFloorProps;
     QVariantList visibleForestVergeClusters;

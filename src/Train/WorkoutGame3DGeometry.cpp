@@ -47,6 +47,10 @@ constexpr double Pi = 3.14159265358979323846;
 constexpr double GapAssetLengthMeters = 40.7;
 constexpr double GapAssetSocketHalfWidthMeters = 0.68;
 constexpr double GapAssetMaximumHalfWidthMeters = 6.0;
+constexpr double GapTerrainShoulderWidthMeters = 1.25;
+constexpr double GapTerrainMidClearanceMeters = 2.5;
+constexpr double GapTerrainDefaultMidMeters = 6.0;
+constexpr double GapTerrainOuterMeters = 14.0;
 constexpr std::array<double, 26> GapAssetRowsMeters = {{
     0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 11.4, 12.0,
     12.45, 12.8, 12.9, 13.175, 13.35, 13.6, 13.8, 14.35,
@@ -651,8 +655,19 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
                     - activeGapJump->splitStartDistanceMeters;
             const GapAssetGroundEdge edge =
                     gapAssetGroundEdge(localDistance);
+            const double shoulderHalfWidth = edge.halfWidthMeters
+                    + GapTerrainShoulderWidthMeters;
+            const double midHalfWidth = std::min(
+                    GapTerrainOuterMeters - GapTerrainShoulderWidthMeters,
+                    std::max(GapTerrainDefaultMidMeters,
+                             edge.halfWidthMeters
+                                + GapTerrainMidClearanceMeters));
+            terrain.vertices[1].lateralMeters = -midHalfWidth;
+            terrain.vertices[2].lateralMeters = -shoulderHalfWidth;
             terrain.vertices[3].lateralMeters = -edge.halfWidthMeters;
             terrain.vertices[4].lateralMeters = edge.halfWidthMeters;
+            terrain.vertices[5].lateralMeters = shoulderHalfWidth;
+            terrain.vertices[6].lateralMeters = midHalfWidth;
             terrain.vertices[3].elevationMeters =
                     sample.visualGroundElevationMeters()
                     + edge.leftHeightMeters;

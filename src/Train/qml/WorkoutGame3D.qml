@@ -402,12 +402,11 @@ Item {
         }
 
         Repeater3D {
-            model: workoutGame3D.features
+            model: workoutGame3D.gapJumpFeatures
             delegate: WorkoutGameAssets.Wg_GapJumpThreeLine {
                 required property var modelData
                 objectName: "gapJumpAssetInstance"
-                visible: modelData.kind === 12
-                         && modelData.assetScaleY !== undefined
+                visible: modelData.assetScaleY !== undefined
                 position: Qt.vector3d(
                     modelData.assetX || 0,
                     modelData.assetY || 0,

@@ -2018,6 +2018,56 @@ private slots:
         for (const QVariant &entry : vergeClusters) verifyPlacement(entry, 2);
     }
 
+    void forestDressingStaysOutsideAuthoredGapJumpGround()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 1701u;
+        course.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::GapJump;
+        section.durationMs = course.durationMs;
+        section.lengthMeters = 120.0;
+        section.targetWatts = 260.0;
+        section.difficulty = 0.5;
+        section.challengeCount = 1;
+        course.sections = {section};
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto gate = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.gapJump.enabled;
+                });
+        QVERIFY(gate != road.pieces.end());
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        const double reviewDistance = 0.5 * (
+                gate->gapJump.splitStartDistanceMeters
+                + gate->gapJump.mergeEndDistanceMeters);
+        viewModel.setFrame(
+                frameAt(road, reviewDistance), 260.0, 260.0, 92, 154, 8);
+        QCOMPARE(viewModel.gapJumpFeatures().size(), 1);
+
+        const auto verifyOutside = [&gate](const QVariant &entry) {
+            const double distance = entry.toMap().value(
+                    QStringLiteral("distance")).toDouble();
+            QVERIFY2(distance < gate->gapJump.splitStartDistanceMeters
+                        || distance > gate->gapJump.mergeEndDistanceMeters,
+                     "forest dressing entered authored gap-jump ground");
+        };
+        for (const QVariant &entry : viewModel.forestFloorProps()) {
+            verifyOutside(entry);
+        }
+        for (const QVariant &entry : viewModel.forestVergeClusters()) {
+            verifyOutside(entry);
+        }
+    }
+
     void forestDressingDelegatesUseResidentEdgeFades()
     {
         const WorkoutGameCourse course = cameraMotionCourse();

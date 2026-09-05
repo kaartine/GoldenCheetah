@@ -55,6 +55,7 @@ constexpr double CameraCorridorClearanceMeters = 0.85;
 constexpr double ForestDressingCameraClearanceMeters = 1.70;
 constexpr double ForestDressingCorridorBehindMeters = 8.2;
 constexpr double ForestDressingCorridorAheadMeters = 12.0;
+constexpr double ForestDressingFeatureClearanceMeters = 2.0;
 constexpr double CameraIntegrationStepSeconds = 0.05;
 constexpr double MaximumCameraCatchupSeconds = 0.25;
 constexpr double MaximumCameraSpeedMetersPerSecond = 16.0;
@@ -75,6 +76,24 @@ double finiteOrZero(double value)
 double normalizedRadians(double radians)
 {
     return std::remainder(radians, 2.0 * Pi);
+}
+
+bool overlapsAuthoredGapGround(
+        const WorkoutGameRoadCourse &course,
+        double distanceMeters)
+{
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.gapJump.enabled) continue;
+        if (distanceMeters
+                    >= piece.gapJump.splitStartDistanceMeters
+                        - ForestDressingFeatureClearanceMeters
+                && distanceMeters
+                    <= piece.gapJump.mergeEndDistanceMeters
+                        + ForestDressingFeatureClearanceMeters) {
+            return true;
+        }
+    }
+    return false;
 }
 
 struct WorkoutGameRoutePoint
@@ -1407,6 +1426,7 @@ void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
         return;
     }
     courseFeatures.clear();
+    courseGapJumpFeatures.clear();
     if (!roadCourse.ready) {
         featureCoverage = {};
         return;
@@ -1447,6 +1467,9 @@ void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
             feature.insert(QStringLiteral("assetScaleZ"), asset.scaleZ);
         }
         courseFeatures.push_back(feature);
+        if (piece.terrain == WorkoutGameTerrainKind::GapJump && asset.ready) {
+            courseGapJumpFeatures.push_back(feature);
+        }
         if (courseFeatures.size() >= MaximumVisibleFeatures) break;
     }
     emit courseChanged();
@@ -1741,6 +1764,7 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
                 WorkoutGameRoadCourseBuilder::sampleVisual(
                         roadCourse, distance);
         if (!sample.ready) continue;
+        if (overlapsAuthoredGapGround(roadCourse, distance)) continue;
         const WorkoutGame3DTerrainProfileSnapshot terrain =
                 WorkoutGame3DTerrainProfile::build(
                         sample, distance, roadCourse.seed);

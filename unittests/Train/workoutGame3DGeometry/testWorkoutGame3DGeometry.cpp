@@ -233,6 +233,57 @@ class TestWorkoutGame3DGeometry : public QObject
     Q_OBJECT
 
 private slots:
+    void gapJumpForestFloorCrossSectionsRemainOrdered()
+    {
+        const WorkoutGameRoadCourse course = gapJumpCourse();
+        QVERIFY(course.ready);
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.gapJump.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+
+        WorkoutGame3DGeometry floor(
+                WorkoutGame3DGeometry::Layer::ForestFloor);
+        floor.setCourse(course);
+        QVERIFY(floor.ready());
+        constexpr int VerticesPerRow = 8;
+        QCOMPARE(floor.vertexData().size() / floor.stride(),
+                 floor.sampleCount() * VerticesPerRow);
+
+        int rowsInsideGap = 0;
+        for (int row = 0; row < floor.sampleCount(); ++row) {
+            const int base = row * VerticesPerRow;
+            const double distance = vertexFloat(
+                    floor.vertexData(), floor.stride(), base, 44) / 0.22;
+            if (distance < piece->gapJump.splitStartDistanceMeters
+                    || distance > piece->gapJump.mergeEndDistanceMeters) {
+                continue;
+            }
+            const WorkoutGameRoadSample road =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(course, distance);
+            QVERIFY(road.ready);
+            double previousLateral = -std::numeric_limits<double>::infinity();
+            for (int column = 0; column < VerticesPerRow; ++column) {
+                const int vertex = base + column;
+                const double x = vertexFloat(
+                        floor.vertexData(), floor.stride(), vertex, 0);
+                const double z = vertexFloat(
+                        floor.vertexData(), floor.stride(), vertex, 8);
+                const double lateral = (x - road.center.xMeters)
+                            * std::cos(road.center.headingRadians)
+                        + (z - road.center.zMeters)
+                            * -std::sin(road.center.headingRadians);
+                QVERIFY2(lateral > previousLateral + 1.0e-4,
+                         "gap-jump terrain cross-section folded over itself");
+                previousLateral = lateral;
+            }
+            ++rowsInsideGap;
+        }
+        QVERIFY(rowsInsideGap > 0);
+    }
+
     void gapJumpBuildsThreeOpenLinesWithoutTrailBridges()
     {
         const WorkoutGameRoadCourse course = gapJumpCourse();
