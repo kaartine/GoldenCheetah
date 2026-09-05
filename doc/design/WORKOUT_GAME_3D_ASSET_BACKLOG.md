@@ -97,6 +97,7 @@ targets, feature decisions, or trainer resistance.
 | EN-05 | Logs/stumps | 4-6 decorative variants | Search/adapt |
 | EN-06 | Distant forest/hills | Low-poly or billboard depth layers | Author from owned/generated work |
 | EN-07 | Sky/fog | Flat-color arcade sky and restrained depth fog | Author |
+| EN-08 | Forest-floor prop kit | Three granite silhouettes, one stump, one decorative fallen deadwood form and three low understory silhouettes | Generate from repository-owned Blender Python; no external model or texture input |
 | FX-01 | Contact shadow | Ground-fixed rider/bike shadow with airborne scaling | Author |
 | FX-02 | Dirt/dust | Small bounded landing and rear-wheel effects | Author |
 | FX-03 | Success/bypass cue | World-space marker plus HUD response | Author |
@@ -112,6 +113,39 @@ targets, feature decisions, or trainer resistance.
 | SV-04 | Catalog cameras | Fixed low-centre, medium-centre and slight-shoulder viewpoints |
 | SV-05 | License manifest | Machine-readable provenance and attribution per imported file |
 | SV-06 | Asset validation report | Scale, sockets, bounds, pivots, nodes, animation, material and budget checks |
+
+### `EN-08` Forest-Floor Prop Contract
+
+`EN-08` is a source and review package only in this task. It must not be added
+to world generation, packaged runtime resources, collision, feature selection
+or the release acceptance state until a separate placement and target-GPU
+review is complete.
+
+- Supply exactly three recognisably different granite forms, one rooted stump,
+  one fallen deadwood form and three understory forms. Granite forms must span
+  low, upright and slab-like silhouettes; understory must span fern, bilberry
+  and heather-like silhouettes.
+- Keep every mesh transform applied, every ground-contact point at canonical
+  `Y = 0` and every named base pivot at the origin. No render vertex may extend
+  below the terrain anchor. Maximum variant footprint is `2.20 m` by `0.80 m`
+  and maximum height is `0.70 m`, compatible with the `1.36 m` trail and the
+  current bicycle scale.
+- The fallen deadwood is scenery-only: maximum diameter/height is `0.34 m`, it
+  has no collision or feature metadata, and later placement must keep it clear
+  of the trail and camera/cue exclusion corridor. It must not resemble or
+  replace the `0.54 m`-high physical `FT-02` log-over.
+- Limit the complete GLB to `480` LOD0 triangles, `64 KiB`, four opaque shared
+  palette materials and zero embedded texture bytes. Limit each instanced
+  variant to `96` triangles. Every primitive must carry UV0 for later reuse of
+  the project surface atlas; a rock or shrub needs one material pass and the
+  stump or deadwood may use at most two.
+- Record project-generated provenance, generator version and hashes in the
+  normal machine-readable manifest. Repeated generation with the pinned
+  Blender patch release must be byte-identical.
+- Render front, left-three-quarter and rear-three-quarter comparison catalogs
+  at `960 x 540`, `47` degrees vertical FOV, identical exposure, lighting,
+  camera distance, ground datum and per-cell world scale. The catalogs are
+  review evidence only and do not imply runtime or release approval.
 
 ## Delivery Tasks
 
