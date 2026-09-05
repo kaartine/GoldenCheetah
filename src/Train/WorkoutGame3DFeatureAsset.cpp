@@ -47,6 +47,42 @@ WorkoutGame3DFeatureAssetSnapshot WorkoutGame3DFeatureAsset::place(
         const WorkoutGameRoadPiece &piece)
 {
     WorkoutGame3DFeatureAssetSnapshot result;
+    if (course.ready && piece.challenge.enabled
+            && piece.terrain == WorkoutGameTerrainKind::GapJump
+            && piece.gapJump.enabled) {
+        constexpr double AssetLengthMeters = 40.7;
+        constexpr double SocketToleranceMeters = 1.0e-6;
+        const double gateLength = piece.gapJump.mergeEndDistanceMeters
+                - piece.gapJump.splitStartDistanceMeters;
+        if (!std::isfinite(gateLength)
+                || std::abs(gateLength - AssetLengthMeters)
+                    > SocketToleranceMeters) {
+            return result;
+        }
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sample(
+                    course, piece.gapJump.splitStartDistanceMeters);
+        const WorkoutGameRoadSample exit =
+                WorkoutGameRoadCourseBuilder::sample(
+                    course, piece.gapJump.mergeEndDistanceMeters);
+        if (!sample.ready || !exit.ready
+                || std::abs(sample.center.headingRadians
+                            - exit.center.headingRadians)
+                    > SocketToleranceMeters
+                || std::abs(sample.baseGradePercent - exit.baseGradePercent)
+                    > SocketToleranceMeters) {
+            return result;
+        }
+        result.ready = true;
+        result.terrain = piece.terrain;
+        result.xMeters = sample.center.xMeters;
+        result.yMeters = sample.visualGroundElevationMeters();
+        result.zMeters = sample.center.zMeters;
+        result.yawDegrees = sample.center.headingRadians * 180.0 / Pi;
+        result.pitchDegrees = -std::atan(sample.baseGradePercent / 100.0)
+                * 180.0 / Pi;
+        return result;
+    }
     const AssetSpec spec = specFor(piece.terrain);
     const WorkoutGameFeatureGeometryProfile profile =
             WorkoutGameFeatureGeometry::profile(

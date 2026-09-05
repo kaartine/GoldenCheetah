@@ -36,6 +36,9 @@ WorkoutGameRoadCourse courseWith(WorkoutGameTerrainKind terrain, double difficul
     feature.targetWatts = 250.0;
     feature.difficulty = difficulty;
     feature.challengeCount = 1;
+    if (terrain == WorkoutGameTerrainKind::GapJump) {
+        feature.lengthMeters = 120.0;
+    }
     WorkoutGameSection exit = approach;
     exit.startMs = 45000;
     source.sections = {approach, feature, exit};
@@ -80,7 +83,7 @@ private slots:
         QVERIFY(!asset.ready);
     }
 
-    void leavesGapJumpSurfaceToTheProceduralRoadGeometry()
+    void placesGapJumpAssetOnItsMeasuredCourseSockets()
     {
         const WorkoutGameRoadCourse course = courseWith(
                 WorkoutGameTerrainKind::GapJump, 0.5);
@@ -88,7 +91,57 @@ private slots:
         QVERIFY(piece.gapJump.enabled);
         const WorkoutGame3DFeatureAssetSnapshot asset =
                 WorkoutGame3DFeatureAsset::place(course, piece);
-        QVERIFY(!asset.ready);
+        QVERIFY(asset.ready);
+        QCOMPARE(asset.terrain, WorkoutGameTerrainKind::GapJump);
+        QCOMPARE(asset.scaleY, 1.0);
+        QCOMPARE(asset.scaleZ, 1.0);
+
+        const WorkoutGameRoadSample socket =
+                WorkoutGameRoadCourseBuilder::sample(
+                    course, piece.gapJump.splitStartDistanceMeters);
+        QVERIFY(socket.ready);
+        QVERIFY(std::abs(asset.xMeters - socket.center.xMeters) < 1e-12);
+        QVERIFY(std::abs(asset.yMeters
+                         - socket.visualGroundElevationMeters()) < 1e-12);
+        QVERIFY(std::abs(asset.zMeters - socket.center.zMeters) < 1e-12);
+        QVERIFY(std::abs(asset.yawDegrees
+                         - socket.center.headingRadians * 180.0
+                            / 3.14159265358979323846) < 1e-12);
+
+        QCOMPARE(piece.gapJump.lines[0].takeoffDistanceMeters
+                    - piece.gapJump.splitStartDistanceMeters, 12.0);
+        QCOMPARE(piece.gapJump.lines[0].landingDistanceMeters
+                    - piece.gapJump.splitStartDistanceMeters, 13.8);
+        QCOMPARE(piece.gapJump.lines[1].landingDistanceMeters
+                    - piece.gapJump.splitStartDistanceMeters, 15.2);
+        QCOMPARE(piece.gapJump.lines[2].landingDistanceMeters
+                    - piece.gapJump.splitStartDistanceMeters, 16.7);
+        QCOMPARE(piece.gapJump.mergeEndDistanceMeters
+                    - piece.gapJump.splitStartDistanceMeters, 40.7);
+    }
+
+    void keepsGapAssetGeometryCanonicalWhileDifficultyChangesAuthority()
+    {
+        const WorkoutGameRoadCourse easy = courseWith(
+                WorkoutGameTerrainKind::GapJump, 0.0);
+        const WorkoutGameRoadCourse hard = courseWith(
+                WorkoutGameTerrainKind::GapJump, 1.0);
+        const WorkoutGameRoadPiece &easyPiece = challengePiece(easy);
+        const WorkoutGameRoadPiece &hardPiece = challengePiece(hard);
+        const WorkoutGame3DFeatureAssetSnapshot easyAsset =
+                WorkoutGame3DFeatureAsset::place(easy, easyPiece);
+        const WorkoutGame3DFeatureAssetSnapshot hardAsset =
+                WorkoutGame3DFeatureAsset::place(hard, hardPiece);
+        QVERIFY(easyAsset.ready);
+        QVERIFY(hardAsset.ready);
+        QCOMPARE(easyAsset.scaleY, 1.0);
+        QCOMPARE(easyAsset.scaleZ, 1.0);
+        QCOMPARE(hardAsset.scaleY, 1.0);
+        QCOMPARE(hardAsset.scaleZ, 1.0);
+        QCOMPARE(easyPiece.gapJump.lines[2].gapLengthMeters, 4.7);
+        QCOMPARE(hardPiece.gapJump.lines[2].gapLengthMeters, 4.7);
+        QVERIFY(hardPiece.gapJump.lines[2].minimumSpeedMetersPerSecond
+                > easyPiece.gapJump.lines[2].minimumSpeedMetersPerSecond);
     }
 
     void placesLogSocketTileAroundThePhysicalObstacle()

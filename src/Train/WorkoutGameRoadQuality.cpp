@@ -40,7 +40,11 @@ std::vector<Exemption> exemptions(const WorkoutGameRoadPlan &plan)
 {
     std::vector<Exemption> result;
     for (const WorkoutGameRoadPiece &piece : plan.pieces) {
-        if (piece.terrain == WorkoutGameTerrainKind::Berm
+        if (piece.terrain == WorkoutGameTerrainKind::GapJump) {
+            result.push_back({piece.startDistanceMeters,
+                              piece.startDistanceMeters
+                                + piece.lengthMeters});
+        } else if (piece.terrain == WorkoutGameTerrainKind::Berm
                 && !piece.challenge.enabled) {
             result.push_back({piece.startDistanceMeters,
                               piece.startDistanceMeters

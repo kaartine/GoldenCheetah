@@ -434,7 +434,7 @@ double pieceTurn(
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
     case WorkoutGameTerrainKind::Tabletop: amount = 0.08; break;
-    case WorkoutGameTerrainKind::GapJump: amount = 0.04; break;
+    case WorkoutGameTerrainKind::GapJump: return 0.0;
     case WorkoutGameTerrainKind::Drop:
         amount = isRecoverySection(section) ? 0.25 : 0.08;
         break;
@@ -538,7 +538,10 @@ WorkoutGameRoadReliefProfile generatedRelief(
 {
     WorkoutGameRoadReliefProfile result;
     result.enabled = true;
-    if (ownsChallenge) return result;
+    if (ownsChallenge
+            || section.terrain == WorkoutGameTerrainKind::GapJump) {
+        return result;
+    }
     const std::uint32_t hash = routeHash(
             course.seed ^ std::uint32_t(pieceIndex * 0x9e3779b9u)
             ^ std::uint32_t(section.visualVariant * 0x85ebca6bu));
@@ -1005,22 +1008,26 @@ WorkoutGameRoadCourse generateRoadCourse(
                         <= sectionStart + sectionLength + 1e-9;
             }
         } else if (section.terrain == WorkoutGameTerrainKind::GapJump) {
-            const WorkoutGameGapJumpGeometryProfile gap =
+            const WorkoutGameGapJumpGeometryProfile authority =
                     WorkoutGameGapJumpGeometry::profile(section.difficulty);
-            const double maximumGap = gap.ready
-                    ? gap.lines.back().gapLengthMeters : 0.0;
+            const WorkoutGameGapJumpGeometryProfile geometry =
+                    WorkoutGameGapJumpGeometry::canonicalProfile();
+            const double maximumGap = geometry.ready
+                    ? geometry.lines.back().gapLengthMeters : 0.0;
             const double recoveryMeters = 6.0;
             const double minimumTakeoff = sectionStart
-                    + gap.prepareLeadMeters;
+                    + authority.prepareLeadMeters;
             const double maximumTakeoff = sectionStart + sectionLength
-                    - maximumGap - recoveryMeters - gap.mergeLengthMeters;
-            featureFitsSection = gap.ready
+                    - maximumGap - recoveryMeters
+                    - geometry.mergeLengthMeters;
+            featureFitsSection = authority.ready && geometry.ready
                     && maximumTakeoff >= minimumTakeoff;
             if (featureFitsSection) {
                 obstacleDistance = std::clamp(
                         challengeDistance + 7.0,
                         minimumTakeoff, maximumTakeoff);
-                challengeDistance = obstacleDistance - gap.lockLeadMeters;
+                challengeDistance = obstacleDistance
+                        - authority.lockLeadMeters;
             }
         }
         if (challenge.enabled
@@ -1142,6 +1149,7 @@ WorkoutGameRoadCourse generateRoadCourse(
             const bool explicitBerm = section.terrain
                     == WorkoutGameTerrainKind::Berm;
             const double baseTurn = ownsChallenge || explicitBerm
+                    || section.terrain == WorkoutGameTerrainKind::GapJump
                     ? pieceTurn(section, std::size_t(part))
                     : ordinaryPieceTurn(
                         course, section, ordinaryPieceIndex++);
@@ -1175,9 +1183,15 @@ WorkoutGameRoadCourse generateRoadCourse(
                         * (piece.entry.gradePercent
                            + piece.exit.gradePercent) / 200.0;
             } else {
-                piece.exit.gradePercent = section.gradePercent;
-                piece.riseMeters = currentPieceLength
-                        * section.gradePercent / 100.0;
+                piece.exit.gradePercent = section.terrain
+                            == WorkoutGameTerrainKind::GapJump
+                        ? 0.0 : section.gradePercent;
+                piece.riseMeters = section.terrain
+                            == WorkoutGameTerrainKind::GapJump
+                        ? currentPieceLength
+                            * (piece.entry.gradePercent
+                               + piece.exit.gradePercent) / 200.0
+                        : currentPieceLength * section.gradePercent / 100.0;
             }
             piece.exit = connectorAt(piece, 1.0);
 
@@ -1226,41 +1240,46 @@ WorkoutGameRoadCourse generateRoadCourse(
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;
                 piece.geometryAnchorDistanceMeters = obstacleDistance;
                 if (section.terrain == WorkoutGameTerrainKind::GapJump) {
-                    const WorkoutGameGapJumpGeometryProfile gap =
+                    const WorkoutGameGapJumpGeometryProfile authority =
                             WorkoutGameGapJumpGeometry::profile(
                                 piece.difficulty);
-                    piece.gapJump.enabled = gap.ready;
+                    const WorkoutGameGapJumpGeometryProfile geometry =
+                            WorkoutGameGapJumpGeometry::canonicalProfile();
+                    piece.gapJump.enabled = authority.ready && geometry.ready;
                     piece.gapJump.prepareDistanceMeters = obstacleDistance
-                            - gap.prepareLeadMeters;
+                            - authority.prepareLeadMeters;
                     piece.gapJump.launchWindowStartDistanceMeters =
-                            obstacleDistance - gap.launchWindowLeadMeters;
+                            obstacleDistance
+                                - authority.launchWindowLeadMeters;
                     piece.gapJump.lockDistanceMeters = obstacleDistance
-                            - gap.lockLeadMeters;
+                            - authority.lockLeadMeters;
                     piece.gapJump.splitStartDistanceMeters = obstacleDistance
-                            - gap.splitLengthMeters;
+                            - geometry.splitLengthMeters;
                     const double recoveryMeters = 6.0;
                     piece.gapJump.mergeEndDistanceMeters = obstacleDistance
-                            + gap.lines.back().gapLengthMeters
-                            + recoveryMeters + gap.mergeLengthMeters;
+                            + geometry.lines.back().gapLengthMeters
+                            + recoveryMeters + geometry.mergeLengthMeters;
                     for (std::size_t index = 0;
-                            index < gap.lines.size(); ++index) {
-                        const WorkoutGameGapJumpLineDefinition &sourceLine =
-                                gap.lines[index];
+                            index < geometry.lines.size(); ++index) {
+                        const WorkoutGameGapJumpLineDefinition &shape =
+                                geometry.lines[index];
+                        const WorkoutGameGapJumpLineDefinition &limits =
+                                authority.lines[index];
                         WorkoutGameRoadGapJumpLine &line =
                                 piece.gapJump.lines[index];
-                        line.id = sourceLine.id;
+                        line.id = shape.id;
                         line.takeoffDistanceMeters = obstacleDistance;
                         line.landingDistanceMeters = obstacleDistance
-                                + sourceLine.gapLengthMeters;
-                        line.lateralMeters = sourceLine.lateralMeters;
-                        line.gapLengthMeters = sourceLine.gapLengthMeters;
+                                + shape.gapLengthMeters;
+                        line.lateralMeters = shape.lateralMeters;
+                        line.gapLengthMeters = shape.gapLengthMeters;
                         line.minimumSpeedMetersPerSecond =
-                                sourceLine.coldThresholdMetersPerSecond;
+                                limits.coldThresholdMetersPerSecond;
                         line.nominalFlightSeconds =
-                                sourceLine.nominalFlightSeconds;
-                        line.lipHeightMeters = sourceLine.lipHeightMeters;
+                                limits.nominalFlightSeconds;
+                        line.lipHeightMeters = shape.lipHeightMeters;
                         line.landingDropMeters =
-                                sourceLine.landingDropMeters;
+                                shape.landingDropMeters;
                     }
                 }
                 const double featureEnd = obstacleDistance

@@ -214,6 +214,62 @@ private slots:
                  WorkoutGameRoadPlanValidationStatus::InvalidPlan);
     }
 
+    void gapJumpAssetGateIsStraightPlanarAndCanonicalAtEveryDifficulty()
+    {
+        for (const double difficulty : {0.0, 0.5, 1.0}) {
+            WorkoutGameCourse source;
+            source.status = WorkoutGameCourseStatus::Ready;
+            source.seed = 1701u;
+            source.durationMs = 30000;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = WorkoutGameTerrainKind::GapJump;
+            section.durationMs = source.durationMs;
+            section.lengthMeters = 120.0;
+            section.targetWatts = 260.0;
+            section.gradePercent = 8.0;
+            section.difficulty = difficulty;
+            section.challengeCount = 1;
+            source.sections = {section};
+
+            const WorkoutGameRoadCourse course =
+                    WorkoutGameRoadCourseBuilder::build(source, 200.0);
+            QVERIFY(course.ready);
+            const auto owner = std::find_if(
+                    course.pieces.begin(), course.pieces.end(),
+                    [](const WorkoutGameRoadPiece &piece) {
+                        return piece.gapJump.enabled;
+                    });
+            QVERIFY(owner != course.pieces.end());
+            QCOMPARE(owner->gapJump.mergeEndDistanceMeters
+                        - owner->gapJump.splitStartDistanceMeters, 40.7);
+            QCOMPARE(owner->gapJump.lines[0].gapLengthMeters, 1.8);
+            QCOMPARE(owner->gapJump.lines[1].gapLengthMeters, 3.2);
+            QCOMPARE(owner->gapJump.lines[2].gapLengthMeters, 4.7);
+
+            for (const WorkoutGameRoadPiece &piece : course.pieces) {
+                if (piece.sourceSectionIndex != owner->sourceSectionIndex)
+                    continue;
+                QCOMPARE(piece.turnRadians, 0.0);
+                QCOMPARE(piece.relief.constantCoefficientMeters, 0.0);
+                QCOMPARE(piece.relief.cosineCoefficientMeters, 0.0);
+                QCOMPARE(piece.relief.sineCoefficientMeters, 0.0);
+            }
+
+            const WorkoutGameRoadSample socketIn =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        course, owner->gapJump.splitStartDistanceMeters);
+            const WorkoutGameRoadSample socketOut =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        course, owner->gapJump.mergeEndDistanceMeters);
+            QVERIFY(socketIn.ready);
+            QVERIFY(socketOut.ready);
+            QCOMPARE(socketIn.center.headingRadians,
+                     socketOut.center.headingRadians);
+            QCOMPARE(socketIn.baseGradePercent, socketOut.baseGradePercent);
+        }
+    }
+
     void explicitBermIsAlwaysUnscoredOrdinaryTrail()
     {
         WorkoutGameCourse source;

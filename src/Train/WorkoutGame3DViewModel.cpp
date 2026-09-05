@@ -295,7 +295,7 @@ void WorkoutGame3DViewModel::setCourse(
     rebuildPowerProfile(course);
     trail->setCourse(roadCourse);
     bypass->setCourse(roadCourse);
-    gapJump->setCourse(roadCourse);
+    gapJump->setCourse({});
     floorBucket = std::numeric_limits<int>::min();
     requestedFloorBucket = std::numeric_limits<int>::min();
     nextFloorBucket = 0;
@@ -1591,8 +1591,7 @@ void WorkoutGame3DViewModel::updateVisibleTriangleCount()
     const std::size_t active = std::size_t(activeFloorBuffer);
     int triangles = trail->triangleCount()
             + bermBuffers[active]->triangleCount()
-            + bypass->triangleCount()
-            + gapJump->triangleCount();
+            + bypass->triangleCount();
     triangles += floorBuffers[active]->triangleCount();
     triangles += rootBuffers[active]->triangleCount();
     triangles += climbBuffers[active]->triangleCount();

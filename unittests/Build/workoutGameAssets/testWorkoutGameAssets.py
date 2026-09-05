@@ -1074,6 +1074,26 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertIn("WorkoutGameDistantTerrain.qml", qrc)
         self.assertIn("geo_DistantRidges_LOD0_mesh.mesh", qrc)
 
+    def test_gap_jump_runtime_policy_packages_one_authored_surface(self) -> None:
+        qrc = (
+            REPOSITORY / "src/Resources/workout-game-assets.qrc"
+        ).read_text(encoding="utf-8")
+        runtime = (
+            REPOSITORY / "src/Train/qml/WorkoutGame3D.qml"
+        ).read_text(encoding="utf-8")
+        for name in (
+            "Wg_GapJumpThreeLine.qml",
+            "geo_GapJumpAccents_LOD0_mesh.mesh",
+            "geo_GapJumpGround_LOD0_mesh.mesh",
+            "geo_GapJumpTread_LOD0_mesh.mesh",
+        ):
+            prefix = "qml/assets/" if name.endswith(".qml") \
+                else "qml/assets/meshes/"
+            self.assertEqual(qrc.count(f'alias="{prefix}{name}"'), 1,
+                             msg=name)
+        self.assertEqual(runtime.count("Wg_GapJumpThreeLine"), 1)
+        self.assertNotIn("gapJumpGeometryModel", runtime)
+
     def test_surface_atlas_is_deterministic_bounded_and_packaged(self) -> None:
         manifest = assets.load_json_file(SURFACE_MANIFEST_PATH)
         atlas = SURFACE_ATLAS_PATH.read_bytes()

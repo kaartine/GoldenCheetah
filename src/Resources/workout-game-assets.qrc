@@ -16,6 +16,10 @@
         <file alias="qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh</file>
         <file alias="qml/assets/Wg_Drop_Greybox.qml">../Train/qml/assets/Wg_Drop_Greybox.qml</file>
         <file alias="qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/Wg_GapJumpThreeLine.qml">../Train/qml/assets/Wg_GapJumpThreeLine.qml</file>
+        <file alias="qml/assets/meshes/geo_GapJumpAccents_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_GapJumpAccents_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_GapJumpGround_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_GapJumpGround_LOD0_mesh.mesh</file>
+        <file alias="qml/assets/meshes/geo_GapJumpTread_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_GapJumpTread_LOD0_mesh.mesh</file>
         <file alias="qml/WorkoutGameRiderBike.qml">../Train/qml/WorkoutGameRiderBike.qml</file>
         <file alias="qml/WorkoutGameConifer.qml">../Train/qml/WorkoutGameConifer.qml</file>
         <file alias="qml/WorkoutGameForestFloorProp.qml">../Train/qml/WorkoutGameForestFloorProp.qml</file>

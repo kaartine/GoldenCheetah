@@ -229,22 +229,6 @@ Item {
         }
 
         Model {
-            objectName: "gapJumpGeometryModel"
-            geometry: workoutGame3D.gapJumpGeometry
-            materials: PrincipledMaterial {
-                baseColor: "white"
-                baseColorMap: dirtSurfaceTexture
-                metalness: 0
-                roughness: 0.96
-                vertexColorsEnabled: true
-                lighting: PrincipledMaterial.FragmentLighting
-                cullMode: Material.NoCulling
-            }
-            castsShadows: false
-            receivesShadows: false
-        }
-
-        Model {
             objectName: "climbGeometryModel"
             geometry: workoutGame3D.climbGeometry
             materials: PrincipledMaterial {
@@ -414,6 +398,28 @@ Item {
                     modelData.scale,
                     modelData.scale)
                 opacity: root.dressingEdgeOpacity(relativeDistance)
+            }
+        }
+
+        Repeater3D {
+            model: workoutGame3D.features
+            delegate: WorkoutGameAssets.Wg_GapJumpThreeLine {
+                required property var modelData
+                objectName: "gapJumpAssetInstance"
+                visible: modelData.kind === 12
+                         && modelData.assetScaleY !== undefined
+                position: Qt.vector3d(
+                    modelData.assetX || 0,
+                    modelData.assetY || 0,
+                    modelData.assetZ || 0)
+                eulerRotation: Qt.vector3d(
+                    modelData.assetPitch || 0,
+                    modelData.assetYaw || 0,
+                    0)
+                scale: Qt.vector3d(
+                    1,
+                    modelData.assetScaleY || 1,
+                    modelData.assetScaleZ || 1)
             }
         }
 

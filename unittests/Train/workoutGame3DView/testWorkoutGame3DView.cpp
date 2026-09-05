@@ -7302,7 +7302,7 @@ private slots:
         QCOMPARE(frame.world.rider.pitchDegrees, 12.5);
     }
 
-    void gapJumpGeometryIsExposedToTheQuick3DScene()
+    void authoredGapJumpAssetReplacesProceduralQuick3DSurface()
     {
         WorkoutGameCourse course;
         course.status = WorkoutGameCourseStatus::Ready;
@@ -7335,8 +7335,8 @@ private slots:
         auto *geometry = qobject_cast<WorkoutGame3DGeometry *>(
                 viewModel.gapJumpGeometry());
         QVERIFY(geometry);
-        QVERIFY(geometry->ready());
-        QVERIFY(geometry->triangleCount() >= 180);
+        QVERIFY(!geometry->ready());
+        QCOMPARE(geometry->triangleCount(), 0);
 
         QQuickView window;
         window.setResizeMode(QQuickView::SizeRootObjectToView);
@@ -7345,11 +7345,20 @@ private slots:
                 QStringLiteral("workoutGame3D"), &viewModel);
         window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
         QCOMPARE(window.status(), QQuickView::Ready);
-        QObject *model = window.rootObject()->findChild<QObject *>(
-                QStringLiteral("gapJumpGeometryModel"));
-        QVERIFY(model);
-        QCOMPARE(model->property("geometry").value<QObject *>(),
-                 viewModel.gapJumpGeometry());
+        QVERIFY(!window.rootObject()->findChild<QObject *>(
+                QStringLiteral("gapJumpGeometryModel")));
+        const QList<QObject *> assets = window.rootObject()->findChildren<QObject *>(
+                QStringLiteral("gapJumpAssetInstance"));
+        QCOMPARE(assets.size(), 1);
+        QVERIFY(assets.front()->property("visible").toBool());
+        const WorkoutGameRoadSample socket =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, gate->gapJump.splitStartDistanceMeters);
+        QVERIFY(socket.ready);
+        QCOMPARE(assets.front()->property("position").value<QVector3D>(),
+                 QVector3D(float(socket.center.xMeters),
+                           float(socket.visualGroundElevationMeters()),
+                           float(socket.center.zMeters)));
     }
 
     void exportsGapJumpAcceptanceMatrixAndRunsSimulatedEndurance()

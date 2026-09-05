@@ -44,6 +44,90 @@ constexpr double BypassHalfWidthMeters = 0.38;
 constexpr double BypassEdgeWidthMeters = 0.08;
 constexpr double ForestDressingSpacingMeters = 3.0;
 constexpr double Pi = 3.14159265358979323846;
+constexpr double GapAssetLengthMeters = 40.7;
+constexpr double GapAssetSocketHalfWidthMeters = 0.68;
+constexpr double GapAssetMaximumHalfWidthMeters = 6.0;
+constexpr std::array<double, 26> GapAssetRowsMeters = {{
+    0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 11.4, 12.0,
+    12.45, 12.8, 12.9, 13.175, 13.35, 13.6, 13.8, 14.35,
+    14.4, 15.2, 15.525, 16.7, 22.7, 26.0, 30.0, 34.0,
+    38.0, 40.7
+}};
+
+double smootherStep(double value)
+{
+    const double bounded = std::clamp(value, 0.0, 1.0);
+    return bounded * bounded * bounded
+            * (bounded * (bounded * 6.0 - 15.0) + 10.0);
+}
+
+double gapAssetGroundHalfWidthAtRow(double localDistanceMeters)
+{
+    const double entry = smootherStep(localDistanceMeters / 6.0);
+    const double exit = 1.0
+            - smootherStep((localDistanceMeters - 34.7) / 6.0);
+    return GapAssetSocketHalfWidthMeters
+            + (GapAssetMaximumHalfWidthMeters
+                - GapAssetSocketHalfWidthMeters) * std::min(entry, exit);
+}
+
+double gapAssetGroundEdgeHeightAtRow(
+        double lateralMeters,
+        double localDistanceMeters)
+{
+    if (std::abs(localDistanceMeters) <= 1.0e-9
+            || std::abs(localDistanceMeters - GapAssetLengthMeters)
+                <= 1.0e-9) {
+        return 0.0;
+    }
+    const double base = -0.16 + 0.055 * std::sin(
+            0.47 * localDistanceMeters + 0.31 * lateralMeters);
+    const double edgeRelief = 0.11 * smootherStep(
+            (std::abs(lateralMeters) - 3.8) / 2.0);
+    return base + edgeRelief;
+}
+
+struct GapAssetGroundEdge
+{
+    double halfWidthMeters = GapAssetSocketHalfWidthMeters;
+    double leftHeightMeters = 0.0;
+    double rightHeightMeters = 0.0;
+};
+
+GapAssetGroundEdge gapAssetGroundEdge(double localDistanceMeters)
+{
+    const double bounded = std::clamp(
+            localDistanceMeters, 0.0, GapAssetLengthMeters);
+    const auto upper = std::lower_bound(
+            GapAssetRowsMeters.begin(), GapAssetRowsMeters.end(), bounded);
+    const std::size_t rightIndex = upper == GapAssetRowsMeters.end()
+            ? GapAssetRowsMeters.size() - 1u
+            : std::size_t(upper - GapAssetRowsMeters.begin());
+    const std::size_t leftIndex = rightIndex == 0u ? 0u : rightIndex - 1u;
+    const double leftZ = GapAssetRowsMeters[leftIndex];
+    const double rightZ = GapAssetRowsMeters[rightIndex];
+    const double progress = rightZ > leftZ
+            ? (bounded - leftZ) / (rightZ - leftZ) : 0.0;
+    const auto edgeAt = [](double z) {
+        GapAssetGroundEdge edge;
+        edge.halfWidthMeters = gapAssetGroundHalfWidthAtRow(z);
+        edge.leftHeightMeters = gapAssetGroundEdgeHeightAtRow(
+                -edge.halfWidthMeters, z);
+        edge.rightHeightMeters = gapAssetGroundEdgeHeightAtRow(
+                edge.halfWidthMeters, z);
+        return edge;
+    };
+    const GapAssetGroundEdge left = edgeAt(leftZ);
+    const GapAssetGroundEdge right = edgeAt(rightZ);
+    return {
+        left.halfWidthMeters + (right.halfWidthMeters
+            - left.halfWidthMeters) * progress,
+        left.leftHeightMeters + (right.leftHeightMeters
+            - left.leftHeightMeters) * progress,
+        left.rightHeightMeters + (right.rightHeightMeters
+            - left.rightHeightMeters) * progress
+    };
+}
 
 bool overlapsChallengeCorridor(
         const WorkoutGameRoadCourse &course,
@@ -172,6 +256,10 @@ void appendFeatureSamples(
         if (!piece.challenge.enabled) continue;
         if (piece.gapJump.enabled) {
             appendMandatory(piece.gapJump.splitStartDistanceMeters);
+            for (const double local : GapAssetRowsMeters) {
+                appendMandatory(
+                        piece.gapJump.splitStartDistanceMeters + local);
+            }
             append(piece.gapJump.lines.front().takeoffDistanceMeters);
             for (const WorkoutGameRoadGapJumpLine &line
                     : piece.gapJump.lines) {
@@ -544,8 +632,7 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
             }
         }
         floorUnderFeatureSamples.push_back(
-                sample.terrain == WorkoutGameTerrainKind::Skinny
-                || activeGapJump != nullptr);
+                sample.terrain == WorkoutGameTerrainKind::Skinny);
         const double rightX = std::cos(sample.center.headingRadians);
         const double rightZ = -std::sin(sample.center.headingRadians);
         const TerrainColor color = layer == Layer::Trail
@@ -560,29 +647,18 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
             return {};
         }
         if (layer == Layer::ForestFloor && activeGapJump != nullptr) {
-            double pitDepth = 0.0;
-            for (const WorkoutGameRoadGapJumpLine &line
-                    : activeGapJump->lines) {
-                if (distance < line.takeoffDistanceMeters
-                        || distance > line.landingDistanceMeters) {
-                    continue;
-                }
-                const double progress = std::clamp(
-                        (distance - line.takeoffDistanceMeters)
-                            / std::max(0.01, line.gapLengthMeters),
-                        0.0, 1.0);
-                pitDepth = std::max(
-                        pitDepth, 1.10 * std::sin(Pi * progress));
-            }
-            if (pitDepth > 0.0) {
-                for (std::size_t vertex = 1u;
-                        vertex + 1u < terrain.vertices.size(); ++vertex) {
-                    terrain.vertices[vertex].elevationMeters -= pitDepth;
-                    terrain.vertices[vertex].red = 0.28f;
-                    terrain.vertices[vertex].green = 0.20f;
-                    terrain.vertices[vertex].blue = 0.12f;
-                }
-            }
+            const double localDistance = distance
+                    - activeGapJump->splitStartDistanceMeters;
+            const GapAssetGroundEdge edge =
+                    gapAssetGroundEdge(localDistance);
+            terrain.vertices[3].lateralMeters = -edge.halfWidthMeters;
+            terrain.vertices[4].lateralMeters = edge.halfWidthMeters;
+            terrain.vertices[3].elevationMeters =
+                    sample.visualGroundElevationMeters()
+                    + edge.leftHeightMeters;
+            terrain.vertices[4].elevationMeters =
+                    sample.visualGroundElevationMeters()
+                    + edge.rightHeightMeters;
         }
         double trailBackingDropMeters = 0.0;
         if (layer == Layer::Trail
