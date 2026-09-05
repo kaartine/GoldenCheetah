@@ -255,6 +255,8 @@ class UiDriver:
     def all_nodes(self, node=None):
         node = self.app if node is None else node
         yield node
+        if self.name(node) == "Workout game 3D canvas":
+            return
         try:
             children = list(node)
         except Exception:

@@ -279,6 +279,15 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
         driver.all_nodes.assert_called_once_with()
 
+    def test_all_nodes_does_not_descend_into_quick3d_canvas(self):
+        canvas = mock.MagicMock()
+        canvas.name = "Workout game 3D canvas"
+        driver = object.__new__(UI.UiDriver)
+
+        self.assertEqual(list(driver.all_nodes(canvas)), [canvas])
+
+        canvas.__iter__.assert_not_called()
+
     def test_stop_training_recovers_from_a_stale_cached_button(self):
         stale = object()
         replacement = object()
