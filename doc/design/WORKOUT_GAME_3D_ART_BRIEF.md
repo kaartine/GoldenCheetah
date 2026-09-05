@@ -39,6 +39,8 @@ real OpenGL still and motion review.
 - Trail width remains 1.36 m and its edges are continuously socketed.
 - Terrain and trees use authored asymmetric silhouettes and terrain-anchored
   bases. Repetition must be broken without unbounded object counts.
+- The four runtime tree slots mix two spruce forms, Scots pine and silver birch;
+  species variation must not add a model node or draw call per anchor.
 - A foreground tree anchor may contain merged low saplings inside its tested
   crown-clearance radius. It must still render as only one trunk and one crown
   model so near-ground density does not multiply draw calls.

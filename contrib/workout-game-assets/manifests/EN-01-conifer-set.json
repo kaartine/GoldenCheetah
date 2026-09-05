@@ -1,6 +1,6 @@
 {
   "assetId": "EN-01-conifer-set",
-  "displayName": "Workout Game Low-Poly Finnish Conifer Grove Set",
+  "displayName": "Workout Game Low-Poly Finnish Mixed-Forest Grove Set",
   "role": "vegetation",
   "source": {
     "kind": "project-authored",
@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_conifer_set.py",
     "retrievedAt": "2026-09-05",
     "originalFileName": "generate_conifer_set.py",
-    "originalSha256": "30df411384ce8e33d5dc6037fc9c51b9440a39c21bac505661d7fbf09179426e",
+    "originalSha256": "7b6b96daaeaf9cf6a23068788346da2b637a10079d2b238251262f8b4db7de3c",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_conifer_set.py"
@@ -25,38 +25,48 @@
     "archivedLicensePath": "COPYING",
     "distributionScopes": ["source", "appimage", "screenshots-video"],
     "conditions": [],
-    "reviewNotes": "Project-authored deterministic spruce, Scots-pine and understory geometry with no external model, image or texture."
+    "reviewNotes": "Project-authored deterministic spruce, Scots-pine, silver-birch and understory geometry with no external model, image or texture."
   },
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_conifer_set.py",
       "purpose": "source",
-      "sha256": "30df411384ce8e33d5dc6037fc9c51b9440a39c21bac505661d7fbf09179426e"
+      "sha256": "7b6b96daaeaf9cf6a23068788346da2b637a10079d2b238251262f8b4db7de3c"
+    },
+    {
+      "path": "contrib/workout-game-assets/blender/render_mixed_forest_audit.py",
+      "purpose": "source",
+      "sha256": "9654144455ed1ad7a9c1e8f124dc63001f5229315f3428283d7a1bbde721f1b0"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_ConiferSet.glb",
       "purpose": "intermediate",
-      "sha256": "6add71831ed5b735154e1a894788f166915077db6a2fcb3193b8524c1f2335ea"
+      "sha256": "b80a7f00d39ba01d30c93cd58923e0244225bf6acaf42286165f66c2cdac4920"
     },
     {
       "path": "src/Train/qml/WorkoutGameConifer.qml",
       "purpose": "runtime",
-      "sha256": "442de9f5207badf8b1929a6d23d16ff29e105cfdbf6174fd099e9a3e7c515304"
+      "sha256": "c1f9ae5358a49eefcb50423722d689d4eed29b6fb5d0cc6724a71d6e2daf5865"
     },
     {
-      "path": "src/Train/qml/assets/meshes/geo_ConiferBrokenTop_LOD0_mesh.mesh",
+      "path": "src/Train/qml/assets/meshes/geo_BirchCrown_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "44c0f2ae9d6b5d41274ce9cd734723a8ce8d84683c48bf3abf933cf6c5f23915"
+      "sha256": "d0b585f3c1789f48b59a3950608386a06cf9af95b17537c7b3d2de82412aebf3"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_BirchTrunk_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "6bbe78fd1f2de6f4305c0908e796cc8035605bafbcd4779347e036e1bb939610"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "7ba73e89d3ea59be5dddd80b1e4c147859e82bac79b234cccb2812958a0fd67b"
+      "sha256": "68cfe53a35ff525907b92bc772237318caa6978d4e90021a34ebb1094b189be7"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "94977ebd562bb90269a55f46fad899a4db1d9442fe8cb4b9601e6a3790b2a108"
+      "sha256": "3e811569a8b818d48a8a7f2f2f7a91e6b467d11e4f5218e887863e64d16ea64c"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh",
@@ -66,7 +76,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_ScotsPineCrown_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "9db45aefa5f806803e88e2d4e7fd10930ab4ad0e839a2c5ac6f751abfd2554b9"
+      "sha256": "c2b81108a129a87c8f1fb0bb9f6832e60596f70607830cec898fb18dd9c8444e"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ScotsPineTrunk_LOD0_mesh.mesh",
@@ -83,7 +93,7 @@
       "Export glTF 2.0 GLB with opaque materials and no cameras, lights, textures or animations.",
       "Reproduce the GLB byte for byte and validate it with the repository policy.",
       "Convert twice with Qt Balsam 6.8.3 and compare every output byte.",
-      "Select one of three spruce groves or the Scots-pine grove in WorkoutGameConifer.qml while runtime terrain owns placement and base elevation.",
+      "Select two spruce groves, one silver-birch grove or the Scots-pine grove in WorkoutGameConifer.qml while runtime terrain owns placement and base elevation.",
       "Keep each grove to one trunk and one crown model; the two ground-level saplings are merged into the crown mesh so the 18-tree runtime cap and draw-call contract do not change."
     ]
   },
@@ -92,15 +102,17 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 28596,
-    "trianglesLod0": 400,
-    "materials": 4,
+    "glbBytes": 37864,
+    "trianglesLod0": 536,
+    "materials": 6,
     "textureBytes": 0,
     "nodes": [
       "GEO_ConiferBrokenTop_LOD0",
       "GEO_ConiferLayered_LOD0",
       "GEO_ConiferNarrow_LOD0",
       "GEO_ConiferTrunk_LOD0",
+      "GEO_BirchCrown_LOD0",
+      "GEO_BirchTrunk_LOD0",
       "GEO_ScotsPineCrown_LOD0",
       "GEO_ScotsPineTrunk_LOD0",
       "PIVOT_BASE",
@@ -113,19 +125,19 @@
       "maximum": [1.2799999713897705, 5.46999979019165, 1.2799999713897705]
     },
     "budgets": {
-      "maxGlbBytes": 32768,
-      "maxTrianglesLod0": 420,
-      "maxMaterials": 4,
+      "maxGlbBytes": 40960,
+      "maxTrianglesLod0": 560,
+      "maxMaterials": 6,
       "maxTextureBytes": 0
     }
   },
   "review": {
-    "status": "approved",
+    "status": "candidate",
     "trademarkStatus": "not-applicable",
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
     "reviewedAt": "2026-09-05",
-    "notes": "Approved project-authored Finnish conifer grove set. The original asymmetric Scots-pine silhouette and merged understory add species and age variation without external content, textures, placement work or additional runtime draw calls. Deterministic Blender and Balsam reproduction, policy validation, integrated X11/OpenGL rendering, terrain-base anchoring, camera-corridor exclusion and stream-edge fade tests passed."
+    "notes": "Candidate project-authored Finnish mixed-forest grove set. The original asymmetric silver-birch and Scots-pine silhouettes plus merged understory add species and age variation without external content, textures, placement work or additional runtime draw calls. Deterministic Blender and Balsam reproduction, policy validation and matched branch-local front/two-three-quarter rendering passed. Target-GPU motion and course-context review remain integration gates."
   }
 }

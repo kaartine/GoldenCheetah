@@ -471,17 +471,22 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "GEO_ConiferNarrow_LOD0",
                 "GEO_ConiferLayered_LOD0",
                 "GEO_ConiferBrokenTop_LOD0",
+                "GEO_BirchTrunk_LOD0",
+                "GEO_BirchCrown_LOD0",
                 "GEO_ScotsPineTrunk_LOD0",
                 "GEO_ScotsPineCrown_LOD0",
             },
         )
-        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 420)
+        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 560)
         bounds = manifest["technical"]["boundsMeters"]
         self.assertGreaterEqual(bounds["maximum"][1], 5.4)
         self.assertGreaterEqual(bounds["minimum"][1], 0.0)
         nodes = {node["name"]: node for node in document["nodes"]}
         for name in ("GEO_ScotsPineTrunk_LOD0", "GEO_ScotsPineCrown_LOD0"):
             self.assertIn("Pinus sylvestris-inspired original silhouette",
+                          nodes[name]["extras"]["species"])
+        for name in ("GEO_BirchTrunk_LOD0", "GEO_BirchCrown_LOD0"):
+            self.assertIn("Betula pendula-inspired original silhouette",
                           nodes[name]["extras"]["species"])
         triangle_counts = {}
         for name in mesh_nodes:
@@ -502,19 +507,63 @@ class TestWorkoutGameAssets(unittest.TestCase):
             + triangle_counts["GEO_ScotsPineCrown_LOD0"],
             136,
         )
+        self.assertLessEqual(
+            triangle_counts["GEO_BirchTrunk_LOD0"]
+            + triangle_counts["GEO_BirchCrown_LOD0"],
+            136,
+        )
+        for name in mesh_nodes:
+            mesh = document["meshes"][nodes[name]["mesh"]]
+            minimum_y = min(
+                document["accessors"][primitive["attributes"]["POSITION"]]["min"][1]
+                for primitive in mesh["primitives"]
+            )
+            self.assertAlmostEqual(minimum_y, 0.0, places=6, msg=name)
         runtime_qml = (
             REPOSITORY / "src/Train/qml/WorkoutGameConifer.qml"
         ).read_text(encoding="utf-8")
         for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
             self.assertNotIn(primitive, runtime_qml)
         self.assertIn("variant === 3", runtime_qml)
+        self.assertIn("variant === 2", runtime_qml)
+        self.assertIn("geo_BirchTrunk_LOD0_mesh.mesh", runtime_qml)
+        self.assertIn("geo_BirchCrown_LOD0_mesh.mesh", runtime_qml)
+        self.assertNotIn("geo_ConiferBrokenTop_LOD0_mesh.mesh", runtime_qml)
         self.assertIn("geo_ScotsPineTrunk_LOD0_mesh.mesh", runtime_qml)
         self.assertIn("geo_ScotsPineCrown_LOD0_mesh.mesh", runtime_qml)
         qrc = (
             REPOSITORY / "src/Resources/workout-game-assets.qrc"
         ).read_text(encoding="utf-8")
+        self.assertIn("geo_BirchTrunk_LOD0_mesh.mesh", qrc)
+        self.assertIn("geo_BirchCrown_LOD0_mesh.mesh", qrc)
+        self.assertNotIn("geo_ConiferBrokenTop_LOD0_mesh.mesh", qrc)
         self.assertIn("geo_ScotsPineTrunk_LOD0_mesh.mesh", qrc)
         self.assertIn("geo_ScotsPineCrown_LOD0_mesh.mesh", qrc)
+
+    def test_mixed_forest_generation_has_fixed_runtime_inventory(self) -> None:
+        document, _ = assets.read_glb(CONIFER_GLB_PATH)
+        manifest = assets.load_json_file(CONIFER_MANIFEST_PATH)
+        self.assertEqual(
+            {material["name"] for material in document["materials"]},
+            {
+                "MAT_BirchBark",
+                "MAT_BirchLeaf",
+                "MAT_ConiferBark",
+                "MAT_ConiferDark",
+                "MAT_ConiferLight",
+                "MAT_ScotsPineBark",
+            },
+        )
+        self.assertEqual(manifest["source"]["kind"], "project-authored")
+        self.assertEqual(manifest["technical"]["trianglesLod0"], 536)
+        generator = (
+            REPOSITORY
+            / "contrib/workout-game-assets/blender/generate_conifer_set.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("import random", generator)
+        self.assertNotIn("import time", generator)
+        self.assertIn("RUNTIME_VARIANT_PAIRS", generator)
+        self.assertIn("does not touch its terrain anchor", generator)
 
     def test_forest_floor_props_are_grounded_atlas_ready_and_non_runtime(self) -> None:
         document, size = assets.read_glb(FOREST_FLOOR_GLB_PATH)

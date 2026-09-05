@@ -12,7 +12,7 @@ Item {
     readonly property var catalog: [
         { "label": "NARROW SPRUCE", "variant": 0 },
         { "label": "LAYERED SPRUCE", "variant": 1 },
-        { "label": "BROKEN-TOP SPRUCE", "variant": 2 },
+        { "label": "SILVER BIRCH", "variant": 2 },
         { "label": "SCOTS PINE", "variant": 3 }
     ]
 

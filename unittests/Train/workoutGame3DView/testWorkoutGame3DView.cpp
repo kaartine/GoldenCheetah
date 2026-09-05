@@ -4951,10 +4951,24 @@ private slots:
                 QStringLiteral("workoutGameScotsPineTrunk"));
         const QList<QObject *> pineCrowns = window.rootObject()->findChildren<QObject *>(
                 QStringLiteral("workoutGameScotsPineCrown"));
+        const QList<QObject *> birchTrunks = window.rootObject()->findChildren<QObject *>(
+                QStringLiteral("workoutGameBirchTrunk"));
+        const QList<QObject *> birchCrowns = window.rootObject()->findChildren<QObject *>(
+                QStringLiteral("workoutGameBirchCrown"));
         QCOMPARE(pineTrunks.size(), 4);
         QCOMPARE(pineCrowns.size(), 4);
+        QCOMPARE(birchTrunks.size(), 4);
+        QCOMPARE(birchCrowns.size(), 4);
         QCOMPARE(std::count_if(
                 pineTrunks.cbegin(), pineTrunks.cend(), [](QObject *object) {
+                    return object->property("visible").toBool();
+                }), 1);
+        QCOMPARE(std::count_if(
+                birchTrunks.cbegin(), birchTrunks.cend(), [](QObject *object) {
+                    return object->property("visible").toBool();
+                }), 1);
+        QCOMPARE(std::count_if(
+                birchCrowns.cbegin(), birchCrowns.cend(), [](QObject *object) {
                     return object->property("visible").toBool();
                 }), 1);
         QCOMPARE(std::count_if(
@@ -5021,10 +5035,18 @@ private slots:
                 ":/qml/assets/meshes/geo_ScotsPineTrunk_LOD0_mesh.mesh"));
         QFile pineCrown(QStringLiteral(
                 ":/qml/assets/meshes/geo_ScotsPineCrown_LOD0_mesh.mesh"));
+        QFile birchTrunk(QStringLiteral(
+                ":/qml/assets/meshes/geo_BirchTrunk_LOD0_mesh.mesh"));
+        QFile birchCrown(QStringLiteral(
+                ":/qml/assets/meshes/geo_BirchCrown_LOD0_mesh.mesh"));
         QVERIFY(pineTrunk.open(QIODevice::ReadOnly));
         QVERIFY(pineCrown.open(QIODevice::ReadOnly));
+        QVERIFY(birchTrunk.open(QIODevice::ReadOnly));
+        QVERIFY(birchCrown.open(QIODevice::ReadOnly));
         QCOMPARE(pineTrunk.size(), qint64(2632));
         QCOMPARE(pineCrown.size(), qint64(6948));
+        QCOMPARE(birchTrunk.size(), qint64(2624));
+        QCOMPARE(birchCrown.size(), qint64(6944));
     }
 
     void loadsRendersAndMovesScene()

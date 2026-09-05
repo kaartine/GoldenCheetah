@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate four low-poly Finnish forest silhouettes for Workout Game."""
+"""Generate a low-poly Finnish mixed-forest set for Workout Game."""
 
 from __future__ import annotations
 
@@ -24,11 +24,13 @@ MESH_NAMES = {
     "GEO_ConiferBrokenTop_LOD0",
     "GEO_ScotsPineTrunk_LOD0",
     "GEO_ScotsPineCrown_LOD0",
+    "GEO_BirchTrunk_LOD0",
+    "GEO_BirchCrown_LOD0",
 }
 REQUIRED_NAMES = {ROOT_NAME, "PIVOT_BASE", *MESH_NAMES}
 EPSILON = 1.0e-7
 MAXIMUM_CROWN_RADIUS_METERS = 1.35
-TRIANGLE_BUDGET = 420
+TRIANGLE_BUDGET = 560
 EXPECTED_TRIANGLES = {
     "GEO_ConiferTrunk_LOD0": 16,
     "GEO_ConiferNarrow_LOD0": 80,
@@ -36,12 +38,14 @@ EXPECTED_TRIANGLES = {
     "GEO_ConiferBrokenTop_LOD0": 96,
     "GEO_ScotsPineTrunk_LOD0": 40,
     "GEO_ScotsPineCrown_LOD0": 96,
+    "GEO_BirchTrunk_LOD0": 40,
+    "GEO_BirchCrown_LOD0": 96,
 }
 RUNTIME_VARIANT_PAIRS = (
     ("GEO_ConiferTrunk_LOD0", "GEO_ConiferNarrow_LOD0"),
     ("GEO_ConiferTrunk_LOD0", "GEO_ConiferLayered_LOD0"),
-    ("GEO_ConiferTrunk_LOD0", "GEO_ConiferBrokenTop_LOD0"),
     ("GEO_ScotsPineTrunk_LOD0", "GEO_ScotsPineCrown_LOD0"),
+    ("GEO_BirchTrunk_LOD0", "GEO_BirchCrown_LOD0"),
 )
 MAXIMUM_RUNTIME_VARIANT_TRIANGLES = 136
 SCOTS_PINE_CLUMP_TRIANGLES = 72
@@ -95,6 +99,27 @@ def scots_pine_trunk():
         append_ring(vertices, 1.55, 0.16, 0.03, -0.02, sides=6),
         append_ring(vertices, 3.20, 0.12, -0.05, 0.03, sides=6),
         append_ring(vertices, 4.55, 0.075, 0.07, 0.00, sides=6),
+    )
+    for lower, upper in zip(rings, rings[1:]):
+        append_join(faces, lower, upper, sides=6)
+    faces.extend((
+        (rings[0], rings[0] + 2, rings[0] + 1),
+        (rings[0], rings[0] + 3, rings[0] + 2),
+        (rings[0], rings[0] + 4, rings[0] + 3),
+        (rings[0], rings[0] + 5, rings[0] + 4),
+    ))
+    return vertices, faces
+
+
+def birch_trunk():
+    """Return a pale, fork-ready bent trunk with a grounded six-sided base."""
+    vertices = []
+    faces = []
+    rings = (
+        append_ring(vertices, 0.0, 0.17, 0.0, 0.0, sides=6),
+        append_ring(vertices, 1.45, 0.13, -0.04, 0.02, sides=6),
+        append_ring(vertices, 2.90, 0.095, 0.07, -0.03, sides=6),
+        append_ring(vertices, 4.25, 0.060, 0.02, 0.04, sides=6),
     )
     for lower, upper in zip(rings, rings[1:]):
         append_join(faces, lower, upper, sides=6)
@@ -163,13 +188,29 @@ def scots_pine_crown():
     return vertices, faces
 
 
+def birch_crown():
+    """Return three separated clumps forming a light asymmetric birch crown."""
+    vertices = []
+    faces = []
+    append_low_poly_clump(
+        vertices, faces, (-0.42, 3.72, 0.04), 0.72, 0.56, 1.08
+    )
+    append_low_poly_clump(
+        vertices, faces, (0.38, 3.94, -0.08), 0.66, 0.52, 1.02
+    )
+    append_low_poly_clump(
+        vertices, faces, (0.02, 4.50, 0.06), 0.54, 0.45, 0.92
+    )
+    return vertices, faces
+
+
 def with_understory(geometry, mirrored=False):
     """Add two small ground-level conifers to turn one anchor into a grove."""
     vertices, faces = geometry
     if mirrored:
-        positions = ((0.73, 0.07, 0.43), (-0.62, 0.06, -0.49))
+        positions = ((0.73, 0.0, 0.43), (-0.62, 0.0, -0.49))
     else:
-        positions = ((-0.73, 0.07, 0.43), (0.62, 0.06, -0.49))
+        positions = ((-0.73, 0.0, 0.43), (0.62, 0.0, -0.49))
     for index, (offset_x, base_y, offset_z) in enumerate(positions):
         ring = append_ring(
             vertices, base_y, 0.27 - index * 0.03,
@@ -259,8 +300,10 @@ def build_scene():
 
     bark = make_material("MAT_ConiferBark", (0.24, 0.12, 0.045, 1.0))
     pine_bark = make_material("MAT_ScotsPineBark", (0.46, 0.22, 0.07, 1.0))
+    birch_bark = make_material("MAT_BirchBark", (0.72, 0.72, 0.62, 1.0))
     dark = make_material("MAT_ConiferDark", (0.035, 0.25, 0.11, 1.0))
     light = make_material("MAT_ConiferLight", (0.07, 0.36, 0.16, 1.0))
+    birch_leaf = make_material("MAT_BirchLeaf", (0.16, 0.43, 0.15, 1.0))
     create_mesh(root, "GEO_ConiferTrunk_LOD0", tapered_trunk(), bark)
     create_mesh(root, "GEO_ConiferNarrow_LOD0", with_understory(continuous_crown((
         (1.00, 0.82, 0.0),
@@ -286,6 +329,19 @@ def build_scene():
         with_understory(scots_pine_crown()), light
     )
     pine_crown["species"] = "Pinus sylvestris-inspired original silhouette"
+    birch_trunk_object = create_mesh(
+        root, "GEO_BirchTrunk_LOD0", birch_trunk(), birch_bark
+    )
+    birch_trunk_object["species"] = (
+        "Betula pendula-inspired original silhouette"
+    )
+    birch_crown_object = create_mesh(
+        root, "GEO_BirchCrown_LOD0",
+        with_understory(birch_crown(), mirrored=True), birch_leaf
+    )
+    birch_crown_object["species"] = (
+        "Betula pendula-inspired original silhouette"
+    )
     create_empty(root, "PIVOT_BASE", (0.0, 0.0, 0.0), 0.12,
                  {"visual_only": True, "physics_authority": "external"})
     return root
@@ -317,6 +373,9 @@ def self_check(root):
             if math.hypot(canonical[0], canonical[2]) \
                     > MAXIMUM_CROWN_RADIUS_METERS + EPSILON:
                 raise RuntimeError(f"{name} exceeds camera-clearance radius")
+        minimum_y = min(vertex.co.z for vertex in obj.data.vertices)
+        if not math.isclose(minimum_y, 0.0, abs_tol=EPSILON):
+            raise RuntimeError(f"{name} does not touch its terrain anchor")
         triangle_counts[name] = len(obj.data.polygons)
         if triangle_counts[name] != EXPECTED_TRIANGLES[name]:
             raise RuntimeError(

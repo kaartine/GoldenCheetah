@@ -6,12 +6,13 @@ low-poly tabletop socket tile, `generate_log_over.py` creates a socketed,
 partly buried log-over tile, `generate_bunny_hop.py` creates a compact
 practice hurdle, `generate_drop.py` creates a faceted drop face, and
 `generate_rider_bike.py` creates the articulated low-poly rider and 29er MTB
-mesh set, and `generate_conifer_set.py` creates four low-poly Finnish forest
-groves. `generate_forest_floor_props.py` creates the eight-variant Finnish
-forest-floor prop kit, and `generate_distant_ridges.py` creates the bounded
-distant-terrain ring. `generate_forest_verge_clusters.py` composes three
-prevalidated trail-edge clusters from the forest-floor source geometry. None
-of the generators downloads or embeds external assets.
+mesh set, and `generate_conifer_set.py` creates a low-poly Finnish mixed-forest
+source set with four runtime groves. `generate_forest_floor_props.py` creates
+the eight-variant Finnish forest-floor prop kit, and
+`generate_distant_ridges.py` creates the bounded distant-terrain ring.
+`generate_forest_verge_clusters.py` composes three prevalidated trail-edge
+clusters from the forest-floor source geometry. None of the generators
+downloads or embeds external assets.
 
 ## Forest-verge cluster contract
 
@@ -86,22 +87,23 @@ source/review package, not runtime placement or a release-checklist item.
   applied transforms, UV map, 240-metre radius and 300-triangle budget before
   export.
 
-## Conifer contract
+## Mixed-forest tree contract
 
-- Three spruce forms provide narrow, layered and broken-top silhouettes. A
-  fourth form uses a tall orange-barked bole and asymmetric high crown to read
-  as an original Scots-pine silhouette. Runtime deterministically selects one
-  form per tree anchor.
+- Three source spruce forms provide narrow, layered and broken-top silhouettes.
+  Runtime uses narrow and layered spruce plus a tall orange-barked Scots pine
+  and a pale bent silver birch with three separated leaf clumps. The pine and
+  birch are original species-inspired silhouettes, not imported botanical
+  models. Runtime deterministically selects one of the four groves per anchor.
 - Every crown mesh also contains two low ground-level saplings inside the
   existing `1.35 m` camera-clearance radius. The saplings turn each anchor into
   a small grove without another runtime model, material pass or draw call.
 - Every source mesh starts at or above `Y = 0`, and `PIVOT_BASE` is exactly at
   the origin. Runtime terrain sampling remains the sole base-height authority.
-- The complete source set uses 400 triangles and four opaque source materials;
+- The complete source set uses 536 triangles and six opaque source materials;
   any runtime tree uses at most 136 triangles across one trunk and one crown.
   It contains no external texture, model or built-in Quick 3D primitive.
 - Blender checks the node inventory, finite triangle topology, applied
-  transforms, nonnegative base height, camera-clearance radius and 420-triangle
+  transforms, nonnegative base height, camera-clearance radius and 560-triangle
   source-set budget before export.
 
 ## Rider-bike contract
