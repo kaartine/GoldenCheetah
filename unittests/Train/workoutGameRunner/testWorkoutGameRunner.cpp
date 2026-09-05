@@ -13,6 +13,9 @@
 #include <QElapsedTimer>
 #include <QTest>
 
+#include <cmath>
+#include <optional>
+
 namespace {
 
 bool waitForFrame(
@@ -29,6 +32,34 @@ bool waitForFrame(
     return false;
 }
 
+int sectionForTerrain(
+        const WorkoutGameCourse &course,
+        WorkoutGameTerrainKind terrain)
+{
+    for (std::size_t index = 0; index < course.sections.size(); ++index) {
+        if (course.sections[index].terrain == terrain) return int(index);
+    }
+    return -1;
+}
+
+bool waitForFrameAtOrAfter(
+        WorkoutGameRunner &runner,
+        std::int64_t workoutTimeMs,
+        WorkoutGameEngineFrame &frame,
+        int timeoutMs = 1000)
+{
+    QElapsedTimer timeout;
+    timeout.start();
+    while (timeout.elapsed() < timeoutMs) {
+        if (runner.takeLatest(frame)
+                && frame.visual.simulation.workoutTimeMs >= workoutTimeMs) {
+            return true;
+        }
+        QTest::qWait(2);
+    }
+    return false;
+}
+
 }
 
 class TestWorkoutGameRunner : public QObject
@@ -36,6 +67,194 @@ class TestWorkoutGameRunner : public QObject
     Q_OBJECT
 
 private slots:
+    void defaultConfigureDoesNotSynthesizeMissingGapTelemetry()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const int gapSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::GapJump);
+        QVERIFY(gapSection >= 0);
+
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(course, 200.0, true));
+        runner.start(course.sections[std::size_t(gapSection)].startMs + 200,
+                     1.0);
+
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        QVERIFY(frame.telemetryStale);
+        QCOMPARE(frame.visual.simulation.activeSection, gapSection);
+        QCOMPARE(frame.watts, 0.0);
+        QCOMPARE(frame.cadenceRpm, 0);
+    }
+
+    void disabledFeatureLabIgnoresProvidedGapScenario()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const int gapSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::GapJump);
+        QVERIFY(gapSection >= 0);
+
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                course, 200.0, false,
+                std::optional<WorkoutGameFeatureLabGapScenario>(
+                    WorkoutGameFeatureLabGapScenario::Long)));
+        runner.start(course.sections[std::size_t(gapSection)].startMs + 200,
+                     1.0);
+
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        QVERIFY(frame.telemetryStale);
+        QCOMPARE(frame.visual.simulation.activeSection, gapSection);
+        QCOMPARE(frame.watts, 0.0);
+        QCOMPARE(frame.cadenceRpm, 0);
+    }
+
+    void gapScenarioRunsWithoutTelemetryAtRunnerTime()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const int gapSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::GapJump);
+        QVERIFY(gapSection >= 0);
+        const std::int64_t anchor =
+                course.sections[std::size_t(gapSection)].startMs + 200;
+        WorkoutGameSimulationInput expected;
+        QVERIFY(WorkoutGameFeatureLab::applyGapScenario(
+                course, anchor, WorkoutGameFeatureLabGapScenario::Short,
+                expected));
+
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                course, 200.0, true,
+                std::optional<WorkoutGameFeatureLabGapScenario>(
+                    WorkoutGameFeatureLabGapScenario::Short)));
+        runner.start(anchor, 1.0);
+
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        QVERIFY(frame.telemetryStale);
+        QCOMPARE(frame.visual.simulation.activeSection, gapSection);
+        QCOMPARE(frame.watts, expected.actualWatts);
+        QCOMPARE(frame.targetWatts, expected.targetWatts);
+        QCOMPARE(frame.cadenceRpm, int(expected.cadenceRpm));
+        QCOMPARE(frame.virtualGear, expected.virtualGear);
+        QVERIFY(std::abs(frame.visual.simulation.speedKph
+                         - expected.authoritativeSpeedKph) < 1.0e-9);
+    }
+
+    void gapScenarioOverridesTelemetryOnlyAfterStaleHandling()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const int gapSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::GapJump);
+        QVERIFY(gapSection >= 0);
+        const std::int64_t anchor =
+                course.sections[std::size_t(gapSection)].startMs + 400;
+        WorkoutGameSimulationInput expected;
+        QVERIFY(WorkoutGameFeatureLab::applyGapScenario(
+                course, anchor, WorkoutGameFeatureLabGapScenario::Medium,
+                expected));
+
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                course, 200.0, true,
+                std::optional<WorkoutGameFeatureLabGapScenario>(
+                    WorkoutGameFeatureLabGapScenario::Medium)));
+        WorkoutGameEngineInput stale;
+        stale.simulation.workoutTimeMs = 0;
+        stale.simulation.actualWatts = 999.0;
+        stale.simulation.targetWatts = 7.0;
+        stale.simulation.cadenceRpm = 199.0;
+        stale.simulation.authoritativeSpeedKph = 99.0;
+        stale.heartRate = 177;
+        stale.telemetryMonotonicTimeMs =
+                WorkoutGameRunner::monotonicMilliseconds() - 5000;
+        runner.setTelemetry(stale);
+        runner.start(anchor, 1.0);
+
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        QVERIFY(frame.telemetryStale);
+        QCOMPARE(frame.visual.simulation.activeSection, gapSection);
+        QCOMPARE(frame.watts, expected.actualWatts);
+        QCOMPARE(frame.targetWatts, expected.targetWatts);
+        QCOMPARE(frame.cadenceRpm, int(expected.cadenceRpm));
+        QCOMPARE(frame.heartRate, 0);
+        QVERIFY(std::abs(frame.visual.simulation.speedKph
+                         - expected.authoritativeSpeedKph) < 1.0e-9);
+    }
+
+    void gapScenarioUsesAuthoritativeSectionBoundaryNotTelemetryTime()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const int gapSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::GapJump);
+        QVERIFY(gapSection > 0);
+        const std::int64_t gapStart =
+                course.sections[std::size_t(gapSection)].startMs;
+
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                course, 200.0, true,
+                std::optional<WorkoutGameFeatureLabGapScenario>(
+                    WorkoutGameFeatureLabGapScenario::Short)));
+        WorkoutGameEngineInput telemetry;
+        telemetry.simulation.workoutTimeMs = gapStart + 5000;
+        telemetry.simulation.actualWatts = 17.0;
+        telemetry.simulation.targetWatts = 19.0;
+        telemetry.simulation.cadenceRpm = 43.0;
+        telemetry.telemetryMonotonicTimeMs =
+                WorkoutGameRunner::monotonicMilliseconds();
+        runner.setTelemetry(telemetry);
+        runner.start(gapStart - 160, 1.0);
+
+        WorkoutGameEngineFrame before;
+        QVERIFY(waitForFrame(runner, before));
+        QVERIFY(before.visual.simulation.workoutTimeMs < gapStart);
+        QCOMPARE(before.visual.simulation.activeSection, gapSection - 1);
+        QCOMPARE(before.watts, 17.0);
+        QCOMPARE(before.cadenceRpm, 43);
+
+        WorkoutGameEngineFrame after;
+        QVERIFY(waitForFrameAtOrAfter(runner, gapStart, after));
+        QCOMPARE(after.visual.simulation.activeSection, gapSection);
+        QCOMPARE(after.watts,
+                 course.sections[std::size_t(gapSection)].targetWatts);
+        QCOMPARE(after.cadenceRpm, 88);
+    }
+
+    void gapScenarioSurvivesPauseResumeResynchronization()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const int gapSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::GapJump);
+        QVERIFY(gapSection >= 0);
+        const std::int64_t gapStart =
+                course.sections[std::size_t(gapSection)].startMs;
+
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                course, 200.0, true,
+                std::optional<WorkoutGameFeatureLabGapScenario>(
+                    WorkoutGameFeatureLabGapScenario::Long)));
+        runner.start(gapStart + 200, 1.0);
+        WorkoutGameEngineFrame first;
+        QVERIFY(waitForFrame(runner, first));
+        const std::uint64_t generation = first.visual.sessionGeneration;
+
+        runner.pause(first.visual.simulation.workoutTimeMs);
+        const std::int64_t resumedAt = gapStart + 2500;
+        runner.resume(resumedAt, 1.0);
+        WorkoutGameEngineFrame resumed;
+        QVERIFY(waitForFrameAtOrAfter(runner, resumedAt, resumed));
+        QVERIFY(resumed.visual.sessionGeneration > generation);
+        QCOMPARE(resumed.visual.simulation.activeSection, gapSection);
+        QCOMPARE(resumed.watts,
+                 course.sections[std::size_t(gapSection)].targetWatts);
+        QCOMPARE(resumed.cadenceRpm, 88);
+        QVERIFY(resumed.telemetryStale);
+    }
+
     void publishesLatestFixedStepFrameWithoutGuiDrivenSimulation()
     {
         WorkoutGameRunner runner;

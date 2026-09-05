@@ -12,11 +12,13 @@
 
 #include "WorkoutGameClock.h"
 #include "WorkoutGameEngine.h"
+#include "WorkoutGameFeatureLab.h"
 
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 class WorkoutGameRunner
@@ -32,6 +34,11 @@ public:
             const WorkoutGameCourse &course,
             double ftpWatts,
             bool featureLabEnabled);
+    bool configure(
+            const WorkoutGameCourse &course,
+            double ftpWatts,
+            bool featureLabEnabled,
+            std::optional<WorkoutGameFeatureLabGapScenario> gapScenario);
     void start(std::int64_t workoutTimeMs, double rateHint);
     void resume(std::int64_t workoutTimeMs, double rateHint);
     void setAnchor(std::int64_t workoutTimeMs, double rateHint);
@@ -64,6 +71,10 @@ private:
 
     void ensureThread();
     void run();
+    bool prepareEngineInput(
+            WorkoutGameEngineInput &input,
+            std::int64_t workoutTimeMs,
+            std::int64_t monotonicTimeMs) const;
     void clearOutput();
     bool publish(
             WorkoutGameEngineFrame frame,
@@ -75,6 +86,8 @@ private:
     WorkoutGameCourse configuredCourse;
     double configuredFtpWatts = 0.0;
     bool configuredFeatureLabEnabled = false;
+    std::optional<WorkoutGameFeatureLabGapScenario>
+            configuredFeatureLabGapScenario;
     std::mutex inputMutex;
     std::condition_variable inputChanged;
     InputState inputState;

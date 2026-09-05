@@ -165,6 +165,13 @@ private slots:
             WorkoutGameEngine engine;
             QVERIFY(engine.configure(course, FtpWatts, true));
             bool observedLock = false;
+            bool observedTakeoff = false;
+            bool observedAirborne = false;
+            bool observedLanding = false;
+            bool observedGroundedMerge = false;
+            bool leftGapSection = false;
+            WorkoutGameGapJumpLine lockedLine =
+                    WorkoutGameGapJumpLine::None;
             for (std::int64_t timeMs = 0; timeMs < course.durationMs;
                  timeMs += 20) {
                 WorkoutGameEngineInput input;
@@ -174,25 +181,64 @@ private slots:
                         course, timeMs, testCase.scenario, input.simulation);
                 const WorkoutGameEngineFrame frame = engine.update(
                         input, 100000 + timeMs);
+                if (observedLock && frame.visual.simulation.activeSection
+                            != frame.visual.feature.sourceSectionIndex) {
+                    leftGapSection = true;
+                }
                 if (frame.visual.feature.terrain
-                            != WorkoutGameTerrainKind::GapJump
-                        || !frame.visual.feature.gapLineLocked) {
+                            != WorkoutGameTerrainKind::GapJump) {
                     continue;
                 }
 
-                observedLock = true;
-                QCOMPARE(frame.visual.feature.lockedGapLine,
-                         testCase.expectedLine);
-                QCOMPARE(frame.visual.feature.outcome,
-                         testCase.expectedOutcome);
-                QCOMPARE(frame.visual.simulation.featureOutcome,
-                         testCase.expectedOutcome);
-                QCOMPARE(frame.visual.feature.launchSpeedReady, true);
-                QCOMPARE(frame.visual.feature.launchPowerReady,
-                         testCase.expectedOutcome
+                if (frame.visual.feature.gapLineLocked) {
+                    if (!observedLock) {
+                        observedLock = true;
+                        lockedLine = frame.visual.feature.lockedGapLine;
+                    }
+                    QCOMPARE(frame.visual.feature.lockedGapLine, lockedLine);
+                    QCOMPARE(frame.visual.feature.lockedGapLine,
+                             testCase.expectedLine);
+                    QCOMPARE(frame.visual.feature.outcome,
+                             testCase.expectedOutcome);
+                    QCOMPARE(frame.visual.simulation.featureOutcome,
+                             testCase.expectedOutcome);
+                    QCOMPARE(frame.visual.feature.launchSpeedReady, true);
+                    QCOMPARE(frame.visual.feature.launchPowerReady,
+                             testCase.expectedOutcome
+                                == WorkoutGameFeatureOutcome::Completed);
+                } else if (observedLock) {
+                    QFAIL("gap line lock was lost before leaving the section");
+                }
+
+                observedTakeoff = observedTakeoff
+                        || frame.visual.feature.triggerJump;
+                if (frame.visual.world.rider.airborne) {
+                    QVERIFY(testCase.expectedOutcome
                             == WorkoutGameFeatureOutcome::Completed);
+                    observedAirborne = true;
+                } else if (observedAirborne) {
+                    observedLanding = true;
+                }
+                if (observedLanding
+                        && frame.visual.feature.phase
+                            == WorkoutGameFeaturePhase::Recovery
+                        && !frame.visual.world.rider.airborne) {
+                    observedGroundedMerge = true;
+                }
             }
             QVERIFY2(observedLock, "gap scenario never reached line lock");
+            QVERIFY(leftGapSection);
+            if (testCase.expectedOutcome
+                    == WorkoutGameFeatureOutcome::Completed) {
+                QVERIFY(observedTakeoff);
+                QVERIFY(observedAirborne);
+                QVERIFY(observedLanding);
+                QVERIFY(observedGroundedMerge);
+            } else {
+                QVERIFY(!observedTakeoff);
+                QVERIFY(!observedAirborne);
+                QVERIFY(!observedLanding);
+            }
         }
     }
 

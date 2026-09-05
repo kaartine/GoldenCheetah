@@ -20,6 +20,8 @@
 #include "WorkoutGameRunner.h"
 #include "WorkoutGameSessionState.h"
 
+#include <optional>
+
 class Context;
 class ErgFile;
 class WorkoutGame3DWindow;
@@ -93,9 +95,7 @@ private:
     bool sessionActive = false;
     bool presentationSuspended = false;
     bool featureLabEnabled = false;
-    bool featureLabGapScenarioEnabled = false;
-    WorkoutGameFeatureLabGapScenario featureLabGapScenario =
-            WorkoutGameFeatureLabGapScenario::Safe;
+    std::optional<WorkoutGameFeatureLabGapScenario> featureLabGapScenario;
     WorkoutGamePositionRate positionRate;
     std::int64_t currentWorkoutTimeMs = 0;
     std::int64_t lastTelemetryMonotonicTimeMs = -1;
