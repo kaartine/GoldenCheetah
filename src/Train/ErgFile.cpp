@@ -1460,6 +1460,7 @@ ErgFile::save(QStringList &errors)
 
             // check if a lap marker should be inserted
             foreach(ErgFileLap l, Laps) {
+                if (l.synthetic) continue;
                 bool addLap = false;
                 if (l.x == p.x && lastLap != l.x) {
                     // this is the case where a lap marker matches a load marker
@@ -1574,6 +1575,7 @@ ErgFile::save(QStringList &errors)
 
             // check if a lap marker should be inserted
             foreach(ErgFileLap l, Laps) {
+                if (l.synthetic) continue;
                 bool addLap = false;
                 if (l.x == p.x && lastLap != l.x) {
                     // this is the case where a lap marker matches a load marker
@@ -2042,11 +2044,15 @@ ErgFile::calculateMetrics()
         bool first = true;
 
         // CP
-        int zonerange = context->athlete->zones("Bike")->whichRange(when);
-        if (context->athlete->zones("Bike")) {
-            if (zonerange >= 0) CP(context->athlete->zones("Bike")->getCP(zonerange));
+        QList<int> powerZones;
+        if (context && context->athlete) {
+            const Zones *bikeZones = context->athlete->zones("Bike");
+            if (bikeZones) {
+                const int zonerange = bikeZones->whichRange(when);
+                if (zonerange >= 0) CP(bikeZones->getCP(zonerange));
+                powerZones = bikeZones->getZoneHighs(zonerange);
+            }
         }
-        QList<int> powerZones = context->athlete->zones("Bike")->getZoneHighs(zonerange);
         numZones(powerZones.length());
         long secondsInZone[MAX_ZONES] = {};
 
@@ -2164,16 +2170,7 @@ ErgFileQueryAdapter::updateQueryStateFromDistance(double x, int& lapnum) const
     // is it in bounds?
     if (x < 0 || x > Duration()) return false;
 
-    // do we need to return the Lap marker?
-    if (Laps().count() > 0) {
-        int lap = 0;
-        for (int i = 0; i < Laps().count(); i++) {
-            if (x >= Laps().at(i).x) lap += 1;
-        }
-        lapnum = lap;
-
-    }
-    else lapnum = 0;
+    lapnum = lapAt(x);
 
     // find right section of the file
     while (x < Points().at(qs.leftPoint).x || x > Points().at(qs.rightPoint).x) {
@@ -2188,6 +2185,20 @@ ErgFileQueryAdapter::updateQueryStateFromDistance(double x, int& lapnum) const
     }
 
     return true;
+}
+
+int
+ErgFileQueryAdapter::lapAt(double x) const
+{
+    if (!ergFile || !ergFile->isValid() || !std::isfinite(x)
+            || x < 0.0 || x > Duration()) {
+        return -1;
+    }
+    int lap = 0;
+    for (const ErgFileLap &marker : Laps()) {
+        if (x >= marker.x) ++lap;
+    }
+    return lap;
 }
 
 double

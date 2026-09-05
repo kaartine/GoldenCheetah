@@ -1230,14 +1230,15 @@ bool documentForPersistence(
         WorkoutGameCourseDocument &destination)
 {
     destination = source;
+    const auto hasCurrentRoadPlan = [&destination]() {
+        return destination.course.roadPlan
+                && destination.course.roadPlan->generationVersion
+                    == WorkoutGameRoadPlan::CurrentGenerationVersion;
+    };
     if (destination.schemaVersion
             == WorkoutGameCourseDocumentCodec::CurrentSchemaVersion) {
         if (!WorkoutGameCourseDocumentCodec::valid(destination)) return false;
-        if (destination.course.roadPlan
-                && destination.course.roadPlan->generationVersion
-                    == WorkoutGameRoadPlan::CurrentGenerationVersion) {
-            return true;
-        }
+        if (hasCurrentRoadPlan()) return true;
     }
     else if ((destination.schemaVersion != 1
                 && destination.schemaVersion != 2
@@ -1245,13 +1246,29 @@ bool documentForPersistence(
             || !WorkoutGameCourseDocumentCodec::valid(destination)) {
         return false;
     }
+    if (hasCurrentRoadPlan()) {
+        destination.schemaVersion =
+                WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
+        if (source.schemaVersion < 3) {
+            destination.conversionAlgorithmVersion =
+                    WorkoutGameCourseDocument::LegacyConversionAlgorithmVersion;
+            destination.prescriptionMetadata =
+                    WorkoutGameCoursePrescriptionMetadata();
+        }
+        return WorkoutGameCourseDocumentCodec::valid(destination);
+    }
     const WorkoutGameCourse visual =
             WorkoutGameDistancePlayback::visualCourse(destination.course);
+    const WorkoutGameCoursePreset roadPreset =
+            destination.conversionAlgorithmVersion
+                    >= WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion
+                ? destination.preset
+                : WorkoutGameCoursePreset::WorkoutFirst;
     const WorkoutGameRoadPlan plan =
             WorkoutGameRoadCourseBuilder::generatePlan(
                 visual, destination.ftpWatts, {
                     WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
-                    destination.preset
+                    roadPreset
                 });
     if (WorkoutGameRoadPlanValidator::validate(
                 plan, destination.course.sections.size())

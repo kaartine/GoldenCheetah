@@ -280,6 +280,7 @@ public:
     double nextLap   (double x) const { return !ergFile ? -1 : ergFile->nextLap(x);    }
     double prevLap   (double x) const { return !ergFile ? -1 : ergFile->prevLap(x);    }
     double currentLap(double x) const { return !ergFile ? -1 : ergFile->currentLap(x); }
+    int    lapAt     (double x) const;
 
     bool   textsInRange(double searchStart, double searchRange, int& rangeStart, int& rangeEnd) const {
         return !ergFile ? false : ergFile->textsInRange(searchStart, searchRange, rangeStart, rangeEnd);

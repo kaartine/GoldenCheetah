@@ -107,16 +107,16 @@ QString presetDescriptionText(WorkoutGameCoursePreset preset)
     switch (preset) {
     case WorkoutGameCoursePreset::WorkoutFirst:
         return QObject::tr(
-            "Workout targets and interval times come first. Grades are calmer, "
-            "turns are gentler and technical trail sections are less frequent.");
+            "Calmer and easier: gentler climbs and turns, with fewer technical "
+            "sections. Grade 0.82x, curvature 1.00x, density 2-4/10.");
     case WorkoutGameCoursePreset::Balanced:
         return QObject::tr(
-            "Preserves every workout target and prescribed interval time, with "
-            "moderate climbing, flowing turns and a balanced technical mix.");
+            "Flowing and mixed: moderate climbs, turns and technical trail. "
+            "Grade 1.00x, curvature 1.30x, density 5-7/10.");
     case WorkoutGameCoursePreset::RideFirst:
         return QObject::tr(
-            "Preserves every workout target and prescribed interval time, while "
-            "using stronger grades, sharper turns and dense technical trail.");
+            "Technical and intense: stronger climbs, sharper turns and dense "
+            "features. Grade 1.18x, curvature 2.60x, density 8-10/10.");
     }
     return {};
 }
@@ -207,6 +207,14 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     headingFont.setBold(true);
     heading->setFont(headingFont);
     layout->addWidget(heading);
+
+    QLabel *prescriptionGuarantee = new QLabel(tr(
+            "All presets preserve prescribed targets and timing. "
+            "Choose the trail character."), this);
+    prescriptionGuarantee->setObjectName(
+            QStringLiteral("prescriptionGuaranteeLabel"));
+    prescriptionGuarantee->setWordWrap(true);
+    layout->addWidget(prescriptionGuarantee);
 
     QHBoxLayout *presetLayout = new QHBoxLayout;
     presetLayout->setSpacing(0);

@@ -1273,9 +1273,11 @@ TrainSidebar::maintainLapDistanceState()
         return;
     }
 
-    const double currentpositionM = workoutGameCourseRuntime.enabled()
-            ? workoutGameCourseRuntime.workoutTimelinePositionMeters()
-            : displayWorkoutDistance * 1000.0;
+    const double currentpositionM =
+            TrainSidebarRuntime::workoutLapPositionMeters(
+                workoutGameCourseRuntime.enabled(),
+                workoutGameCourseRuntime.workoutTimelinePositionMeters(),
+                displayWorkoutDistance * 1000.0);
     double lapmarkerM = ergFileQueryAdapter.currentLap(currentpositionM);
 
     // If no current lap then handle route as lap.
@@ -2545,19 +2547,23 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
                 displayDistance += distanceTick;
                 rawWorkoutDistance += distanceTick;
                 const double previousLapPosition =
-                        workoutGameCourseRuntime.enabled()
-                            ? workoutGameCourseRuntime
-                                .workoutTimelinePositionMeters() / 1000.0
-                            : displayWorkoutDistance;
+                        TrainSidebarRuntime::workoutLapPositionMeters(
+                            workoutGameCourseRuntime.enabled(),
+                            workoutGameCourseRuntime
+                                .workoutTimelinePositionMeters(),
+                            displayWorkoutDistance * 1000.0) / 1000.0;
                 updateWorkoutDistanceProgress();
                 if (workoutGameCourseRuntime.enabled()) {
                     rtData.setLoad(displayWorkoutTargetWatts);
                 }
-                const double lapPosition = workoutGameCourseRuntime.enabled()
-                        ? workoutGameCourseRuntime
-                            .workoutTimelinePositionMeters() / 1000.0
-                        : displayWorkoutDistance;
-                const double lapPositionTick = lapPosition - previousLapPosition;
+                const double lapDistancePositionKm =
+                        TrainSidebarRuntime::workoutLapPositionMeters(
+                            workoutGameCourseRuntime.enabled(),
+                            workoutGameCourseRuntime
+                                .workoutTimelinePositionMeters(),
+                            displayWorkoutDistance * 1000.0) / 1000.0;
+                const double lapPositionTick =
+                        lapDistancePositionKm - previousLapPosition;
                 displayLapDistance += lapPositionTick;
                 displayLapDistanceRemaining -= lapPositionTick;
 
@@ -2650,10 +2656,11 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
 
                 const double lapPosition = status & RT_MODE_ERGO
                         ? load_msecs
-                        : workoutGameCourseRuntime.enabled()
-                            ? workoutGameCourseRuntime
-                                .workoutTimelinePositionMeters()
-                            : displayWorkoutDistance * 1000.0;
+                        : TrainSidebarRuntime::workoutLapPositionMeters(
+                            workoutGameCourseRuntime.enabled(),
+                            workoutGameCourseRuntime
+                                .workoutTimelinePositionMeters(),
+                            displayWorkoutDistance * 1000.0);
 
                 // alert when approaching end of lap
                 if (lapAudioEnabled && lapAudioThisLap) {
@@ -2678,16 +2685,28 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
                 }
 
                 // Text Cues
-                if (lapPosition > textPositionEmitted) {
-                    double searchRange = (status & RT_MODE_ERGO) ? 1000 : 10;
+                const double cueLookAhead =
+                        (status & RT_MODE_ERGO) ? 1000.0 : 10.0;
+                const TrainSidebarRuntime::CueSearchWindow cueWindow =
+                        TrainSidebarRuntime::cueSearchWindow(
+                            textPositionEmitted, lapPosition, cueLookAhead);
+                if (cueWindow.ready) {
                     int rangeStart, rangeEnd;
-                    if (ergFileQueryAdapter.textsInRange(lapPosition, searchRange, rangeStart, rangeEnd)) {
+                    if (ergFileQueryAdapter.textsInRange(
+                                cueWindow.start,
+                                cueWindow.end - cueWindow.start,
+                                rangeStart, rangeEnd)) {
                         for (int idx = rangeStart; idx <= rangeEnd; idx++) {
                             ErgFileText cue = ergFile->Texts.at(idx);
+                            if (!TrainSidebarRuntime::cueIsNewInWindow(
+                                        cueWindow, textPositionEmitted,
+                                        cue.x)) {
+                                continue;
+                            }
                             context->notifySetNotification(cue.text, cue.duration);
                         }
-                        textPositionEmitted = lapPosition + searchRange;
                     }
+                    textPositionEmitted = cueWindow.end;
                 }
 
                 // Maintain time in ERGO mode
@@ -3096,8 +3115,18 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
                     bicycle.WindResistance(displayAltitude),
                     workoutPositionMeters);
         } else if (context->currentErgFile()) {
+            int routeLap = 0;
             const double workoutSlope = ergFileQueryAdapter.gradientAt(
-                    workoutPositionMeters, curLap);
+                    workoutPositionMeters, routeLap);
+            const double lapPositionMeters =
+                    TrainSidebarRuntime::workoutLapPositionMeters(
+                        workoutGameCourseRuntime.enabled(),
+                        workoutGameCourseRuntime
+                            .workoutTimelinePositionMeters(),
+                        workoutPositionMeters);
+            curLap = workoutGameCourseRuntime.enabled()
+                    ? ergFileQueryAdapter.lapAt(lapPositionMeters)
+                    : routeLap;
             slope = TrainSidebarRuntime::slopeTarget(
                     slope, workoutSlope, initializeSlope);
 
@@ -3619,7 +3648,13 @@ void TrainSidebar::FFwdLap()
         context->notifySeek(load_msecs);
     } else {
         static const double s_BeforeOffset = 10.1;
-        lapmarker = ergFileQueryAdapter.nextLap((displayWorkoutDistance*1000) + s_BeforeOffset);
+        const double lapPositionMeters =
+                TrainSidebarRuntime::workoutLapPositionMeters(
+                    workoutGameCourseRuntime.enabled(),
+                    workoutGameCourseRuntime.workoutTimelinePositionMeters(),
+                    displayWorkoutDistance * 1000.0);
+        lapmarker = ergFileQueryAdapter.nextLap(
+                lapPositionMeters + s_BeforeOffset);
         if (lapmarker >= 0) {
             // Go to slightly before lap marker so the lap transition message will be displayed.
             lapmarker = std::max(0., lapmarker - s_BeforeOffset);
@@ -3653,7 +3688,12 @@ void TrainSidebar::RewindLap()
     }
     else {
         // Search for lap prior to 50 meters ago.
-        double target = std::max(0., (displayWorkoutDistance * 1000) - 50.);
+        const double lapPositionMeters =
+                TrainSidebarRuntime::workoutLapPositionMeters(
+                    workoutGameCourseRuntime.enabled(),
+                    workoutGameCourseRuntime.workoutTimelinePositionMeters(),
+                    displayWorkoutDistance * 1000.0);
+        double target = std::max(0., lapPositionMeters - 50.);
 
         lapmarker = ergFileQueryAdapter.prevLap(target);
 

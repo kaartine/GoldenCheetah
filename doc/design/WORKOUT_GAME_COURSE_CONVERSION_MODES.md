@@ -231,6 +231,13 @@ source and stable seed. Each comparison row shows:
 - every per-interval duration change, its signed amount and authorized metadata
   role (or an explicit `no prescription changes` result).
 
+The dialog states once that all three presets preserve prescribed targets and
+timing. Each concise preset description leads with rider-facing trail character:
+calmer and easier, flowing and mixed, or technical and intense. Supporting
+detail quantifies those differences with the 0.82/1.00/1.18 grade scales,
+1.00/1.30/2.60 curvature scales and 2--4/5--7/8--10 technical sections per ten
+eligible sections.
+
 Key-effort and recovery retention must never be inferred only from aggregate
 work/rest percentages: both preserved/total counts are first-class preview
 values in the selected-mode detail and in every all-three comparison row.
@@ -269,3 +276,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 The static suite verifies that this design contract, fixture and production APIs
 remain aligned. The corresponding C++/Qt suites exercise conversion,
 persistence, source adaptation, dialog behavior and runtime playback.
+
+ETA step splitting across a section boundary remains a deferred precision
+item. The estimator currently applies the correct maximum-exposure transition,
+but a simulation step that straddles a boundary uses the old section's physics
+inputs for the whole step. Fixing that requires splitting the physics update at
+the boundary and is intentionally outside this runtime-timeline task.

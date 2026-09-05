@@ -377,6 +377,7 @@ class TestStravaRoutesDownloadPipeline : public QObject
 
 private slots:
     void crsParserPreservesLapNamesAndDistanceTextCues();
+    void syntheticWorkoutLapsRemainSyntheticAfterSaveAndReload();
     void routesFollowerPostedCancellationIsPrompt();
     void completionReturnsToGuiThread();
     void cancellationStopsWorker();
@@ -481,6 +482,60 @@ crsParserPreservesLapNamesAndDistanceTextCues()
     QCOMPARE(finished->Laps.back().name, QStringLiteral("Finish"));
     QVERIFY(!finished->Laps.back().synthetic);
 
+    ErgFileQueryAdapter adapter(finished.get());
+    QCOMPARE(adapter.lapAt(199.0), 1);
+    QCOMPARE(adapter.lapAt(200.0), 2);
+
+}
+
+void TestStravaRoutesDownloadPipeline::
+syntheticWorkoutLapsRemainSyntheticAfterSaveAndReload()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    struct FormatCase {
+        const char *extension;
+        const char *column;
+        ErgFileFormat format;
+    };
+    const FormatCase formats[] = {
+        {"erg", "WATTS", ErgFileFormat::erg},
+        {"mrc", "PERCENT", ErgFileFormat::mrc}
+    };
+    for (const FormatCase &format : formats) {
+        const QString path = directory.filePath(
+                QStringLiteral("synthetic.%1")
+                    .arg(QLatin1String(format.extension)));
+        QFile source(path);
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        const QByteArray contents = QString::fromLatin1(
+            "[COURSE HEADER]\n"
+            "VERSION=1\n"
+            "UNITS=METRIC\n"
+            "MINUTES %1\n"
+            "[END COURSE HEADER]\n"
+            "[COURSE DATA]\n"
+            "0.000 100\n"
+            "1.000 100\n"
+            "[END COURSE DATA]\n")
+                .arg(QLatin1String(format.column)).toLatin1();
+        QCOMPARE(source.write(contents), qint64(contents.size()));
+        source.close();
+
+        ErgFile original(path, format.format, nullptr);
+        QVERIFY(original.isValid());
+        QCOMPARE(original.Laps.size(), 2);
+        QVERIFY(original.Laps.front().synthetic);
+        QVERIFY(original.Laps.back().synthetic);
+
+        QStringList errors;
+        QVERIFY2(original.save(errors), qPrintable(errors.join(';')));
+        ErgFile reloaded(path, format.format, nullptr);
+        QVERIFY(reloaded.isValid());
+        QCOMPARE(reloaded.Laps.size(), 2);
+        QVERIFY(reloaded.Laps.front().synthetic);
+        QVERIFY(reloaded.Laps.back().synthetic);
+    }
 }
 
 void TestStravaRoutesDownloadPipeline::

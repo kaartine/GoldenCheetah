@@ -286,6 +286,38 @@ private slots:
                 1.5);
     }
 
+    void generatedCourseLapLookupUsesWorkoutTimeline()
+    {
+        QCOMPARE(TrainSidebarRuntime::workoutLapPositionMeters(
+                         true, 240.0, 125.0),
+                 240.0);
+        QCOMPARE(TrainSidebarRuntime::workoutLapPositionMeters(
+                         false, 240.0, 125.0),
+                 125.0);
+    }
+
+    void cueSearchCoversDelayedTimelineAdvanceWithoutDuplicates()
+    {
+        const TrainSidebarRuntime::CueSearchWindow initial =
+                TrainSidebarRuntime::cueSearchWindow(-1.0, 0.0, 10.0);
+        QVERIFY(initial.ready);
+        QCOMPARE(initial.start, 0.0);
+        QCOMPARE(initial.end, 10.0);
+        QVERIFY(TrainSidebarRuntime::cueIsNewInWindow(
+                initial, -1.0, 0.0));
+
+        const TrainSidebarRuntime::CueSearchWindow delayed =
+                TrainSidebarRuntime::cueSearchWindow(
+                    initial.end, 35.0, 10.0);
+        QVERIFY(delayed.ready);
+        QCOMPARE(delayed.start, initial.end);
+        QCOMPARE(delayed.end, 45.0);
+        QVERIFY(!TrainSidebarRuntime::cueIsNewInWindow(
+                delayed, initial.end, initial.end));
+        QVERIFY(TrainSidebarRuntime::cueIsNewInWindow(
+                delayed, initial.end, 25.0));
+    }
+
     void daumRestartReleasesPausedState()
     {
         TestDaum daum(nullptr, QString(), QString());

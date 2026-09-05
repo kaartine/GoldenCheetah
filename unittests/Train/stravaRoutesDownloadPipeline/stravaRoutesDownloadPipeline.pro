@@ -24,6 +24,7 @@ SOURCES = testStravaRoutesDownloadPipeline.cpp \
           ../../../src/Train/ErgFile.cpp \
           ../../../src/Train/ErgFileBase.cpp \
           ../../../src/Train/ErgFileBytes.cpp \
+          ../../../src/Train/WorkoutFileWriter.cpp \
           ../../../src/Train/StravaRoutesClient.cpp \
           ../../../src/Train/StravaRoutesDownload.cpp \
           ../../../src/Train/StravaRoutesDownloadPipeline.cpp \
@@ -35,6 +36,7 @@ SOURCES = testStravaRoutesDownloadPipeline.cpp \
 HEADERS = ../../../src/Cloud/StravaTokenRefresh.h \
           ../../../src/Train/ErgFile.h \
           ../../../src/Train/ErgFileBase.h \
+          ../../../src/Train/WorkoutFileWriter.h \
           ../../../src/Train/StravaRoutesClient.h \
           ../../../src/Train/StravaRoutesDownload.h \
           ../../../src/Train/StravaRoutesDownloadPipeline.h \

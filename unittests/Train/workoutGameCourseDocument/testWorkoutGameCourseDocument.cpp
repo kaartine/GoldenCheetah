@@ -605,7 +605,7 @@ private slots:
                 }));
     }
 
-    void savingVersionThreePreservesItsPresetRoadShape()
+    void savingVersionThreePreservesItsAlgorithmAndStoredRoadShape()
     {
         WorkoutGameCourseDocument versionThree = sampleDocument();
         versionThree.schemaVersion = 3;
@@ -616,16 +616,10 @@ private slots:
                     versionThree.preset);
         QVERIFY(WorkoutGameCourseDocumentCodec::valid(versionThree));
 
-        const WorkoutGameCourse visual =
-                WorkoutGameDistancePlayback::visualCourse(
-                    versionThree.course);
-        const WorkoutGameRoadPlan expected =
-                WorkoutGameRoadCourseBuilder::generatePlan(
-                    visual, versionThree.ftpWatts, {
-                        WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
-                        versionThree.preset
-                    });
-        QVERIFY(!expected.pieces.empty());
+        const std::shared_ptr<const WorkoutGameRoadPlan> expected =
+                versionThree.course.roadPlan;
+        QVERIFY(expected);
+        QVERIFY(!expected->pieces.empty());
 
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -639,11 +633,12 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
                     path, loaded, error),
                  WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(loaded.conversionAlgorithmVersion, 2);
         QCOMPARE(loaded.preset, WorkoutGameCoursePreset::RideFirst);
-        QCOMPARE(loaded.course.roadPlan->pieces.size(), expected.pieces.size());
-        for (std::size_t index = 0; index < expected.pieces.size(); ++index) {
+        QCOMPARE(loaded.course.roadPlan->pieces.size(), expected->pieces.size());
+        for (std::size_t index = 0; index < expected->pieces.size(); ++index) {
             QCOMPARE(loaded.course.roadPlan->pieces[index].turnRadians,
-                     expected.pieces[index].turnRadians);
+                     expected->pieces[index].turnRadians);
         }
     }
 

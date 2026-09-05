@@ -98,6 +98,8 @@ class TestWorkoutGameCourseConversionDialog : public QObject
             return QRect(widget->mapTo(&dialog, QPoint(0, 0)), widget->size());
         };
         QWidget *heading = requiredChild<QWidget>(dialog, "courseDialogHeading");
+        QWidget *guarantee = requiredChild<QWidget>(
+                dialog, "prescriptionGuaranteeLabel");
         QWidget *workoutFirst = requiredChild<QWidget>(
                 dialog, "workoutFirstPresetButton");
         QWidget *balanced = requiredChild<QWidget>(dialog, "balancedPresetButton");
@@ -106,7 +108,7 @@ class TestWorkoutGameCourseConversionDialog : public QObject
         QWidget *output = requiredChild<QWidget>(dialog, "courseOutputPathEdit");
         QWidget *browse = requiredChild<QWidget>(dialog, "browseCourseOutputButton");
         QWidget *create = requiredChild<QWidget>(dialog, "createCourseButton");
-        for (QWidget *widget : {heading, workoutFirst, balanced, rideFirst,
+        for (QWidget *widget : {heading, guarantee, workoutFirst, balanced, rideFirst,
                                 title, output, browse, create}) {
             QVERIFY(dialog.rect().contains(dialogGeometry(widget)));
         }
@@ -117,7 +119,9 @@ class TestWorkoutGameCourseConversionDialog : public QObject
         const int presetBottom = std::max({dialogGeometry(workoutFirst).bottom(),
                                           dialogGeometry(balanced).bottom(),
                                           dialogGeometry(rideFirst).bottom()});
-        QVERIFY(dialogGeometry(heading).bottom() < presetTop);
+        QVERIFY(dialogGeometry(heading).bottom()
+                < dialogGeometry(guarantee).top());
+        QVERIFY(dialogGeometry(guarantee).bottom() < presetTop);
         QVERIFY(presetBottom < dialogGeometry(scrollArea).top());
         QVERIFY(dialogGeometry(scrollArea).bottom() < dialogGeometry(title).top());
         QVERIFY(dialogGeometry(title).bottom() < dialogGeometry(output).top());
@@ -192,8 +196,8 @@ private slots:
                  WorkoutGameCourseSourceStatus::Ready);
         QVERIFY(requiredChild<QToolButton>(dialog, "balancedPresetButton")
                         ->isChecked());
-        QVERIFY(requiredChild<QLabel>(dialog, "presetDescriptionLabel")
-                        ->text().contains("preserves every", Qt::CaseInsensitive));
+        QVERIFY(requiredChild<QLabel>(dialog, "prescriptionGuaranteeLabel")
+                        ->text().contains("preserve", Qt::CaseInsensitive));
         QVERIFY(!requiredChild<QLabel>(dialog, "durationValue")->text().isEmpty());
         QVERIFY(requiredChild<QLabel>(dialog, "etaValue")->text().contains("-"));
         QVERIFY(requiredChild<QLabel>(dialog, "distanceValue")->text().contains("km"));
@@ -287,7 +291,7 @@ private slots:
 
         QCOMPARE(dialog.selectedPreset(), WorkoutGameCoursePreset::RideFirst);
         QVERIFY(requiredChild<QLabel>(dialog, "presetDescriptionLabel")
-                        ->text().contains("sharper turns", Qt::CaseInsensitive));
+                        ->text().contains("2.60x", Qt::CaseInsensitive));
         QCOMPARE(requiredChild<QLabel>(dialog, "runtimeExposureValue")->text(),
                  QStringLiteral("100% of prescribed interval time"));
         QCOMPARE(rideFirst.status, WorkoutGameCourseSourceStatus::Ready);
@@ -342,6 +346,57 @@ private slots:
         QVERIFY(!QFileInfo::exists(
                 WorkoutGameCourseDocumentStore::sidecarPathForCourse(
                     coursePath)));
+    }
+
+    void presetsSharePrescriptionGuaranteeAndDescribeDistinctTrailCharacter()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        WorkoutGameCourseConversionDialog dialog(
+                sampleRequest(), directory.filePath("intervals-mtb.crs"));
+
+        const QString guarantee = requiredChild<QLabel>(
+                dialog, "prescriptionGuaranteeLabel")->text();
+        QVERIFY(guarantee.contains("all presets", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("target", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("timing", Qt::CaseInsensitive));
+
+        struct ExpectedPreset {
+            const char *button;
+            const char *character;
+            const char *grade;
+            const char *curvature;
+            const char *density;
+        };
+        const ExpectedPreset expected[] = {
+            {"workoutFirstPresetButton", "calmer and easier",
+             "0.82x", "1.00x", "2-4/10"},
+            {"balancedPresetButton", "flowing and mixed",
+             "1.00x", "1.30x", "5-7/10"},
+            {"rideFirstPresetButton", "technical and intense",
+             "1.18x", "2.60x", "8-10/10"}
+        };
+        QStringList descriptions;
+        for (const ExpectedPreset &preset : expected) {
+            requiredChild<QToolButton>(dialog, preset.button)->click();
+            const QString description = requiredChild<QLabel>(
+                    dialog, "presetDescriptionLabel")->text();
+            descriptions.append(description);
+            QVERIFY2(description.startsWith(
+                             QLatin1String(preset.character),
+                             Qt::CaseInsensitive),
+                     qPrintable(description));
+            QVERIFY2(description.contains(QLatin1String(preset.grade)),
+                     qPrintable(description));
+            QVERIFY2(description.contains(QLatin1String(preset.curvature)),
+                     qPrintable(description));
+            QVERIFY2(description.contains(QLatin1String(preset.density)),
+                     qPrintable(description));
+        }
+        QCOMPARE(descriptions.size(), 3);
+        QVERIFY(descriptions[0] != descriptions[1]);
+        QVERIFY(descriptions[1] != descriptions[2]);
+        QVERIFY(descriptions[0] != descriptions[2]);
     }
 
     void previewWidgetRendersElevationAndPowerData()

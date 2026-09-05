@@ -14,6 +14,7 @@
 #include <QIODevice>
 #include <QStringList>
 
+#include <algorithm>
 #include <cmath>
 
 namespace TrainSidebarRuntime
@@ -88,6 +89,48 @@ inline double slopeTarget(double currentSlope,
                           bool initialize)
 {
     return initialize ? workoutSlope : currentSlope;
+}
+
+inline double workoutLapPositionMeters(
+        bool generatedCourse,
+        double timelinePositionMeters,
+        double visualPositionMeters)
+{
+    return generatedCourse ? timelinePositionMeters : visualPositionMeters;
+}
+
+struct CueSearchWindow
+{
+    bool ready = false;
+    double start = 0.0;
+    double end = 0.0;
+};
+
+inline CueSearchWindow cueSearchWindow(
+        double previousEnd,
+        double currentPosition,
+        double lookAhead)
+{
+    CueSearchWindow result;
+    if (!std::isfinite(previousEnd) || !std::isfinite(currentPosition)
+            || !std::isfinite(lookAhead) || lookAhead < 0.0) {
+        return result;
+    }
+    result.start = previousEnd < 0.0 ? 0.0 : previousEnd;
+    result.end = std::max(0.0, currentPosition) + lookAhead;
+    result.ready = result.end >= result.start;
+    return result;
+}
+
+inline bool cueIsNewInWindow(
+        const CueSearchWindow &window,
+        double previousEnd,
+        double cuePosition)
+{
+    return window.ready && std::isfinite(cuePosition)
+            && cuePosition > previousEnd
+            && cuePosition >= window.start
+            && cuePosition <= window.end;
 }
 
 template<typename Initialize, typename ApplyInitialTarget, typename NotifyStart>
