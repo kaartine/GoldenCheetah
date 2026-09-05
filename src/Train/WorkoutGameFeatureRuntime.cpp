@@ -347,6 +347,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             activeRoadSample.ready
                 && activeRoadSample.pieceIndex < configuredCourse.pieces.size()
             ? &configuredCourse.pieces[activeRoadSample.pieceIndex] : nullptr;
+    bool gapRouteOwnsLateral = false;
     const auto updateOrdinaryBankLine = [&]() {
         constexpr double MaximumLateralSpeedMetersPerSecond = 1.2;
         constexpr double MaximumLateralAccelerationMetersPerSecondSquared = 4.0;
@@ -424,7 +425,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         }
         if (activeRoadPiece && !activeRoadPiece->challenge.enabled
                 && result.route == WorkoutGameRoute::MainLine
-                && result.terrain != WorkoutGameTerrainKind::GapJump
+                && !gapRouteOwnsLateral
                 && (ordinaryBankActive
                     || std::abs(bankLineState.lateralOffsetMeters) > 1.0e-6)) {
             result.lateralOffsetMeters = bankLineState.lateralOffsetMeters;
@@ -741,6 +742,10 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                              : result.launchWindowStartDistanceMeters,
                 profile.splitLengthMeters,
                 mergeStart, mergeEnd, lateral);
+        gapRouteOwnsLateral = gate.enabled
+                && result.visualDistanceMeters
+                    >= gate.splitStartDistanceMeters
+                && result.visualDistanceMeters < mergeEnd;
         moveGapJumpLateral(
                 targetLateral,
                 double(elapsedMilliseconds) / 1000.0,
