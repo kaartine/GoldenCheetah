@@ -1,0 +1,73 @@
+{
+  "assetId": "RB-01-rider-bike",
+  "assetSha256": "49a9cc20828a4eadf356c25722ff63ea2aebead732e1e278c0b7bd70e4f1dea9",
+  "catalog": {
+    "heightPixels": 540,
+    "pose": "neutral-seated-crank-left-high",
+    "verticalFovDegrees": 47.0,
+    "wheelbaseScaleMeters": 1.313,
+    "widthPixels": 960
+  },
+  "renders": [
+    {
+      "cameraPositionMeters": [
+        0.0,
+        1.18,
+        4.5
+      ],
+      "cameraTargetMeters": [
+        0.0,
+        0.91,
+        0.18
+      ],
+      "path": "RB-01-front.png",
+      "sha256": "8a7d8c09d7bb185cc6b662b3099568cd36cf56e1420f7dd354be18a8c0c573ab",
+      "view": "front"
+    },
+    {
+      "cameraPositionMeters": [
+        0.0,
+        1.22,
+        -4.25
+      ],
+      "cameraTargetMeters": [
+        0.0,
+        0.91,
+        0.08
+      ],
+      "path": "RB-01-rear.png",
+      "sha256": "7ef9633c1d40d79324ff01f15845df4f3d3cff823aa57e26dd88fa6624fdf5d4",
+      "view": "rear"
+    },
+    {
+      "cameraPositionMeters": [
+        4.35,
+        1.18,
+        0.18
+      ],
+      "cameraTargetMeters": [
+        0.0,
+        0.88,
+        0.18
+      ],
+      "path": "RB-01-side.png",
+      "sha256": "34bfc99c2987d88f4bfd9c01f0c58cc494f6517279e7a38f2d7ef5c00c91a7b1",
+      "view": "side"
+    },
+    {
+      "cameraPositionMeters": [
+        2.65,
+        1.86,
+        -4.15
+      ],
+      "cameraTargetMeters": [
+        0.0,
+        0.94,
+        0.1
+      ],
+      "path": "RB-01-chase.png",
+      "sha256": "561bb567543fbd889289f871da822bddef8422e670c808c63fb81a6c38ca1fde",
+      "view": "chase"
+    }
+  ]
+}

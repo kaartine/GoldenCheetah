@@ -72,6 +72,10 @@ RIDER_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_RiderBike.glb"
 )
+RIDER_AUDIT_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/audits/RB-01/RB-01-audit.json"
+)
 CONIFER_MANIFEST_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/manifests/EN-01-conifer-set.json"
@@ -526,13 +530,22 @@ class TestWorkoutGameAssets(unittest.TestCase):
             0.0,
             places=5,
         )
-        self.assertEqual(root_extras["reference_model"], "Pole Voima K2")
+        self.assertEqual(
+            root_extras["reference_model"],
+            "original generic modern enduro 29er",
+        )
         self.assertEqual(
             root_extras["rider_reference"],
             "fictional project-authored rider; no specific likeness",
         )
-        self.assertEqual(root_extras["front_tire"], "Maxxis Assegai DD 29x2.5")
-        self.assertEqual(root_extras["rear_tire"], "Maxxis Minion DHR II DD 29x2.5")
+        self.assertEqual(
+            root_extras["front_tire"],
+            "unbranded 29x2.5 aggressive front-grip tire",
+        )
+        self.assertEqual(
+            root_extras["rear_tire"],
+            "unbranded 29x2.5 rear-braking tire",
+        )
         self.assertEqual(
             root_extras["helmet_reference"],
             "black-white open-face enduro helmet with visor",
@@ -546,18 +559,46 @@ class TestWorkoutGameAssets(unittest.TestCase):
             nodes["GEO_RearWheel_LOD0"]["extras"]["tread_role"],
             "rear-braking",
         )
+        self.assertEqual(
+            nodes["GEO_MainFrame_LOD0"]["extras"]["design_origin"],
+            "project-authored",
+        )
+        self.assertEqual(
+            nodes["GEO_MainFrame_LOD0"]["extras"]["silhouette_family"],
+            "generic-modern-enduro",
+        )
+        self.assertEqual(
+            nodes["GEO_BikeComponents_LOD0"]["extras"]["drivetrain_role"],
+            "unbranded-one-by-chain-cassette-derailleur",
+        )
+        self.assertEqual(
+            nodes["GEO_Helmet_LOD0"]["extras"]["helmet_role"],
+            "open-face-enduro-shell",
+        )
         crank_extras = nodes["GEO_Crank_LOD0"]["extras"]
         self.assertEqual(crank_extras["left_pedal_contact_m"], [-0.13, 0.5375, 0.0])
         self.assertEqual(crank_extras["right_pedal_contact_m"], [0.13, 0.2175, 0.0])
         self.assertAlmostEqual(crank_extras["crank_length_m"], 0.16, places=5)
         self.assertGreaterEqual(crank_extras["pedal_platform_length_m"], 0.10)
+        self.assertGreaterEqual(manifest["technical"]["trianglesLod0"], 2500)
         self.assertLessEqual(manifest["technical"]["trianglesLod0"], 3600)
-        self.assertEqual(manifest["review"]["status"], "approved")
+        self.assertEqual(manifest["review"]["status"], "candidate")
         self.assertEqual(manifest["review"]["trademarkStatus"], "clear")
         self.assertEqual(manifest["review"]["personReleaseStatus"], "not-applicable")
         self.assertEqual(manifest["review"]["propertyReleaseStatus"], "not-applicable")
         self.assertIn("No endorsement", manifest["review"]["notes"])
-        self.assertNotIn("Leo Kokkonen", json.dumps(manifest))
+        rights_text = (
+            json.dumps(manifest) + json.dumps(root_extras)
+        ).casefold()
+        for protected_reference in (
+            "pole",
+            "voima",
+            "kokkonen",
+            "maxxis",
+            "assegai",
+            "minion",
+        ):
+            self.assertNotIn(protected_reference, rights_text)
         for mesh in document["meshes"]:
             for primitive in mesh["primitives"]:
                 self.assertIn("TEXCOORD_0", primitive["attributes"])
@@ -573,6 +614,31 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertIn('baseColor: "#2f68b2"', runtime_qml)
         self.assertIn('baseColor: "#d7dad8"', runtime_qml)
+
+    def test_rider_bike_audit_has_fixed_front_rear_side_and_chase_views(self) -> None:
+        audit = assets.load_json_file(RIDER_AUDIT_PATH)
+        self.assertEqual(audit["assetId"], "RB-01-rider-bike")
+        self.assertEqual(audit["assetSha256"], sha256(RIDER_GLB_PATH))
+        self.assertEqual(audit["catalog"]["widthPixels"], 960)
+        self.assertEqual(audit["catalog"]["heightPixels"], 540)
+        self.assertEqual(audit["catalog"]["verticalFovDegrees"], 47.0)
+        self.assertEqual(audit["catalog"]["wheelbaseScaleMeters"], 1.313)
+        self.assertEqual(
+            [render["view"] for render in audit["renders"]],
+            ["front", "rear", "side", "chase"],
+        )
+        render_hashes = []
+        for render in audit["renders"]:
+            path = RIDER_AUDIT_PATH.parent / render["path"]
+            self.assertTrue(path.is_file())
+            data = path.read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", data[16:24]), (960, 540))
+            self.assertEqual(render["sha256"], sha256(path))
+            self.assertEqual(len(render["cameraPositionMeters"]), 3)
+            self.assertEqual(len(render["cameraTargetMeters"]), 3)
+            render_hashes.append(render["sha256"])
+        self.assertEqual(len(set(render_hashes)), 4)
 
     def test_conifer_set_has_varied_bounded_project_authored_silhouettes(self) -> None:
         document, size = assets.read_glb(CONIFER_GLB_PATH)

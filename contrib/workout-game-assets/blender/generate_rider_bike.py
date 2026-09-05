@@ -27,8 +27,8 @@ TIRE_WIDTH_M = 0.0635
 TIRE_CASING_RADIAL_M = 0.047
 TIRE_TREAD_HEIGHT_M = 0.009
 RIM_RADIUS_M = 0.300
-K2_REACH_M = 0.480
-K2_STACK_M = 0.648
+RIDER_CONTRACT_REACH_M = 0.480
+RIDER_CONTRACT_STACK_M = 0.648
 HEAD_TUBE_LENGTH_M = 0.140
 REAR_AXLE = (0.0, WHEEL_RADIUS_M, -CHAINSTAY_M)
 FRONT_AXLE = (0.0, WHEEL_RADIUS_M, WHEELBASE_M - CHAINSTAY_M)
@@ -36,7 +36,11 @@ CRANK = (0.0, WHEEL_RADIUS_M, 0.0)
 STEER = (0.0, 1.085, 0.465)
 PELVIS = (0.0, 1.08, -0.10)
 SEAT = (0.0, 0.96, -0.10)
-HEAD_HIGH = (0.0, CRANK[1] + K2_STACK_M, K2_REACH_M)
+HEAD_HIGH = (
+    0.0,
+    CRANK[1] + RIDER_CONTRACT_STACK_M,
+    RIDER_CONTRACT_REACH_M,
+)
 HEAD_TUBE_RISE_M = HEAD_TUBE_LENGTH_M * math.sin(
     math.radians(HEAD_ANGLE_DEGREES)
 )
@@ -62,12 +66,12 @@ PEDAL_CONTACT_X_M = 0.130
 PEDAL_PLATFORM_LENGTH_M = 0.120
 DOWN_TUBE_HALF_WIDTH_M = 0.078
 DOWN_TUBE_PROFILE = (
-    (0.325, -0.055),
-    (0.335, 0.115),
-    (0.780, 0.580),
-    (0.900, 0.560),
-    (0.925, 0.450),
-    (0.520, -0.055),
+    (0.325, -0.060),
+    (0.340, 0.090),
+    (0.765, 0.555),
+    (0.870, 0.570),
+    (0.915, 0.475),
+    (0.500, -0.075),
 )
 MOTOR_PROFILE = (
     (0.285, -0.070),
@@ -80,28 +84,28 @@ MOTOR_PROFILE = (
     (0.320, -0.110),
 )
 SEAT_MAST_PROFILE = (
-    (0.500, 0.020),
-    (0.970, -0.060),
-    (0.950, -0.155),
-    (0.490, -0.085),
+    (0.485, -0.055),
+    (0.940, -0.080),
+    (0.925, -0.170),
+    (0.500, -0.135),
 )
 TOP_BRIDGE_PROFILE = (
-    (0.835, -0.125),
-    (0.925, 0.460),
+    (0.835, -0.155),
+    (0.925, 0.430),
     (1.035, 0.492),
-    (0.965, -0.145),
+    (0.970, -0.175),
 )
 LOWER_SWINGARM_PROFILE = (
-    (0.315, -0.460),
-    (0.400, 0.020),
-    (0.510, 0.015),
-    (0.405, -0.485),
+    (0.325, -0.475),
+    (0.395, 0.015),
+    (0.495, 0.010),
+    (0.415, -0.500),
 )
 UPPER_SWINGARM_PROFILE = (
-    (0.350, -0.445),
-    (0.630, -0.155),
-    (0.710, -0.235),
-    (0.400, -0.495),
+    (0.350, -0.455),
+    (0.625, -0.170),
+    (0.700, -0.245),
+    (0.405, -0.505),
 )
 MAX_GLB_BYTES = 200 * 1024
 MAX_TRIANGLES = 3600
@@ -146,7 +150,7 @@ PIVOT_NAMES = {
 REQUIRED_NAMES = {ROOT_NAME, *MESH_NAMES, *PIVOT_NAMES}
 
 MATERIALS = (
-    ("MAT_Frame_TrueGold", (0.64, 0.42, 0.12, 1.0)),
+    ("MAT_Frame_HighVizAmber", (0.72, 0.31, 0.055, 1.0)),
     ("MAT_Tire_Black", (0.018, 0.021, 0.020, 1.0)),
     ("MAT_Component_Black", (0.025, 0.030, 0.032, 1.0)),
     ("MAT_Rider_Cobalt", (0.095, 0.28, 0.62, 1.0)),
@@ -428,8 +432,8 @@ def wheel_mesh(center, tread_role):
             faces.extend(((a, b, c), (a, c, d)))
 
     tread_inner = WHEEL_RADIUS_M - TIRE_TREAD_HEIGHT_M - 0.002
-    for index in range(20):
-        angle = 2.0 * math.pi * index / 20
+    for index in range(16):
+        angle = 2.0 * math.pi * index / 16
         if tread_role == "front-grip":
             center_offset = 0.008 if index % 2 == 0 else -0.008
             blocks = (
@@ -519,6 +523,43 @@ def bike_components_mesh():
         ),
         0.105,
     )
+    # A readable but low-cost one-by drivetrain. These shapes intentionally
+    # use generic packaging and contain no copied tooth or derailleur profile.
+    drivetrain_x = -0.092
+    for inner, outer in ((0.042, 0.078), (0.058, 0.092), (0.072, 0.108)):
+        append_disc_ring(
+            vertices, faces, REAR_AXLE, drivetrain_x, inner, outer,
+            segments=10,
+        )
+    append_disc_ring(
+        vertices, faces, CRANK, drivetrain_x, 0.045, 0.087, segments=12
+    )
+    append_tube(
+        vertices, faces,
+        (drivetrain_x, CRANK[1] + 0.074, CRANK[2] - 0.040),
+        (drivetrain_x, REAR_AXLE[1] + 0.092, REAR_AXLE[2] + 0.010),
+        0.006, sides=4,
+    )
+    append_tube(
+        vertices, faces,
+        (drivetrain_x, CRANK[1] - 0.074, CRANK[2] - 0.040),
+        (drivetrain_x, REAR_AXLE[1] - 0.075, REAR_AXLE[2] + 0.010),
+        0.006, sides=4,
+    )
+    derailleur_upper = (
+        drivetrain_x, REAR_AXLE[1] - 0.035, REAR_AXLE[2] + 0.025
+    )
+    derailleur_lower = (
+        drivetrain_x, REAR_AXLE[1] - 0.185, REAR_AXLE[2] + 0.070
+    )
+    append_tube(
+        vertices, faces, derailleur_upper, derailleur_lower, 0.018,
+        sides=5,
+    )
+    append_disc_ring(
+        vertices, faces, derailleur_lower, drivetrain_x - 0.001,
+        0.017, 0.036, segments=8,
+    )
     return vertices, faces
 
 
@@ -550,6 +591,14 @@ def fork_mesh():
         (-0.080, HEAD_LOW[1], HEAD_LOW[2]),
         (0.080, HEAD_LOW[1], HEAD_LOW[2]),
         0.037, sides=4,
+    )
+    fork_arch_y = FRONT_AXLE[1] + 0.255
+    fork_arch_z = FRONT_AXLE[2] - 0.025
+    append_tube(
+        vertices, faces,
+        (-0.052, fork_arch_y, fork_arch_z),
+        (0.052, fork_arch_y, fork_arch_z),
+        0.025, sides=4,
     )
     append_tube(vertices, faces, HEAD_LOW, HEAD_HIGH, 0.034, sides=4)
     return vertices, faces
@@ -776,24 +825,35 @@ def low_poly_sphere(center, radius, lower_fraction=-1.0):
 
 def helmet_mesh():
     vertices = []
-    for y_value, radius in ((-0.02, 0.145), (0.105, 0.12)):
+    rings = (
+        (-0.050, 0.145, 0.170),
+        (0.055, 0.150, 0.155),
+        (0.125, 0.105, 0.115),
+    )
+    for y_value, radius_x, radius_z in rings:
         for index in range(8):
             angle = 2.0 * math.pi * index / 8
             vertices.append((
-                radius * math.cos(angle),
+                radius_x * math.cos(angle),
                 y_value,
-                radius * math.sin(angle),
+                radius_z * math.sin(angle) - 0.018,
             ))
-    vertices.append((0.0, 0.145, 0.0))
+    vertices.append((0.0, 0.165, -0.018))
     top = len(vertices) - 1
     faces = []
+    for ring in range(len(rings) - 1):
+        lower = ring * 8
+        upper = lower + 8
+        for index in range(8):
+            following = (index + 1) % 8
+            faces.extend((
+                (lower + index, upper + index, upper + following),
+                (lower + index, upper + following, lower + following),
+            ))
+    upper = (len(rings) - 1) * 8
     for index in range(8):
         following = (index + 1) % 8
-        faces.extend((
-            (index, 8 + index, 8 + following),
-            (index, 8 + following, following),
-            (top, 8 + following, 8 + index),
-        ))
+        faces.append((top, upper + following, upper + index))
     return vertices, faces
 
 
@@ -805,12 +865,12 @@ def helmet_accent_mesh():
         vertices,
         faces,
         (
-            (-0.035, -0.115),
-            (-0.035, 0.105),
-            (0.005, 0.125),
-            (0.018, -0.120),
+            (-0.050, -0.168),
+            (-0.045, 0.090),
+            (0.008, 0.120),
+            (0.025, -0.155),
         ),
-        0.147,
+        0.151,
     )
     append_side_prism(
         vertices,
@@ -823,6 +883,13 @@ def helmet_accent_mesh():
         ),
         0.080,
     )
+    for x_offset in (-0.092, 0.092):
+        append_tube(
+            vertices, faces,
+            (x_offset, 0.055, -0.105),
+            (x_offset, 0.120, 0.015),
+            0.014, sides=4,
+        )
     return vertices, faces
 
 
@@ -865,14 +932,17 @@ def build_scene():
     root["up_axis"] = "+Y"
     root["forward_axis"] = "+Z"
     root["physics_authority"] = "external"
-    root["reference_model"] = "Pole Voima K2"
-    root["reference_geometry"] = "Pole Voima K2 public geometry table and product photography"
+    root["reference_model"] = "original generic modern enduro 29er"
+    root["reference_geometry"] = (
+        "project-authored silhouette constrained by the existing runtime "
+        "pivot contract and generic modern enduro proportions"
+    )
     root["rider_reference"] = (
         "fictional project-authored rider; no specific likeness"
     )
     root["helmet_reference"] = "black-white open-face enduro helmet with visor"
-    root["front_tire"] = "Maxxis Assegai DD 29x2.5"
-    root["rear_tire"] = "Maxxis Minion DHR II DD 29x2.5"
+    root["front_tire"] = "unbranded 29x2.5 aggressive front-grip tire"
+    root["rear_tire"] = "unbranded 29x2.5 rear-braking tire"
     root["tire_width_m"] = TIRE_WIDTH_M
     root["surface_provenance"] = (
         "GPL project-authored from public references; no CAD, source mesh, "
@@ -883,8 +953,8 @@ def build_scene():
     root["head_angle_degrees"] = HEAD_ANGLE_DEGREES
     root["suspension_travel_m"] = SUSPENSION_TRAVEL_M
     root["motor_radius_m"] = MOTOR_REFERENCE_RADIUS_M
-    root["k2_reach_m"] = K2_REACH_M
-    root["k2_stack_m"] = K2_STACK_M
+    root["contract_reach_m"] = RIDER_CONTRACT_REACH_M
+    root["contract_stack_m"] = RIDER_CONTRACT_STACK_M
     root["head_tube_length_m"] = HEAD_TUBE_LENGTH_M
 
     materials = {name: make_material(name, color) for name, color in MATERIALS}
@@ -894,7 +964,10 @@ def build_scene():
     ):
         vertices, faces = generator()
         create_mesh(root, name, vertices, faces,
-                    materials["MAT_Frame_TrueGold"])
+                    materials["MAT_Frame_HighVizAmber"], {
+                        "design_origin": "project-authored",
+                        "silhouette_family": "generic-modern-enduro",
+                    })
     for name, generator in (
         ("GEO_Fork_LOD0", fork_mesh),
         ("GEO_RearShock_LOD0", rear_shock_mesh),
@@ -902,12 +975,17 @@ def build_scene():
     ):
         vertices, faces = generator()
         create_mesh(root, name, vertices, faces,
-                    materials["MAT_Component_Black"])
+                    materials["MAT_Component_Black"], {
+                        "drivetrain_role": (
+                            "unbranded-one-by-chain-cassette-derailleur"
+                            if name == "GEO_BikeComponents_LOD0" else "none"
+                        ),
+                    })
     for name, center, tread_role, tire_model in (
         ("GEO_RearWheel_LOD0", REAR_AXLE, "rear-braking",
-         "Maxxis Minion DHR II DD 29x2.5"),
+         "unbranded rear-braking 29x2.5"),
         ("GEO_FrontWheel_LOD0", FRONT_AXLE, "front-grip",
-         "Maxxis Assegai DD 29x2.5"),
+         "unbranded front-grip 29x2.5"),
     ):
         vertices, faces = wheel_mesh(center, tread_role)
         create_mesh(
@@ -949,7 +1027,10 @@ def build_scene():
                 materials["MAT_Component_Black"])
     vertices, faces = helmet_mesh()
     create_mesh(root, "GEO_Helmet_LOD0", vertices, faces,
-                materials["MAT_Helmet_White"])
+                materials["MAT_Helmet_White"], {
+                    "helmet_role": "open-face-enduro-shell",
+                    "design_origin": "project-authored",
+                })
     vertices, faces = helmet_accent_mesh()
     create_mesh(root, "GEO_HelmetAccent_LOD0", vertices, faces,
                 materials["MAT_Component_Black"])
@@ -1034,13 +1115,30 @@ def self_check(root) -> tuple[int, int]:
         "suspension_travel_m": SUSPENSION_TRAVEL_M,
         "motor_radius_m": MOTOR_REFERENCE_RADIUS_M,
         "tire_width_m": TIRE_WIDTH_M,
-        "k2_reach_m": K2_REACH_M,
-        "k2_stack_m": K2_STACK_M,
+        "contract_reach_m": RIDER_CONTRACT_REACH_M,
+        "contract_stack_m": RIDER_CONTRACT_STACK_M,
         "head_tube_length_m": HEAD_TUBE_LENGTH_M,
     }
     for property_name, expected in expected_root_properties.items():
         if not math.isclose(float(root[property_name]), expected, abs_tol=1e-9):
             raise RuntimeError(f"Root metadata mismatch for {property_name}")
+    rights_text = " ".join(
+        str(root.get(key, "")) for key in (
+            "reference_model",
+            "reference_geometry",
+            "rider_reference",
+            "front_tire",
+            "rear_tire",
+            "surface_provenance",
+        )
+    ).casefold()
+    for protected_reference in (
+            "pole", "voima", "kokkonen", "maxxis", "assegai", "minion"):
+        if protected_reference in rights_text:
+            raise RuntimeError(
+                f"Protected reference leaked into asset metadata: "
+                f"{protected_reference}"
+            )
     for name, expected in PIVOT_LOCATIONS.items():
         actual = tuple(objects[name].location)
         if any(not math.isclose(actual[index], value, abs_tol=1e-6)
@@ -1048,6 +1146,12 @@ def self_check(root) -> tuple[int, int]:
             raise RuntimeError(f"Pivot location mismatch for {name}")
         if objects[name].get("physics_authority") != "external":
             raise RuntimeError(f"{name} claims physics authority")
+    if (objects["GEO_BikeComponents_LOD0"].get("drivetrain_role")
+            != "unbranded-one-by-chain-cassette-derailleur"):
+        raise RuntimeError("One-by drivetrain contract changed")
+    if (objects["GEO_Helmet_LOD0"].get("helmet_role")
+            != "open-face-enduro-shell"):
+        raise RuntimeError("Helmet silhouette contract changed")
     critical_mesh_points = {
         "GEO_MainFrame_LOD0": (
             (DOWN_TUBE_HALF_WIDTH_M,
@@ -1097,7 +1201,7 @@ def self_check(root) -> tuple[int, int]:
         "GEO_Torso_LOD0": ((0.12, 0.48, 0.185),),
         "GEO_HairBeard_LOD0": ((0.105, -0.125, 0.025),),
         "GEO_Eyewear_LOD0": ((0.125, 0.015, 0.105),),
-        "GEO_HelmetAccent_LOD0": ((0.147, -0.035, -0.115),),
+        "GEO_HelmetAccent_LOD0": ((0.151, -0.050, -0.168),),
     }
     for mesh_name, points in critical_mesh_points.items():
         for point in points:
