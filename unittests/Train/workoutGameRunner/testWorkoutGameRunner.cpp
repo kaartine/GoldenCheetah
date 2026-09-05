@@ -67,6 +67,137 @@ class TestWorkoutGameRunner : public QObject
     Q_OBJECT
 
 private slots:
+    void fixedStepPresentationKeepsLockedGapMergeContinuous()
+    {
+        constexpr double FtpWatts = 190.0;
+        constexpr double MaximumLateralSpeedMetersPerSecond = 3.0;
+        constexpr double MaximumLateralAccelerationMetersPerSecondSquared = 9.0;
+        constexpr double MainTrailToleranceMeters = 0.08;
+        constexpr std::int64_t TraceIntervalMs = 250;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(
+                FtpWatts);
+        const int gapSection = sectionForTerrain(
+                course, WorkoutGameTerrainKind::GapJump);
+        QVERIFY(gapSection >= 0);
+        const WorkoutGameSection &section =
+                course.sections[std::size_t(gapSection)];
+        const std::uint64_t expectedActionId =
+                (std::uint64_t(gapSection + 1) << 32)
+                | (std::uint64_t(WorkoutGameTerrainKind::GapJump) + 1u);
+        WorkoutGameEngine engine;
+        QVERIFY(engine.configure(course, FtpWatts, true));
+        WorkoutGameVisualSmoother presentation;
+        constexpr std::int64_t PresentationEpochMs = 100000;
+        std::int64_t nextPresentedMs = 0;
+        std::int64_t nextTraceMs = 0;
+        bool sawLockedLong = false;
+        bool sawFullLineOffset = false;
+        bool sawContinuousMerge = false;
+        bool hasPreviousTrace = false;
+        bool hasPreviousVelocity = false;
+        double previousLateralMeters = 0.0;
+        double previousVelocityMetersPerSecond = 0.0;
+        std::int64_t previousTraceMs = 0;
+        WorkoutGameVisualSnapshot lastGapTrace;
+
+        const std::int64_t gapEndMs = section.startMs + section.durationMs;
+        for (std::int64_t workoutTimeMs = 0;
+             workoutTimeMs <= gapEndMs; workoutTimeMs += 20) {
+            WorkoutGameEngineInput input;
+            input.simulation = WorkoutGameFeatureLab::input(
+                    course, workoutTimeMs,
+                    WorkoutGameFeatureLabScenario::Pass);
+            WorkoutGameFeatureLab::applyGapScenario(
+                    course, workoutTimeMs,
+                    WorkoutGameFeatureLabGapScenario::Long,
+                    input.simulation);
+            // Match the packaged integer-watts sample (225 W actual against
+            // the 224.2 W gap target at this FTP).
+            input.simulation.actualWatts = std::ceil(
+                    input.simulation.targetWatts);
+            const WorkoutGameEngineFrame source = engine.update(
+                    input, PresentationEpochMs + workoutTimeMs);
+            presentation.setTarget(
+                    source.visual, PresentationEpochMs + workoutTimeMs);
+
+            while (nextPresentedMs <= workoutTimeMs) {
+                const WorkoutGameVisualSnapshot rendered = presentation.sample(
+                        PresentationEpochMs + nextPresentedMs);
+                if (nextPresentedMs >= nextTraceMs) {
+                    nextTraceMs += TraceIntervalMs;
+                    const auto &feature = rendered.feature;
+                    const bool sameLockedAction = feature.ready
+                            && feature.terrain
+                                == WorkoutGameTerrainKind::GapJump
+                            && feature.route == WorkoutGameRoute::MainLine
+                            && feature.gapLineLocked
+                            && feature.lockedGapLine
+                                == WorkoutGameGapJumpLine::Long
+                            && feature.actionId == expectedActionId;
+                    if (sameLockedAction) {
+                        sawLockedLong = true;
+                        lastGapTrace = rendered;
+                        const double lateralMeters =
+                                feature.lateralOffsetMeters;
+                        sawFullLineOffset = sawFullLineOffset
+                                || lateralMeters >= 2.2;
+                        if (hasPreviousTrace) {
+                            const double elapsedSeconds = double(
+                                    nextPresentedMs - previousTraceMs) / 1000.0;
+                            const double velocityMetersPerSecond =
+                                    (lateralMeters - previousLateralMeters)
+                                    / elapsedSeconds;
+                            QVERIFY2(std::abs(velocityMetersPerSecond)
+                                            <= MaximumLateralSpeedMetersPerSecond
+                                                + 1.0e-6,
+                                     qPrintable(QStringLiteral(
+                                         "presented gap lateral speed was %1 "
+                                         "m/s at %2 ms")
+                                         .arg(velocityMetersPerSecond, 0, 'f', 3)
+                                         .arg(nextPresentedMs)));
+                            if (hasPreviousVelocity) {
+                                const double acceleration =
+                                        (velocityMetersPerSecond
+                                            - previousVelocityMetersPerSecond)
+                                        / elapsedSeconds;
+                                QVERIFY2(std::abs(acceleration)
+                                                <= MaximumLateralAccelerationMetersPerSecondSquared
+                                                    + 1.0e-6,
+                                         qPrintable(QStringLiteral(
+                                             "presented gap lateral acceleration "
+                                             "was %1 m/s2 at %2 ms")
+                                             .arg(acceleration, 0, 'f', 3)
+                                             .arg(nextPresentedMs)));
+                            }
+                            if (sawFullLineOffset
+                                    && std::abs(lateralMeters) > 0.1
+                                    && std::abs(lateralMeters)
+                                        < std::abs(previousLateralMeters)
+                                            - 1.0e-6) {
+                                sawContinuousMerge = true;
+                            }
+                            previousVelocityMetersPerSecond =
+                                    velocityMetersPerSecond;
+                            hasPreviousVelocity = true;
+                        }
+                        hasPreviousTrace = true;
+                        previousTraceMs = nextPresentedMs;
+                        previousLateralMeters = lateralMeters;
+                    }
+                }
+                nextPresentedMs += 16;
+            }
+        }
+
+        QVERIFY(sawLockedLong);
+        QVERIFY(sawFullLineOffset);
+        QVERIFY2(sawContinuousMerge,
+                 "locked long line did not visibly merge toward trail center");
+        QCOMPARE(lastGapTrace.feature.actionId, expectedActionId);
+        QVERIFY(std::abs(lastGapTrace.feature.lateralOffsetMeters)
+                <= MainTrailToleranceMeters);
+    }
+
     void defaultConfigureDoesNotSynthesizeMissingGapTelemetry()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);

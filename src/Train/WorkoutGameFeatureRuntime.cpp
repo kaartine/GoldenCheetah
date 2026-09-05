@@ -424,6 +424,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         }
         if (activeRoadPiece && !activeRoadPiece->challenge.enabled
                 && result.route == WorkoutGameRoute::MainLine
+                && result.terrain != WorkoutGameTerrainKind::GapJump
                 && (ordinaryBankActive
                     || std::abs(bankLineState.lateralOffsetMeters) > 1.0e-6)) {
             result.lateralOffsetMeters = bankLineState.lateralOffsetMeters;
