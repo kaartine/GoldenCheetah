@@ -42,12 +42,17 @@ bool validTitle(const QString &title)
 bool attachRoadPlan(
         WorkoutGameDistanceCourse &course,
         const std::vector<WorkoutGameInterval> &sourceIntervals,
-        double ftpWatts)
+        double ftpWatts,
+        WorkoutGameCoursePreset preset)
 {
     const WorkoutGameCourse visual =
             WorkoutGameDistancePlayback::visualCourse(course);
     const WorkoutGameRoadPlan plan =
-            WorkoutGameRoadCourseBuilder::generatePlan(visual, ftpWatts);
+            WorkoutGameRoadCourseBuilder::generatePlan(
+                visual, ftpWatts, {
+                    WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
+                    preset
+                });
     if (WorkoutGameRoadPlanValidator::validate(plan, course.sections.size())
             != WorkoutGameRoadPlanValidationStatus::Ready
             || !WorkoutGameRoadQuality::audit(plan).accepted()) {
@@ -111,7 +116,8 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
         return result;
     }
     if (!attachRoadPlan(
-                conversion.course, workout.intervals, request.ftpWatts)) {
+                conversion.course, workout.intervals, request.ftpWatts,
+                request.preset)) {
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }
@@ -165,7 +171,8 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
         return result;
     }
     if (!attachRoadPlan(
-                conversion.course, source.sourceIntervals, source.ftpWatts)) {
+                conversion.course, source.sourceIntervals, source.ftpWatts,
+                preset)) {
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }

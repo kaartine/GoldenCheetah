@@ -11,6 +11,7 @@
 #define _GC_WorkoutGameRoadCourse_h
 
 #include "WorkoutGameCourse.h"
+#include "WorkoutGameCoursePrescription.h"
 #include "WorkoutGameFeatureChallenge.h"
 #include "WorkoutGameGapJumpGeometry.h"
 
@@ -180,12 +181,24 @@ struct WorkoutGameRoadTimelineSample
     double distanceMeters = 0.0;
 };
 
+struct WorkoutGameRoadCourseGenerationParameters
+{
+    static constexpr std::uint32_t CurrentVersion = 1;
+
+    std::uint32_t generationVersion = CurrentVersion;
+    WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
+};
+
 class WorkoutGameRoadCourseBuilder
 {
 public:
     static WorkoutGameRoadPlan generatePlan(
             const WorkoutGameCourse &course,
             double ftpWatts);
+    static WorkoutGameRoadPlan generatePlan(
+            const WorkoutGameCourse &course,
+            double ftpWatts,
+            const WorkoutGameRoadCourseGenerationParameters &parameters);
     static WorkoutGameRoadCourse materialize(
             const WorkoutGameCourse &course,
             const WorkoutGameRoadPlan &plan);

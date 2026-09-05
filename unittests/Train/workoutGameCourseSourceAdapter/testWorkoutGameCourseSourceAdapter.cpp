@@ -16,6 +16,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <array>
 #include <cmath>
 
 namespace {
@@ -47,6 +48,43 @@ WorkoutGameCourseSourceRequest sampleRequest()
     return request;
 }
 
+WorkoutGameCourseSourceRequest shortCourseRequest(bool uneven)
+{
+    WorkoutGameCourseSourceRequest request;
+    request.sourceContents = uneven
+            ? QByteArrayLiteral("uneven") : QByteArrayLiteral("flat");
+    request.sourceFileName = uneven
+            ? QStringLiteral("short-uneven.erg")
+            : QStringLiteral("short-flat.erg");
+    request.ftpWatts = 190.0;
+    request.seed = 73u;
+    if (uneven) {
+        request.points = {
+            {0.0, 115.0},
+            {30000.0, 115.0},
+            {30000.0, 225.0},
+            {75000.0, 225.0},
+            {75000.0, 145.0},
+            {105000.0, 145.0}
+        };
+    } else {
+        request.points = {
+            {0.0, 155.0},
+            {90000.0, 155.0}
+        };
+    }
+    return request;
+}
+
+double accumulatedTurn(const WorkoutGameRoadPlan &plan)
+{
+    double radians = 0.0;
+    for (const WorkoutGameRoadPiece &piece : plan.pieces) {
+        radians += std::abs(piece.turnRadians);
+    }
+    return radians;
+}
+
 }
 
 class TestWorkoutGameCourseSourceAdapter : public QObject
@@ -54,6 +92,136 @@ class TestWorkoutGameCourseSourceAdapter : public QObject
     Q_OBJECT
 
 private slots:
+    void roadGenerationParametersAreVersionedAndBackwardCompatible()
+    {
+        const WorkoutGameCourseSourceRequest source = shortCourseRequest(false);
+        const WorkoutGameWorkout normalized =
+                WorkoutGameWorkoutAdapter::normalize(source.points);
+        QCOMPARE(normalized.status, WorkoutGameWorkoutStatus::Ready);
+        WorkoutGameCourseConversionRequest conversionRequest;
+        conversionRequest.intervals = normalized.intervals;
+        conversionRequest.ftpWatts = source.ftpWatts;
+        conversionRequest.seed = source.seed;
+        const WorkoutGameCourseConversionResult conversion =
+                WorkoutGameCourseConverter::convert(conversionRequest);
+        QCOMPARE(conversion.status,
+                 WorkoutGameCourseConversionStatus::Ready);
+        const WorkoutGameCourse visual =
+                WorkoutGameDistancePlayback::visualCourse(conversion.course);
+
+        const WorkoutGameRoadPlan defaultPlan =
+                WorkoutGameRoadCourseBuilder::generatePlan(
+                    visual, source.ftpWatts);
+        const WorkoutGameRoadPlan explicitLegacyScale =
+                WorkoutGameRoadCourseBuilder::generatePlan(
+                    visual, source.ftpWatts, {
+                        WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
+                        WorkoutGameCoursePreset::WorkoutFirst
+                    });
+        QCOMPARE(defaultPlan.pieces.size(), explicitLegacyScale.pieces.size());
+        for (std::size_t index = 0;
+                index < defaultPlan.pieces.size(); ++index) {
+            const WorkoutGameRoadPiece &left = defaultPlan.pieces[index];
+            const WorkoutGameRoadPiece &right = explicitLegacyScale.pieces[index];
+            QCOMPARE(left.startDistanceMeters, right.startDistanceMeters);
+            QCOMPARE(left.lengthMeters, right.lengthMeters);
+            QCOMPARE(left.turnRadians, right.turnRadians);
+            QCOMPARE(left.entry.xMeters, right.entry.xMeters);
+            QCOMPARE(left.entry.zMeters, right.entry.zMeters);
+            QCOMPARE(left.exit.xMeters, right.exit.xMeters);
+            QCOMPARE(left.exit.zMeters, right.exit.zMeters);
+        }
+
+        WorkoutGameRoadCourseGenerationParameters unsupported;
+        unsupported.generationVersion =
+                WorkoutGameRoadCourseGenerationParameters::CurrentVersion + 1u;
+        const WorkoutGameRoadPlan rejected =
+                WorkoutGameRoadCourseBuilder::generatePlan(
+                    visual, source.ftpWatts, unsupported);
+        QVERIFY(rejected.pieces.empty());
+    }
+
+    void presetsHaveStrictPairwiseRoadCurvature_data()
+    {
+        QTest::addColumn<bool>("uneven");
+        QTest::newRow("short-flat") << false;
+        QTest::newRow("short-uneven") << true;
+    }
+
+    void presetsHaveStrictPairwiseRoadCurvature()
+    {
+        QFETCH(bool, uneven);
+        WorkoutGameCourseSourceRequest request = shortCourseRequest(uneven);
+        const WorkoutGameWorkout normalized =
+                WorkoutGameWorkoutAdapter::normalize(request.points);
+        QCOMPARE(normalized.status, WorkoutGameWorkoutStatus::Ready);
+
+        std::array<WorkoutGameCourseSourceResult, 3> results;
+        const std::array<WorkoutGameCoursePreset, 3> presets {{
+            WorkoutGameCoursePreset::WorkoutFirst,
+            WorkoutGameCoursePreset::Balanced,
+            WorkoutGameCoursePreset::RideFirst
+        }};
+        for (std::size_t mode = 0; mode < presets.size(); ++mode) {
+            request.preset = presets[mode];
+            results[mode] = WorkoutGameCourseSourceAdapter::convert(request);
+            QVERIFY2(results[mode].status
+                        == WorkoutGameCourseSourceStatus::Ready,
+                     qPrintable(QStringLiteral("preset index %1 status %2")
+                        .arg(mode).arg(int(results[mode].status))));
+            QVERIFY(results[mode].document.course.roadPlan);
+            const WorkoutGameRoadPlan &plan =
+                    *results[mode].document.course.roadPlan;
+            QCOMPARE(WorkoutGameRoadPlanValidator::validate(
+                        plan, normalized.intervals.size()),
+                     WorkoutGameRoadPlanValidationStatus::Ready);
+            QVERIFY(WorkoutGameRoadQuality::audit(plan).accepted());
+            QCOMPARE(results[mode].document.sourceIntervals.size(),
+                     normalized.intervals.size());
+            QCOMPARE(results[mode].document.course.sections.size(),
+                     normalized.intervals.size());
+            for (std::size_t index = 0;
+                    index < normalized.intervals.size(); ++index) {
+                const WorkoutGameInterval &source = normalized.intervals[index];
+                const WorkoutGameDistanceCourseSection &section =
+                        results[mode].document.course.sections[index];
+                const WorkoutGameInterval &persisted =
+                        results[mode].document.sourceIntervals[index];
+                QCOMPARE(persisted.startMs, source.startMs);
+                QCOMPARE(persisted.durationMs, source.durationMs);
+                QCOMPARE(persisted.startWatts, source.startWatts);
+                QCOMPARE(persisted.endWatts, source.endWatts);
+                QCOMPARE(section.targetStartWatts, source.startWatts);
+                QCOMPARE(section.targetEndWatts, source.endWatts);
+                QCOMPARE(section.nominalDurationMs, source.durationMs);
+                QCOMPARE(section.minimumDurationMs, source.durationMs);
+            }
+            const WorkoutGameCourseSourceResult repeated =
+                    WorkoutGameCourseSourceAdapter::convert(request);
+            QCOMPARE(repeated.status, WorkoutGameCourseSourceStatus::Ready);
+            QCOMPARE(WorkoutGameCourseDocumentCodec::encode(
+                        repeated.document),
+                     WorkoutGameCourseDocumentCodec::encode(
+                        results[mode].document));
+        }
+
+        const double workoutFirst = accumulatedTurn(
+                *results[0].document.course.roadPlan);
+        const double balanced = accumulatedTurn(
+                *results[1].document.course.roadPlan);
+        const double rideFirst = accumulatedTurn(
+                *results[2].document.course.roadPlan);
+        QVERIFY2(workoutFirst < balanced,
+                 qPrintable(QStringLiteral("Workout First %1, Balanced %2")
+                     .arg(workoutFirst, 0, 'f', 9)
+                     .arg(balanced, 0, 'f', 9)));
+        QVERIFY2(balanced < rideFirst,
+                 qPrintable(QStringLiteral("Balanced %1, Ride First %2")
+                     .arg(balanced, 0, 'f', 9)
+                     .arg(rideFirst, 0, 'f', 9)));
+
+    }
+
     void convertedCourseProducesAnAcceptedPersistableRoadPlan()
     {
         const WorkoutGameCourseSourceRequest source = sampleRequest();

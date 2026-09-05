@@ -467,6 +467,44 @@ double ordinaryPieceTurn(
     return direction * magnitude;
 }
 
+bool validGenerationParameters(
+        const WorkoutGameRoadCourseGenerationParameters &parameters)
+{
+    if (parameters.generationVersion
+            != WorkoutGameRoadCourseGenerationParameters::CurrentVersion) {
+        return false;
+    }
+    switch (parameters.preset) {
+    case WorkoutGameCoursePreset::WorkoutFirst:
+    case WorkoutGameCoursePreset::Balanced:
+    case WorkoutGameCoursePreset::RideFirst:
+        return true;
+    }
+    return false;
+}
+
+double presetTurnScale(WorkoutGameCoursePreset preset)
+{
+    // Generation version 1 preserves the established Workout First geometry;
+    // the other modes add deterministic curvature without changing distance.
+    switch (preset) {
+    case WorkoutGameCoursePreset::WorkoutFirst: return 1.0;
+    case WorkoutGameCoursePreset::Balanced: return 1.30;
+    case WorkoutGameCoursePreset::RideFirst: return 2.60;
+    }
+    return 1.0;
+}
+
+double presetScaledTurn(
+        double turnRadians,
+        const WorkoutGameRoadCourseGenerationParameters &parameters)
+{
+    constexpr double MaximumTurnRadians = 85.0 * Pi / 180.0;
+    return std::clamp(
+            turnRadians * presetTurnScale(parameters.preset),
+            -MaximumTurnRadians, MaximumTurnRadians);
+}
+
 std::uint32_t routeHash(std::uint32_t value)
 {
     value ^= value >> 16;
@@ -798,13 +836,15 @@ namespace {
 
 WorkoutGameRoadCourse generateRoadCourse(
         const WorkoutGameCourse &course,
-        double ftpWatts)
+        double ftpWatts,
+        const WorkoutGameRoadCourseGenerationParameters &parameters)
 {
     WorkoutGameRoadCourse result;
     if (course.status != WorkoutGameCourseStatus::Ready
             || course.sections.empty()
             || !std::isfinite(ftpWatts)
-            || ftpWatts <= 0.0) {
+            || ftpWatts <= 0.0
+            || !validGenerationParameters(parameters)) {
         return result;
     }
     result.seed = course.seed;
@@ -1101,10 +1141,11 @@ WorkoutGameRoadCourse generateRoadCourse(
             piece.lengthMeters = currentPieceLength;
             const bool explicitBerm = section.terrain
                     == WorkoutGameTerrainKind::Berm;
-            piece.turnRadians = ownsChallenge || explicitBerm
+            const double baseTurn = ownsChallenge || explicitBerm
                     ? pieceTurn(section, std::size_t(part))
                     : ordinaryPieceTurn(
                         course, section, ordinaryPieceIndex++);
+            piece.turnRadians = presetScaledTurn(baseTurn, parameters);
             piece.difficulty = std::clamp(section.difficulty, 0.0, 1.0);
             piece.reliefScale = std::clamp(
                     std::isfinite(section.reliefScale)
@@ -1363,9 +1404,21 @@ WorkoutGameRoadPlan WorkoutGameRoadCourseBuilder::generatePlan(
         const WorkoutGameCourse &course,
         double ftpWatts)
 {
+    return generatePlan(course, ftpWatts, {
+        WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
+        WorkoutGameCoursePreset::WorkoutFirst
+    });
+}
+
+WorkoutGameRoadPlan WorkoutGameRoadCourseBuilder::generatePlan(
+        const WorkoutGameCourse &course,
+        double ftpWatts,
+        const WorkoutGameRoadCourseGenerationParameters &parameters)
+{
     WorkoutGameCourse source = course;
     source.roadPlan.reset();
-    const WorkoutGameRoadCourse road = generateRoadCourse(source, ftpWatts);
+    const WorkoutGameRoadCourse road = generateRoadCourse(
+            source, ftpWatts, parameters);
     WorkoutGameRoadPlan plan;
     if (!road.ready) return plan;
     plan.pieces = road.pieces;
