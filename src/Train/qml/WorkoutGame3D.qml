@@ -66,13 +66,13 @@ Item {
 
     function treeEdgeOpacity(relativeMeters) {
         const behind = Math.max(0, Math.min(1, (relativeMeters + 18) / 6))
-        const ahead = Math.max(0, Math.min(1, (42 - relativeMeters) / 10))
+        const ahead = Math.max(0, Math.min(1, (29 - relativeMeters) / 10))
         return Math.min(behind, ahead)
     }
 
     function dressingEdgeOpacity(relativeMeters) {
         const behind = Math.max(0, Math.min(1, (relativeMeters + 14) / 4))
-        const ahead = Math.max(0, Math.min(1, (46 - relativeMeters) / 8))
+        const ahead = Math.max(0, Math.min(1, (44 - relativeMeters) / 8))
         return Math.min(behind, ahead)
     }
 
@@ -338,10 +338,11 @@ Item {
         }
 
         Repeater3D {
-            model: workoutGame3D.trees
+            model: workoutGame3D.treeRenderModel
             delegate: Node {
                 required property var modelData
                 objectName: "workoutGameTree"
+                readonly property string vegetationId: modelData.stableId
                 readonly property real relativeDistance:
                     modelData.distance - workoutGame3D.distanceMeters
                 readonly property real targetOpacity:
@@ -368,9 +369,11 @@ Item {
         }
 
         Repeater3D {
-            model: workoutGame3D.forestFloorProps
+            model: workoutGame3D.forestFloorRenderModel
             delegate: WorkoutGameForestFloorProp {
                 required property var modelData
+                variant: modelData.variant
+                readonly property string vegetationId: modelData.stableId
                 readonly property real relativeDistance:
                     modelData.distance - workoutGame3D.distanceMeters
                 position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
@@ -385,9 +388,11 @@ Item {
         }
 
         Repeater3D {
-            model: workoutGame3D.forestVergeClusters
+            model: workoutGame3D.forestVergeRenderModel
             delegate: WorkoutGameForestVergeCluster {
                 required property var modelData
+                variant: modelData.variant
+                readonly property string vegetationId: modelData.stableId
                 readonly property real relativeDistance:
                     modelData.distance - workoutGame3D.distanceMeters
                 position: Qt.vector3d(modelData.x, modelData.y, modelData.z)

@@ -17,6 +17,7 @@
 #include "WorkoutGameEngine.h"
 #include "WorkoutGameFeatureHud.h"
 
+#include <QAbstractListModel>
 #include <QObject>
 #include <QString>
 #include <QVariantList>
@@ -27,6 +28,27 @@
 #include <memory>
 #include <limits>
 #include <vector>
+
+class WorkoutGame3DStableListModel final : public QAbstractListModel
+{
+public:
+    enum Role {
+        ModelDataRole = Qt::UserRole + 1
+    };
+
+    explicit WorkoutGame3DStableListModel(QObject *parent = nullptr) :
+        QAbstractListModel(parent)
+    {
+    }
+
+    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex &index, int role) const override;
+    QHash<int, QByteArray> roleNames() const override;
+    void sync(const QVariantList &nextItems);
+
+private:
+    QVariantList items;
+};
 
 struct WorkoutGame3DFrameWorkCounters
 {
@@ -151,6 +173,11 @@ class WorkoutGame3DViewModel : public QObject
                NOTIFY forestDressingChanged)
     Q_PROPERTY(QVariantList forestVergeClusters READ forestVergeClusters
                NOTIFY forestDressingChanged)
+    Q_PROPERTY(QAbstractItemModel *treeRenderModel READ treeRenderModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel *forestFloorRenderModel
+               READ forestFloorRenderModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel *forestVergeRenderModel
+               READ forestVergeRenderModel CONSTANT)
     Q_PROPERTY(QString cameraComposition READ cameraComposition CONSTANT)
     Q_PROPERTY(QString cameraPresentation READ cameraPresentation
                NOTIFY sceneChanged)
@@ -332,6 +359,9 @@ public:
     {
         return visibleForestVergeClusters;
     }
+    QAbstractItemModel *treeRenderModel() { return &treeItems; }
+    QAbstractItemModel *forestFloorRenderModel() { return &forestFloorItems; }
+    QAbstractItemModel *forestVergeRenderModel() { return &forestVergeItems; }
     QString cameraComposition() const { return currentCameraComposition; }
     QString cameraPresentation() const;
     double cameraPresentationBlend() const
@@ -413,6 +443,9 @@ private:
     QVariantList visibleTrees;
     QVariantList visibleForestFloorProps;
     QVariantList visibleForestVergeClusters;
+    WorkoutGame3DStableListModel treeItems;
+    WorkoutGame3DStableListModel forestFloorItems;
+    WorkoutGame3DStableListModel forestVergeItems;
     int forestDressingFirstSlot = std::numeric_limits<int>::min();
     int forestDressingLastSlot = std::numeric_limits<int>::min();
     bool sceneReady = false;
@@ -422,6 +455,8 @@ private:
     WorkoutGame3DStreamingCoverage requestedFloorCoverage;
     WorkoutGame3DStreamingCoverage featureCoverage;
     WorkoutGame3DStreamingCoverage treeCoverage;
+    double lastTreeStreamDistanceMeters =
+            std::numeric_limits<double>::quiet_NaN();
     double riderPositionX = 0.0;
     double riderPositionY = 0.0;
     double riderPositionZ = 0.0;

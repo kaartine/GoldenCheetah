@@ -25,6 +25,7 @@
 
 #include <QByteArray>
 #include <QMetaObject>
+#include <QSet>
 #include <QVariantMap>
 
 #include <algorithm>
@@ -56,6 +57,7 @@ constexpr double ForestDressingCameraClearanceMeters = 1.70;
 constexpr double ForestDressingCorridorBehindMeters = 8.2;
 constexpr double ForestDressingCorridorAheadMeters = 12.0;
 constexpr double ForestDressingFeatureClearanceMeters = 2.0;
+constexpr double TreeInvisibleEntryAheadMeters = 29.0;
 constexpr double CameraIntegrationStepSeconds = 0.05;
 constexpr double MaximumCameraCatchupSeconds = 0.25;
 constexpr double MaximumCameraSpeedMetersPerSecond = 16.0;
@@ -78,6 +80,11 @@ constexpr double MaximumRiderBankRollDegreesPerSecond = 75.0;
 double finiteOrZero(double value)
 {
     return std::isfinite(value) ? value : 0.0;
+}
+
+QString stableItemId(const QVariant &item)
+{
+    return item.toMap().value(QStringLiteral("stableId")).toString();
 }
 
 double normalizedRadians(double radians)
@@ -244,6 +251,76 @@ std::uint32_t mix(std::uint32_t value)
 
 }
 
+int WorkoutGame3DStableListModel::rowCount(const QModelIndex &parent) const
+{
+    return parent.isValid() ? 0 : items.size();
+}
+
+QVariant WorkoutGame3DStableListModel::data(
+        const QModelIndex &index, int role) const
+{
+    if (!index.isValid() || index.row() < 0 || index.row() >= items.size()
+            || role != ModelDataRole) {
+        return {};
+    }
+    return items.at(index.row());
+}
+
+QHash<int, QByteArray> WorkoutGame3DStableListModel::roleNames() const
+{
+    return {{ModelDataRole, QByteArrayLiteral("modelData")}};
+}
+
+void WorkoutGame3DStableListModel::sync(const QVariantList &nextItems)
+{
+    QSet<QString> nextIds;
+    for (const QVariant &item : nextItems) {
+        nextIds.insert(stableItemId(item));
+    }
+    for (int row = items.size() - 1; row >= 0; --row) {
+        if (nextIds.contains(stableItemId(items.at(row)))) continue;
+        beginRemoveRows(QModelIndex(), row, row);
+        items.removeAt(row);
+        endRemoveRows();
+    }
+
+    for (int row = 0; row < nextItems.size(); ++row) {
+        const QVariant &next = nextItems.at(row);
+        const QString nextId = stableItemId(next);
+        int existingRow = -1;
+        for (int candidate = row; candidate < items.size(); ++candidate) {
+            if (stableItemId(items.at(candidate)) == nextId) {
+                existingRow = candidate;
+                break;
+            }
+        }
+        if (existingRow < 0) {
+            beginInsertRows(QModelIndex(), row, row);
+            items.insert(row, next);
+            endInsertRows();
+        } else {
+            if (existingRow != row) {
+                beginMoveRows(
+                        QModelIndex(), existingRow, existingRow,
+                        QModelIndex(), row);
+                items.move(existingRow, row);
+                endMoveRows();
+            }
+            if (items.at(row) != next) {
+                items[row] = next;
+                const QModelIndex changed = index(row, 0);
+                emit dataChanged(changed, changed, {ModelDataRole});
+            }
+        }
+    }
+    while (items.size() > nextItems.size()) {
+        const int row = items.size() - 1;
+        beginRemoveRows(QModelIndex(), row, row);
+        items.removeAt(row);
+        endRemoveRows();
+    }
+}
+
 WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     QObject(parent),
     trail(std::make_unique<WorkoutGame3DGeometry>(
@@ -328,12 +405,17 @@ void WorkoutGame3DViewModel::setCourse(
     requestedFloorCoverage = {};
     featureCoverage = {};
     treeCoverage = {};
+    lastTreeStreamDistanceMeters =
+            std::numeric_limits<double>::quiet_NaN();
     forestDressingFirstSlot = std::numeric_limits<int>::min();
     forestDressingLastSlot = std::numeric_limits<int>::min();
     visibleTrees.clear();
     courseGapJumpFeatures.clear();
     visibleForestFloorProps.clear();
     visibleForestVergeClusters.clear();
+    treeItems.sync(visibleTrees);
+    forestFloorItems.sync(visibleForestFloorProps);
+    forestVergeItems.sync(visibleForestVergeClusters);
     currentFeatureHud = {};
     currentFeatureName.clear();
     currentFeatureActionText.clear();
@@ -1711,6 +1793,16 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
 {
     if (!roadCourse.ready) return;
     rebuildForestDressing(distanceMeters);
+    const bool discontinuousMove =
+            !std::isfinite(lastTreeStreamDistanceMeters)
+            || std::abs(distanceMeters - lastTreeStreamDistanceMeters)
+                    > TreeInvisibleEntryAheadMeters;
+    lastTreeStreamDistanceMeters = distanceMeters;
+    const bool initialPopulation = !treeCoverage.valid() || discontinuousMove;
+    QSet<QString> residentTreeIds;
+    for (const QVariant &entry : visibleTrees) {
+        residentTreeIds.insert(stableItemId(entry));
+    }
     const bool sidePresentation =
             cameraPresentationSnapshot.sideBlend > 0.0;
     bool cameraClearanceChanged = false;
@@ -1759,9 +1851,16 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
                     (double(random & 255u) / 255.0 - 0.5) * 2.2;
             const double distance = (double(slot) + 0.5)
                     * TreeSpacingMeters + jitter;
+            const QString stableId = QStringLiteral("tree-%1-%2")
+                    .arg(slot).arg(sideIndex);
             if (distance < 0.0) continue;
             if (distance < coverageStart) continue;
             if (distance > coverageEnd || distance > courseEnd) break;
+            if (!initialPopulation && !residentTreeIds.contains(stableId)
+                    && distance - distanceMeters
+                            < TreeInvisibleEntryAheadMeters) {
+                continue;
+            }
             const WorkoutGameRoadSample sample =
                     WorkoutGameRoadCourseBuilder::sampleVisual(
                         roadCourse, distance);
@@ -1802,12 +1901,14 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
             tree.insert(QStringLiteral("scale"), scale);
             tree.insert(QStringLiteral("crownRadius"), crownRadius);
             tree.insert(QStringLiteral("variant"), int((random >> 24) & 3u));
+            tree.insert(QStringLiteral("stableId"), stableId);
             visibleTrees.push_back(tree);
             if (visibleTrees.size() >= MaximumVisibleTrees) break;
         }
         if (visibleTrees.size() >= MaximumVisibleTrees) break;
     }
 
+    treeItems.sync(visibleTrees);
     ++workCounters.treeSignals;
     emit treesChanged();
 }
@@ -1926,6 +2027,8 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
                     0.72 + double((random >> 8) & 255u) / 708.0);
         prop.insert(QStringLiteral("mirror"), side < 0.0);
         if (cluster) {
+            prop.insert(QStringLiteral("stableId"),
+                        QStringLiteral("verge-%1").arg(slot));
             prop.insert(QStringLiteral("variant"),
                         int((random >> 20) % 3u));
             if (vergeClusters.size()
@@ -1933,6 +2036,8 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
                 vergeClusters.push_back(prop);
             }
         } else {
+            prop.insert(QStringLiteral("stableId"),
+                        QStringLiteral("floor-%1").arg(slot));
             prop.insert(QStringLiteral("variant"),
                         int((random >> 20) % 8u));
             if (floorProps.size()
@@ -1943,6 +2048,8 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
     }
     visibleForestFloorProps = floorProps;
     visibleForestVergeClusters = vergeClusters;
+    forestFloorItems.sync(visibleForestFloorProps);
+    forestVergeItems.sync(visibleForestVergeClusters);
     ++workCounters.forestSignals;
     emit forestDressingChanged();
 }

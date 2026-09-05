@@ -36,6 +36,7 @@
 #include <QImageWriter>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPointer>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -2375,8 +2376,8 @@ private slots:
         };
         QCOMPARE(edgeOpacity(-14.0), 0.0);
         QCOMPARE(edgeOpacity(-10.0), 1.0);
-        QCOMPARE(edgeOpacity(38.0), 1.0);
-        QCOMPARE(edgeOpacity(46.0), 0.0);
+        QCOMPARE(edgeOpacity(36.0), 1.0);
+        QCOMPARE(edgeOpacity(44.0), 0.0);
     }
 
     void forestDressingOnlyChangesAtTransparentResidentEdges()
@@ -2443,6 +2444,177 @@ private slots:
             previous = current;
             previousDistance = distance;
         }
+    }
+
+    void streamedVegetationKeepsVisibleDelegateIdentity()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        WorkoutGameVisualSnapshot frame = frameAt(road, 20.0);
+        frame.simulation.workoutTimeMs = 5000;
+        frame.presentationTimeMs = frame.simulation.workoutTimeMs;
+        viewModel.setFrame(frame, 225.0, 225.0, 88, 150, 7);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QCoreApplication::processEvents();
+
+        using DelegateMap = QHash<QString, QPointer<QObject>>;
+        const auto delegates = [&window](const QString &objectName)
+                -> DelegateMap {
+            DelegateMap result;
+            const QList<QObject *> objects =
+                    window.rootObject()->findChildren<QObject *>(objectName);
+            for (QObject *object : objects) {
+                const QString id = object->property(
+                        "vegetationId").toString();
+                if (id.isEmpty() || result.contains(id)) return {};
+                result.insert(id, object);
+            }
+            return result;
+        };
+
+        DelegateMap priorTrees = delegates(QStringLiteral("workoutGameTree"));
+        DelegateMap priorFloor = delegates(
+                QStringLiteral("workoutGameForestFloorProp"));
+        DelegateMap priorVerge = delegates(
+                QStringLiteral("workoutGameForestVergeCluster"));
+        QVERIFY(!priorTrees.isEmpty());
+        QVERIFY(!priorFloor.isEmpty());
+        QVERIFY(!priorVerge.isEmpty());
+
+        int treeBoundaries = 0;
+        int dressingBoundaries = 0;
+        int invisibleTreeEntries = 0;
+        int invisibleDressingEntries = 0;
+        double maximumNewDressingOpacity = 0.0;
+        double nearestNewDressingMeters =
+                std::numeric_limits<double>::infinity();
+        for (int step = 1; step <= 120; ++step) {
+            const double distance = 20.0 + 0.5 * step;
+            frame = frameAt(road, distance);
+            frame.simulation.workoutTimeMs = 5000 + step * 50;
+            frame.presentationTimeMs = frame.simulation.workoutTimeMs;
+            viewModel.setFrame(frame, 225.0, 225.0, 88, 150, 7);
+            QCoreApplication::processEvents();
+
+            const DelegateMap currentTrees = delegates(
+                    QStringLiteral("workoutGameTree"));
+            const DelegateMap currentFloor = delegates(
+                    QStringLiteral("workoutGameForestFloorProp"));
+            const DelegateMap currentVerge = delegates(
+                    QStringLiteral("workoutGameForestVergeCluster"));
+            struct OverlapResult {
+                int retained = 0;
+                bool alive = true;
+                bool sameObject = true;
+            };
+            const auto inspectOverlap = [](const DelegateMap &before,
+                                           const DelegateMap &after) {
+                OverlapResult result;
+                for (auto item = after.cbegin(); item != after.cend(); ++item) {
+                    if (!before.contains(item.key())) continue;
+                    ++result.retained;
+                    result.alive = result.alive
+                            && !before.value(item.key()).isNull();
+                    result.sameObject = result.sameObject
+                            && before.value(item.key()).data()
+                                    == item.value().data();
+                }
+                return result;
+            };
+            const OverlapResult retainedTrees = inspectOverlap(
+                    priorTrees, currentTrees);
+            const OverlapResult retainedFloor = inspectOverlap(
+                    priorFloor, currentFloor);
+            const OverlapResult retainedVerge = inspectOverlap(
+                    priorVerge, currentVerge);
+            QVERIFY2(retainedTrees.alive && retainedTrees.sameObject,
+                     "visible tree was recreated");
+            QVERIFY2(retainedFloor.alive && retainedFloor.sameObject,
+                     "visible forest-floor prop was recreated");
+            QVERIFY2(retainedVerge.alive && retainedVerge.sameObject,
+                     "visible verge cluster was recreated");
+
+            const auto keySet = [](const DelegateMap &map) {
+                QSet<QString> result;
+                for (auto item = map.cbegin(); item != map.cend(); ++item) {
+                    result.insert(item.key());
+                }
+                return result;
+            };
+            const bool modelsChanged =
+                    keySet(currentTrees) != keySet(priorTrees)
+                    || keySet(currentFloor) != keySet(priorFloor)
+                    || keySet(currentVerge) != keySet(priorVerge);
+            if (modelsChanged) {
+                QVERIFY(retainedTrees.retained >= 4);
+                QVERIFY(retainedFloor.retained + retainedVerge.retained >= 3);
+            }
+            if (keySet(currentTrees) != keySet(priorTrees)) {
+                ++treeBoundaries;
+                for (auto item = currentTrees.cbegin();
+                     item != currentTrees.cend(); ++item) {
+                    if (priorTrees.contains(item.key())) continue;
+                    const double relative = item.value()->property(
+                            "relativeDistance").toDouble();
+                    const double opacity = item.value()->property(
+                            "opacity").toDouble();
+                    QVERIFY2(opacity <= 0.05,
+                             qPrintable(QStringLiteral(
+                                 "new tree entered at %1 m with opacity %2")
+                                 .arg(relative, 0, 'f', 3)
+                                 .arg(opacity, 0, 'f', 3)));
+                    ++invisibleTreeEntries;
+                }
+            }
+            const bool dressingChanged =
+                    keySet(currentFloor) != keySet(priorFloor)
+                    || keySet(currentVerge) != keySet(priorVerge);
+            if (dressingChanged) {
+                ++dressingBoundaries;
+                const auto inspectNewDressing = [&](const DelegateMap &before,
+                                                    const DelegateMap &after) {
+                    for (auto item = after.cbegin();
+                         item != after.cend(); ++item) {
+                        if (before.contains(item.key())) continue;
+                        const double relative = item.value()->property(
+                                "relativeDistance").toDouble();
+                        const double opacity = item.value()->property(
+                                "opacity").toDouble();
+                        maximumNewDressingOpacity = std::max(
+                                maximumNewDressingOpacity, opacity);
+                        nearestNewDressingMeters = std::min(
+                                nearestNewDressingMeters, relative);
+                        ++invisibleDressingEntries;
+                    }
+                };
+                inspectNewDressing(priorFloor, currentFloor);
+                inspectNewDressing(priorVerge, currentVerge);
+            }
+            priorTrees = currentTrees;
+            priorFloor = currentFloor;
+            priorVerge = currentVerge;
+        }
+        QVERIFY2(treeBoundaries >= 1 && invisibleTreeEntries >= 1,
+                 "test did not cross a tree streaming boundary");
+        QVERIFY2(dressingBoundaries >= 2 && invisibleDressingEntries >= 2,
+                 "test did not cross enough floor-dressing boundaries");
+        QVERIFY2(maximumNewDressingOpacity <= 0.05,
+                 qPrintable(QStringLiteral(
+                     "new floor dressing entered at %1 m with opacity %2")
+                     .arg(nearestNewDressingMeters, 0, 'f', 3)
+                     .arg(maximumNewDressingOpacity, 0, 'f', 3)));
     }
 
     void treesFadeAtTheResidentWindowEdges()
