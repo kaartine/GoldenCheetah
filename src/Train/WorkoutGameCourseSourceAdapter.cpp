@@ -130,6 +130,8 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
             QCryptographicHash::hash(
                 request.sourceContents, QCryptographicHash::Sha256).toHex());
     result.document.sourceIntervals = workout.intervals;
+    result.document.sourceLaps = request.sourceLaps;
+    result.document.sourceTexts = request.sourceTexts;
     result.document.prescriptionMetadata = request.prescriptionMetadata;
     result.document.ftpWatts = request.ftpWatts;
     result.document.preset = request.preset;

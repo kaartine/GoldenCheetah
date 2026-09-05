@@ -15,6 +15,9 @@
 #include <QByteArray>
 #include <QString>
 
+#include <cstdint>
+#include <vector>
+
 enum class WorkoutGameCourseDocumentStatus
 {
     Ready,
@@ -26,17 +29,32 @@ enum class WorkoutGameCourseDocumentStatus
     IoError
 };
 
+struct WorkoutGameCourseSourceLap
+{
+    std::int64_t timeMs = 0;
+    QString name;
+};
+
+struct WorkoutGameCourseSourceText
+{
+    std::int64_t timeMs = 0;
+    int durationSeconds = 0;
+    QString text;
+};
+
 struct WorkoutGameCourseDocument
 {
     static constexpr int LegacyConversionAlgorithmVersion = 1;
     static constexpr int CurrentConversionAlgorithmVersion = 2;
 
-    int schemaVersion = 3;
+    int schemaVersion = 4;
     int conversionAlgorithmVersion = CurrentConversionAlgorithmVersion;
     QString title;
     QString sourceFileName;
     QString sourceSha256;
     std::vector<WorkoutGameInterval> sourceIntervals;
+    std::vector<WorkoutGameCourseSourceLap> sourceLaps;
+    std::vector<WorkoutGameCourseSourceText> sourceTexts;
     WorkoutGameCoursePrescriptionMetadata prescriptionMetadata;
     double ftpWatts = 0.0;
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
@@ -47,8 +65,9 @@ struct WorkoutGameCourseDocument
 class WorkoutGameCourseDocumentCodec
 {
 public:
-    static constexpr int CurrentSchemaVersion = 3;
+    static constexpr int CurrentSchemaVersion = 4;
     static constexpr qsizetype MaximumDocumentBytes = 1024 * 1024;
+    static constexpr std::size_t MaximumSourceAnnotations = 4096;
 
     static bool valid(const WorkoutGameCourseDocument &document);
     static QByteArray encode(const WorkoutGameCourseDocument &document);

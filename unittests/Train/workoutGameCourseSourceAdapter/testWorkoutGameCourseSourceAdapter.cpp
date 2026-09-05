@@ -44,6 +44,14 @@ WorkoutGameCourseSourceRequest sampleRequest()
     request.sourceContents = QByteArrayLiteral("abc");
     request.sourceFileName = QStringLiteral(
             "/private/athlete/workouts/three-climbs.erg");
+    request.sourceLaps = {
+        {10 * 60000, QStringLiteral("Warmup complete")},
+        {17 * 60000, QStringLiteral("Second climb")}
+    };
+    request.sourceTexts = {
+        {11 * 60000, 6, QStringLiteral("Cadence 95 rpm")},
+        {18 * 60000, 8, QStringLiteral("Stay seated")}
+    };
     request.ftpWatts = 190.0;
     return request;
 }
@@ -304,6 +312,14 @@ private slots:
         QVERIFY(!result.document.sourceIntervals.empty());
         QCOMPARE(result.document.sourceIntervals.front().startMs,
                  std::int64_t(0));
+        QCOMPARE(result.document.sourceLaps.size(), std::size_t(2));
+        QCOMPARE(result.document.sourceLaps[0].timeMs, std::int64_t(600000));
+        QCOMPARE(result.document.sourceLaps[0].name,
+                 QStringLiteral("Warmup complete"));
+        QCOMPARE(result.document.sourceTexts.size(), std::size_t(2));
+        QCOMPARE(result.document.sourceTexts[0].durationSeconds, 6);
+        QCOMPARE(result.document.sourceTexts[0].text,
+                 QStringLiteral("Cadence 95 rpm"));
         QCOMPARE(result.document.course.status,
                  WorkoutGameDistanceCourseStatus::Ready);
         QCOMPARE(result.document.schemaVersion,
@@ -437,6 +453,14 @@ private slots:
                  original.document.sourceSha256);
         QCOMPARE(edited.document.sourceIntervals.size(),
                  original.document.sourceIntervals.size());
+        QCOMPARE(edited.document.sourceLaps.size(),
+                 original.document.sourceLaps.size());
+        QCOMPARE(edited.document.sourceLaps[1].name,
+                 original.document.sourceLaps[1].name);
+        QCOMPARE(edited.document.sourceTexts.size(),
+                 original.document.sourceTexts.size());
+        QCOMPARE(edited.document.sourceTexts[1].text,
+                 original.document.sourceTexts[1].text);
         QVERIFY(edited.summary.technicalFeatureCount
                 > original.summary.technicalFeatureCount);
         QCOMPARE(edited.document.schemaVersion,
@@ -459,6 +483,8 @@ private slots:
         QCOMPARE(original.status, WorkoutGameCourseSourceStatus::Ready);
         WorkoutGameCourseDocument legacy = original.document;
         legacy.schemaVersion = 1;
+        legacy.sourceLaps.clear();
+        legacy.sourceTexts.clear();
         legacy.course.roadPlan.reset();
         QVERIFY(WorkoutGameCourseDocumentCodec::valid(legacy));
 

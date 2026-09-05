@@ -13,7 +13,9 @@
 
 #include <QString>
 
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace {
 
@@ -38,10 +40,12 @@ QString sectionLabel(const WorkoutGameDistanceCourseSection &section)
             : featureLabel(section.feature);
 }
 
-QString segmentLine(const WorkoutGameDistanceCourseSection &section)
+QString segmentLine(
+        double lengthMeters,
+        const WorkoutGameDistanceCourseSection &section)
 {
     return QStringLiteral("%1 %2 0.0\n")
-            .arg(section.lengthMeters / 1000.0, 0, 'f', 6)
+            .arg(lengthMeters / 1000.0, 0, 'f', 6)
             .arg(section.gradePercent, 0, 'f', 3);
 }
 
@@ -53,6 +57,54 @@ QString cueLine(const WorkoutGameDistanceCourseSection &section)
             .arg(section.startDistanceMeters / 1000.0, 0, 'f', 6)
             .arg(targetWatts)
             .arg(sectionLabel(section));
+}
+
+double distanceAtSourceTime(
+        const WorkoutGameCourseDocument &document,
+        std::int64_t timeMs)
+{
+    if (timeMs <= 0) return 0.0;
+    if (timeMs >= document.course.nominalDurationMs) {
+        return document.course.totalDistanceMeters;
+    }
+    for (const WorkoutGameDistanceCourseSection &section
+            : document.course.sections) {
+        const std::int64_t endMs = section.sourceStartMs
+                + section.nominalDurationMs;
+        if (timeMs <= endMs) {
+            const double progress = section.nominalDurationMs > 0
+                    ? std::clamp(
+                        double(timeMs - section.sourceStartMs)
+                            / double(section.nominalDurationMs),
+                        0.0, 1.0)
+                    : 0.0;
+            return section.startDistanceMeters
+                    + section.lengthMeters * progress;
+        }
+    }
+    return document.course.totalDistanceMeters;
+}
+
+struct DistanceLap
+{
+    double distanceMeters = 0.0;
+    QString name;
+};
+
+std::vector<DistanceLap> mappedSourceLaps(
+        const WorkoutGameCourseDocument &document)
+{
+    std::vector<DistanceLap> result;
+    result.reserve(document.sourceLaps.size());
+    for (const WorkoutGameCourseSourceLap &lap : document.sourceLaps) {
+        result.push_back({distanceAtSourceTime(document, lap.timeMs),
+                          lap.name.simplified()});
+    }
+    std::stable_sort(result.begin(), result.end(),
+        [](const DistanceLap &left, const DistanceLap &right) {
+            return left.distanceMeters < right.distanceMeters;
+        });
+    return result;
 }
 
 }
@@ -76,22 +128,52 @@ QByteArray WorkoutGameCourseCrsExporter::encode(
             "[COURSE DATA]\n")
             .arg(document.title, document.sourceFileName);
 
-    for (std::size_t index = 0;
-            index < document.course.sections.size();
-            ++index) {
+    const std::vector<DistanceLap> sourceLaps = mappedSourceLaps(document);
+    std::size_t nextSourceLap = 0;
+    constexpr double DistanceEpsilon = 1.0e-6;
+    for (std::size_t index = 0; index < document.course.sections.size(); ++index) {
         const WorkoutGameDistanceCourseSection &section =
                 document.course.sections[index];
-        if (index > 0) {
+        if (sourceLaps.empty() && index > 0) {
             output += QStringLiteral("LAP %1\n").arg(
                     sectionLabel(section));
         }
-        output += segmentLine(section);
+        double cursor = section.startDistanceMeters;
+        const double sectionEnd = cursor + section.lengthMeters;
+        while (nextSourceLap < sourceLaps.size()
+                && sourceLaps[nextSourceLap].distanceMeters
+                    <= sectionEnd + DistanceEpsilon) {
+            const DistanceLap &lap = sourceLaps[nextSourceLap];
+            if (lap.distanceMeters + DistanceEpsilon < cursor) {
+                ++nextSourceLap;
+                continue;
+            }
+            const double beforeLap = std::clamp(
+                    lap.distanceMeters - cursor, 0.0, sectionEnd - cursor);
+            if (beforeLap > DistanceEpsilon) {
+                output += segmentLine(beforeLap, section);
+                cursor += beforeLap;
+            }
+            output += QStringLiteral("LAP %1\n").arg(lap.name);
+            ++nextSourceLap;
+        }
+        const double remaining = sectionEnd - cursor;
+        if (remaining > DistanceEpsilon) {
+            output += segmentLine(remaining, section);
+        }
     }
 
     output += QStringLiteral("[END COURSE DATA]\n[COURSE TEXT]\n");
     for (const WorkoutGameDistanceCourseSection &section :
             document.course.sections) {
         output += cueLine(section);
+    }
+    for (const WorkoutGameCourseSourceText &text : document.sourceTexts) {
+        output += QStringLiteral("%1 %2 %3\n")
+                .arg(distanceAtSourceTime(document, text.timeMs) / 1000.0,
+                     0, 'f', 6)
+                .arg(text.text.simplified())
+                .arg(text.durationSeconds);
     }
     output += QStringLiteral("[END COURSE TEXT]\n");
     return output.toUtf8();

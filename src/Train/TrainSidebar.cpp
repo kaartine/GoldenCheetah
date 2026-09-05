@@ -48,6 +48,10 @@
 #include <QSoundEffect>
 #include <QFile>
 
+#include <cmath>
+#include <cstdint>
+#include <limits>
+
 // Three current realtime device types supported are:
 #include "RealtimeController.h"
 #include "ComputrainerController.h"
@@ -714,6 +718,24 @@ TrainSidebar::createMtbCourse()
     request.points.reserve(std::size_t(workout->Points.size()));
     for (const ErgFilePoint &point : workout->Points) {
         request.points.push_back({point.x, point.val});
+    }
+    request.sourceLaps.reserve(std::size_t(workout->Laps.size()));
+    for (const ErgFileLap &lap : workout->Laps) {
+        if (std::isfinite(lap.x) && lap.x >= 0.0
+                && lap.x <= double(std::numeric_limits<std::int64_t>::max())) {
+            request.sourceLaps.push_back({
+                std::int64_t(std::llround(lap.x)), lap.name
+            });
+        }
+    }
+    request.sourceTexts.reserve(std::size_t(workout->Texts.size()));
+    for (const ErgFileText &text : workout->Texts) {
+        if (std::isfinite(text.x) && text.x >= 0.0
+                && text.x <= double(std::numeric_limits<std::int64_t>::max())) {
+            request.sourceTexts.push_back({
+                std::int64_t(std::llround(text.x)), text.duration, text.text
+            });
+        }
     }
     request.sourceContents = sourceContents;
     request.sourceFileName = workout->filename();

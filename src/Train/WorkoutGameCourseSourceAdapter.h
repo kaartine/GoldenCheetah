@@ -34,6 +34,8 @@ struct WorkoutGameCourseSourceRequest
     QByteArray sourceContents;
     QString sourceFileName;
     QString title;
+    std::vector<WorkoutGameCourseSourceLap> sourceLaps;
+    std::vector<WorkoutGameCourseSourceText> sourceTexts;
     double ftpWatts = 0.0;
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
     WorkoutGameRoadPhysicsParameters roadPhysics;

@@ -339,7 +339,42 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), versionTwo);
     }
 
-    void schemaThreeRejectsUnannotatedSourceAndGeneratedDurationDifference()
+    void versionThreeRemainsCanonicalAndRejectsVersionFourAnnotations()
+    {
+        QJsonObject root = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
+                .object();
+        root.insert(QStringLiteral("schemaVersion"), 3);
+        const QByteArray versionThree =
+                QJsonDocument(root).toJson(QJsonDocument::Compact) + '\n';
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    versionThree, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.schemaVersion, 3);
+        QCOMPARE(decoded.conversionAlgorithmVersion,
+                 WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
+        QVERIFY(decoded.sourceLaps.empty());
+        QVERIFY(decoded.sourceTexts.empty());
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), versionThree);
+
+        QJsonObject annotatedRoot = root;
+        QJsonObject source =
+                annotatedRoot.value(QStringLiteral("source")).toObject();
+        source.insert(QStringLiteral("laps"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("timeMs"), 1000},
+                {QStringLiteral("name"), QStringLiteral("Hidden v4 lap")}
+            }
+        });
+        annotatedRoot.insert(QStringLiteral("source"), source);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(annotatedRoot).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::InvalidDocument);
+    }
+
+    void currentSchemaRejectsUnannotatedSourceAndGeneratedDurationDifference()
     {
         WorkoutGameCourseDocument source = sampleDocument();
         source.sourceIntervals = {
@@ -352,7 +387,7 @@ private slots:
         QVERIFY(encoded.isEmpty());
     }
 
-    void schemaThreeRejectsUnsafePrescribedRecoveryExposure()
+    void currentSchemaRejectsUnsafePrescribedRecoveryExposure()
     {
         WorkoutGameCourseDocument source = sampleDocument();
         source.sourceIntervals = {
@@ -365,7 +400,7 @@ private slots:
         QVERIFY(WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
     }
 
-    void schemaThreeRoundTripsExplicitVersionedCooldownMetadata()
+    void currentSchemaRoundTripsExplicitVersionedCooldownMetadata()
     {
         QJsonObject root = QJsonDocument::fromJson(
                 WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
@@ -774,6 +809,53 @@ private slots:
         QVERIFY(crs.contains("Target 200 W - Climb 8\n"));
         QVERIFY(crs.contains("Target 100 W - Recovery descent 8\n"));
         QVERIFY(crs.endsWith("[END COURSE TEXT]\n"));
+    }
+
+    void sourceLapsAndInstructionsRoundTripAndMapToCourseDistance()
+    {
+        WorkoutGameCourseDocument source = sampleDocument();
+        source.sourceLaps = {
+            {15000, QStringLiteral("Tempo block")}
+        };
+        source.sourceTexts = {
+            {5000, 6, QStringLiteral("Hold 95 rpm")},
+            {25000, 8, QStringLiteral("Relax shoulders")}
+        };
+
+        const QByteArray encoded = WorkoutGameCourseDocumentCodec::encode(source);
+        QVERIFY(encoded.contains("\"laps\""));
+        QVERIFY(encoded.contains("\"texts\""));
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.sourceLaps.size(), std::size_t(1));
+        QCOMPARE(decoded.sourceLaps[0].timeMs, std::int64_t(15000));
+        QCOMPARE(decoded.sourceLaps[0].name, QStringLiteral("Tempo block"));
+        QCOMPARE(decoded.sourceTexts.size(), std::size_t(2));
+        QCOMPARE(decoded.sourceTexts[1].durationSeconds, 8);
+        QCOMPARE(decoded.sourceTexts[1].text,
+                 QStringLiteral("Relax shoulders"));
+
+        const QByteArray crs = WorkoutGameCourseCrsExporter::encode(decoded);
+        QVERIFY(crs.contains("0.050000 -4.000 0.0\nLAP Tempo block\n"));
+        QVERIFY(crs.contains("0.050000 Hold 95 rpm 6\n"));
+        QVERIFY(crs.contains("0.250000 Relax shoulders 8\n"));
+    }
+
+    void invalidSourceInstructionsFailClosed()
+    {
+        WorkoutGameCourseDocument source = sampleDocument();
+        source.sourceTexts = {
+            {5000, 6, QStringLiteral("unsafe\ncue")}
+        };
+        QVERIFY(WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
+
+        source.sourceTexts = {
+            {source.course.nominalDurationMs + 1, 6,
+             QStringLiteral("outside workout")}
+        };
+        QVERIFY(WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
     }
 
     void newArtifactPairIsAtomicAndConflictSafe()

@@ -149,6 +149,95 @@ WorkoutGameCourseDocumentStatus parsePrescriptionMetadata(
     return WorkoutGameCourseDocumentStatus::Ready;
 }
 
+QJsonArray sourceLapsToJson(
+        const std::vector<WorkoutGameCourseSourceLap> &laps)
+{
+    QJsonArray values;
+    for (const WorkoutGameCourseSourceLap &lap : laps) {
+        values.append(QJsonObject {
+            {QStringLiteral("timeMs"), double(lap.timeMs)},
+            {QStringLiteral("name"), lap.name}
+        });
+    }
+    return values;
+}
+
+WorkoutGameCourseDocumentStatus parseSourceLaps(
+        const QJsonValue &value,
+        std::vector<WorkoutGameCourseSourceLap> &laps)
+{
+    laps.clear();
+    if (value.isUndefined()) return WorkoutGameCourseDocumentStatus::Ready;
+    if (!value.isArray()) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    if (value.toArray().size()
+            > int(WorkoutGameCourseDocumentCodec::MaximumSourceAnnotations)) {
+        return WorkoutGameCourseDocumentStatus::ResourceLimit;
+    }
+    for (const QJsonValue &entry : value.toArray()) {
+        if (!entry.isObject()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        const QJsonObject object = entry.toObject();
+        std::int64_t timeMs = 0;
+        const QJsonValue name = object.value(QStringLiteral("name"));
+        if (!integerNumber(object, "timeMs", timeMs) || !name.isString()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        laps.push_back({timeMs, name.toString()});
+    }
+    return WorkoutGameCourseDocumentStatus::Ready;
+}
+
+QJsonArray sourceTextsToJson(
+        const std::vector<WorkoutGameCourseSourceText> &texts)
+{
+    QJsonArray values;
+    for (const WorkoutGameCourseSourceText &text : texts) {
+        values.append(QJsonObject {
+            {QStringLiteral("timeMs"), double(text.timeMs)},
+            {QStringLiteral("durationSeconds"), text.durationSeconds},
+            {QStringLiteral("text"), text.text}
+        });
+    }
+    return values;
+}
+
+WorkoutGameCourseDocumentStatus parseSourceTexts(
+        const QJsonValue &value,
+        std::vector<WorkoutGameCourseSourceText> &texts)
+{
+    texts.clear();
+    if (value.isUndefined()) return WorkoutGameCourseDocumentStatus::Ready;
+    if (!value.isArray()) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    if (value.toArray().size()
+            > int(WorkoutGameCourseDocumentCodec::MaximumSourceAnnotations)) {
+        return WorkoutGameCourseDocumentStatus::ResourceLimit;
+    }
+    for (const QJsonValue &entry : value.toArray()) {
+        if (!entry.isObject()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        const QJsonObject object = entry.toObject();
+        std::int64_t timeMs = 0;
+        std::int64_t durationSeconds = 0;
+        const QJsonValue text = object.value(QStringLiteral("text"));
+        if (!integerNumber(object, "timeMs", timeMs)
+                || !integerNumber(
+                    object, "durationSeconds", durationSeconds)
+                || durationSeconds < std::numeric_limits<int>::min()
+                || durationSeconds > std::numeric_limits<int>::max()
+                || !text.isString()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        texts.push_back({timeMs, int(durationSeconds), text.toString()});
+    }
+    return WorkoutGameCourseDocumentStatus::Ready;
+}
+
 QString featureName(WorkoutGameFeature feature)
 {
     switch (feature) {
@@ -1151,7 +1240,8 @@ bool documentForPersistence(
         }
     }
     else if ((destination.schemaVersion != 1
-                && destination.schemaVersion != 2)
+                && destination.schemaVersion != 2
+                && destination.schemaVersion != 3)
             || !WorkoutGameCourseDocumentCodec::valid(destination)) {
         return false;
     }
@@ -1204,6 +1294,38 @@ bool WorkoutGameCourseDocumentCodec::valid(
     static const QRegularExpression sha256Pattern(
             QStringLiteral("^[0-9a-f]{64}$"));
     const QFileInfo sourceInfo(document.sourceFileName);
+    const auto validAnnotationText = [](const QString &value,
+                                        qsizetype maximumLength,
+                                        bool allowEmpty) {
+        return (allowEmpty || !value.trimmed().isEmpty())
+                && value.size() <= maximumLength
+                && !value.contains(QLatin1Char('\n'))
+                && !value.contains(QLatin1Char('\r'));
+    };
+    bool sourceAnnotationsValid =
+            document.sourceLaps.size() <= MaximumSourceAnnotations
+            && document.sourceTexts.size() <= MaximumSourceAnnotations;
+    std::int64_t previousLapMs = 0;
+    for (const WorkoutGameCourseSourceLap &lap : document.sourceLaps) {
+        if (lap.timeMs < previousLapMs || lap.timeMs < 0
+                || lap.timeMs > document.course.nominalDurationMs
+                || !validAnnotationText(lap.name, 200, true)) {
+            sourceAnnotationsValid = false;
+            break;
+        }
+        previousLapMs = lap.timeMs;
+    }
+    std::int64_t previousTextMs = 0;
+    for (const WorkoutGameCourseSourceText &text : document.sourceTexts) {
+        if (text.timeMs < previousTextMs || text.timeMs < 0
+                || text.timeMs > document.course.nominalDurationMs
+                || text.durationSeconds < 0 || text.durationSeconds > 3600
+                || !validAnnotationText(text.text, 500, false)) {
+            sourceAnnotationsValid = false;
+            break;
+        }
+        previousTextMs = text.timeMs;
+    }
     bool sourceIntervalsValid = document.sourceIntervals.empty();
     if (!document.sourceIntervals.empty()) {
         if (document.schemaVersion < 3) {
@@ -1262,12 +1384,18 @@ bool WorkoutGameCourseDocumentCodec::valid(
     } else if (document.prescriptionMetadata.present()) {
         sourceIntervalsValid = false;
     }
+    const bool sourceAnnotationsAllowed =
+            document.schemaVersion == CurrentSchemaVersion
+            || (document.sourceLaps.empty() && document.sourceTexts.empty());
     const bool schemaValid = document.schemaVersion == 1
             ? !document.course.roadPlan
                 && !document.prescriptionMetadata.present()
+                && sourceAnnotationsAllowed
             : (document.schemaVersion == 2
+                    || document.schemaVersion == 3
                     || document.schemaVersion == CurrentSchemaVersion)
                 && roadPlanMatchesCourse(document.course)
+                && sourceAnnotationsAllowed
                 && (document.schemaVersion == 2
                     ? !document.prescriptionMetadata.present()
                     : document.conversionAlgorithmVersion
@@ -1288,6 +1416,7 @@ bool WorkoutGameCourseDocumentCodec::valid(
             && document.ftpWatts > 0.0
             && document.ftpWatts <= 3000.0
             && sourceIntervalsValid
+            && sourceAnnotationsValid
             && !presetName(document.preset).isEmpty()
             && WorkoutGameDistanceCourseBuilder::validParameters(
                 document.generationParameters)
@@ -1306,13 +1435,23 @@ QByteArray WorkoutGameCourseDocumentCodec::encode(
         source.insert(QStringLiteral("intervals"),
                       intervalsToJson(document.sourceIntervals));
     }
+    if (document.schemaVersion == CurrentSchemaVersion) {
+        if (!document.sourceLaps.empty()) {
+            source.insert(QStringLiteral("laps"),
+                          sourceLapsToJson(document.sourceLaps));
+        }
+        if (!document.sourceTexts.empty()) {
+            source.insert(QStringLiteral("texts"),
+                          sourceTextsToJson(document.sourceTexts));
+        }
+    }
     QJsonObject conversion {
         {QStringLiteral("ftpWatts"), document.ftpWatts},
         {QStringLiteral("preset"), presetName(document.preset)},
         {QStringLiteral("parameters"), generationToJson(
             document.generationParameters)}
     };
-    if (document.schemaVersion == CurrentSchemaVersion) {
+    if (document.schemaVersion >= 3) {
         conversion.insert(QStringLiteral("algorithmVersion"),
                           document.conversionAlgorithmVersion);
         if (document.prescriptionMetadata.present()) {
@@ -1355,7 +1494,7 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
     if (!integerNumber(root, "schemaVersion", schemaVersion)) {
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
-    if (schemaVersion != 1 && schemaVersion != 2
+    if (schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3
             && schemaVersion != CurrentSchemaVersion) {
         return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
     }
@@ -1393,7 +1532,7 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
     }
     document.sourceFileName = sourceFileName.toString();
     document.sourceSha256 = sourceSha256.toString();
-    if (document.schemaVersion == CurrentSchemaVersion) {
+    if (document.schemaVersion >= 3) {
         std::int64_t algorithmVersion = 0;
         if (!integerNumber(
                     conversion, "algorithmVersion", algorithmVersion)) {
@@ -1415,6 +1554,21 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
         }
     } else if (conversion.contains(QStringLiteral("algorithmVersion"))
             || source.contains(QStringLiteral("prescriptionMetadata"))) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    if (document.schemaVersion == CurrentSchemaVersion) {
+        const WorkoutGameCourseDocumentStatus lapsStatus = parseSourceLaps(
+                source.value(QStringLiteral("laps")), document.sourceLaps);
+        if (lapsStatus != WorkoutGameCourseDocumentStatus::Ready) {
+            return lapsStatus;
+        }
+        const WorkoutGameCourseDocumentStatus textsStatus = parseSourceTexts(
+                source.value(QStringLiteral("texts")), document.sourceTexts);
+        if (textsStatus != WorkoutGameCourseDocumentStatus::Ready) {
+            return textsStatus;
+        }
+    } else if (source.contains(QStringLiteral("laps"))
+            || source.contains(QStringLiteral("texts"))) {
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
     const QJsonValue intervals = source.value(QStringLiteral("intervals"));
