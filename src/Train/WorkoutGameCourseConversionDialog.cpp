@@ -21,6 +21,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QStringList>
 #include <QStyle>
 #include <QToolButton>
@@ -47,6 +48,7 @@ QLabel *summaryValue(const char *objectName, QWidget *parent)
     QLabel *label = new QLabel(parent);
     label->setObjectName(QLatin1String(objectName));
     label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    label->setWordWrap(true);
     return label;
 }
 
@@ -241,91 +243,93 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
             this, &WorkoutGameCourseConversionDialog::selectRideFirst);
     layout->addLayout(presetLayout);
 
-    presetDescriptionLabel = new QLabel(this);
+    QScrollArea *detailsScrollArea = new QScrollArea(this);
+    detailsScrollArea->setObjectName(
+            QStringLiteral("courseDetailsScrollArea"));
+    detailsScrollArea->setWidgetResizable(true);
+    detailsScrollArea->setFrameShape(QFrame::NoFrame);
+    detailsScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    QWidget *details = new QWidget(detailsScrollArea);
+    details->setObjectName(QStringLiteral("courseDetailsScrollContents"));
+    details->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    QVBoxLayout *detailsLayout = new QVBoxLayout(details);
+    detailsLayout->setContentsMargins(0, 0, 8, 0);
+    detailsLayout->setSpacing(14);
+    detailsLayout->setSizeConstraint(QLayout::SetMinAndMaxSize);
+
+    presetDescriptionLabel = new QLabel(details);
     presetDescriptionLabel->setObjectName(
             QStringLiteral("presetDescriptionLabel"));
     presetDescriptionLabel->setWordWrap(true);
-    layout->addWidget(presetDescriptionLabel);
+    detailsLayout->addWidget(presetDescriptionLabel);
 
-    preview = new WorkoutGameCoursePreviewWidget(this);
-    layout->addWidget(preview, 1);
+    preview = new WorkoutGameCoursePreviewWidget(details);
+    detailsLayout->addWidget(preview);
 
     QGridLayout *summary = new QGridLayout;
     summary->setHorizontalSpacing(18);
     summary->setVerticalSpacing(5);
-    durationValue = summaryValue("durationValue", this);
-    etaValue = summaryValue("etaValue", this);
-    distanceValue = summaryValue("distanceValue", this);
-    ascentValue = summaryValue("ascentValue", this);
-    featuresValue = summaryValue("featuresValue", this);
-    loadValue = summaryValue("loadValue", this);
-    loadDeviationValue = summaryValue("loadDeviationValue", this);
-    workDeviationValue = summaryValue("workDeviationValue", this);
-    recoveryDeviationValue = summaryValue("recoveryDeviationValue", this);
-    totalDeviationValue = summaryValue("totalDeviationValue", this);
-    keyEffortRetentionValue = summaryValue("keyEffortRetentionValue", this);
-    recoveryRetentionValue = summaryValue("recoveryRetentionValue", this);
-    terrainSignatureValue = summaryValue("terrainSignatureValue", this);
-    technicalExposureValue = summaryValue("technicalExposureValue", this);
-    featureDensityValue = summaryValue("featureDensityValue", this);
-    runtimeExposureValue = summaryValue("runtimeExposureValue", this);
-    prescriptionChangesValue = summaryValue("prescriptionChangesValue", this);
-    summary->addWidget(new QLabel(tr("Workout duration"), this), 0, 0);
-    summary->addWidget(durationValue, 0, 1);
-    summary->addWidget(new QLabel(tr("Expected ride time"), this), 0, 2);
-    summary->addWidget(etaValue, 0, 3);
-    summary->addWidget(new QLabel(tr("Distance"), this), 1, 0);
-    summary->addWidget(distanceValue, 1, 1);
-    summary->addWidget(new QLabel(tr("Ascent"), this), 1, 2);
-    summary->addWidget(ascentValue, 1, 3);
-    summary->addWidget(new QLabel(tr("Features"), this), 2, 0);
-    summary->addWidget(featuresValue, 2, 1, 1, 3);
-    summary->addWidget(new QLabel(tr("Load"), this), 3, 0);
-    summary->addWidget(loadValue, 3, 1);
-    summary->addWidget(new QLabel(tr("Load deviation"), this), 3, 2);
-    summary->addWidget(loadDeviationValue, 3, 3);
-    summary->addWidget(new QLabel(tr("Key efforts preserved"), this), 4, 0);
-    summary->addWidget(keyEffortRetentionValue, 4, 1);
-    summary->addWidget(new QLabel(tr("Recoveries preserved"), this), 4, 2);
-    summary->addWidget(recoveryRetentionValue, 4, 3);
-    summary->addWidget(new QLabel(tr("Work deviation"), this), 5, 0);
-    summary->addWidget(workDeviationValue, 5, 1);
-    summary->addWidget(new QLabel(tr("Recovery/rest deviation"), this), 5, 2);
-    summary->addWidget(recoveryDeviationValue, 5, 3);
-    summary->addWidget(new QLabel(tr("Total deviation"), this), 6, 0);
-    summary->addWidget(totalDeviationValue, 6, 1);
-    summary->addWidget(new QLabel(tr("Terrain signature"), this), 6, 2);
-    summary->addWidget(terrainSignatureValue, 6, 3);
-    summary->addWidget(new QLabel(tr("Technical exposure"), this), 7, 0);
-    summary->addWidget(technicalExposureValue, 7, 1);
-    summary->addWidget(new QLabel(tr("Feature density"), this), 7, 2);
-    summary->addWidget(featureDensityValue, 7, 3);
-    summary->addWidget(new QLabel(tr("Minimum section time"), this), 8, 0);
-    summary->addWidget(runtimeExposureValue, 8, 1, 1, 3);
-    summary->addWidget(new QLabel(tr("Prescription changes"), this), 9, 0);
-    summary->addWidget(prescriptionChangesValue, 9, 1, 1, 3);
+    durationValue = summaryValue("durationValue", details);
+    etaValue = summaryValue("etaValue", details);
+    distanceValue = summaryValue("distanceValue", details);
+    ascentValue = summaryValue("ascentValue", details);
+    featuresValue = summaryValue("featuresValue", details);
+    loadValue = summaryValue("loadValue", details);
+    loadDeviationValue = summaryValue("loadDeviationValue", details);
+    workDeviationValue = summaryValue("workDeviationValue", details);
+    recoveryDeviationValue = summaryValue("recoveryDeviationValue", details);
+    totalDeviationValue = summaryValue("totalDeviationValue", details);
+    keyEffortRetentionValue = summaryValue("keyEffortRetentionValue", details);
+    recoveryRetentionValue = summaryValue("recoveryRetentionValue", details);
+    terrainSignatureValue = summaryValue("terrainSignatureValue", details);
+    technicalExposureValue = summaryValue("technicalExposureValue", details);
+    featureDensityValue = summaryValue("featureDensityValue", details);
+    runtimeExposureValue = summaryValue("runtimeExposureValue", details);
+    prescriptionChangesValue = summaryValue("prescriptionChangesValue", details);
+    int summaryRow = 0;
+    auto addSummaryRow = [&](const QString &name, QLabel *value) {
+        QLabel *nameLabel = new QLabel(name, details);
+        nameLabel->setWordWrap(true);
+        summary->addWidget(nameLabel, summaryRow, 0);
+        summary->addWidget(value, summaryRow, 1);
+        ++summaryRow;
+    };
+    addSummaryRow(tr("Workout duration"), durationValue);
+    addSummaryRow(tr("Expected ride time"), etaValue);
+    addSummaryRow(tr("Distance"), distanceValue);
+    addSummaryRow(tr("Ascent"), ascentValue);
+    addSummaryRow(tr("Features"), featuresValue);
+    addSummaryRow(tr("Load"), loadValue);
+    addSummaryRow(tr("Load deviation"), loadDeviationValue);
+    addSummaryRow(tr("Key efforts preserved"), keyEffortRetentionValue);
+    addSummaryRow(tr("Recoveries preserved"), recoveryRetentionValue);
+    addSummaryRow(tr("Work deviation"), workDeviationValue);
+    addSummaryRow(tr("Recovery/rest deviation"), recoveryDeviationValue);
+    addSummaryRow(tr("Total deviation"), totalDeviationValue);
+    addSummaryRow(tr("Terrain signature"), terrainSignatureValue);
+    addSummaryRow(tr("Technical exposure"), technicalExposureValue);
+    addSummaryRow(tr("Feature density"), featureDensityValue);
+    addSummaryRow(tr("Minimum section time"), runtimeExposureValue);
+    addSummaryRow(tr("Prescription changes"), prescriptionChangesValue);
     summary->setColumnStretch(1, 1);
-    summary->setColumnStretch(3, 1);
-    layout->addLayout(summary);
+    detailsLayout->addLayout(summary);
 
     QGridLayout *comparison = new QGridLayout;
     workoutFirstComparisonValue = summaryValue(
-            "workoutFirstComparisonValue", this);
-    balancedComparisonValue = summaryValue("balancedComparisonValue", this);
-    rideFirstComparisonValue = summaryValue("rideFirstComparisonValue", this);
-    for (QLabel *label : {workoutFirstComparisonValue,
-                          balancedComparisonValue,
-                          rideFirstComparisonValue}) {
-        label->setWordWrap(true);
-    }
-    comparison->addWidget(new QLabel(tr("Workout first"), this), 0, 0);
+            "workoutFirstComparisonValue", details);
+    balancedComparisonValue = summaryValue("balancedComparisonValue", details);
+    rideFirstComparisonValue = summaryValue("rideFirstComparisonValue", details);
+    comparison->addWidget(new QLabel(tr("Workout first"), details), 0, 0);
     comparison->addWidget(workoutFirstComparisonValue, 0, 1);
-    comparison->addWidget(new QLabel(tr("Balanced"), this), 1, 0);
+    comparison->addWidget(new QLabel(tr("Balanced"), details), 1, 0);
     comparison->addWidget(balancedComparisonValue, 1, 1);
-    comparison->addWidget(new QLabel(tr("Ride first"), this), 2, 0);
+    comparison->addWidget(new QLabel(tr("Ride first"), details), 2, 0);
     comparison->addWidget(rideFirstComparisonValue, 2, 1);
     comparison->setColumnStretch(1, 1);
-    layout->addLayout(comparison);
+    detailsLayout->addLayout(comparison);
+    detailsScrollArea->setWidget(details);
+    layout->addWidget(detailsScrollArea, 1);
 
     QGridLayout *fields = new QGridLayout;
     fields->setHorizontalSpacing(10);
@@ -360,6 +364,7 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     layout->addWidget(errorLabel);
 
     QDialogButtonBox *buttons = new QDialogButtonBox(this);
+    buttons->setObjectName(QStringLiteral("courseDialogButtonBox"));
     createButton = buttons->addButton(
             tr("Create Course"), QDialogButtonBox::AcceptRole);
     createButton->setObjectName(QStringLiteral("createCourseButton"));

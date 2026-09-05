@@ -13,14 +13,18 @@
 
 #include <QFileInfo>
 #include <QImage>
+#include <QDialogButtonBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRect>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -65,6 +69,112 @@ T *requiredChild(QObject &parent, const char *name)
 class TestWorkoutGameCourseConversionDialog : public QObject
 {
     Q_OBJECT
+
+    void verifyResponsiveGeometry(qreal fontScale)
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        WorkoutGameCourseConversionDialog dialog(
+                sampleRequest(), directory.filePath("intervals-mtb.crs"));
+        QFont font = dialog.font();
+        font.setPointSizeF(font.pointSizeF() * fontScale);
+        dialog.setFont(font);
+        dialog.resize(820, 700);
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        QCoreApplication::processEvents();
+
+        QScrollArea *scrollArea = dialog.findChild<QScrollArea *>(
+                QStringLiteral("courseDetailsScrollArea"));
+        QWidget *scrollContents = dialog.findChild<QWidget *>(
+                QStringLiteral("courseDetailsScrollContents"));
+        QDialogButtonBox *buttonBox = dialog.findChild<QDialogButtonBox *>(
+                QStringLiteral("courseDialogButtonBox"));
+        QVERIFY2(scrollArea, "The detail region must be vertically scrollable");
+        QVERIFY(scrollContents);
+        QVERIFY(buttonBox);
+
+        auto dialogGeometry = [&](QWidget *widget) {
+            return QRect(widget->mapTo(&dialog, QPoint(0, 0)), widget->size());
+        };
+        QWidget *heading = requiredChild<QWidget>(dialog, "courseDialogHeading");
+        QWidget *workoutFirst = requiredChild<QWidget>(
+                dialog, "workoutFirstPresetButton");
+        QWidget *balanced = requiredChild<QWidget>(dialog, "balancedPresetButton");
+        QWidget *rideFirst = requiredChild<QWidget>(dialog, "rideFirstPresetButton");
+        QWidget *title = requiredChild<QWidget>(dialog, "courseTitleEdit");
+        QWidget *output = requiredChild<QWidget>(dialog, "courseOutputPathEdit");
+        QWidget *browse = requiredChild<QWidget>(dialog, "browseCourseOutputButton");
+        QWidget *create = requiredChild<QWidget>(dialog, "createCourseButton");
+        for (QWidget *widget : {heading, workoutFirst, balanced, rideFirst,
+                                title, output, browse, create}) {
+            QVERIFY(dialog.rect().contains(dialogGeometry(widget)));
+        }
+        QVERIFY(dialog.rect().contains(dialogGeometry(scrollArea)));
+        QVERIFY(dialog.rect().contains(dialogGeometry(buttonBox)));
+
+        const int presetTop = dialogGeometry(workoutFirst).top();
+        const int presetBottom = std::max({dialogGeometry(workoutFirst).bottom(),
+                                          dialogGeometry(balanced).bottom(),
+                                          dialogGeometry(rideFirst).bottom()});
+        QVERIFY(dialogGeometry(heading).bottom() < presetTop);
+        QVERIFY(presetBottom < dialogGeometry(scrollArea).top());
+        QVERIFY(dialogGeometry(scrollArea).bottom() < dialogGeometry(title).top());
+        QVERIFY(dialogGeometry(title).bottom() < dialogGeometry(output).top());
+        QVERIFY(dialogGeometry(output).bottom() < dialogGeometry(buttonBox).top());
+        QVERIFY(dialogGeometry(browse).intersects(dialogGeometry(output)) == false);
+        QVERIFY(dialogGeometry(create).intersects(dialogGeometry(scrollArea)) == false);
+
+        QVERIFY(scrollArea->widgetResizable());
+        QCOMPARE(scrollArea->widget(), scrollContents);
+        QVERIFY(scrollContents->width() <= scrollArea->viewport()->width());
+        QVERIFY(scrollContents->height() > scrollArea->viewport()->height());
+        QVERIFY(scrollArea->verticalScrollBar()->maximum() > 0);
+
+        const char *scrollableControls[] = {
+            "presetDescriptionLabel",
+            "coursePreview",
+            "durationValue",
+            "prescriptionChangesValue",
+            "workoutFirstComparisonValue",
+            "balancedComparisonValue",
+            "rideFirstComparisonValue"
+        };
+        QWidget *previous = nullptr;
+        for (const char *name : scrollableControls) {
+            QWidget *control = requiredChild<QWidget>(dialog, name);
+            if (previous) {
+                const QRect previousGeometry(
+                        previous->mapTo(scrollContents, QPoint(0, 0)),
+                        previous->size());
+                const QRect controlGeometry(
+                        control->mapTo(scrollContents, QPoint(0, 0)),
+                        control->size());
+                QVERIFY2(previousGeometry.bottom() < controlGeometry.top(), name);
+            }
+            previous = control;
+            scrollArea->ensureWidgetVisible(control, 0, 0);
+            QCoreApplication::processEvents();
+            const QRect viewportGeometry(
+                    control->mapTo(scrollArea->viewport(), QPoint(0, 0)),
+                    control->size());
+            QVERIFY2(scrollArea->viewport()->rect().contains(viewportGeometry), name);
+            if (QLabel *label = qobject_cast<QLabel *>(control)) {
+                if (label->wordWrap()) {
+                    const int requiredHeight = label->heightForWidth(label->width());
+                    const QByteArray dimensions = QStringLiteral(
+                            "%1: %2 px available, %3 px required at %4 px wide")
+                            .arg(QLatin1String(name))
+                            .arg(label->height())
+                            .arg(requiredHeight)
+                            .arg(label->width())
+                            .toLatin1();
+                    QVERIFY2(label->height() + 1 >= requiredHeight,
+                             dimensions.constData());
+                }
+            }
+        }
+    }
 
 private slots:
     void balancedPreviewShowsCompleteSummary()
@@ -129,8 +239,12 @@ private slots:
                 "balancedComparisonValue",
                 "rideFirstComparisonValue"}) {
             const QString text = requiredChild<QLabel>(dialog, name)->text();
-            QVERIFY2(text.contains("key", Qt::CaseInsensitive), name);
-            QVERIFY2(text.contains("recovery", Qt::CaseInsensitive), name);
+            const QByteArray details = QStringLiteral("%1: %2")
+                    .arg(QLatin1String(name), text).toLatin1();
+            QVERIFY2(text.contains("key", Qt::CaseInsensitive),
+                     details.constData());
+            QVERIFY2(text.contains("recovery", Qt::CaseInsensitive),
+                     details.constData());
         }
         QVERIFY(requiredChild<QPushButton>(dialog, "createCourseButton")
                         ->isEnabled());
@@ -146,36 +260,14 @@ private slots:
         }
     }
 
-    void minimumSizeKeepsCriticalControlsInsideDialog()
+    void compactDialogDoesNotOverlapOrClip()
     {
-        QTemporaryDir directory;
-        WorkoutGameCourseConversionDialog dialog(
-                sampleRequest(), directory.filePath("intervals-mtb.crs"));
-        dialog.resize(dialog.minimumSize());
-        dialog.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        verifyResponsiveGeometry(1.0);
+    }
 
-        const QRect available = dialog.rect();
-        const char *criticalControls[] = {
-            "workoutFirstPresetButton",
-            "balancedPresetButton",
-            "rideFirstPresetButton",
-            "coursePreview",
-            "courseTitleEdit",
-            "courseOutputPathEdit",
-            "browseCourseOutputButton",
-            "createCourseButton"
-        };
-        for (const char *name : criticalControls) {
-            QWidget *control = requiredChild<QWidget>(dialog, name);
-            const QRect geometry(
-                    control->mapTo(&dialog, QPoint(0, 0)), control->size());
-            QVERIFY2(available.contains(geometry), name);
-            QVERIFY2(control->width() >= control->minimumSizeHint().width()
-                        || control->sizePolicy().horizontalPolicy()
-                            == QSizePolicy::Expanding,
-                     name);
-        }
+    void largeFontDialogDoesNotOverlapOrClip()
+    {
+        verifyResponsiveGeometry(1.5);
     }
 
     void presetSwitchUpdatesPreviewButNotWorkoutTargets()
