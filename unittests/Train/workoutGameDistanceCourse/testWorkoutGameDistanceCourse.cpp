@@ -161,21 +161,35 @@ private slots:
         };
         WorkoutGameDistanceCourseGenerationParameters parameters;
 
+        std::uint32_t gapSeed = 0u;
+        WorkoutGameDistanceCourse rideFirst;
+        parameters.technicality = 0.95;
+        for (std::uint32_t seed = 1u; seed <= 64u; ++seed) {
+            const WorkoutGameDistanceCourse candidate =
+                    WorkoutGameDistanceCourseBuilder::build(
+                        workout, 190.0, parameters, seed);
+            if (candidate.status == WorkoutGameDistanceCourseStatus::Ready
+                    && candidate.sections[1].terrain
+                        == WorkoutGameTerrainKind::GapJump) {
+                gapSeed = seed;
+                rideFirst = candidate;
+                break;
+            }
+        }
+        QVERIFY(gapSeed != 0u);
+
         parameters.technicality = 0.15;
         const WorkoutGameDistanceCourse workoutFirst =
                 WorkoutGameDistanceCourseBuilder::build(
-                    workout, 190.0, parameters, 2u);
+                    workout, 190.0, parameters, gapSeed);
         parameters.technicality = 0.55;
         const WorkoutGameDistanceCourse balanced =
                 WorkoutGameDistanceCourseBuilder::build(
-                    workout, 190.0, parameters, 2u);
+                    workout, 190.0, parameters, gapSeed);
         parameters.technicality = 0.95;
-        const WorkoutGameDistanceCourse rideFirst =
-                WorkoutGameDistanceCourseBuilder::build(
-                    workout, 190.0, parameters, 2u);
         const WorkoutGameDistanceCourse repeated =
                 WorkoutGameDistanceCourseBuilder::build(
-                    workout, 190.0, parameters, 2u);
+                    workout, 190.0, parameters, gapSeed);
 
         QCOMPARE(workoutFirst.sections[1].feature,
                  WorkoutGameFeature::SprintJump);
@@ -234,6 +248,64 @@ private slots:
         QVERIFY(faster.finished);
         QVERIFY(slower.elapsedTimeMs > nominal.elapsedTimeMs);
         QVERIFY(nominal.elapsedTimeMs > faster.elapsedTimeMs);
+    }
+
+    void estimateAppliesMinimumExposurePerSection()
+    {
+        const WorkoutGameDistanceCourseGenerationParameters parameters;
+        WorkoutGameDistanceCourse course =
+                WorkoutGameDistanceCourseBuilder::build({
+                    {0, 60000, 300.0, 300.0},
+                    {60000, 60000, 300.0, 300.0}
+                }, 190.0, parameters, 91u);
+        QCOMPARE(course.status, WorkoutGameDistanceCourseStatus::Ready);
+
+        course.sections[0].startDistanceMeters = 0.0;
+        course.sections[0].lengthMeters = 600.0;
+        course.sections[0].gradePercent = 0.0;
+        course.sections[0].startElevationMeters = 0.0;
+        course.sections[0].endElevationMeters = 0.0;
+        course.sections[0].minimumDurationMs = 1000;
+        course.sections[1].startDistanceMeters = 600.0;
+        course.sections[1].lengthMeters = 5.0;
+        course.sections[1].gradePercent = 0.0;
+        course.sections[1].startElevationMeters = 0.0;
+        course.sections[1].endElevationMeters = 0.0;
+        course.sections[1].minimumDurationMs = 60000;
+        course.totalDistanceMeters = 605.0;
+        course.elevationGainMeters = 0.0;
+        course.elevationLossMeters = 0.0;
+        QVERIFY(WorkoutGameDistanceCourseBuilder::validCourse(course));
+
+        WorkoutGameDistanceCourse unrestricted = course;
+        unrestricted.sections[1].minimumDurationMs = 1000;
+        const WorkoutGameDistanceCourseEstimate baseline =
+                WorkoutGameDistanceCourseEstimator::estimate(
+                    unrestricted, parameters.roadPhysics, 1.0, 100);
+        const WorkoutGameDistanceCourseEstimate constrained =
+                WorkoutGameDistanceCourseEstimator::estimate(
+                    course, parameters.roadPhysics, 1.0, 100);
+
+        QVERIFY(baseline.finished);
+        QVERIFY(constrained.finished);
+        QVERIFY(constrained.elapsedTimeMs
+                >= baseline.elapsedTimeMs + 50000);
+    }
+
+    void estimateBootstrapsARampThatStartsAtZeroPower()
+    {
+        WorkoutGameDistanceCourseGenerationParameters parameters;
+        const WorkoutGameDistanceCourse course =
+                WorkoutGameDistanceCourseBuilder::build({
+                    {0, 60000, 0.0, 200.0}
+                }, 190.0, parameters, 117u);
+        QCOMPARE(course.status, WorkoutGameDistanceCourseStatus::Ready);
+
+        const WorkoutGameDistanceCourseEstimate estimate =
+                WorkoutGameDistanceCourseEstimator::estimate(
+                    course, parameters.roadPhysics, 1.0, 100);
+        QVERIFY(estimate.finished);
+        QVERIFY(estimate.elapsedTimeMs >= course.nominalDurationMs);
     }
 
     void sameInputProducesTheSameCourse()

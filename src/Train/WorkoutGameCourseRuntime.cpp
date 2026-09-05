@@ -42,6 +42,7 @@ WorkoutGameCourseRuntimeStatus WorkoutGameCourseRuntime::configure(
         return WorkoutGameCourseRuntimeStatus::InvalidMetadata;
     }
     configuredFtpWatts = document.ftpWatts;
+    latestProgress = playback.atDistance(0.0);
     configured = true;
     return WorkoutGameCourseRuntimeStatus::Ready;
 }
@@ -52,6 +53,14 @@ void WorkoutGameCourseRuntime::reset()
     configuredFtpWatts = 0.0;
     configuredVisualCourse = WorkoutGameCourse();
     playback = WorkoutGameDistancePlayback();
+    latestProgress = WorkoutGameDistancePlaybackSnapshot();
+}
+
+void WorkoutGameCourseRuntime::restartProgress()
+{
+    playback.resetProgress();
+    latestProgress = configured ? playback.atDistance(0.0)
+                                : WorkoutGameDistancePlaybackSnapshot();
 }
 
 bool WorkoutGameCourseRuntime::enabled() const
@@ -71,14 +80,36 @@ const WorkoutGameCourse &WorkoutGameCourseRuntime::visualCourse() const
 
 WorkoutGameDistancePlaybackSnapshot
 WorkoutGameCourseRuntime::atWorkoutPosition(
-        std::int64_t positionMeters) const
+        double positionMeters) const
 {
     if (!configured) return {};
-    return playback.atDistance(double(positionMeters));
+    return playback.atDistance(positionMeters);
+}
+
+WorkoutGameDistancePlaybackSnapshot
+WorkoutGameCourseRuntime::atWorkoutProgress(
+        double rawPositionMeters,
+        std::int64_t elapsedTimeMs,
+        bool moving)
+{
+    if (!configured) return {};
+    latestProgress = playback.atProgress(
+            rawPositionMeters, elapsedTimeMs, moving);
+    return latestProgress;
+}
+
+WorkoutGameDistancePlaybackSnapshot
+WorkoutGameCourseRuntime::seekToWorkoutPosition(
+        double positionMeters,
+        std::int64_t elapsedTimeMs)
+{
+    if (!configured) return {};
+    latestProgress = playback.seekToDistance(positionMeters, elapsedTimeMs);
+    return latestProgress;
 }
 
 double WorkoutGameCourseRuntime::generatedTargetWattsAt(
-        std::int64_t positionMeters, double relativeGearRatio) const
+        double positionMeters, double relativeGearRatio) const
 {
     if (!configured || !std::isfinite(relativeGearRatio)
             || relativeGearRatio <= 0.0) {
@@ -90,4 +121,17 @@ double WorkoutGameCourseRuntime::generatedTargetWattsAt(
     if (!snapshot.ready || !std::isfinite(snapshot.targetWatts)) return -1.0;
 
     return std::clamp(snapshot.targetWatts * relativeGearRatio, 0.0, 2500.0);
+}
+
+double WorkoutGameCourseRuntime::generatedProgressTargetWatts(
+        double relativeGearRatio) const
+{
+    if (!configured || !latestProgress.ready
+            || !std::isfinite(latestProgress.targetWatts)
+            || !std::isfinite(relativeGearRatio)
+            || relativeGearRatio <= 0.0) {
+        return -1.0;
+    }
+    return std::clamp(
+            latestProgress.targetWatts * relativeGearRatio, 0.0, 2500.0);
 }

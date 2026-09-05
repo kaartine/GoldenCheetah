@@ -29,7 +29,6 @@ public:
             std::size_t paletteCount,
             std::uint32_t seed,
             bool sourceRecovery);
-    static double curvatureDegreesPer100m(WorkoutGameCoursePreset preset);
 };
 
 #endif

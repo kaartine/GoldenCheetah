@@ -301,7 +301,8 @@ class TrainSidebar : public GcWindow
         double displayPower, displayHeartRate, displayCadence, displaySpeed;
         double displayLRBalance, displayLTE, displayRTE, displayLPS, displayRPS;
         double displaySMO2, displayTHB, displayO2HB, displayHHB;
-        double displayDistance, displayWorkoutDistance;
+        double displayDistance, displayWorkoutDistance, rawWorkoutDistance;
+        double displayWorkoutTargetWatts;
         double displayLapDistance, displayLapDistanceRemaining;
         double displayLatitude, displayLongitude, displayAltitude; // geolocation
         double displayCoreTemp, displaySkinTemp, displayHeatStrain;
@@ -318,6 +319,11 @@ class TrainSidebar : public GcWindow
         double displayTemp;
 
         void maintainLapDistanceState();
+        qint64 workoutProgressElapsedMs() const;
+        void updateWorkoutDistanceProgress();
+        void seekWorkoutDistance(double distanceKilometers);
+        bool workoutCourseFinished() const;
+        void publishWorkoutPosition();
 
         // for non-zero average calcs
         int pwrcount, cadcount, hrcount, spdcount, lodcount, grdcount; // for NZ average calc

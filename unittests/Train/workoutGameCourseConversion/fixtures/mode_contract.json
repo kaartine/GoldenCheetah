@@ -21,10 +21,12 @@
       "technicality": 0.15,
       "technicalTerrainExposurePercent": [25.0, 45.0],
       "technicalFeatureDensityPerTenSections": [2.0, 4.0],
+      "minimumRuntimeWorkExposurePercent": 100.0,
+      "minimumRuntimeKeyEffortExposurePercent": 100.0,
+      "minimumRuntimeRecoveryExposurePercent": 100.0,
       "allowedTechnicalTerrain": ["roots", "rollers", "easy-rock-garden", "log-over"],
       "scoredChallengeOnWorkAllowed": true,
-      "scoredChallengeOnRecoveryAllowed": false,
-      "curvatureDegreesPer100m": [45.0, 75.0]
+      "scoredChallengeOnRecoveryAllowed": false
     },
     "Balanced": {
       "maximumIntervalPowerErrorWatts": 0.0,
@@ -37,15 +39,17 @@
       "technicality": 0.55,
       "technicalTerrainExposurePercent": [50.0, 75.0],
       "technicalFeatureDensityPerTenSections": [5.0, 7.0],
+      "minimumRuntimeWorkExposurePercent": 100.0,
+      "minimumRuntimeKeyEffortExposurePercent": 100.0,
+      "minimumRuntimeRecoveryExposurePercent": 100.0,
       "allowedTechnicalTerrain": ["roots", "rollers", "rock-garden", "log-over", "skinny"],
       "scoredChallengeOnWorkAllowed": true,
-      "scoredChallengeOnRecoveryAllowed": false,
-      "curvatureDegreesPer100m": [60.0, 120.0]
+      "scoredChallengeOnRecoveryAllowed": false
     },
     "RideFirst": {
       "maximumIntervalPowerErrorWatts": 0.0,
       "maximumKeyEffortDurationErrorMs": 0,
-      "minimumRecoveryRetention": 0.95,
+      "minimumRecoveryRetention": 1.0,
       "defaultRecoveryRetention": 1.0,
       "maximumNonPrescriptiveChangePercent": 8.0,
       "maximumTotalDurationDeviationPercent": 8.0,
@@ -53,10 +57,12 @@
       "technicality": 0.95,
       "technicalTerrainExposurePercent": [75.0, 100.0],
       "technicalFeatureDensityPerTenSections": [8.0, 10.0],
+      "minimumRuntimeWorkExposurePercent": 100.0,
+      "minimumRuntimeKeyEffortExposurePercent": 100.0,
+      "minimumRuntimeRecoveryExposurePercent": 100.0,
       "allowedTechnicalTerrain": ["roots", "rollers", "rock-garden", "log-over", "skinny", "rock-slab", "tabletop", "gap-jump"],
       "scoredChallengeOnWorkAllowed": true,
-      "scoredChallengeOnRecoveryAllowed": false,
-      "curvatureDegreesPer100m": [75.0, 170.0]
+      "scoredChallengeOnRecoveryAllowed": false
     }
   },
   "expected": {

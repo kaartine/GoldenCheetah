@@ -89,14 +89,12 @@ bool WorkoutGameCourseSummary::build(
     summary.recoveryCount = prescription.recoveryCount;
     summary.preservedRecoveryCount = prescription.preservedRecoveryCount;
     summary.prescriptionChanges = prescription.durationChanges;
-    summary.curvatureDegreesPer100m =
-            WorkoutGameCourseTerrain::curvatureDegreesPer100m(preset);
     summary.fastEstimate = WorkoutGameDistanceCourseEstimator::estimate(
-            course, roadPhysics, 1.15);
+            course, roadPhysics, 1.15, 250);
     summary.nominalEstimate = WorkoutGameDistanceCourseEstimator::estimate(
-            course, roadPhysics, 1.0);
+            course, roadPhysics, 1.0, 250);
     summary.slowEstimate = WorkoutGameDistanceCourseEstimator::estimate(
-            course, roadPhysics, 0.85);
+            course, roadPhysics, 0.85, 250);
     if (!summary.fastEstimate.finished
             || !summary.nominalEstimate.finished
             || !summary.slowEstimate.finished) {
@@ -107,11 +105,7 @@ bool WorkoutGameCourseSummary::build(
         const WorkoutGameCourseModeContract contract =
                 WorkoutGameCoursePrescription::contractFor(preset);
         constexpr double Epsilon = 1.0e-9;
-        if (summary.technicalTerrainExposurePercent + Epsilon
-                    < contract.minimumTechnicalTerrainExposurePercent
-                || summary.technicalTerrainExposurePercent
-                    > contract.maximumTechnicalTerrainExposurePercent + Epsilon
-                || summary.technicalFeatureDensityPerTenSections + Epsilon
+        if (summary.technicalFeatureDensityPerTenSections + Epsilon
                     < contract.minimumTechnicalFeatureDensityPerTenSections
                 || summary.technicalFeatureDensityPerTenSections
                     > contract.maximumTechnicalFeatureDensityPerTenSections

@@ -8,6 +8,8 @@
  */
 
 #include "WorkoutGameCourseConversion.h"
+
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -50,6 +52,7 @@ WorkoutGameCourseConverter::parametersForPreset(
 {
     WorkoutGameDistanceCourseGenerationParameters parameters;
     parameters.roadPhysics = roadPhysics;
+    parameters.simulationStepMs = 200;
     switch (preset) {
     case WorkoutGameCoursePreset::WorkoutFirst:
         parameters.gradeScale = 0.82;
@@ -61,15 +64,18 @@ WorkoutGameCourseConverter::parametersForPreset(
         break;
     case WorkoutGameCoursePreset::Balanced:
         parameters.technicality = 0.55;
+        parameters.workMinimumDurationScale = 1.0;
+        parameters.workMaximumDurationScale = 1.03;
         parameters.recoveryMinimumDurationScale = 1.0;
+        parameters.recoveryMaximumDurationScale = 1.03;
         break;
     case WorkoutGameCoursePreset::RideFirst:
         parameters.gradeScale = 1.18;
         parameters.technicality = 0.95;
-        parameters.workMinimumDurationScale = 0.8;
-        parameters.workMaximumDurationScale = 1.5;
-        parameters.recoveryMinimumDurationScale = 0.95;
-        parameters.recoveryMaximumDurationScale = 1.9;
+        parameters.workMinimumDurationScale = 1.0;
+        parameters.workMaximumDurationScale = 1.08;
+        parameters.recoveryMinimumDurationScale = 1.0;
+        parameters.recoveryMaximumDurationScale = 1.08;
         break;
     }
     return parameters;
@@ -98,6 +104,19 @@ WorkoutGameCourseConversionResult WorkoutGameCourseConverter::convert(
     if (result.course.status != WorkoutGameDistanceCourseStatus::Ready) {
         result.status = WorkoutGameCourseConversionStatus::GenerationFailed;
         return result;
+    }
+    for (std::size_t index = 0; index < request.intervals.size(); ++index) {
+        const WorkoutGameCourseIntervalRole role =
+                WorkoutGameCoursePrescription::roleAt(
+                    request.prescriptionMetadata, index);
+        if (request.preset == WorkoutGameCoursePreset::WorkoutFirst
+                || role == WorkoutGameCourseIntervalRole::Prescribed) {
+            result.course.sections[index].minimumDurationMs =
+                    result.course.sections[index].nominalDurationMs;
+            result.course.sections[index].maximumDurationMs = std::max(
+                    result.course.sections[index].maximumDurationMs,
+                    result.course.sections[index].nominalDurationMs);
+        }
     }
 
     const WorkoutGameCoursePrescriptionAudit prescription =

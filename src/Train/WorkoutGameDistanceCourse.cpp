@@ -282,11 +282,11 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
         section.sourceStartMs = interval.startMs;
         section.nominalDurationMs = interval.durationMs;
         section.minimumDurationMs = scaledDuration(
-                interval.durationMs, isRecoveryFeature(adapted.feature)
+                interval.durationMs, sourceRecovery
                     ? parameters.recoveryMinimumDurationScale
                     : parameters.workMinimumDurationScale);
         section.maximumDurationMs = scaledDuration(
-                interval.durationMs, isRecoveryFeature(adapted.feature)
+                interval.durationMs, sourceRecovery
                     ? parameters.recoveryMaximumDurationScale
                     : parameters.workMaximumDurationScale);
         section.startDistanceMeters = before.distanceMeters;
@@ -364,32 +364,62 @@ WorkoutGameDistanceCourseEstimate WorkoutGameDistanceCourseEstimator::estimate(
     const std::int64_t maximumDurationMs = std::clamp<std::int64_t>(
             scaledMaximum, 60000, MaximumEstimateDurationMs);
     std::size_t sectionIndex = 0;
+    double rawDistanceMeters = 0.0;
+    double progressDistanceMeters = 0.0;
+    std::int64_t sectionActiveTimeMs = 0;
     while (result.elapsedTimeMs < maximumDurationMs) {
-        const WorkoutGameRoadPhysicsSnapshot before = physics.update({}, 0);
-        while (sectionIndex + 1 < course.sections.size()
-                && before.distanceMeters >=
-                    course.sections[sectionIndex].startDistanceMeters
-                        + course.sections[sectionIndex].lengthMeters) {
-            ++sectionIndex;
-        }
         const WorkoutGameDistanceCourseSection &section =
                 course.sections[sectionIndex];
-        const double progress = section.lengthMeters > 0.0
-                ? (before.distanceMeters - section.startDistanceMeters)
-                    / section.lengthMeters
-                : 1.0;
         const std::int64_t stepMs = std::min(
                 rawSimulationStepMs,
                 maximumDurationMs - result.elapsedTimeMs);
+        const double targetProgress = std::clamp(
+                (double(sectionActiveTimeMs) + double(stepMs) * 0.5)
+                    / double(section.nominalDurationMs),
+                0.0, 1.0);
+        const double targetWatts =
+                targetAt(section, targetProgress) * rawPowerScale;
         const WorkoutGameRoadPhysicsSnapshot after = physics.update({
-            targetAt(section, progress) * rawPowerScale,
+            targetWatts,
             section.gradePercent,
             0.0
         }, stepMs);
         result.elapsedTimeMs += stepMs;
-        result.distanceMeters = after.distanceMeters;
-        result.elevationMeters = after.elevationMeters;
-        if (after.distanceMeters >= course.totalDistanceMeters) {
+        const double rawAdvance = std::max(
+                0.0, after.distanceMeters - rawDistanceMeters);
+        rawDistanceMeters = after.distanceMeters;
+        // ETA assumes continuous active riding. Real stops are intentionally
+        // handled only by runtime progression and extend the actual ride.
+        sectionActiveTimeMs += stepMs;
+        const double timeProgress = std::clamp(
+                double(sectionActiveTimeMs)
+                    / double(section.minimumDurationMs),
+                0.0, 1.0);
+        const double sectionEnd = section.startDistanceMeters
+                + section.lengthMeters;
+        const double timeBound = section.startDistanceMeters
+                + section.lengthMeters * timeProgress;
+        const double availableAdvance = std::max(
+                0.0, std::min(sectionEnd, timeBound)
+                    - progressDistanceMeters);
+        progressDistanceMeters += std::min(rawAdvance, availableAdvance);
+        constexpr double BoundaryEpsilonMeters = 1.0e-9;
+        if (progressDistanceMeters >= sectionEnd - BoundaryEpsilonMeters) {
+            progressDistanceMeters = sectionEnd;
+            if (sectionIndex + 1 < course.sections.size()) {
+                ++sectionIndex;
+                sectionActiveTimeMs = 0;
+            }
+        }
+        result.distanceMeters = progressDistanceMeters;
+        const double sectionProgress = std::clamp(
+                (progressDistanceMeters - section.startDistanceMeters)
+                    / section.lengthMeters,
+                0.0, 1.0);
+        result.elevationMeters = section.startElevationMeters
+                + (section.endElevationMeters - section.startElevationMeters)
+                    * sectionProgress;
+        if (progressDistanceMeters >= course.totalDistanceMeters) {
             result.finished = true;
             return result;
         }

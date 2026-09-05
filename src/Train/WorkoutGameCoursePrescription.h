@@ -54,12 +54,10 @@ struct WorkoutGameCourseModeContract
     double maximumRecoveryDurationDeviationPercent = 0.0;
     double maximumTotalDurationDeviationPercent = 0.0;
     double maximumLoadDeviationPercent = 0.0;
-    double minimumTechnicalTerrainExposurePercent = 25.0;
-    double maximumTechnicalTerrainExposurePercent = 45.0;
+    double targetMinimumTechnicalTerrainExposurePercent = 25.0;
+    double targetMaximumTechnicalTerrainExposurePercent = 45.0;
     double minimumTechnicalFeatureDensityPerTenSections = 2.0;
     double maximumTechnicalFeatureDensityPerTenSections = 4.0;
-    double minimumCurvatureDegreesPer100m = 45.0;
-    double maximumCurvatureDegreesPer100m = 75.0;
 };
 
 enum class WorkoutGameCoursePrescriptionStatus

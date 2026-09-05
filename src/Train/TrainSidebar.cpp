@@ -426,7 +426,8 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     lodcount = 0;
     wbalr = wbal = 0;
     load_msecs = total_msecs = lap_msecs = 0;
-    displayWorkoutDistance = displayDistance = displayPower = displayHeartRate =
+    rawWorkoutDistance = displayWorkoutDistance = displayWorkoutTargetWatts =
+    displayDistance = displayPower = displayHeartRate =
     displaySpeed = displayCadence = slope = load = 0;
     displaySMO2 = displayTHB = displayO2HB = displayHHB = 0;
     displayLRBalance = RideFile::NA;
@@ -716,11 +717,13 @@ TrainSidebar::createMtbCourse()
     }
     request.sourceContents = sourceContents;
     request.sourceFileName = workout->filename();
-    request.ftpWatts = FTP > 0
-            ? double(FTP)
-            : workout->ftp() > 0
-                ? double(workout->ftp())
-                : workout->CP();
+    const int zoneRange = context->athlete->zones("Bike")
+            ? context->athlete->zones("Bike")->whichRange(QDate::currentDate())
+            : -1;
+    const double athleteFtpWatts = zoneRange >= 0
+            ? context->athlete->zones("Bike")->getCP(zoneRange) : 0.0;
+    request.ftpWatts = TrainSidebarRuntime::courseFtpWatts(
+            athleteFtpWatts, workout->CP(), workout->ftp());
 
     QString outputDirectory =
             appsettings->value(nullptr, GC_WORKOUTDIR).toString();
@@ -1262,6 +1265,72 @@ TrainSidebar::maintainLapDistanceState()
     displayLapDistanceRemaining = (nextlapmarkerM - currentpositionM) / 1000.;
 }
 
+qint64
+TrainSidebar::workoutProgressElapsedMs() const
+{
+    return session_elapsed_msec + session_time.elapsed();
+}
+
+void
+TrainSidebar::updateWorkoutDistanceProgress()
+{
+    if (!workoutGameCourseRuntime.enabled()) {
+        displayWorkoutDistance = rawWorkoutDistance;
+        return;
+    }
+
+    const WorkoutGameDistancePlaybackSnapshot progress =
+            workoutGameCourseRuntime.atWorkoutProgress(
+                rawWorkoutDistance * 1000.0,
+                workoutProgressElapsedMs(),
+                displaySpeed > 0.2
+                    || displayCadence > 0.0
+                    || displayPower > 5.0);
+    if (progress.ready) {
+        displayWorkoutDistance = progress.distanceMeters / 1000.0;
+        displayWorkoutTargetWatts = progress.targetWatts;
+    }
+}
+
+void
+TrainSidebar::seekWorkoutDistance(double distanceKilometers)
+{
+    rawWorkoutDistance = std::max(0.0, distanceKilometers);
+    if (!workoutGameCourseRuntime.enabled()) {
+        displayWorkoutDistance = rawWorkoutDistance;
+        return;
+    }
+
+    const WorkoutGameDistancePlaybackSnapshot progress =
+            workoutGameCourseRuntime.seekToWorkoutPosition(
+                rawWorkoutDistance * 1000.0,
+                workoutProgressElapsedMs());
+    if (progress.ready) {
+        rawWorkoutDistance = progress.distanceMeters / 1000.0;
+        displayWorkoutDistance = rawWorkoutDistance;
+        displayWorkoutTargetWatts = progress.targetWatts;
+    }
+}
+
+bool
+TrainSidebar::workoutCourseFinished() const
+{
+    if (!workoutGameCourseRuntime.enabled()) return false;
+    const WorkoutGameDistancePlaybackSnapshot progress =
+            workoutGameCourseRuntime.atWorkoutPosition(
+                displayWorkoutDistance * 1000.0);
+    return progress.ready && progress.finished;
+}
+
+void
+TrainSidebar::publishWorkoutPosition()
+{
+    if (!workoutGameCourseRuntime.enabled()) return;
+    context->notifySetNow(TrainSidebarRuntime::contextWorkoutPosition(
+            displayWorkoutDistance * 1000.0,
+            workoutCourseFinished()));
+}
+
 QStringList
 TrainSidebar::listWorkoutFiles(const QDir &dir) const
 {
@@ -1518,9 +1587,9 @@ void TrainSidebar::Start()       // when start button is pressed
         if (status & RT_RECORDING) disk_timer->start(SAMPLERATE);
         load_period.restart();
         load_timer->start(LOADRATE);
-        if (workoutRideModeEnabled) {
+        if (workoutRideModeEnabled || workoutGameCourseRuntime.enabled()) {
             resetWorkoutRideCommandDispatch();
-            applyWorkoutTarget(false);
+            if (!applyWorkoutTarget(false)) return;
         }
 
 #if !defined GC_VIDEO_NONE
@@ -1557,6 +1626,8 @@ void TrainSidebar::Start()       // when start button is pressed
         videosyncTree->setEnabled(true);
 #endif
 #endif
+
+        publishWorkoutPosition();
 
         // tell the world
         context->notifyPause();
@@ -1639,6 +1710,7 @@ void TrainSidebar::Start()       // when start button is pressed
         session_elapsed_msec = 0;
         lap_time.start();
         lap_elapsed_msec = 0;
+        workoutGameCourseRuntime.restartProgress();
         wbalr = 0;
         wbal = WPRIME;
         
@@ -1729,9 +1801,9 @@ void TrainSidebar::Pause()        // pause capture to recalibrate
         if (status & RT_RECORDING) disk_timer->start(SAMPLERATE);
         load_period.restart();
         load_timer->start(LOADRATE);
-        if (workoutRideModeEnabled) {
+        if (workoutRideModeEnabled || workoutGameCourseRuntime.enabled()) {
             resetWorkoutRideCommandDispatch();
-            applyWorkoutTarget(false);
+            if (!applyWorkoutTarget(false)) return;
         }
 
 #if !defined GC_VIDEO_NONE
@@ -1762,6 +1834,8 @@ void TrainSidebar::Pause()        // pause capture to recalibrate
         videosyncTree->setEnabled(true);
 #endif
 #endif
+
+        publishWorkoutPosition();
 
         // tell the world
         context->notifyPause();
@@ -1908,6 +1982,8 @@ void TrainSidebar::finishStop(RecordingStopAction recordingAction)
         recordingAction = KeepRecording;
     }
 
+    publishWorkoutPosition();
+
     // re-enable the screen saver on Windows
 #ifdef WIN32
     SetThreadExecutionState(ES_CONTINUOUS);
@@ -2053,7 +2129,8 @@ void TrainSidebar::finishStop(RecordingStopAction recordingAction)
     session_time.restart();
     lap_elapsed_msec = 0;
     lap_time.restart();
-    displayWorkoutDistance = displayDistance = 0;
+    rawWorkoutDistance = displayWorkoutDistance = displayWorkoutTargetWatts =
+            displayDistance = 0;
     displayLapDistance = 0;
     displayLapDistanceRemaining = -1;
     displayAltitude = 0;
@@ -2432,9 +2509,16 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
             if ((status&RT_RUNNING) && ((status&RT_PAUSED) == 0)) {
 
                 displayDistance += distanceTick;
-                displayLapDistance += distanceTick;
-                displayLapDistanceRemaining -= distanceTick;
-                displayWorkoutDistance += distanceTick;
+                rawWorkoutDistance += distanceTick;
+                const double previousWorkoutDistance = displayWorkoutDistance;
+                updateWorkoutDistanceProgress();
+                if (workoutGameCourseRuntime.enabled()) {
+                    rtData.setLoad(displayWorkoutTargetWatts);
+                }
+                const double workoutDistanceTick =
+                        displayWorkoutDistance - previousWorkoutDistance;
+                displayLapDistance += workoutDistanceTick;
+                displayLapDistanceRemaining -= workoutDistanceTick;
 
                 if (!(status&RT_MODE_ERGO) && (context->currentVideoSyncFile()))
                 {
@@ -2958,9 +3042,16 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
         target = TrainerTarget::erg(load, load_msecs);
     } else {
         resetWorkoutRideCommandDispatch();
-        if (context->currentErgFile()) {
+        const double workoutPositionMeters = displayWorkoutDistance * 1000.0;
+        const bool generatedCourseFinished = workoutCourseFinished();
+        if (generatedCourseFinished) {
+            target = TrainerTarget::slope(
+                    -100.0,
+                    bicycle.WindResistance(displayAltitude),
+                    workoutPositionMeters);
+        } else if (context->currentErgFile()) {
             const double workoutSlope = ergFileQueryAdapter.gradientAt(
-                    displayWorkoutDistance * 1000., curLap);
+                    workoutPositionMeters, curLap);
             slope = TrainSidebarRuntime::slopeTarget(
                     slope, workoutSlope, initializeSlope);
 
@@ -2970,16 +3061,21 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             }
 
             displayWorkoutLap = curLap;
+            target = TrainerTarget::slope(
+                    slope,
+                    bicycle.WindResistance(displayAltitude),
+                    workoutPositionMeters);
+        } else {
+            target = TrainerTarget::slope(
+                    slope,
+                    bicycle.WindResistance(displayAltitude),
+                    workoutPositionMeters);
         }
-
-        target = TrainerTarget::slope(
-                slope,
-                bicycle.WindResistance(displayAltitude),
-                displayWorkoutDistance * 1000);
-        generatedCourseTargetWatts =
-                workoutGameCourseRuntime.generatedTargetWattsAt(
-                    std::llround(displayWorkoutDistance * 1000.0),
-                    virtualDrivetrain.relativeRatio());
+        if (!generatedCourseFinished) {
+            generatedCourseTargetWatts =
+                    workoutGameCourseRuntime.generatedProgressTargetWatts(
+                        virtualDrivetrain.relativeRatio());
+        }
     }
 
     std::vector<TrainerTargetDevice *> targetDevices;
@@ -2992,7 +3088,8 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
         const TrainerTargetResult result = trainerTargetCoordinator.apply(
                 target, targetDevices);
         if (result == TrainerTargetResult::WorkoutFinished) {
-            context->notifySetNow(target.workoutPosition);
+            context->notifySetNow(TrainSidebarRuntime::contextWorkoutPosition(
+                    target.workoutPosition, workoutCourseFinished()));
             Stop(DEVICE_OK);
             return false;
         }
@@ -3019,7 +3116,8 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
         }
     }
 
-    context->notifySetNow(target.workoutPosition);
+    context->notifySetNow(TrainSidebarRuntime::contextWorkoutPosition(
+            target.workoutPosition, workoutCourseFinished()));
     return true;
 }
 
@@ -3414,12 +3512,14 @@ void TrainSidebar::FFwd()
             }
             context->notifySeek(stepSize); // in case of video with RLV file synchronisation just ask to go forward
         }
-        displayWorkoutDistance += stepSize;
+        seekWorkoutDistance(displayWorkoutDistance + stepSize);
     }
 
     resetTextAudioEmitTracking();
 
     maintainLapDistanceState();
+
+    if (workoutGameCourseRuntime.enabled() && !applyWorkoutTarget(true)) return;
 
     context->notifySetNotification(tr("Fast forward.."), 2);
 }
@@ -3447,12 +3547,14 @@ void TrainSidebar::Rewind()
             context->notifySeek(stepSize);
         }
 
-        displayWorkoutDistance += stepSize;
+        seekWorkoutDistance(displayWorkoutDistance + stepSize);
     }
 
     resetTextAudioEmitTracking();
 
     maintainLapDistanceState();
+
+    if (workoutGameCourseRuntime.enabled() && !applyWorkoutTarget(true)) return;
 
     context->notifySetNotification(tr("Rewind.."), 2);
 }
@@ -3476,13 +3578,15 @@ void TrainSidebar::FFwdLap()
             // Go to slightly before lap marker so the lap transition message will be displayed.
             lapmarker = std::max(0., lapmarker - s_BeforeOffset);
 
-            displayWorkoutDistance = lapmarker / 1000; // jump forward to lapmarker
+            seekWorkoutDistance(lapmarker / 1000); // jump forward to lapmarker
         }
     }
 
     resetTextAudioEmitTracking();
 
     maintainLapDistanceState();    
+
+    if (workoutGameCourseRuntime.enabled() && !applyWorkoutTarget(true)) return;
 
     if (lapmarker >= 0) context->notifySetNotification(tr("Next Lap.."), 2);
 }
@@ -3510,12 +3614,14 @@ void TrainSidebar::RewindLap()
         // Go to slightly before lap marker so the lap transition message will be displayed.
         if (lapmarker >= 0.) lapmarker = std::max(0., lapmarker - 10.1);
 
-        if (lapmarker >= 0.) displayWorkoutDistance = lapmarker / 1000; // jump to lapmarker
+        if (lapmarker >= 0.) seekWorkoutDistance(lapmarker / 1000); // jump to lapmarker
     }
 
     resetTextAudioEmitTracking();
 
     maintainLapDistanceState();
+
+    if (workoutGameCourseRuntime.enabled() && !applyWorkoutTarget(true)) return;
 
     if (lapmarker >= 0) context->notifySetNotification(tr("Back Lap.."), 2);
 }

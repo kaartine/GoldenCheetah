@@ -28,20 +28,30 @@ class WorkoutGameCourseRuntime
 public:
     WorkoutGameCourseRuntimeStatus configure(const QString &coursePath);
     void reset();
+    void restartProgress();
 
     bool enabled() const;
     double ftpWatts() const;
     const WorkoutGameCourse &visualCourse() const;
     WorkoutGameDistancePlaybackSnapshot atWorkoutPosition(
-            std::int64_t positionMeters) const;
+            double positionMeters) const;
+    WorkoutGameDistancePlaybackSnapshot atWorkoutProgress(
+            double rawPositionMeters,
+            std::int64_t elapsedTimeMs,
+            bool moving = true);
+    WorkoutGameDistancePlaybackSnapshot seekToWorkoutPosition(
+            double positionMeters,
+            std::int64_t elapsedTimeMs);
     double generatedTargetWattsAt(
-            std::int64_t positionMeters, double relativeGearRatio) const;
+            double positionMeters, double relativeGearRatio) const;
+    double generatedProgressTargetWatts(double relativeGearRatio) const;
 
 private:
     bool configured = false;
     double configuredFtpWatts = 0.0;
     WorkoutGameCourse configuredVisualCourse;
     WorkoutGameDistancePlayback playback;
+    WorkoutGameDistancePlaybackSnapshot latestProgress;
 };
 
 #endif

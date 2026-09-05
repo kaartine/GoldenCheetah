@@ -19,8 +19,10 @@ struct WorkoutGameDistancePlaybackSnapshot
 {
     bool ready = false;
     bool finished = false;
+    bool maximumExposureExceeded = false;
     std::size_t sectionIndex = 0;
     std::int64_t nominalTimeMs = 0;
+    std::int64_t sectionElapsedMs = 0;
     double distanceMeters = 0.0;
     double sectionProgress = 0.0;
     double targetWatts = 0.0;
@@ -33,13 +35,29 @@ class WorkoutGameDistancePlayback
 {
 public:
     bool configure(const WorkoutGameDistanceCourse &course);
+    void resetProgress();
     WorkoutGameDistancePlaybackSnapshot atDistance(double distanceMeters) const;
+    WorkoutGameDistancePlaybackSnapshot atProgress(
+            double rawDistanceMeters,
+            std::int64_t elapsedTimeMs,
+            bool moving = true);
+    WorkoutGameDistancePlaybackSnapshot seekToDistance(
+            double distanceMeters,
+            std::int64_t elapsedTimeMs);
 
     static WorkoutGameCourse visualCourse(
             const WorkoutGameDistanceCourse &course);
 
 private:
+    WorkoutGameDistancePlaybackSnapshot progressSnapshot() const;
+    void anchorProgress(double distanceMeters, std::int64_t elapsedTimeMs);
+
     WorkoutGameDistanceCourse configuredCourse;
+    double lastRawDistanceMeters = 0.0;
+    double progressDistanceMeters = 0.0;
+    std::size_t progressSectionIndex = 0;
+    std::int64_t progressSectionActiveTimeMs = 0;
+    std::int64_t lastProgressTimeMs = 0;
 };
 
 #endif

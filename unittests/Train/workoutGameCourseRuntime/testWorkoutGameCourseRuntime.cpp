@@ -213,10 +213,66 @@ private slots:
         QCOMPARE(runtime.generatedTargetWattsAt(200, 2.0), 200.0);
     }
 
+    void runtimeConstrainsRawTrainerDistanceByElapsedExposure()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("runtime.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, sampleDocument(), error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseRuntime runtime;
+        QCOMPARE(runtime.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
+
+        const WorkoutGameDistancePlaybackSnapshot fast =
+                runtime.atWorkoutProgress(100, 4500);
+        QCOMPARE(fast.distanceMeters, 50.0);
+        QCOMPARE(fast.sectionIndex, std::size_t(0));
+        QCOMPARE(fast.targetWatts, 195.0);
+        QCOMPARE(runtime.generatedProgressTargetWatts(1.0), 195.0);
+
+        const WorkoutGameDistancePlaybackSnapshot stopped =
+                runtime.atWorkoutProgress(100, 6250);
+        QCOMPARE(stopped.distanceMeters, 50.0);
+        QCOMPARE(stopped.sectionIndex, std::size_t(0));
+
+        const WorkoutGameDistancePlaybackSnapshot boundary =
+                runtime.atWorkoutProgress(150, 10750);
+        QCOMPARE(boundary.distanceMeters, 100.0);
+        QCOMPARE(boundary.sectionIndex, std::size_t(1));
+
+        const WorkoutGameDistancePlaybackSnapshot lateEntry =
+                runtime.atWorkoutProgress(200, 10850);
+        QVERIFY(lateEntry.distanceMeters >= 100.0);
+        QVERIFY(lateEntry.distanceMeters < 102.0);
+    }
+
+    void restartingSessionClearsRuntimeProgress()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("runtime.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, sampleDocument(), error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseRuntime runtime;
+        QCOMPARE(runtime.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
+        QVERIFY(runtime.atWorkoutProgress(100, 4500).distanceMeters > 0.0);
+
+        runtime.restartProgress();
+        QCOMPARE(runtime.atWorkoutProgress(0, 0).distanceMeters, 0.0);
+        QCOMPARE(runtime.atWorkoutProgress(0, 30000).distanceMeters, 0.0);
+    }
+
     void rejectsUnavailableOrInvalidGeneratorTargets()
     {
         WorkoutGameCourseRuntime runtime;
         QCOMPARE(runtime.generatedTargetWattsAt(50, 1.0), -1.0);
+        QCOMPARE(runtime.generatedProgressTargetWatts(1.0), -1.0);
 
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -228,6 +284,7 @@ private slots:
         QCOMPARE(runtime.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
 
         QCOMPARE(runtime.generatedTargetWattsAt(50, 0.0), -1.0);
+        QCOMPARE(runtime.generatedProgressTargetWatts(0.0), -1.0);
         QCOMPARE(runtime.generatedTargetWattsAt(
                      50, std::numeric_limits<double>::infinity()), -1.0);
     }

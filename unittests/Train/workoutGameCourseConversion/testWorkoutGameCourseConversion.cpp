@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameCourseConversion.h"
+#include "Train/WorkoutGameRoadPlan.h"
 #include "Train/WorkoutGameCoursePrescription.h"
 #include "Train/WorkoutGameCourseTerrain.h"
 #include "Train/WorkoutGameFeatureCatalog.h"
@@ -174,6 +175,66 @@ private slots:
         }
     }
 
+    void rideFirstKeepsLowIntensityWarmupInsideRecoveryExposureLimit()
+    {
+        WorkoutGameCourseConversionRequest request;
+        request.intervals = {
+            {0, 5 * 60000, 100.0, 100.0},
+            {5 * 60000, 60000, 220.0, 220.0},
+            {6 * 60000, 5 * 60000, 100.0, 100.0}
+        };
+        request.ftpWatts = 200.0;
+        request.preset = WorkoutGameCoursePreset::RideFirst;
+        request.seed = 42u;
+
+        const WorkoutGameCourseConversionResult result =
+                WorkoutGameCourseConverter::convert(request);
+
+        QCOMPARE(result.status, WorkoutGameCourseConversionStatus::Ready);
+        QVERIFY(double(result.course.sections.front().minimumDurationMs) + 1.0
+                >= double(request.intervals.front().durationMs) * 0.95);
+        QCOMPARE(result.course.sections.front().nominalDurationMs,
+                 request.intervals.front().durationMs);
+    }
+
+    void recoveryBermsRemainNormalUnscoredRoadSections()
+    {
+        WorkoutGameCourseConversionRequest request;
+        request.intervals = {
+            {0, 60000, 140.0, 140.0},
+            {60000, 3 * 60000, 100.0, 100.0},
+            {4 * 60000, 60000, 140.0, 140.0}
+        };
+        request.ftpWatts = 200.0;
+        request.seed = 42u;
+
+        request.preset = WorkoutGameCoursePreset::WorkoutFirst;
+        const WorkoutGameCourseConversionResult workoutFirst =
+                WorkoutGameCourseConverter::convert(request);
+        request.preset = WorkoutGameCoursePreset::RideFirst;
+        const WorkoutGameCourseConversionResult rideFirst =
+                WorkoutGameCourseConverter::convert(request);
+
+        QCOMPARE(workoutFirst.status, WorkoutGameCourseConversionStatus::Ready);
+        QCOMPARE(rideFirst.status, WorkoutGameCourseConversionStatus::Ready);
+        QCOMPARE(rideFirst.course.sections[1].terrain,
+                 WorkoutGameTerrainKind::Berm);
+        QVERIFY(rideFirst.course.sections[1].terrain
+                != workoutFirst.course.sections[1].terrain);
+        QCOMPARE(rideFirst.course.sections[1].feature,
+                 WorkoutGameFeature::RecoveryDescent);
+        QCOMPARE(rideFirst.course.sections[1].nominalDurationMs,
+                 request.intervals[1].durationMs);
+        if (rideFirst.course.roadPlan) {
+            for (const WorkoutGameRoadPiece &piece
+                    : rideFirst.course.roadPlan->pieces) {
+                if (piece.sourceSectionIndex == 1u) {
+                    QVERIFY(!piece.challenge.enabled);
+                }
+            }
+        }
+    }
+
     void balancedPresetProducesCompletePreviewSummary()
     {
         WorkoutGameCourseConversionRequest request;
@@ -255,6 +316,38 @@ private slots:
         QCOMPARE(workoutFirst.summary.loadDeviationPercent, 0.0);
         QCOMPARE(balanced.summary.loadDeviationPercent, 0.0);
         QCOMPARE(rideFirst.summary.loadDeviationPercent, 0.0);
+        QCOMPARE(workoutFirst.generationParameters.workMinimumDurationScale, 1.0);
+        QCOMPARE(workoutFirst.generationParameters.workMaximumDurationScale, 1.0);
+        QCOMPARE(balanced.generationParameters.workMinimumDurationScale, 1.0);
+        QCOMPARE(balanced.generationParameters.workMaximumDurationScale, 1.03);
+        QCOMPARE(rideFirst.generationParameters.workMinimumDurationScale, 1.0);
+        QCOMPARE(rideFirst.generationParameters.workMaximumDurationScale, 1.08);
+        QCOMPARE(rideFirst.generationParameters.recoveryMinimumDurationScale, 1.0);
+        QCOMPARE(rideFirst.generationParameters.recoveryMaximumDurationScale, 1.08);
+        QCOMPARE(workoutFirst.generationParameters.simulationStepMs,
+                 std::int64_t(200));
+        QCOMPARE(balanced.generationParameters.simulationStepMs,
+                 std::int64_t(200));
+        QCOMPARE(rideFirst.generationParameters.simulationStepMs,
+                 std::int64_t(200));
+
+        const auto minimumRuntimeDuration = [](
+                const WorkoutGameDistanceCourse &course) {
+            std::int64_t total = 0;
+            for (const WorkoutGameDistanceCourseSection &section
+                    : course.sections) {
+                total += section.minimumDurationMs;
+            }
+            return total;
+        };
+        QVERIFY(workoutFirst.summary.fastEstimate.elapsedTimeMs
+                >= minimumRuntimeDuration(workoutFirst.course));
+        QVERIFY(balanced.summary.fastEstimate.elapsedTimeMs
+                >= minimumRuntimeDuration(balanced.course));
+        QVERIFY(rideFirst.summary.fastEstimate.elapsedTimeMs
+                >= minimumRuntimeDuration(rideFirst.course));
+        QCOMPARE(workoutFirst.summary.fastEstimate.elapsedTimeMs,
+                 workoutFirst.summary.nominalDurationMs);
         QVERIFY(workoutFirst.summary.technicalTerrainExposurePercent
                 < balanced.summary.technicalTerrainExposurePercent);
         QVERIFY(balanced.summary.technicalTerrainExposurePercent
@@ -263,10 +356,6 @@ private slots:
                 < balanced.summary.technicalFeatureDensityPerTenSections);
         QVERIFY(balanced.summary.technicalFeatureDensityPerTenSections
                 < rideFirst.summary.technicalFeatureDensityPerTenSections);
-        QVERIFY(workoutFirst.summary.curvatureDegreesPer100m + 15.0
-                <= balanced.summary.curvatureDegreesPer100m + 1.0e-9);
-        QVERIFY(balanced.summary.curvatureDegreesPer100m + 15.0
-                <= rideFirst.summary.curvatureDegreesPer100m + 1.0e-9);
         bool hasNewRideFeature = false;
         for (const WorkoutGameDistanceCourseSection &section
                 : rideFirst.course.sections) {
@@ -350,9 +439,9 @@ private slots:
             QCOMPARE(result.summary.totalDurationDeviationPercent, 0.0);
             QCOMPARE(result.summary.recoveryDurationDeviationPercent, 0.0);
             QVERIFY(result.summary.technicalTerrainExposurePercent + 1.0e-9
-                    >= contract.minimumTechnicalTerrainExposurePercent);
+                    >= contract.targetMinimumTechnicalTerrainExposurePercent);
             QVERIFY(result.summary.technicalTerrainExposurePercent
-                    <= contract.maximumTechnicalTerrainExposurePercent
+                    <= contract.targetMaximumTechnicalTerrainExposurePercent
                         + 1.0e-9);
             QVERIFY(result.summary.technicalFeatureDensityPerTenSections
                     + 1.0e-9
@@ -360,10 +449,6 @@ private slots:
             QVERIFY(result.summary.technicalFeatureDensityPerTenSections
                     <= contract.maximumTechnicalFeatureDensityPerTenSections
                         + 1.0e-9);
-            QVERIFY(result.summary.curvatureDegreesPer100m + 1.0e-9
-                    >= contract.minimumCurvatureDegreesPer100m);
-            QVERIFY(result.summary.curvatureDegreesPer100m
-                    <= contract.maximumCurvatureDegreesPer100m + 1.0e-9);
 
             for (std::size_t index = 0;
                     index < request.intervals.size(); ++index) {
@@ -373,10 +458,12 @@ private slots:
                 QCOMPARE(output.targetStartWatts, source.startWatts);
                 QCOMPARE(output.targetEndWatts, source.endWatts);
                 QCOMPARE(output.nominalDurationMs, source.durationMs);
+                QCOMPARE(output.minimumDurationMs, source.durationMs);
                 QVERIFY(std::abs(output.gradePercent) <= 12.0 + 1.0e-9);
                 if (WorkoutGameCoursePrescription::isKeyEffort(
                             source, request.ftpWatts)) {
                     QCOMPARE(output.nominalDurationMs, source.durationMs);
+                    QCOMPARE(output.minimumDurationMs, source.durationMs);
                 }
                 if (WorkoutGameCoursePrescription::isRecovery(
                             source, request.ftpWatts)) {
@@ -411,6 +498,44 @@ private slots:
                      fiveMinuteRecovery.durationMs);
             QVERIFY(generatedRecovery.terrain
                     != WorkoutGameTerrainKind::GapJump);
+        }
+    }
+
+    void unevenIntervalLengthsDoNotMakeTerrainPaletteFailConversion()
+    {
+        WorkoutGameCourseConversionRequest request;
+        request.ftpWatts = 190.0;
+        request.seed = 17u;
+        for (int index = 0; index < 10; ++index) {
+            appendInterval(request.intervals,
+                           index == 4 ? 20 * 60000 : 30000,
+                           150.0);
+        }
+
+        for (WorkoutGameCoursePreset preset : {
+                 WorkoutGameCoursePreset::WorkoutFirst,
+                 WorkoutGameCoursePreset::Balanced,
+                 WorkoutGameCoursePreset::RideFirst}) {
+            request.preset = preset;
+            const WorkoutGameCourseConversionResult result =
+                    WorkoutGameCourseConverter::convert(request);
+            QCOMPARE(result.status, WorkoutGameCourseConversionStatus::Ready);
+            QCOMPARE(result.summary.nominalDurationMs,
+                     std::int64_t(20 * 60000 + 9 * 30000));
+            std::int64_t minimumRuntimeDurationMs = 0;
+            for (std::size_t index = 0;
+                    index < request.intervals.size(); ++index) {
+                QCOMPARE(result.course.sections[index].targetStartWatts,
+                         request.intervals[index].startWatts);
+                QCOMPARE(result.course.sections[index].targetEndWatts,
+                         request.intervals[index].endWatts);
+                QCOMPARE(result.course.sections[index].nominalDurationMs,
+                         request.intervals[index].durationMs);
+                minimumRuntimeDurationMs +=
+                        result.course.sections[index].minimumDurationMs;
+            }
+            QVERIFY(result.summary.fastEstimate.elapsedTimeMs
+                    >= minimumRuntimeDurationMs);
         }
     }
 

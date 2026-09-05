@@ -64,6 +64,7 @@ private:
     QToolButton *workoutFirstButton = nullptr;
     QToolButton *balancedButton = nullptr;
     QToolButton *rideFirstButton = nullptr;
+    QLabel *presetDescriptionLabel = nullptr;
     WorkoutGameCoursePreviewWidget *preview = nullptr;
     QLabel *durationValue = nullptr;
     QLabel *etaValue = nullptr;
@@ -80,7 +81,7 @@ private:
     QLabel *terrainSignatureValue = nullptr;
     QLabel *technicalExposureValue = nullptr;
     QLabel *featureDensityValue = nullptr;
-    QLabel *curvatureValue = nullptr;
+    QLabel *runtimeExposureValue = nullptr;
     QLabel *prescriptionChangesValue = nullptr;
     QLabel *workoutFirstComparisonValue = nullptr;
     QLabel *balancedComparisonValue = nullptr;

@@ -40,7 +40,6 @@ struct WorkoutGameCourseConversionSummary
     bool technicalTerrainExposureApplicable = false;
     double technicalTerrainExposurePercent = 0.0;
     double technicalFeatureDensityPerTenSections = 0.0;
-    double curvatureDegreesPer100m = 0.0;
     std::vector<WorkoutGameCoursePrescriptionAudit::DurationChange>
             prescriptionChanges;
     WorkoutGameDistanceCourseEstimate fastEstimate;

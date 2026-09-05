@@ -275,13 +275,15 @@ void WorkoutGameWindow::storeGhost()
 
 double WorkoutGameWindow::currentFtp(ErgFile *workout) const
 {
+    // ErgFile has already scaled its watt points to CP(). Use the same
+    // denominator even if athlete zones changed after the file was loaded.
+    if (workout && workout->CP() > 0.0) return workout->CP();
     if (context && context->athlete && context->athlete->zones("Bike")) {
         const Zones *zones = context->athlete->zones("Bike");
         const int range = zones->whichRange(QDate::currentDate());
         if (range >= 0 && zones->getCP(range) > 0) return zones->getCP(range);
     }
     if (workout && workout->ftp() > 0) return workout->ftp();
-    if (workout && workout->CP() > 0.0) return workout->CP();
     return 0.0;
 }
 
@@ -528,11 +530,8 @@ void WorkoutGameWindow::updateRunnerTelemetry()
     if (hasTelemetry) {
         input.simulation.actualWatts = finiteClampedNonNegative(
                 latestTelemetry.getWatts(), MaximumPowerWatts);
-        input.simulation.targetWatts = distanceRuntime.enabled()
-                && distanceSnapshot.ready
-                ? distanceSnapshot.targetWatts
-                : finiteClampedNonNegative(
-                    latestTelemetry.getLoad(), MaximumPowerWatts);
+        input.simulation.targetWatts = finiteClampedNonNegative(
+                latestTelemetry.getLoad(), MaximumPowerWatts);
         input.simulation.cadenceRpm = finiteClampedNonNegative(
                 latestTelemetry.getCadence(), MaximumCadenceRpm);
         if (distanceRuntime.enabled()) {

@@ -17,9 +17,19 @@ bool WorkoutGameDistancePlayback::configure(
         const WorkoutGameDistanceCourse &course)
 {
     configuredCourse = WorkoutGameDistanceCourse();
+    resetProgress();
     if (!WorkoutGameDistanceCourseBuilder::validCourse(course)) return false;
     configuredCourse = course;
     return true;
+}
+
+void WorkoutGameDistancePlayback::resetProgress()
+{
+    lastRawDistanceMeters = 0.0;
+    progressDistanceMeters = 0.0;
+    progressSectionIndex = 0;
+    progressSectionActiveTimeMs = 0;
+    lastProgressTimeMs = 0;
 }
 
 WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::atDistance(
@@ -63,6 +73,117 @@ WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::atDistance(
     result.gradePercent = section->gradePercent;
     result.feature = section->feature;
     result.terrain = section->terrain;
+    return result;
+}
+
+WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::atProgress(
+        double rawDistanceMeters,
+        std::int64_t elapsedTimeMs,
+        bool moving)
+{
+    if (!std::isfinite(rawDistanceMeters) || elapsedTimeMs < 0
+            || elapsedTimeMs < lastProgressTimeMs
+            || !WorkoutGameDistanceCourseBuilder::validCourse(configuredCourse)) {
+        return {};
+    }
+
+    const double rawDistance = std::max(0.0, rawDistanceMeters);
+    if (rawDistance < lastRawDistanceMeters) {
+        lastRawDistanceMeters = rawDistance;
+        lastProgressTimeMs = elapsedTimeMs;
+        return progressSnapshot();
+    }
+
+    const double rawAdvance = rawDistance - lastRawDistanceMeters;
+    const std::int64_t elapsedAdvanceMs = elapsedTimeMs - lastProgressTimeMs;
+    lastRawDistanceMeters = rawDistance;
+    lastProgressTimeMs = elapsedTimeMs;
+    if (progressDistanceMeters >= configuredCourse.totalDistanceMeters) {
+        return progressSnapshot();
+    }
+    if (!moving) return progressSnapshot();
+
+    const WorkoutGameDistanceCourseSection &section =
+            configuredCourse.sections[progressSectionIndex];
+    const double sectionEnd = section.startDistanceMeters
+            + section.lengthMeters;
+    if (rawAdvance > 1.0e-9) {
+        progressSectionActiveTimeMs += elapsedAdvanceMs;
+    }
+    const double timeProgress = std::clamp(
+            double(progressSectionActiveTimeMs)
+                / double(section.minimumDurationMs),
+            0.0, 1.0);
+    const double timeBound = section.startDistanceMeters
+            + section.lengthMeters * timeProgress;
+    const double availableAdvance = std::max(
+            0.0, std::min(sectionEnd, timeBound) - progressDistanceMeters);
+    progressDistanceMeters += std::min(rawAdvance, availableAdvance);
+
+    constexpr double BoundaryEpsilonMeters = 1.0e-9;
+    if (progressDistanceMeters >= sectionEnd - BoundaryEpsilonMeters) {
+        progressDistanceMeters = sectionEnd;
+        if (progressSectionIndex + 1 < configuredCourse.sections.size()) {
+            ++progressSectionIndex;
+            progressSectionActiveTimeMs = 0;
+        }
+    }
+    return progressSnapshot();
+}
+
+WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::seekToDistance(
+        double distanceMeters,
+        std::int64_t elapsedTimeMs)
+{
+    if (!std::isfinite(distanceMeters) || elapsedTimeMs < 0
+            || !WorkoutGameDistanceCourseBuilder::validCourse(configuredCourse)) {
+        return {};
+    }
+    anchorProgress(distanceMeters, elapsedTimeMs);
+    return progressSnapshot();
+}
+
+void WorkoutGameDistancePlayback::anchorProgress(
+        double distanceMeters,
+        std::int64_t elapsedTimeMs)
+{
+    progressDistanceMeters = std::clamp(
+            distanceMeters, 0.0, configuredCourse.totalDistanceMeters);
+    lastRawDistanceMeters = progressDistanceMeters;
+    lastProgressTimeMs = elapsedTimeMs;
+    const WorkoutGameDistancePlaybackSnapshot snapshot =
+            atDistance(progressDistanceMeters);
+    progressSectionIndex = snapshot.sectionIndex;
+    const WorkoutGameDistanceCourseSection &section =
+            configuredCourse.sections[progressSectionIndex];
+    progressSectionActiveTimeMs = std::int64_t(std::llround(
+            snapshot.sectionProgress * double(section.minimumDurationMs)));
+}
+
+WorkoutGameDistancePlaybackSnapshot
+WorkoutGameDistancePlayback::progressSnapshot() const
+{
+    WorkoutGameDistancePlaybackSnapshot result =
+            atDistance(progressDistanceMeters);
+    if (!result.ready) return result;
+    result.sectionElapsedMs = progressSectionActiveTimeMs;
+    const WorkoutGameDistanceCourseSection &section =
+            configuredCourse.sections[result.sectionIndex];
+    const double targetProgress = result.finished
+            ? 1.0
+            : std::clamp(
+                double(progressSectionActiveTimeMs)
+                    / double(section.nominalDurationMs),
+                0.0, 1.0);
+    result.nominalTimeMs = result.finished
+            ? configuredCourse.nominalDurationMs
+            : section.sourceStartMs + std::int64_t(std::llround(
+                targetProgress * double(section.nominalDurationMs)));
+    result.targetWatts = section.targetStartWatts
+            + (section.targetEndWatts - section.targetStartWatts)
+                * targetProgress;
+    result.maximumExposureExceeded = !result.finished
+            && result.sectionElapsedMs > section.maximumDurationMs;
     return result;
 }
 

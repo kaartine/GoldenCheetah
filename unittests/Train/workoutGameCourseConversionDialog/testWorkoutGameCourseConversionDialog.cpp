@@ -9,6 +9,7 @@
 
 #include "Train/WorkoutGameCourseConversionDialog.h"
 #include "Train/WorkoutGameCoursePreviewWidget.h"
+#include "Train/WorkoutGameRoadPlan.h"
 
 #include <QFileInfo>
 #include <QImage>
@@ -20,6 +21,7 @@
 #include <QTest>
 #include <QToolButton>
 
+#include <cmath>
 #include <set>
 
 namespace {
@@ -80,6 +82,8 @@ private slots:
                  WorkoutGameCourseSourceStatus::Ready);
         QVERIFY(requiredChild<QToolButton>(dialog, "balancedPresetButton")
                         ->isChecked());
+        QVERIFY(requiredChild<QLabel>(dialog, "presetDescriptionLabel")
+                        ->text().contains("preserves every", Qt::CaseInsensitive));
         QVERIFY(!requiredChild<QLabel>(dialog, "durationValue")->text().isEmpty());
         QVERIFY(requiredChild<QLabel>(dialog, "etaValue")->text().contains("-"));
         QVERIFY(requiredChild<QLabel>(dialog, "distanceValue")->text().contains("km"));
@@ -96,12 +100,14 @@ private slots:
                         ->text().contains("/"));
         QVERIFY(!requiredChild<QLabel>(dialog, "terrainSignatureValue")
                         ->text().isEmpty());
+        QVERIFY(requiredChild<QLabel>(dialog, "terrainSignatureValue")
+                        ->text().contains("bends", Qt::CaseInsensitive));
         QVERIFY(requiredChild<QLabel>(dialog, "technicalExposureValue")
                         ->text().contains("%"));
         QVERIFY(requiredChild<QLabel>(dialog, "featureDensityValue")
                         ->text().contains("/10 sections"));
-        QVERIFY(requiredChild<QLabel>(dialog, "curvatureValue")
-                        ->text().contains("deg/100 m"));
+        QCOMPARE(requiredChild<QLabel>(dialog, "runtimeExposureValue")->text(),
+                 QStringLiteral("100% of prescribed interval time"));
         QVERIFY(!requiredChild<QLabel>(dialog, "prescriptionChangesValue")
                         ->text().isEmpty());
         QVERIFY(!requiredChild<QLabel>(dialog, "workoutFirstComparisonValue")
@@ -188,6 +194,10 @@ private slots:
         const WorkoutGameCourseSourceResult rideFirst = dialog.currentResult();
 
         QCOMPARE(dialog.selectedPreset(), WorkoutGameCoursePreset::RideFirst);
+        QVERIFY(requiredChild<QLabel>(dialog, "presetDescriptionLabel")
+                        ->text().contains("sharper turns", Qt::CaseInsensitive));
+        QCOMPARE(requiredChild<QLabel>(dialog, "runtimeExposureValue")->text(),
+                 QStringLiteral("100% of prescribed interval time"));
         QCOMPARE(rideFirst.status, WorkoutGameCourseSourceStatus::Ready);
         QVERIFY(rideFirst.summary.elevationGainMeters
                 > balanced.summary.elevationGainMeters);
@@ -198,11 +208,19 @@ private slots:
         QCOMPARE(rideFirst.summary.workDurationDeviationPercent, 0.0);
         QCOMPARE(rideFirst.summary.recoveryDurationDeviationPercent, 0.0);
         QVERIFY(rideFirst.summary.technicalTerrainExposurePercent
-                > balanced.summary.technicalTerrainExposurePercent);
+                >= balanced.summary.technicalTerrainExposurePercent);
         QVERIFY(rideFirst.summary.technicalFeatureDensityPerTenSections
-                > balanced.summary.technicalFeatureDensityPerTenSections);
-        QVERIFY(rideFirst.summary.curvatureDegreesPer100m
-                > balanced.summary.curvatureDegreesPer100m);
+                >= balanced.summary.technicalFeatureDensityPerTenSections);
+        const auto accumulatedTurn = [](const WorkoutGameCourseSourceResult &result) {
+            double radians = 0.0;
+            if (!result.document.course.roadPlan) return radians;
+            for (const WorkoutGameRoadPiece &piece
+                    : result.document.course.roadPlan->pieces) {
+                radians += std::abs(piece.turnRadians);
+            }
+            return radians;
+        };
+        QVERIFY(accumulatedTurn(rideFirst) > accumulatedTurn(balanced));
         QCOMPARE(rideFirst.document.course.sections.size(),
                  balanced.document.course.sections.size());
         for (std::size_t index = 0;

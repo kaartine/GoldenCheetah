@@ -93,16 +93,16 @@ void WorkoutGameCourseTerrain::apply(
         std::uint32_t seed,
         bool sourceRecovery)
 {
-    if (sourceRecovery) {
-        section.terrain = WorkoutGameTerrainKind::SmoothTrail;
-        section.challengeCount = 0;
-        return;
-    }
     if (section.feature == WorkoutGameFeature::RecoveryDescent
             || section.feature == WorkoutGameFeature::CooldownDescent) {
         section.terrain = preset == WorkoutGameCoursePreset::RideFirst
                 ? WorkoutGameTerrainKind::Berm
                 : section.terrain;
+        section.challengeCount = 0;
+        return;
+    }
+    if (sourceRecovery) {
+        section.terrain = WorkoutGameTerrainKind::SmoothTrail;
         section.challengeCount = 0;
         return;
     }
@@ -154,15 +154,4 @@ void WorkoutGameCourseTerrain::apply(
         break;
     }
     applyChallengeCount(section, false);
-}
-
-double WorkoutGameCourseTerrain::curvatureDegreesPer100m(
-        WorkoutGameCoursePreset preset)
-{
-    switch (preset) {
-    case WorkoutGameCoursePreset::WorkoutFirst: return 55.0;
-    case WorkoutGameCoursePreset::Balanced: return 85.0;
-    case WorkoutGameCoursePreset::RideFirst: return 125.0;
-    }
-    return 0.0;
 }

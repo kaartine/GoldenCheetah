@@ -86,27 +86,21 @@ WorkoutGameCourseModeContract WorkoutGameCoursePrescription::contractFor(
         contract.maximumWorkDurationDeviationPercent = 3.0;
         contract.maximumTotalDurationDeviationPercent = 3.0;
         contract.maximumLoadDeviationPercent = 3.0;
-        contract.minimumTechnicalTerrainExposurePercent = 50.0;
-        contract.maximumTechnicalTerrainExposurePercent = 75.0;
+        contract.targetMinimumTechnicalTerrainExposurePercent = 50.0;
+        contract.targetMaximumTechnicalTerrainExposurePercent = 75.0;
         contract.minimumTechnicalFeatureDensityPerTenSections = 5.0;
         contract.maximumTechnicalFeatureDensityPerTenSections = 7.0;
-        contract.minimumCurvatureDegreesPer100m = 60.0;
-        contract.maximumCurvatureDegreesPer100m = 120.0;
         break;
     case WorkoutGameCoursePreset::RideFirst:
-        contract.minimumRecoveryRetention = 0.95;
-        contract.minimumRecoveryExposure = 0.95;
         contract.maximumNonPrescriptiveDurationChangePercent = 8.0;
         contract.maximumWorkDurationDeviationPercent = 8.0;
         contract.maximumRecoveryDurationDeviationPercent = 8.0;
         contract.maximumTotalDurationDeviationPercent = 8.0;
         contract.maximumLoadDeviationPercent = 8.0;
-        contract.minimumTechnicalTerrainExposurePercent = 75.0;
-        contract.maximumTechnicalTerrainExposurePercent = 100.0;
+        contract.targetMinimumTechnicalTerrainExposurePercent = 75.0;
+        contract.targetMaximumTechnicalTerrainExposurePercent = 100.0;
         contract.minimumTechnicalFeatureDensityPerTenSections = 8.0;
         contract.maximumTechnicalFeatureDensityPerTenSections = 10.0;
-        contract.minimumCurvatureDegreesPer100m = 75.0;
-        contract.maximumCurvatureDegreesPer100m = 170.0;
         break;
     }
     return contract;

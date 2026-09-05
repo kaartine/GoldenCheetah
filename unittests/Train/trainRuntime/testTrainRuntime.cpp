@@ -122,6 +122,25 @@ class TestTrainRuntime : public QObject
     Q_OBJECT
 
 private slots:
+    void contextPositionNeverCrossesABoundaryEarlyButPublishesExactFinish()
+    {
+        QCOMPARE(TrainSidebarRuntime::contextWorkoutPosition(99.75, false),
+                 99L);
+        QCOMPARE(TrainSidebarRuntime::contextWorkoutPosition(99.75, true),
+                 100L);
+    }
+
+    void courseFtpUsesTheScaleAppliedToWorkoutPoints()
+    {
+        QCOMPARE(TrainSidebarRuntime::courseFtpWatts(190.0, 300.0, 250.0),
+                 300.0);
+        QCOMPARE(TrainSidebarRuntime::courseFtpWatts(0.0, 300.0, 250.0),
+                 300.0);
+        QCOMPARE(TrainSidebarRuntime::courseFtpWatts(0.0, 0.0, 250.0),
+                 250.0);
+        QCOMPARE(TrainSidebarRuntime::courseFtpWatts(0.0, 0.0, 0.0), 0.0);
+    }
+
     void coreAndRrHeadersRoundTripToTheirOwnFiles()
     {
         QTemporaryDir directory;

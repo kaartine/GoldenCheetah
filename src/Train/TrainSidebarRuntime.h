@@ -14,8 +14,30 @@
 #include <QIODevice>
 #include <QStringList>
 
+#include <cmath>
+
 namespace TrainSidebarRuntime
 {
+
+inline long contextWorkoutPosition(double positionMeters, bool finished)
+{
+    return long(finished
+            ? std::ceil(positionMeters) : std::floor(positionMeters));
+}
+
+inline double courseFtpWatts(double athleteFtpWatts,
+                             double scaledWorkoutFtpWatts,
+                             double declaredWorkoutFtpWatts)
+{
+    if (std::isfinite(scaledWorkoutFtpWatts) && scaledWorkoutFtpWatts > 0.0)
+        return scaledWorkoutFtpWatts;
+    if (std::isfinite(athleteFtpWatts) && athleteFtpWatts > 0.0)
+        return athleteFtpWatts;
+    if (std::isfinite(declaredWorkoutFtpWatts)
+            && declaredWorkoutFtpWatts > 0.0)
+        return declaredWorkoutFtpWatts;
+    return 0.0;
+}
 
 enum class AuxiliaryHeader {
     Rr,

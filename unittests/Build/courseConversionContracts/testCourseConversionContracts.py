@@ -78,7 +78,7 @@ class CourseConversionContractTest(unittest.TestCase):
         self.assertEqual(
             self.fixture["contracts"]["RideFirst"]
                 ["minimumRecoveryRetention"],
-            0.95)
+            1.0)
         self.assertEqual(
             self.fixture["contracts"]["RideFirst"]
                 ["defaultRecoveryRetention"],
@@ -104,9 +104,9 @@ class CourseConversionContractTest(unittest.TestCase):
             contracts["RideFirst"]["maximumTotalDurationDeviationPercent"],
             8.0)
         self.assertGreaterEqual(
-            contracts["RideFirst"]["minimumRecoveryRetention"], 0.95)
+            contracts["RideFirst"]["minimumRecoveryRetention"], 1.0)
 
-    def test_terrain_feature_and_curvature_bands_are_distinct(self):
+    def test_terrain_and_feature_bands_are_distinct(self):
         contracts = self.fixture["contracts"]
         modes = ("WorkoutFirst", "Balanced", "RideFirst")
         self.assertEqual(
@@ -123,6 +123,18 @@ class CourseConversionContractTest(unittest.TestCase):
              for mode in modes],
             [[2.0, 4.0], [5.0, 7.0], [8.0, 10.0]])
         self.assertEqual(
+            [contracts[mode]["minimumRuntimeWorkExposurePercent"]
+             for mode in modes],
+            [100.0, 100.0, 100.0])
+        self.assertEqual(
+            [contracts[mode]["minimumRuntimeRecoveryExposurePercent"]
+             for mode in modes],
+            [100.0, 100.0, 100.0])
+        self.assertEqual(
+            [contracts[mode]["minimumRuntimeKeyEffortExposurePercent"]
+             for mode in modes],
+            [100.0, 100.0, 100.0])
+        self.assertEqual(
             contracts["WorkoutFirst"]["allowedTechnicalTerrain"],
             ["roots", "rollers", "easy-rock-garden", "log-over"])
         self.assertNotIn(
@@ -132,23 +144,17 @@ class CourseConversionContractTest(unittest.TestCase):
                 self.assertTrue(contracts[mode]["scoredChallengeOnWorkAllowed"])
                 self.assertFalse(
                     contracts[mode]["scoredChallengeOnRecoveryAllowed"])
-        curvature = [
-            contracts[mode]["curvatureDegreesPer100m"] for mode in modes
-        ]
-        self.assertGreaterEqual(curvature[0][0], 45.0)
-        self.assertGreaterEqual(curvature[1][0] - curvature[0][0], 15.0)
-        self.assertGreaterEqual(curvature[2][0] - curvature[1][0], 15.0)
-        self.assertLessEqual(curvature[2][1], 2.0 * 85.0)
 
     def test_design_records_preview_metadata_and_legacy_rules(self):
         normalized_design = " ".join(self.design.split())
         required = (
-            "No mode may automatically shorten any such interval",
+            "No conversion mode may shorten the nominal duration of any such interval",
+            "Runtime progression may reach a section boundary only after",
             "ordinary 5:00",
             "technical terrain exposure",
             "Workout first is not a no-game mode",
             "Prescribed recovery never receives a scored challenge",
-            "feature count/density and curvature",
+            "feature count and density",
             "Create/Save",
             "preserved/total key efforts and preserved/total recoveries",
             "must never be inferred only from aggregate work/rest percentages",
@@ -196,8 +202,7 @@ class CourseConversionContractTest(unittest.TestCase):
                 "minimumRecoveryRetention",
                 "maximumNonPrescriptiveDurationChangePercent",
                 "technicalTerrainExposure",
-                "technicalFeatureDensityPerTenSections",
-                "curvatureDegreesPer100m"):
+                "technicalFeatureDensityPerTenSections"):
             with self.subTest(token=token):
                 self.assertIn(token, source)
         self.assertIn("prescriptionMetadata", conversion)
