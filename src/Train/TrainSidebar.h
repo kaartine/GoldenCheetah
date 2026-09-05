@@ -223,7 +223,6 @@ class TrainSidebar : public GcWindow
         void setWorkoutRideEnabled(bool enabled);
         void newLap();      // start new Lap!
         void resetLapTimer(); //reset the lap timer
-        void resetTextAudioEmitTracking();
         void steerScroll(int scrollAmount);   // Scroll the train display
 
         void toggleCalibration();
@@ -319,6 +318,9 @@ class TrainSidebar : public GcWindow
         double displayTemp;
 
         void maintainLapDistanceState();
+        double currentWorkoutTimelinePosition() const;
+        void resetTextAudioEmitTracking(
+                TrainSidebarRuntime::CueTimelineReset reason);
         qint64 workoutProgressElapsedMs() const;
         void updateWorkoutDistanceProgress();
         void seekWorkoutDistance(double distanceKilometers);

@@ -422,6 +422,7 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
 
     displayTemp = 0;
     displayWorkoutLap = 0;
+    textPositionEmitted = -1.0;
     pwrcount = 0;
     cadcount = 0;
     hrcount = 0;
@@ -1750,7 +1751,8 @@ void TrainSidebar::Start()       // when start button is pressed
         wbalr = 0;
         wbal = WPRIME;
         
-        resetTextAudioEmitTracking();
+        resetTextAudioEmitTracking(
+                TrainSidebarRuntime::CueTimelineReset::WorkoutStart);
 
         //reset all calibration data
         calibrating = startCalibration = restartCalibration = finishCalibration = false;
@@ -2808,7 +2810,13 @@ void TrainSidebar::newLap()
     qDebug() << "running:" << (status&RT_RUNNING) << "paused:" << (status&RT_PAUSED);
 
     if ((status&RT_RUNNING) && ((status&RT_PAUSED) == 0) &&
-        ergFileQueryAdapter.addNewLap(displayWorkoutDistance * 1000.) >= 0) {
+        TrainSidebarRuntime::insertManualLap(
+            workoutGameCourseRuntime.enabled(),
+            workoutGameCourseRuntime.workoutTimelinePositionMeters(),
+            displayWorkoutDistance * 1000.0,
+            [this](double positionMeters) {
+                return ergFileQueryAdapter.addNewLap(positionMeters);
+            }) >= 0) {
 
         context->notifyNewLap();
         context->notifySetNotification(tr("New lap.."), 2);
@@ -2824,14 +2832,31 @@ void TrainSidebar::resetLapTimer()
     cadcount  = 0;
     hrcount   = 0;
     spdcount  = 0;
-    this->resetTextAudioEmitTracking();
+    this->resetTextAudioEmitTracking(
+            TrainSidebarRuntime::CueTimelineReset::LapChange);
     this->maintainLapDistanceState();
 }
 
-void TrainSidebar::resetTextAudioEmitTracking()
+double TrainSidebar::currentWorkoutTimelinePosition() const
+{
+    if (status & RT_MODE_ERGO) return std::max(0.0, double(load_msecs));
+
+    return TrainSidebarRuntime::workoutLapPositionMeters(
+            workoutGameCourseRuntime.enabled(),
+            workoutGameCourseRuntime.workoutTimelinePositionMeters(),
+            displayWorkoutDistance * 1000.0);
+}
+
+void TrainSidebar::resetTextAudioEmitTracking(
+        TrainSidebarRuntime::CueTimelineReset reason)
 {
     lapAudioThisLap = true;
-    textPositionEmitted = -1;
+    if (reason == TrainSidebarRuntime::CueTimelineReset::WorkoutStart) {
+        textPositionEmitted = -1.0;
+        return;
+    }
+    textPositionEmitted = TrainSidebarRuntime::resetCuePosition(
+            reason, textPositionEmitted, currentWorkoutTimelinePosition());
 }
 
 // Can be called from the controller - when user steers to scroll display
@@ -3590,7 +3615,7 @@ void TrainSidebar::FFwd()
         seekWorkoutDistance(displayWorkoutDistance + stepSize);
     }
 
-    resetTextAudioEmitTracking();
+    resetTextAudioEmitTracking(TrainSidebarRuntime::CueTimelineReset::Seek);
 
     maintainLapDistanceState();
 
@@ -3625,7 +3650,7 @@ void TrainSidebar::Rewind()
         seekWorkoutDistance(displayWorkoutDistance + stepSize);
     }
 
-    resetTextAudioEmitTracking();
+    resetTextAudioEmitTracking(TrainSidebarRuntime::CueTimelineReset::Seek);
 
     maintainLapDistanceState();
 
@@ -3663,7 +3688,7 @@ void TrainSidebar::FFwdLap()
         }
     }
 
-    resetTextAudioEmitTracking();
+    resetTextAudioEmitTracking(TrainSidebarRuntime::CueTimelineReset::Seek);
 
     maintainLapDistanceState();    
 
@@ -3703,7 +3728,7 @@ void TrainSidebar::RewindLap()
         if (lapmarker >= 0.) seekWorkoutDistance(lapmarker / 1000); // jump to lapmarker
     }
 
-    resetTextAudioEmitTracking();
+    resetTextAudioEmitTracking(TrainSidebarRuntime::CueTimelineReset::Seek);
 
     maintainLapDistanceState();
 

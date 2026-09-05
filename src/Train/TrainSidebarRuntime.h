@@ -99,6 +99,38 @@ inline double workoutLapPositionMeters(
     return generatedCourse ? timelinePositionMeters : visualPositionMeters;
 }
 
+template<typename AddLap>
+int insertManualLap(bool generatedCourse,
+                    double timelinePositionMeters,
+                    double visualPositionMeters,
+                    AddLap addLap)
+{
+    return addLap(workoutLapPositionMeters(
+            generatedCourse,
+            timelinePositionMeters,
+            visualPositionMeters));
+}
+
+enum class CueTimelineReset {
+    WorkoutStart,
+    LapChange,
+    Seek
+};
+
+inline double resetCuePosition(CueTimelineReset reason,
+                               double previousEnd,
+                               double currentPosition)
+{
+    if (reason == CueTimelineReset::WorkoutStart) return -1.0;
+
+    const double coveredEnd = std::isfinite(previousEnd)
+            ? previousEnd : -1.0;
+    if (reason == CueTimelineReset::LapChange) return coveredEnd;
+    if (!std::isfinite(currentPosition)) return coveredEnd;
+
+    return std::max(coveredEnd, std::max(0.0, currentPosition));
+}
+
 struct CueSearchWindow
 {
     bool ready = false;

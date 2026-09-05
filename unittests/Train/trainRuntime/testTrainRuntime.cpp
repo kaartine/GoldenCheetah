@@ -296,6 +296,34 @@ private slots:
                  125.0);
     }
 
+    void generatedCourseManualLapPersistsWorkoutTimelinePosition()
+    {
+        double persistedPosition = -1.0;
+        const int result = TrainSidebarRuntime::insertManualLap(
+                true, 240.0, 125.0,
+                [&persistedPosition](double positionMeters) {
+                    persistedPosition = positionMeters;
+                    return 3;
+                });
+
+        QCOMPARE(result, 3);
+        QCOMPARE(persistedPosition, 240.0);
+    }
+
+    void ordinaryCourseManualLapPersistsPhysicalCoursePosition()
+    {
+        double persistedPosition = -1.0;
+        const int result = TrainSidebarRuntime::insertManualLap(
+                false, 240.0, 125.0,
+                [&persistedPosition](double positionMeters) {
+                    persistedPosition = positionMeters;
+                    return 4;
+                });
+
+        QCOMPARE(result, 4);
+        QCOMPARE(persistedPosition, 125.0);
+    }
+
     void cueSearchCoversDelayedTimelineAdvanceWithoutDuplicates()
     {
         const TrainSidebarRuntime::CueSearchWindow initial =
@@ -316,6 +344,57 @@ private slots:
                 delayed, initial.end, initial.end));
         QVERIFY(TrainSidebarRuntime::cueIsNewInWindow(
                 delayed, initial.end, 25.0));
+    }
+
+    void lapResetPreservesDelayedCueCoverageExactlyOnce()
+    {
+        const double previousEnd = 10.0;
+        const double resetEnd = TrainSidebarRuntime::resetCuePosition(
+                TrainSidebarRuntime::CueTimelineReset::LapChange,
+                previousEnd, 30.0);
+        QCOMPARE(resetEnd, previousEnd);
+
+        const TrainSidebarRuntime::CueSearchWindow delayed =
+                TrainSidebarRuntime::cueSearchWindow(resetEnd, 35.0, 10.0);
+        QVERIFY(delayed.ready);
+        QVERIFY(TrainSidebarRuntime::cueIsNewInWindow(
+                delayed, resetEnd, 25.0));
+
+        const TrainSidebarRuntime::CueSearchWindow next =
+                TrainSidebarRuntime::cueSearchWindow(
+                    delayed.end, 36.0, 10.0);
+        QVERIFY(!TrainSidebarRuntime::cueIsNewInWindow(
+                next, delayed.end, 25.0));
+    }
+
+    void forwardSeekReanchorsCueTrackingAtNewTimelinePosition()
+    {
+        QCOMPARE(TrainSidebarRuntime::resetCuePosition(
+                         TrainSidebarRuntime::CueTimelineReset::Seek,
+                         110.0, 500.0),
+                 500.0);
+    }
+
+    void rewindNeverReopensPreviouslyCoveredCues()
+    {
+        const double resetEnd = TrainSidebarRuntime::resetCuePosition(
+                TrainSidebarRuntime::CueTimelineReset::Seek,
+                110.0, 20.0);
+        QCOMPARE(resetEnd, 110.0);
+
+        const TrainSidebarRuntime::CueSearchWindow rewound =
+                TrainSidebarRuntime::cueSearchWindow(resetEnd, 20.0, 10.0);
+        QVERIFY(!rewound.ready);
+
+        const TrainSidebarRuntime::CueSearchWindow caughtUp =
+                TrainSidebarRuntime::cueSearchWindow(resetEnd, 101.0, 10.0);
+        QVERIFY(caughtUp.ready);
+        QVERIFY(!TrainSidebarRuntime::cueIsNewInWindow(
+                caughtUp, resetEnd, 50.0));
+        QVERIFY(!TrainSidebarRuntime::cueIsNewInWindow(
+                caughtUp, resetEnd, 110.0));
+        QVERIFY(TrainSidebarRuntime::cueIsNewInWindow(
+                caughtUp, resetEnd, 111.0));
     }
 
     void daumRestartReleasesPausedState()
