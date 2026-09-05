@@ -767,7 +767,7 @@ def analyze_gap_jump(samples: list[TraceSample]) -> dict[str, float | int]:
 
 def validate_gap_jump(
     summary: dict[str, float | int],
-    require_launch_readiness: bool = True,
+    require_power_readiness: bool = True,
 ) -> list[str]:
     failures = []
     if summary["gap_jump_samples"] < 3:
@@ -780,13 +780,13 @@ def validate_gap_jump(
         failures.append("gap jump launch window was active outside 10-3 m")
     if summary["gap_locked_distance_max_m"] > 3.25:
         failures.append("gap jump line locked before the 3 m decision point")
-    if require_launch_readiness:
+    if require_power_readiness:
         if summary["gap_max_power_hold_ms"] < 500.0:
             failures.append("gap jump did not sustain target power for 500 ms")
-        if summary["gap_speed_ready_samples"] < 1:
-            failures.append("gap jump never completed a 500 ms speed window")
         if summary["gap_power_ready_samples"] < 1:
             failures.append("gap jump power gate never became ready")
+    if summary["gap_speed_ready_samples"] < 1:
+        failures.append("gap jump never completed a 500 ms speed window")
     if summary["gap_action_id_changes"]:
         failures.append("gap jump action identity changed during approach")
     if summary["gap_post_lock_line_changes"]:
@@ -794,16 +794,66 @@ def validate_gap_jump(
     return failures
 
 
-def validate_gap_jump_line(
+def gap_action_id(sample: TraceSample) -> int | None:
+    value = numeric(sample, "action_id")
+    if value is None or value <= 0.0 or not value.is_integer():
+        return None
+    return int(value)
+
+
+def select_gap_jump_action(
     samples: list[TraceSample], expected_line: str
-) -> list[str]:
+) -> tuple[list[TraceSample], int | None, list[str]]:
     gap_samples = [
         sample for sample in samples
         if sample.get("feature_terrain") == "gap-jump"
     ]
     expected_locked_line = "none" if expected_line == "safe" else expected_line
+    actions: dict[int, list[int]] = {}
+    for index, sample in enumerate(gap_samples):
+        action_id = gap_action_id(sample)
+        if action_id is not None:
+            actions.setdefault(action_id, []).append(index)
+    matching = [
+        action_id for action_id, indexes in actions.items()
+        if any(
+            numeric(gap_samples[index], "line_locked") == 1.0
+            and gap_samples[index].get("locked_line") == expected_locked_line
+            for index in indexes
+        )
+    ]
+    if len(matching) > 1:
+        return [], None, [
+            f"multiple gap jump actions match expected {expected_line} line"
+        ]
+    if matching:
+        selected_id = matching[0]
+    elif len(actions) == 1:
+        selected_id = next(iter(actions))
+    elif not actions:
+        return [], None, ["gap jump action_id was not observed"]
+    else:
+        return [], None, [
+            f"no unique gap jump action matches expected {expected_line} line"
+        ]
+
+    indexes = actions[selected_id]
+    first = indexes[0]
+    last = indexes[-1]
+    while first > 0 and gap_action_id(gap_samples[first - 1]) is None:
+        first -= 1
+    while (last + 1 < len(gap_samples)
+           and gap_action_id(gap_samples[last + 1]) is None):
+        last += 1
+    return gap_samples[first:last + 1], selected_id, []
+
+
+def validate_selected_gap_jump_line(
+    samples: list[TraceSample], expected_line: str, selected_id: int
+) -> list[str]:
+    expected_locked_line = "none" if expected_line == "safe" else expected_line
     locked_indexes = [
-        index for index, sample in enumerate(gap_samples)
+        index for index, sample in enumerate(samples)
         if numeric(sample, "line_locked") == 1.0
     ]
     failures = []
@@ -811,30 +861,67 @@ def validate_gap_jump_line(
         return ["gap jump line lock was not observed"]
 
     first_lock = locked_indexes[0]
-    observed_line = str(gap_samples[first_lock].get("locked_line", ""))
+    selected_samples = samples[first_lock:]
+    observed_line = str(samples[first_lock].get("locked_line", ""))
     if observed_line != expected_locked_line:
         failures.append(
             f"gap jump locked {observed_line or 'unknown'}, "
             f"expected {expected_line}"
         )
-    if any(
-        str(sample.get("locked_line", "")) != observed_line
-        for sample in gap_samples[first_lock + 1:]
-    ):
+
+    required_fields = (
+        "action_id", "distance_to_lip_m", "launch_window", "line_locked",
+        "locked_line", "launch_speed_ready", "launch_power_ready",
+        "power_hold_ms", "feature_phase", "feature_outcome", "route",
+        "airborne", "rear_contact", "front_contact",
+    )
+    missing_fields = set()
+    for sample in selected_samples:
+        missing_fields.update(
+            field for field in required_fields if field not in sample
+        )
+    failures.extend(
+        f"selected gap action is missing required {field} field after lock"
+        for field in sorted(missing_fields)
+    )
+
+    expected_route = "bypass" if expected_line == "safe" else "main"
+    expected_outcome = (
+        "bypassed" if expected_line == "safe" else "completed"
+    )
+    if any(gap_action_id(sample) != selected_id for sample in selected_samples):
+        failures.append("gap jump action_id changed or disappeared after lock")
+    if any(numeric(sample, "line_locked") != 1.0
+           for sample in selected_samples):
+        failures.append("gap jump line_locked did not remain 1 after lock")
+    if any(str(sample.get("locked_line", "")) != observed_line
+           for sample in selected_samples[1:]):
         failures.append("gap jump line changed after lock")
+    if any(sample.get("route") != expected_route
+           for sample in selected_samples):
+        failures.append("gap jump route changed or contradicted the locked line")
+    if any(sample.get("feature_outcome") != expected_outcome
+           for sample in selected_samples):
+        failures.append(
+            "gap jump outcome changed or contradicted the locked line"
+        )
 
     completed = any(
         sample.get("route") == "main"
         and sample.get("feature_outcome") == "completed"
-        for sample in gap_samples[first_lock:]
+        for sample in selected_samples
     )
     bypassed = any(
         sample.get("route") == "bypass"
         and sample.get("feature_outcome") == "bypassed"
-        for sample in gap_samples[first_lock:]
+        for sample in selected_samples
     )
+    if completed and bypassed:
+        failures.append(
+            "selected gap action has contradictory completed and bypassed outcomes"
+        )
     airborne_indexes = [
-        index for index, sample in enumerate(gap_samples[first_lock:], first_lock)
+        index for index, sample in enumerate(selected_samples)
         if numeric(sample, "airborne") == 1.0
     ]
 
@@ -854,45 +941,94 @@ def validate_gap_jump_line(
         return failures
 
     first_airborne = airborne_indexes[0]
-    takeoff_indexes = [
-        index for index, sample in enumerate(
-            gap_samples[first_lock:first_airborne], first_lock
-        )
-        if sample.get("feature_phase") in ("committed", "action")
-        and numeric(sample, "airborne") != 1.0
-        and (
-            numeric(sample, "rear_contact") == 1.0
-            or numeric(sample, "front_contact") == 1.0
-        )
-    ]
-    if not takeoff_indexes:
+    takeoff = selected_samples[first_airborne - 1] \
+        if first_airborne > 0 else {}
+    if (takeoff.get("feature_phase") not in ("committed", "action")
+            or numeric(takeoff, "airborne") == 1.0
+            or not (
+                numeric(takeoff, "rear_contact") == 1.0
+                or numeric(takeoff, "front_contact") == 1.0
+            )):
         failures.append(f"{expected_line} gap line has no takeoff evidence")
 
-    landing_indexes = [
-        index for index, sample in enumerate(
-            gap_samples[first_airborne + 1:], first_airborne + 1
+    first_landing = first_airborne + 1
+    while (first_landing < len(selected_samples)
+           and numeric(selected_samples[first_landing], "airborne") == 1.0):
+        first_landing += 1
+    if any(sample.get("feature_phase") != "action"
+           for sample in selected_samples[first_airborne:first_landing]):
+        failures.append(
+            "gap jump airborne phase was not contiguous action evidence"
         )
-        if numeric(sample, "airborne") == 0.0
-        and (
+    if first_landing >= len(selected_samples):
+        failures.append(f"{expected_line} gap line has no landing evidence")
+        return failures
+    landing = selected_samples[first_landing]
+    if (numeric(landing, "airborne") != 0.0
+            or not (
+                numeric(landing, "rear_contact") == 1.0
+                or numeric(landing, "front_contact") == 1.0
+            )
+            or landing.get("feature_phase") not in ("action", "recovery")):
+        failures.append(
+            "gap jump airborne phase was not contiguous with a grounded landing"
+        )
+    if any(numeric(sample, "airborne") == 1.0
+           for sample in selected_samples[first_landing + 1:]):
+        failures.append("gap jump became re-airborne after landing")
+    if any(
+        numeric(sample, "airborne") != 0.0
+        or not (
             numeric(sample, "rear_contact") == 1.0
             or numeric(sample, "front_contact") == 1.0
         )
-        and sample.get("feature_phase") in ("action", "recovery")
-    ]
-    if not landing_indexes:
-        failures.append(f"{expected_line} gap line has no landing evidence")
-        return failures
-
-    first_landing = landing_indexes[0]
+        for sample in selected_samples[first_landing:]
+    ):
+        failures.append("gap jump did not remain grounded after landing")
     merged = any(
         sample.get("feature_phase") == "recovery"
         and sample.get("route") == "main"
         and sample.get("feature_outcome") == "completed"
-        for sample in gap_samples[first_landing + 1:]
+        for sample in selected_samples[first_landing + 1:]
     )
     if not merged:
         failures.append(f"{expected_line} gap line has no merge evidence")
     return failures
+
+
+def validate_gap_jump_line(
+    samples: list[TraceSample], expected_line: str
+) -> list[str]:
+    selected, selected_id, failures = select_gap_jump_action(
+        samples, expected_line
+    )
+    if failures or selected_id is None:
+        return failures
+    return validate_selected_gap_jump_line(
+        selected, expected_line, selected_id
+    )
+
+
+def validate_expected_gap_jump(
+    samples: list[TraceSample], expected_line: str
+) -> tuple[dict[str, float | int], list[str]]:
+    selected, selected_id, failures = select_gap_jump_action(
+        samples, expected_line
+    )
+    summary = analyze_gap_jump(selected)
+    failures.extend(validate_gap_jump(
+        summary, require_power_readiness=expected_line != "safe"
+    ))
+    if selected_id is not None:
+        line_failures = validate_selected_gap_jump_line(
+            selected, expected_line, selected_id
+        )
+        failures.extend(
+            failure for failure in line_failures if failure not in failures
+        )
+    if selected_id is not None:
+        summary["gap_selected_action_id"] = selected_id
+    return summary, failures
 
 
 def validate(
@@ -1062,19 +1198,17 @@ def main() -> int:
         )
         summary.update(cold_start)
         failures.extend(validate_cold_start(cold_start))
-    if args.require_gap_launch_window or args.expected_gap_line:
+    if args.expected_gap_line:
+        gap_summary, gap_failures = validate_expected_gap_jump(
+            trace, args.expected_gap_line
+        )
+        gap_summary["expected_gap_line"] = args.expected_gap_line
+        summary.update(gap_summary)
+        failures.extend(gap_failures)
+    elif args.require_gap_launch_window:
         gap_summary = analyze_gap_jump(trace)
         summary.update(gap_summary)
-        if args.require_gap_launch_window:
-            failures.extend(validate_gap_jump(
-                gap_summary,
-                require_launch_readiness=args.expected_gap_line != "safe",
-            ))
-        if args.expected_gap_line:
-            summary["expected_gap_line"] = args.expected_gap_line
-            failures.extend(validate_gap_jump_line(
-                trace, args.expected_gap_line
-            ))
+        failures.extend(validate_gap_jump(gap_summary))
     if args.recording:
         acceptance = reconcile_acceptance(
             trace,

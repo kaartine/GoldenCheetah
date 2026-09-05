@@ -54,7 +54,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 "distance_to_lip_m": distance,
                 "launch_window": int(3.0 < distance <= 10.0),
                 "line_locked": line_locked,
-                "launch_speed_ready": int(not safe),
+                "launch_speed_ready": 1,
                 "launch_power_ready": int(not safe),
                 "power_hold_ms": 0 if safe else 500,
                 "action_id": 41.0,
@@ -976,20 +976,14 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             with self.subTest(line=line):
                 samples = self.gap_line_samples(line)
 
-                failures = ANALYZER.validate_gap_jump_line(samples, line)
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, line
+                )
 
                 self.assertEqual(failures, [])
-                if line == "safe":
-                    self.assertEqual(
-                        ANALYZER.validate_gap_jump(
-                            ANALYZER.analyze_gap_jump(samples),
-                            require_launch_readiness=False,
-                        ),
-                        [],
-                    )
 
     def test_rejects_wrong_expected_gap_line(self):
-        failures = ANALYZER.validate_gap_jump_line(
+        unused, failures = ANALYZER.validate_expected_gap_jump(
             self.gap_line_samples("medium"), "short"
         )
 
@@ -1000,9 +994,129 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         samples = self.gap_line_samples("short")
         samples[-1]["locked_line"] = "medium"
 
-        failures = ANALYZER.validate_gap_jump_line(samples, "short")
+        unused, failures = ANALYZER.validate_expected_gap_jump(
+            samples, "short"
+        )
 
         self.assertTrue(any("changed after lock" in item for item in failures))
+
+    def test_rejects_multiple_actions_matching_expected_gap_line(self):
+        samples = self.gap_line_samples("medium")
+        samples.extend(
+            dict(sample, action_id=42.0)
+            for sample in self.gap_line_samples("medium")
+        )
+
+        unused, failures = ANALYZER.validate_expected_gap_jump(
+            samples, "medium"
+        )
+
+        self.assertTrue(any("multiple" in item and "action" in item
+                            for item in failures), failures)
+
+    def test_scopes_expected_gap_line_to_one_matching_action(self):
+        samples = self.gap_line_samples("short")
+        samples.extend(
+            dict(sample, action_id=42.0)
+            for sample in self.gap_line_samples("long")
+        )
+
+        summary, failures = ANALYZER.validate_expected_gap_jump(
+            samples, "long"
+        )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(summary["gap_selected_action_id"], 42)
+        self.assertEqual(summary["gap_action_id_changes"], 0)
+
+    def test_rejects_contradictory_gap_outcomes_for_selected_action(self):
+        samples = self.gap_line_samples("long")
+        samples[-1]["feature_outcome"] = "bypassed"
+        samples[-1]["route"] = "bypass"
+
+        unused, failures = ANALYZER.validate_expected_gap_jump(
+            samples, "long"
+        )
+
+        self.assertTrue(any("contradictory" in item for item in failures))
+
+    def test_rejects_gap_line_lock_drop_after_selection(self):
+        samples = self.gap_line_samples("short")
+        samples[-1]["line_locked"] = 0
+
+        unused, failures = ANALYZER.validate_expected_gap_jump(
+            samples, "short"
+        )
+
+        self.assertTrue(any("line_locked" in item for item in failures))
+
+    def test_rejects_missing_required_gap_fields_after_lock(self):
+        for field in (
+            "action_id", "distance_to_lip_m", "launch_window",
+            "line_locked", "locked_line", "feature_phase", "feature_outcome",
+            "route", "airborne", "rear_contact", "front_contact",
+            "launch_speed_ready", "launch_power_ready", "power_hold_ms",
+        ):
+            with self.subTest(field=field):
+                samples = self.gap_line_samples("long")
+                index = -1 if field == "action_id" else -2
+                del samples[index][field]
+
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, "long"
+                )
+
+                self.assertTrue(any(
+                    "missing" in item and field in item for item in failures
+                ), failures)
+
+    def test_expected_gap_line_rejects_early_or_missing_launch_window(self):
+        for condition in ("early", "missing"):
+            with self.subTest(condition=condition):
+                samples = self.gap_line_samples("long")
+                for sample in samples:
+                    sample["launch_window"] = 0
+                if condition == "early":
+                    samples[0]["distance_to_lip_m"] = 11.0
+                    samples[0]["launch_window"] = 1
+
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, "long"
+                )
+
+                expected = "outside 10-3 m" if condition == "early" \
+                    else "was not observed"
+                self.assertTrue(any(expected in item for item in failures))
+
+    def test_expected_gap_line_requires_speed_and_jump_power_readiness(self):
+        cases = (
+            ("long", "launch_speed_ready", "speed window"),
+            ("long", "launch_power_ready", "power gate"),
+            ("safe", "launch_speed_ready", "speed window"),
+        )
+        for line, field, message in cases:
+            with self.subTest(line=line, field=field):
+                samples = self.gap_line_samples(line)
+                for sample in samples:
+                    sample[field] = 0
+                    if field == "launch_power_ready":
+                        sample["power_hold_ms"] = 0
+
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, line
+                )
+
+                self.assertTrue(any(message in item for item in failures))
+
+    def test_safe_gap_line_omits_only_power_readiness(self):
+        samples = self.gap_line_samples("safe")
+        for sample in samples:
+            sample["launch_power_ready"] = 0
+            sample["power_hold_ms"] = 0
+
+        unused, failures = ANALYZER.validate_expected_gap_jump(samples, "safe")
+
+        self.assertEqual(failures, [])
 
     def test_rejects_gap_jump_without_airborne_or_landing_evidence(self):
         for missing in ("airborne", "landing"):
@@ -1014,7 +1128,9 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 else:
                     samples = samples[:4]
 
-                failures = ANALYZER.validate_gap_jump_line(samples, "long")
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, "long"
+                )
 
                 self.assertTrue(
                     any(missing in item for item in failures), failures
@@ -1024,10 +1140,56 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         samples = self.gap_line_samples("safe")
         samples[3]["airborne"] = 1
 
-        failures = ANALYZER.validate_gap_jump_line(samples, "safe")
+        unused, failures = ANALYZER.validate_expected_gap_jump(samples, "safe")
 
         self.assertTrue(any("safe" in item and "airborne" in item
                             for item in failures))
+
+    def test_rejects_gap_jump_that_becomes_airborne_after_landing(self):
+        samples = self.gap_line_samples("medium")
+        samples[-1]["airborne"] = 1
+        samples[-1]["rear_contact"] = 0
+        samples[-1]["front_contact"] = 0
+
+        unused, failures = ANALYZER.validate_expected_gap_jump(
+            samples, "medium"
+        )
+
+        self.assertTrue(any("re-airborne" in item for item in failures))
+
+    def test_rejects_incomplete_ordered_gap_flight_evidence(self):
+        for missing in ("takeoff", "airborne phase", "merge"):
+            with self.subTest(missing=missing):
+                samples = self.gap_line_samples("long")
+                if missing == "takeoff":
+                    for sample in samples[:3]:
+                        sample["feature_phase"] = "measure"
+                        sample["rear_contact"] = 0
+                        sample["front_contact"] = 0
+                elif missing == "airborne phase":
+                    samples[3]["feature_phase"] = "recovery"
+                else:
+                    for sample in samples[5:]:
+                        sample["feature_phase"] = "action"
+
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, "long"
+                )
+
+                self.assertTrue(any(missing in item for item in failures),
+                                failures)
+
+    def test_rejects_non_contiguous_gap_airborne_phase(self):
+        samples = self.gap_line_samples("medium")
+        samples.insert(4, dict(
+            samples[3], airborne=0, rear_contact=0, front_contact=0
+        ))
+
+        unused, failures = ANALYZER.validate_expected_gap_jump(
+            samples, "medium"
+        )
+
+        self.assertTrue(any("contiguous" in item for item in failures))
 
     def test_rejects_malformed_expected_gap_line_option(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1048,6 +1210,42 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
 
             self.assertEqual(error.exception.code, 2)
             self.assertIn("invalid choice", error_output.getvalue())
+
+    def test_expected_gap_line_cli_always_runs_base_gap_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "application.log"
+            log.write_text("", encoding="utf-8")
+            arguments = [
+                "analyze_workout_game.py", str(log),
+                "--expected-gap-line", "long",
+            ]
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                with mock.patch.object(sys, "argv", arguments):
+                    status = ANALYZER.main()
+
+            result = json.loads(output.getvalue())
+            self.assertEqual(status, 1)
+            self.assertTrue(any("too few gap jump" in item
+                                for item in result["failures"]))
+
+    def test_no_gap_options_preserves_non_gap_analysis_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "application.log"
+            log.write_text("", encoding="utf-8")
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                with mock.patch.object(
+                    sys, "argv", ["analyze_workout_game.py", str(log)]
+                ), mock.patch.object(
+                    ANALYZER,
+                    "validate_expected_gap_jump",
+                    side_effect=AssertionError("gap validation must not run"),
+                ):
+                    status = ANALYZER.main()
+
+            self.assertEqual(status, 1)
 
     def test_ui_runner_requires_gap_acceptance_for_feature_lab(self):
         runner = RUNNER_PATH.read_text(encoding="utf-8")
