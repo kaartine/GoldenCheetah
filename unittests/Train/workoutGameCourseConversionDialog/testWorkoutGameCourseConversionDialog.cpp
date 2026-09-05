@@ -85,6 +85,23 @@ private slots:
         QVERIFY(requiredChild<QLabel>(dialog, "distanceValue")->text().contains("km"));
         QVERIFY(requiredChild<QLabel>(dialog, "ascentValue")->text().contains("m"));
         QVERIFY(requiredChild<QLabel>(dialog, "featuresValue")->text().contains("3"));
+        QVERIFY(requiredChild<QLabel>(dialog, "loadValue")->text().contains("pts"));
+        QVERIFY(requiredChild<QLabel>(dialog, "workDeviationValue")->text().contains("%"));
+        QVERIFY(requiredChild<QLabel>(dialog, "recoveryDeviationValue")->text().contains("%"));
+        QVERIFY(!requiredChild<QLabel>(dialog, "workoutFirstComparisonValue")
+                        ->text().isEmpty());
+        QVERIFY(!requiredChild<QLabel>(dialog, "balancedComparisonValue")
+                        ->text().isEmpty());
+        QVERIFY(!requiredChild<QLabel>(dialog, "rideFirstComparisonValue")
+                        ->text().isEmpty());
+        QVERIFY(requiredChild<QLabel>(dialog, "workoutFirstComparisonValue")
+                        ->text()
+                != requiredChild<QLabel>(dialog, "balancedComparisonValue")
+                        ->text());
+        QVERIFY(requiredChild<QLabel>(dialog, "balancedComparisonValue")
+                        ->text()
+                != requiredChild<QLabel>(dialog, "rideFirstComparisonValue")
+                        ->text());
         QVERIFY(requiredChild<QPushButton>(dialog, "createCourseButton")
                         ->isEnabled());
 
@@ -155,6 +172,15 @@ private slots:
             QCOMPARE(rideFirst.document.course.sections[index].targetEndWatts,
                      balanced.document.course.sections[index].targetEndWatts);
         }
+
+        requiredChild<QToolButton>(dialog, "balancedPresetButton")->click();
+        const WorkoutGameCourseSourceResult repeated = dialog.currentResult();
+        QCOMPARE(repeated.summary.nominalDurationMs,
+                 balanced.summary.nominalDurationMs);
+        QCOMPARE(repeated.summary.distanceMeters,
+                 balanced.summary.distanceMeters);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(repeated.document),
+                 WorkoutGameCourseDocumentCodec::encode(balanced.document));
     }
 
     void previewWidgetRendersElevationAndPowerData()

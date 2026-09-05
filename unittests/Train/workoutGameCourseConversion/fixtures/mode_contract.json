@@ -1,0 +1,30 @@
+{
+  "ftpWatts": 190.0,
+  "intervals": [
+    {"durationMs": 600000, "startWatts": 140.0, "endWatts": 140.0},
+    {"durationMs": 240000, "startWatts": 205.0, "endWatts": 205.0},
+    {"durationMs": 10000, "startWatts": 250.0, "endWatts": 250.0},
+    {"durationMs": 180000, "startWatts": 110.0, "endWatts": 110.0},
+    {"durationMs": 300000, "startWatts": 100.0, "endWatts": 100.0}
+  ],
+  "expected": {
+    "WorkoutFirst": {
+      "durationMs": 1330000,
+      "workDeviationPercent": 0.0,
+      "recoveryDeviationPercent": 0.0,
+      "loadDeviationPercent": 0.0
+    },
+    "Balanced": {
+      "durationMs": 1289200,
+      "workDeviationPercent": -1.411764705882353,
+      "recoveryDeviationPercent": -6.0,
+      "loadDeviationPercent": -1.9743209519331621
+    },
+    "RideFirst": {
+      "durationMs": 1233410,
+      "workDeviationPercent": -4.545411764705879,
+      "recoveryDeviationPercent": -12.07375,
+      "loadDeviationPercent": -4.9999815544866015
+    }
+  }
+}

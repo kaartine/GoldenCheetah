@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameCourseConversion.h"
+#include "Train/WorkoutGameCoursePrescription.h"
 
 #include <QTest>
 
@@ -74,8 +75,20 @@ private slots:
         QCOMPARE(result.status, WorkoutGameCourseConversionStatus::Ready);
         QCOMPARE(result.course.status, WorkoutGameDistanceCourseStatus::Ready);
         QCOMPARE(result.course.seed, std::uint32_t(42));
-        QCOMPARE(result.summary.nominalDurationMs,
+        QCOMPARE(result.summary.sourceDurationMs,
                  std::int64_t(36 * 60000 + 30000));
+        QVERIFY(result.summary.nominalDurationMs
+                < result.summary.sourceDurationMs);
+        QVERIFY(result.summary.sourceLoadPoints > 0.0);
+        QVERIFY(result.summary.estimatedLoadPoints > 0.0);
+        QVERIFY(std::abs(result.summary.loadDeviationPercent)
+                <= 3.0 + 1.0e-9);
+        QVERIFY(std::abs(result.summary.workDurationDeviationPercent)
+                <= 3.0 + 1.0e-9);
+        QVERIFY(std::abs(result.summary.recoveryDurationDeviationPercent)
+                <= 8.0 + 1.0e-9);
+        QCOMPARE(result.summary.preservedKeyEffortCount,
+                 result.summary.keyEffortCount);
         QVERIFY(result.summary.distanceMeters > 5000.0);
         QVERIFY(result.summary.elevationGainMeters > 0.0);
         QVERIFY(result.summary.nominalEstimate.finished);
@@ -120,6 +133,14 @@ private slots:
                 < balanced.summary.technicalFeatureCount);
         QVERIFY(balanced.summary.technicalFeatureCount
                 < rideFirst.summary.technicalFeatureCount);
+        QVERIFY(workoutFirst.summary.nominalDurationMs
+                > balanced.summary.nominalDurationMs);
+        QVERIFY(balanced.summary.nominalDurationMs
+                > rideFirst.summary.nominalDurationMs);
+        QVERIFY(workoutFirst.summary.loadDeviationPercent
+                > balanced.summary.loadDeviationPercent);
+        QVERIFY(balanced.summary.loadDeviationPercent
+                > rideFirst.summary.loadDeviationPercent);
         bool hasNewRideFeature = false;
         for (const WorkoutGameDistanceCourseSection &section
                 : rideFirst.course.sections) {
@@ -140,6 +161,88 @@ private slots:
             QVERIFY(workoutFirst.course.sections[index].maximumDurationMs
                     <= rideFirst.course.sections[index].maximumDurationMs);
         }
+    }
+
+    void modesMeetPublishedTrainingContract()
+    {
+        WorkoutGameCourseConversionRequest request;
+        request.intervals = sampleWorkout();
+        request.ftpWatts = 190.0;
+        request.seed = 123u;
+
+        const WorkoutGameCoursePreset presets[] = {
+            WorkoutGameCoursePreset::WorkoutFirst,
+            WorkoutGameCoursePreset::Balanced,
+            WorkoutGameCoursePreset::RideFirst
+        };
+        for (WorkoutGameCoursePreset preset : presets) {
+            request.preset = preset;
+            const WorkoutGameCourseConversionResult result =
+                    WorkoutGameCourseConverter::convert(request);
+            QCOMPARE(result.status,
+                     WorkoutGameCourseConversionStatus::Ready);
+            const WorkoutGameCourseModeContract contract =
+                    WorkoutGameCoursePrescription::contractFor(preset);
+            QVERIFY(std::abs(result.summary.workDurationDeviationPercent)
+                    <= contract.maximumWorkDurationDeviationPercent + 1.0e-9);
+            QVERIFY(std::abs(result.summary.recoveryDurationDeviationPercent)
+                    <= contract.maximumRecoveryDurationDeviationPercent + 1.0e-9);
+            QVERIFY(std::abs(result.summary.totalDurationDeviationPercent)
+                    <= contract.maximumTotalDurationDeviationPercent + 1.0e-9);
+            QVERIFY(std::abs(result.summary.loadDeviationPercent)
+                    <= contract.maximumLoadDeviationPercent + 1.0e-9);
+            QCOMPARE(result.summary.keyEffortCount,
+                     result.summary.preservedKeyEffortCount);
+
+            for (std::size_t index = 0;
+                    index < request.intervals.size(); ++index) {
+                const WorkoutGameInterval &source = request.intervals[index];
+                const WorkoutGameDistanceCourseSection &output =
+                        result.course.sections[index];
+                QCOMPARE(output.targetStartWatts, source.startWatts);
+                QCOMPARE(output.targetEndWatts, source.endWatts);
+                QVERIFY(std::abs(output.gradePercent) <= 12.0 + 1.0e-9);
+                if (WorkoutGameCoursePrescription::isKeyEffort(
+                            source, request.ftpWatts)) {
+                    QCOMPARE(output.nominalDurationMs, source.durationMs);
+                }
+                if (WorkoutGameCoursePrescription::isRecovery(
+                            source, request.ftpWatts)) {
+                    QVERIFY(double(output.nominalDurationMs)
+                            >= double(source.durationMs)
+                                * contract.minimumRecoveryRetention - 1.0);
+                    QVERIFY(double(output.minimumDurationMs)
+                            >= double(source.durationMs)
+                                * contract.minimumRecoveryExposure - 1.0);
+                    QVERIFY(output.terrain
+                            != WorkoutGameTerrainKind::GapJump);
+                }
+            }
+        }
+    }
+
+    void zeroSeedIsStableAcrossModeSwitches()
+    {
+        WorkoutGameCourseConversionRequest request;
+        request.intervals = sampleWorkout();
+        request.ftpWatts = 190.0;
+
+        request.preset = WorkoutGameCoursePreset::Balanced;
+        const WorkoutGameCourseConversionResult balanced =
+                WorkoutGameCourseConverter::convert(request);
+        request.preset = WorkoutGameCoursePreset::RideFirst;
+        const WorkoutGameCourseConversionResult rideFirst =
+                WorkoutGameCourseConverter::convert(request);
+        request.preset = WorkoutGameCoursePreset::Balanced;
+        const WorkoutGameCourseConversionResult repeated =
+                WorkoutGameCourseConverter::convert(request);
+
+        QCOMPARE(balanced.course.seed, rideFirst.course.seed);
+        QCOMPARE(repeated.course.seed, balanced.course.seed);
+        QCOMPARE(repeated.summary.nominalDurationMs,
+                 balanced.summary.nominalDurationMs);
+        QCOMPARE(repeated.summary.distanceMeters,
+                 balanced.summary.distanceMeters);
     }
 
     void sameRequestProducesIdenticalResult()

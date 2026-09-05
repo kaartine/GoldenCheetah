@@ -163,7 +163,11 @@ private slots:
                 WorkoutGameCourseDocumentCodec::decode(encoded, decoded);
 
         QCOMPARE(status, WorkoutGameCourseDocumentStatus::Ready);
-        QCOMPARE(decoded.schemaVersion, 2);
+        QCOMPARE(decoded.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QCOMPARE(decoded.conversionAlgorithmVersion,
+                 WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
+        QVERIFY(encoded.contains("\"algorithmVersion\":2"));
         QCOMPARE(decoded.title, source.title);
         QCOMPARE(decoded.sourceFileName, source.sourceFileName);
         QCOMPARE(decoded.sourceSha256, source.sourceSha256);
@@ -233,7 +237,8 @@ private slots:
         WorkoutGameCourseDocument decoded;
         QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
                  WorkoutGameCourseDocumentStatus::Ready);
-        QCOMPARE(decoded.schemaVersion, 2);
+        QCOMPARE(decoded.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QCOMPARE(decoded.course.sections[0].feature,
                  WorkoutGameFeature::SprintJump);
         QCOMPARE(decoded.course.sections[0].terrain,
@@ -278,7 +283,7 @@ private slots:
         }
     }
 
-    void versionOneLoadsWithoutRoadPlanAndExplicitSaveUpgradesToVersionTwo()
+    void versionOneLoadsWithoutRoadPlanAndExplicitSaveUpgradesToCurrent()
     {
         WorkoutGameCourseDocument legacy = sampleDocument();
         legacy.schemaVersion = 1;
@@ -303,10 +308,55 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
                     path, upgraded, error),
                  WorkoutGameCourseDocumentStatus::Ready);
-        QCOMPARE(upgraded.schemaVersion, 2);
+        QCOMPARE(upgraded.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QCOMPARE(upgraded.conversionAlgorithmVersion,
+                 WorkoutGameCourseDocument::LegacyConversionAlgorithmVersion);
         QVERIFY(upgraded.course.roadPlan);
         QVERIFY(WorkoutGameRoadQuality::audit(
                     *upgraded.course.roadPlan).accepted());
+    }
+
+    void versionTwoRemainsCanonicalAndReadable()
+    {
+        QJsonObject root = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
+                .object();
+        root.insert(QStringLiteral("schemaVersion"), 2);
+        QJsonObject conversion =
+                root.value(QStringLiteral("conversion")).toObject();
+        conversion.remove(QStringLiteral("algorithmVersion"));
+        root.insert(QStringLiteral("conversion"), conversion);
+        const QByteArray versionTwo =
+                QJsonDocument(root).toJson(QJsonDocument::Compact) + '\n';
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(versionTwo, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.schemaVersion, 2);
+        QCOMPARE(decoded.conversionAlgorithmVersion,
+                 WorkoutGameCourseDocument::LegacyConversionAlgorithmVersion);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), versionTwo);
+    }
+
+    void schemaThreeAllowsSourceAndGeneratedDurationsToDiffer()
+    {
+        WorkoutGameCourseDocument source = sampleDocument();
+        source.sourceIntervals = {
+            {0, 15000, 150.0, 200.0},
+            {15000, 20000, 100.0, 100.0}
+        };
+        QCOMPARE(source.course.nominalDurationMs, std::int64_t(30000));
+
+        const QByteArray encoded = WorkoutGameCourseDocumentCodec::encode(source);
+        QVERIFY(!encoded.isEmpty());
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.sourceIntervals.back().startMs
+                    + decoded.sourceIntervals.back().durationMs,
+                 std::int64_t(35000));
+        QCOMPARE(decoded.course.nominalDurationMs, std::int64_t(30000));
     }
 
     void unknownRoadGenerationVersionFailsClosed()
