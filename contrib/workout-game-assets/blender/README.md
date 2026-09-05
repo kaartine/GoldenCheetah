@@ -219,3 +219,11 @@ QT_QPA_PLATFORM=offscreen balsam \
 For this toolchain, repeated Balsam runs must match the manifest hashes. The
 `Build/workoutGameAssets` tests cover policy failures, and the
 `Train/workoutGame3DView` tests load and render the production qrc output.
+
+Set `GC_WORKOUT_GAME_CONIFER_ASSET_AUDIT_DIR` when running
+`rendersPackagedConiferGroveCatalog` to export matched front,
+left-three-quarter and rear-three-quarter views. Each variant renders in an
+isolated cell with a fixed camera, field of view and world scale; the asset is
+rotated for alternate angles so framing remains directly comparable. The audit
+uses the packaged runtime meshes and leaves production placement and rendering
+unchanged.

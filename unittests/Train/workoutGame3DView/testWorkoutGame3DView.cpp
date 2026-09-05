@@ -488,6 +488,25 @@ int nearColorPixels(
     return count;
 }
 
+int coniferAssetPixels(const QImage &image, const QRect &region)
+{
+    int count = 0;
+    const QRect bounded = region.intersected(image.rect());
+    for (int y = bounded.top(); y <= bounded.bottom(); ++y) {
+        for (int x = bounded.left(); x <= bounded.right(); ++x) {
+            const QColor color(image.pixel(x, y));
+            const bool foliage = color.green() > color.red() + 4
+                    && color.green() > color.blue() + 4
+                    && color.green() <= 125;
+            const bool bark = color.red() > color.green() + 15
+                    && color.green() > color.blue() + 8
+                    && color.red() <= 180;
+            if (foliage || bark) ++count;
+        }
+    }
+    return count;
+}
+
 int riderBluePixels(const QImage &image, const QRect &region)
 {
     int count = 0;
@@ -4943,15 +4962,59 @@ private slots:
                     return object->property("visible").toBool();
                 }), 1);
 
-        const QImage rendered = window.grabWindow();
-        QVERIFY(!rendered.isNull());
-        QCOMPARE(rendered.size(), QSize(1280, 720));
-        QVERIFY2(sampledColorCount(rendered) > 12,
-                 "packaged conifer grove catalog appears blank");
+        const QString auditDirectory = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_CONIFER_ASSET_AUDIT_DIR");
+        if (!auditDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(auditDirectory));
+        }
+        const std::array<QString, 3> angleNames = {{
+            QStringLiteral("front"),
+            QStringLiteral("left-three-quarter"),
+            QStringLiteral("rear-three-quarter")
+        }};
+        std::array<QImage, 3> renderedAngles;
+        for (std::size_t index = 0; index < renderedAngles.size(); ++index) {
+            QVERIFY(window.rootObject()->setProperty(
+                    "cameraAngle", int(index)));
+            QTest::qWait(250);
+            renderedAngles[index] = window.grabWindow();
+            QVERIFY(!renderedAngles[index].isNull());
+            QCOMPARE(renderedAngles[index].size(), QSize(1280, 720));
+            QVERIFY2(sampledColorCount(renderedAngles[index]) > 12,
+                     qPrintable(angleNames[index]
+                         + QStringLiteral(" conifer view appears blank")));
+            QCOMPARE(coniferAssetPixels(
+                    renderedAngles[index], QRect(0, 0, 1280, 24)), 0);
+            constexpr int CellWidth = 320;
+            for (int cell = 0; cell < 4; ++cell) {
+                const QRect content(
+                        cell * CellWidth + 12, 24, CellWidth - 24, 620);
+                QVERIFY2(coniferAssetPixels(
+                        renderedAngles[index], content) > 1000,
+                        qPrintable(angleNames[index]
+                            + QStringLiteral(" variant %1 is missing")
+                                  .arg(cell)));
+                QCOMPARE(coniferAssetPixels(
+                        renderedAngles[index],
+                        QRect(cell * CellWidth, 0, 12, 650)), 0);
+                QCOMPARE(coniferAssetPixels(
+                        renderedAngles[index],
+                        QRect((cell + 1) * CellWidth - 12,
+                              0, 12, 650)), 0);
+            }
+            if (!auditDirectory.isEmpty()) {
+                const QString path = QDir(auditDirectory).filePath(
+                        angleNames[index] + QStringLiteral(".png"));
+                QVERIFY2(renderedAngles[index].save(path), qPrintable(path));
+            }
+        }
+        QVERIFY(changedPixels(renderedAngles[0], renderedAngles[1]) > 1000);
+        QVERIFY(changedPixels(renderedAngles[1], renderedAngles[2]) > 1000);
         const QString screenshot = qEnvironmentVariable(
                 "GC_WORKOUT_GAME_CONIFER_ASSET_SCREENSHOT");
         if (!screenshot.isEmpty()) {
-            QVERIFY2(rendered.save(screenshot), qPrintable(screenshot));
+            QVERIFY2(renderedAngles[0].save(screenshot),
+                     qPrintable(screenshot));
         }
 
         QFile pineTrunk(QStringLiteral(
