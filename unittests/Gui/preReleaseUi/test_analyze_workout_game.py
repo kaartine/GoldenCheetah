@@ -1011,23 +1011,40 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             samples, "medium"
         )
 
-        self.assertTrue(any("multiple" in item and "action" in item
+        self.assertTrue(any("exactly one positive" in item
                             for item in failures), failures)
 
-    def test_scopes_expected_gap_line_to_one_matching_action(self):
-        samples = self.gap_line_samples("short")
-        samples.extend(
-            dict(sample, action_id=42.0)
-            for sample in self.gap_line_samples("long")
-        )
+    def test_rejects_multiple_actions_when_only_one_matches_expected_line(self):
+        for first, later in (("short", "long"), ("long", "short")):
+            with self.subTest(first=first, later=later):
+                samples = self.gap_line_samples(first)
+                samples.extend(
+                    dict(sample, action_id=42.0)
+                    for sample in self.gap_line_samples(later)
+                )
 
-        summary, failures = ANALYZER.validate_expected_gap_jump(
-            samples, "long"
-        )
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, "long"
+                )
 
-        self.assertEqual(failures, [])
-        self.assertEqual(summary["gap_selected_action_id"], 42)
-        self.assertEqual(summary["gap_action_id_changes"], 0)
+                self.assertTrue(any("exactly one positive" in item
+                                    for item in failures), failures)
+
+    def test_accepts_actual_c137_positive_action_id_shape(self):
+        for line in ("long", "safe"):
+            with self.subTest(line=line):
+                samples = self.gap_line_samples(line)
+                for sample in samples:
+                    sample["action_id"] = 38654705677.0
+
+                summary, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, line
+                )
+
+                self.assertEqual(failures, [])
+                self.assertEqual(
+                    summary["gap_selected_action_id"], 38654705677
+                )
 
     def test_rejects_contradictory_gap_outcomes_for_selected_action(self):
         samples = self.gap_line_samples("long")
@@ -1069,6 +1086,69 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 self.assertTrue(any(
                     "missing" in item and field in item for item in failures
                 ), failures)
+
+    def test_rejects_malformed_gap_numeric_and_boolean_fields(self):
+        cases = (
+            ("distance_to_lip_m", float("nan")),
+            ("distance_to_lip_m", float("inf")),
+            ("distance_to_lip_m", "unknown"),
+            ("launch_window", 2),
+            ("line_locked", -1),
+            ("airborne", 0.5),
+            ("rear_contact", "yes"),
+            ("front_contact", float("nan")),
+            ("launch_speed_ready", 2),
+            ("launch_power_ready", -1),
+            ("power_hold_ms", float("nan")),
+            ("power_hold_ms", -1),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                samples = self.gap_line_samples("long")
+                samples[-2][field] = value
+
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, "long"
+                )
+
+                self.assertTrue(any(
+                    "invalid" in item and field in item for item in failures
+                ), failures)
+
+    def test_rejects_malformed_or_inappropriate_gap_enums(self):
+        cases = (
+            ("locked_line", "extra"),
+            ("route", "detour"),
+            ("feature_outcome", "success"),
+            ("feature_phase", "flying"),
+            ("feature_phase", "measure"),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                samples = self.gap_line_samples("long")
+                samples[-2][field] = value
+
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, "long"
+                )
+
+                self.assertTrue(any(
+                    "invalid" in item and field in item for item in failures
+                ), failures)
+
+    def test_rejects_non_positive_or_malformed_gap_action_id(self):
+        for value in (0, -1, 1.5, float("nan"), "unknown"):
+            with self.subTest(value=value):
+                samples = self.gap_line_samples("long")
+                for sample in samples:
+                    sample["action_id"] = value
+
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, "long"
+                )
+
+                self.assertTrue(any("exactly one positive" in item
+                                    for item in failures), failures)
 
     def test_expected_gap_line_rejects_early_or_missing_launch_window(self):
         for condition in ("early", "missing"):
@@ -1117,6 +1197,14 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         unused, failures = ANALYZER.validate_expected_gap_jump(samples, "safe")
 
         self.assertEqual(failures, [])
+
+    def test_rejects_safe_gap_line_truncated_before_recovery_merge(self):
+        samples = self.gap_line_samples("safe")[:5]
+
+        unused, failures = ANALYZER.validate_expected_gap_jump(samples, "safe")
+
+        self.assertTrue(any("recovery" in item and "after action" in item
+                            for item in failures), failures)
 
     def test_rejects_gap_jump_without_airborne_or_landing_evidence(self):
         for missing in ("airborne", "landing"):
