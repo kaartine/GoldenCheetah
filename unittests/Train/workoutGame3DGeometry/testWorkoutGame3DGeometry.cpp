@@ -773,12 +773,12 @@ private slots:
         WorkoutGame3DGeometry skinny(WorkoutGame3DGeometry::Layer::Skinny);
         skinny.setCourse(course);
         QVERIFY(skinny.ready());
-        QCOMPARE(skinny.sampleCount(), 1584);
+        QCOMPARE(skinny.sampleCount(), 2352);
         QCOMPARE(skinny.vertexData().size(),
                  skinny.sampleCount() * skinny.stride());
         const int triangleCount = skinny.indexData().size()
                 / int(3 * sizeof(quint32));
-        QCOMPARE(triangleCount, 792);
+        QCOMPARE(triangleCount, 1176);
         QVERIFY(skinny.boundsMax().x() - skinny.boundsMin().x() > 0.45f);
         QVERIFY(skinny.boundsMax().y() - skinny.boundsMin().y() > 0.30f);
         double maximumHorizontalSpan = 0.0;
