@@ -993,7 +993,7 @@ private slots:
         QVERIFY(low.lateralOffsetMeters * piece->turnRadians > 0.0);
     }
 
-    void gapSectionKeepsOrdinaryBankLineOutsideTheGapBranch()
+    void gapSectionReservesStraightApproachForAuthoredBranch()
     {
         WorkoutGameCourse course;
         course.status = WorkoutGameCourseStatus::Ready;
@@ -1012,33 +1012,23 @@ private slots:
         const WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(course, 200.0);
         QVERIFY(road.ready);
-        const auto bankPiece = std::find_if(
-                road.pieces.begin(), road.pieces.end(),
-                [](const WorkoutGameRoadPiece &candidate) {
-                    return candidate.bank.enabled
-                            && !candidate.challenge.enabled;
-                });
         const WorkoutGameRoadPiece *gapPiece = challengePieceFor(road, 0);
-        QVERIFY(bankPiece != road.pieces.end());
         QVERIFY(gapPiece != nullptr);
-        QVERIFY(bankPiece->geometryAnchorDistanceMeters
-                < gapPiece->gapJump.splitStartDistanceMeters);
-
-        WorkoutGameFeatureRuntime runtime;
-        QVERIFY(runtime.configure(road));
-        WorkoutGameSimulationSnapshot input = snapshot(
-                0, progressAtDistance(
-                    road, 0, bankPiece->geometryAnchorDistanceMeters),
-                WorkoutGameFeatureOutcome::Active);
-        WorkoutGameFeatureRuntimeSnapshot high;
-        for (int index = 0; index <= 100; ++index) {
-            input.workoutTimeMs = 1000 + index * 20;
-            high = runtime.update(input, 280.0, 190.0);
+        QCOMPARE(std::count_if(
+                     road.pieces.begin(), road.pieces.end(),
+                     [](const WorkoutGameRoadPiece &candidate) {
+                         return candidate.challenge.enabled;
+                     }),
+                 std::ptrdiff_t(1));
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            QCOMPARE(piece.sourceSectionIndex, std::size_t(0));
+            QVERIFY(!piece.bank.enabled);
+            QVERIFY(std::abs(piece.turnRadians) < 1.0e-9);
         }
-
-        QVERIFY(high.bermLineBias > 0.99);
-        QVERIFY(high.lateralOffsetMeters * bankPiece->turnRadians < 0.0);
-        QVERIFY(std::abs(high.lateralOffsetMeters) > 0.05);
+        QVERIFY(gapPiece->gapJump.splitStartDistanceMeters
+                < gapPiece->gapJump.mergeEndDistanceMeters);
+        QVERIFY(gapPiece->gapJump.mergeEndDistanceMeters
+                <= road.totalLengthMeters);
     }
 
     void ordinaryBankLineRejectsPowerNoiseWithoutLateralTeleportation()

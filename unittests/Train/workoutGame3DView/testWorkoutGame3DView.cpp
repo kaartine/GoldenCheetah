@@ -1536,6 +1536,36 @@ private slots:
         window.setSessionRunning(false);
     }
 
+    void groundShadowOnlyRendersWithAirClearance()
+    {
+        const WorkoutGameCourse course = sampleCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(road, 12.0);
+        viewModel.setFrame(frame, 215.0, 220.0, 87, 148, 7);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QObject *shadow = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderGroundShadow"));
+        QVERIFY(shadow);
+        QCOMPARE(shadow->property("visible").toBool(), false);
+
+        frame.world.rider.airborne = true;
+        frame.world.rider.clearanceMeters = 1.20;
+        frame.simulation.workoutTimeMs += 16;
+        viewModel.setFrame(frame, 215.0, 220.0, 87, 148, 7);
+        QTRY_COMPARE(shadow->property("visible").toBool(), true);
+    }
+
     void productionWindowPublishesCompletedFrameDiagnostics()
     {
         if (!hasInteractiveGraphicsPlatform()) {

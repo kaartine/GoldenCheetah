@@ -243,6 +243,7 @@ Node {
 
     Model {
         objectName: "riderGroundShadow"
+        visible: root.airHeight > 0.015
         source: "assets/meshes/geo_Shadow_LOD0_mesh.mesh"
         y: -airHeight
         scale: Qt.vector3d(
