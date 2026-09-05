@@ -30,10 +30,10 @@ Set `GC_UI_GENERATOR_MODE` to `on-target`, `over-target`, `under-target`,
 `cadence-low`, `cadence-high` or `follow-target` to select the isolated Data
 Generator scenario. Unknown values stop the run before GoldenCheetah starts.
 Keep the default `GC_UI_GAME_RUN_SECONDS=11.8` when the full UI workflow uses
-`GC_WORKOUT_GAME_FEATURE_LAB=1`. A value close to the 109.5-second course
+`GC_WORKOUT_GAME_FEATURE_LAB=1`. A value close to the 122.5-second course
 duration lets the workout auto-complete before the later stop, discard and save
 tests and therefore invalidates those tests. Validate a full-course trace in a
-separate game session. For an interactive 109.5-second ride through all eleven
+separate game session. For an interactive 122.5-second ride through all eleven
 terrain types, including six progressive unscored berms, use
 `run-feature-lab.sh [APPIMAGE]`. When copied beside
 `GoldenCheetah-latest.AppImage`, the AppImage argument can be omitted. The

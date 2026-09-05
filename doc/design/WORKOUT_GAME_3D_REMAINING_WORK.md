@@ -9,6 +9,7 @@ work package here and must not be scheduled as separate duplicate tasks.
 
 Status values are:
 
+- `verified`: every gate owned by the package has current evidence.
 - `partial`: relevant implementation exists, but one or more acceptance gates
   still fail or lack interactive evidence.
 - `not started`: no production implementation was found for the requested
@@ -32,10 +33,10 @@ blocked and three are deferred.
 Work these items in order unless a later item can be implemented and tested
 independently without delaying an earlier gate.
 
-The practical execution order is WG-16's required-test inventory and known
-failures first, then WG-02, WG-03 through WG-15, the physical WG-01 gate and
-finally WG-17. This keeps independently automatable work moving while the real
-trainer/user gate is unavailable.
+The practical execution order is WG-16's current required-test inventory and
+remaining UI/visual gates first, then WG-02, WG-03 through WG-15, the physical
+WG-01 gate and finally WG-17. This keeps independently automatable work moving
+while the real trainer/user gate is unavailable.
 
 ## Execution Batches
 
@@ -48,7 +49,7 @@ uses at most ten CPUs, and publishes an accepted development AppImage to
 
 | Batch | Scope | Focused verification | Aggregate gate |
 | --- | --- | --- | --- |
-| B0 Test foundation | WG-16 inventory, the two known world failures, gap-jump contract conflict and stale release evidence | Required-test inventory reconciliation; failing world cases; gap branch/runtime tests | All current non-visual unit projects, then ASan/UBSan for changed pure modules |
+| B0 Test foundation (focused gates complete) | WG-16 inventory, the two formerly failing world cases, resolved gap-jump contract conflict and stale release evidence | Required-test inventory reconciliation; focused world cases; gap branch/runtime tests | Affected non-visual projects and ASan/UBSan for changed pure modules; the full current rollup belongs to B4 |
 | B1 Route and world | WG-03, WG-04, WG-06 and WG-15 | Route-quality windows, persisted road plan/version, berm frequency/line, socket continuity, terrain anchoring and render budgets | Course conversion, document/store, road, geometry, terrain and deterministic render suites |
 | B2 Motion and gameplay | WG-05, WG-07 through WG-14 | Camera/frustum, crank/feet, contact, feature traces, guidance, gap lines and progressive gearing | Simulation, engine, runner, ViewModel/QML and feature-lab suites plus sanitizer subset |
 | B3 Presentation performance | WG-02 and remaining WG-10/WG-12/WG-15 visual acceptance | Cold first-ten-second frame trace, per-feature still/motion catalog, HUD bounds and prop sweep | Isolated packaged-AppImage Intel/NVIDIA video, trace and frame-budget matrix |
@@ -117,22 +118,25 @@ detection remains enabled except for
 the Quick 3D View suite, where Qt 6.8.3 retains a known 600-byte offscreen
 renderer allocation after its platform-dependent cases are skipped.
 
-The required inventory reconciles 173/173 projects. Its final X11 run passed
+The required inventory reconciles 173/173 projects. Its earlier X11 run passed
 172 projects and stopped only at the AppImage policy project because two
 protected inventory hashes were stale. After updating exactly those hashes,
 the complete AppImage project, including reproducibility, SBOM, credential,
 immutable-action and private-OAuth gates, passes without any other source
-change. This dependency-scoped rerun completes the current 173-project
-unit/integration inventory.
+change. This split-run evidence covers every project at that revision; the
+current single-run confirmation is the B4 aggregate rollup.
 
 The B3 implementation and pre-package test gates are complete. Work now in
-progress is B4: build the clean reproducible AppImage, exercise its isolated
-Painter, Scene Graph and Quick 3D workflows, verify the exact package and
-publish it. B4 also requires a post-cold-start Quick 3D motion capture, exact
-saved-activity identity, process-group ownership and complete XDG isolation.
-The real-trainer and user A/B gates remain deliberately separate in B5 and
-cannot be replaced with generated telemetry. Legacy renderer retirement stays
-blocked until that physical acceptance is recorded.
+progress is B4's current single-run inventory and the open all-feature lab,
+Data Generator discoverability/isolation without hidden configuration, and
+compact-HUD acceptance evidence. The clean
+reproducible `c1373ea` AppImage has already passed its isolated Painter, Scene
+Graph and Quick 3D normal workflows, post-cold-start Quick 3D captures, exact
+saved-activity identity, process-group ownership and complete XDG isolation,
+and is published at the stable path. The real-trainer and user A/B gates remain
+deliberately separate in B5 and cannot be replaced with generated telemetry.
+Legacy renderer retirement stays blocked until that physical acceptance is
+recorded.
 
 | ID | Priority | Status | Consolidated work | Done when | Source requirements |
 | --- | --- | --- | --- | --- | --- |
@@ -159,10 +163,12 @@ blocked until that physical acceptance is recorded.
 
 ## Known Concrete Release Failures
 
-- The required inventory now includes
-  `Train/workoutGameGapJumpLaunchWindow` and reconciles 173/173 projects. Its
-  five focused gap suites pass 73/73, and the complete current unit/integration
-  inventory is green. `REL-01` remains open only for the new packaged UI run.
+- The required inventory includes `Train/workoutGameGapJumpLaunchWindow` and
+  reconciles 173/173 projects. Its five focused gap suites pass 73/73, and the
+  exact `c1373ea` package passed the isolated Painter, Scene Graph and Quick 3D
+  normal UI workflow. A current full 173-project run remains before `REL-01`
+  can be marked verified. WG-16 additionally requires the open
+  `LIVE-GAME-03..06` and `VIS-15` evidence.
 - The formerly documented climb-continuity and rock-garden bypass failures are
   stale. Current `workoutGameWorld` passes 47/47 normally and under ASan/UBSan;
   both regressions also pass 25 repeated runs. Keep the strict tests, but do not

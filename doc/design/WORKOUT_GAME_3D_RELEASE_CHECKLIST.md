@@ -1156,10 +1156,38 @@ project because two protected inventory hashes were stale. After updating
 exactly those hashes, the complete AppImage project passes its reproducibility,
 SBOM, credential, immutable-action and private-OAuth gates without another
 source change. The twelve directly affected suites pass 386/386 under
-ASan/UBSan, with 34 expected opt-in renderer skips. The current automated
-unit/integration inventory is therefore complete; `REL-01` remains open for
-the new packaged UI run. Real trainer A/B acceptance remains separately open
-under `REL-04`.
+ASan/UBSan, with 34 expected opt-in renderer skips. This split-run evidence
+covers every project at that revision; the current single reconciled run is
+still required before `REL-01` closes. Real trainer A/B acceptance remains
+separately open under `REL-04`.
+
+**Current `REL-01` package evidence (`c1373ea`, 2026-09-05):** the exact
+reproducible AppImage
+promoted to `GoldenCheetah-latest.AppImage` passed the isolated pre-release UI
+workflow through all three retained renderer paths. Painter, Scene Graph and
+Quick 3D each passed 8/8 cases covering startup, navigation, prepared workout
+import, Train controls, visible Data Generator and virtual gears, Workout Game
+start/stop/continue/save/reopen, workout Save As and clean shutdown. Two
+additional independent Quick 3D executions of the promoted package each passed
+the same 8/8 workflow cases and their cold-start performance gate. The final
+source delta passed 79/79 offscreen and 99/99 X11/Quick 3D ViewModel cases;
+the 79-case offscreen suite also passed under ASan/UBSan without a sanitizer
+finding. These focused and split-run B1/B2 results cover the current inventory,
+but still require the single reconciled run called out above. Two independent
+clean package passes produced the same AppImage
+SHA-256, `30dacd8da15ebf91914bfd77eca5ba66c72bd47459ab5c7bc0792afb952b3a76`,
+and the package gates verified the build manifest, SBOM, configured private
+OAuth fallback, bundled keychain and offscreen Qt runtime. This package
+evidence does not close `REL-01` until the current full required-test inventory
+also passes in one reconciled run, and it does not substitute for `REL-04`.
+Closing `REL-01` does not by itself close WG-16: the open
+`LIVE-GAME-03..06` and `VIS-15` acceptance evidence remains separate.
+
+One combined-matrix Quick 3D sample recorded two consecutive frame intervals
+over 25 ms against a limit of one, while its 24 functional workflows passed
+and two independent Quick 3D performance runs met the limit. That isolated
+Xvfb timing sample remains visible evidence under `WG-02`; native Intel and
+NVIDIA acceptance is not inferred from it.
 
 **REL-03/REL-05 evidence (`56faa71`):** two independent clean release builds
 produced byte-identical ELF binaries and AppImages. The promoted AppImage is
