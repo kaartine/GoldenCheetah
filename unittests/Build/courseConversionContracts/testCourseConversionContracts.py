@@ -206,8 +206,10 @@ class CourseConversionContractTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, source)
         self.assertIn("prescriptionMetadata", conversion)
-        self.assertIn("CurrentSchemaVersion = 3", document)
+        self.assertIn("CurrentSchemaVersion = 4", document)
         self.assertIn("conversionAlgorithmVersion", document)
+        self.assertIn("sourceLaps", document)
+        self.assertIn("sourceTexts", document)
 
 
 if __name__ == "__main__":
