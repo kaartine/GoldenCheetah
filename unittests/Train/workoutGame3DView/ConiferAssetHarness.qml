@@ -80,7 +80,6 @@ Item {
                     width: 1
                     height: parent.height
                     color: "#406474"
-                    opacity: 0.45
                 }
 
                 Text {

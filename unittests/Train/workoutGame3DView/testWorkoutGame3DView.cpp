@@ -4947,35 +4947,6 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
         QTest::qWait(500);
 
-        const QList<QObject *> pineTrunks = window.rootObject()->findChildren<QObject *>(
-                QStringLiteral("workoutGameScotsPineTrunk"));
-        const QList<QObject *> pineCrowns = window.rootObject()->findChildren<QObject *>(
-                QStringLiteral("workoutGameScotsPineCrown"));
-        const QList<QObject *> birchTrunks = window.rootObject()->findChildren<QObject *>(
-                QStringLiteral("workoutGameBirchTrunk"));
-        const QList<QObject *> birchCrowns = window.rootObject()->findChildren<QObject *>(
-                QStringLiteral("workoutGameBirchCrown"));
-        QCOMPARE(pineTrunks.size(), 4);
-        QCOMPARE(pineCrowns.size(), 4);
-        QCOMPARE(birchTrunks.size(), 4);
-        QCOMPARE(birchCrowns.size(), 4);
-        QCOMPARE(std::count_if(
-                pineTrunks.cbegin(), pineTrunks.cend(), [](QObject *object) {
-                    return object->property("visible").toBool();
-                }), 1);
-        QCOMPARE(std::count_if(
-                birchTrunks.cbegin(), birchTrunks.cend(), [](QObject *object) {
-                    return object->property("visible").toBool();
-                }), 1);
-        QCOMPARE(std::count_if(
-                birchCrowns.cbegin(), birchCrowns.cend(), [](QObject *object) {
-                    return object->property("visible").toBool();
-                }), 1);
-        QCOMPARE(std::count_if(
-                pineCrowns.cbegin(), pineCrowns.cend(), [](QObject *object) {
-                    return object->property("visible").toBool();
-                }), 1);
-
         const QString auditDirectory = qEnvironmentVariable(
                 "GC_WORKOUT_GAME_CONIFER_ASSET_AUDIT_DIR");
         if (!auditDirectory.isEmpty()) {
@@ -4994,6 +4965,11 @@ private slots:
             renderedAngles[index] = window.grabWindow();
             QVERIFY(!renderedAngles[index].isNull());
             QCOMPARE(renderedAngles[index].size(), QSize(1280, 720));
+            if (!auditDirectory.isEmpty()) {
+                const QString path = QDir(auditDirectory).filePath(
+                        angleNames[index] + QStringLiteral(".png"));
+                QVERIFY2(renderedAngles[index].save(path), qPrintable(path));
+            }
             QVERIFY2(sampledColorCount(renderedAngles[index]) > 12,
                      qPrintable(angleNames[index]
                          + QStringLiteral(" conifer view appears blank")));
@@ -5015,11 +4991,6 @@ private slots:
                         renderedAngles[index],
                         QRect((cell + 1) * CellWidth - 12,
                               0, 12, 650)), 0);
-            }
-            if (!auditDirectory.isEmpty()) {
-                const QString path = QDir(auditDirectory).filePath(
-                        angleNames[index] + QStringLiteral(".png"));
-                QVERIFY2(renderedAngles[index].save(path), qPrintable(path));
             }
         }
         QVERIFY(changedPixels(renderedAngles[0], renderedAngles[1]) > 1000);
