@@ -42,6 +42,10 @@ real OpenGL still and motion review.
 - A foreground tree anchor may contain merged low saplings inside its tested
   crown-clearance radius. It must still render as only one trunk and one crown
   model so near-ground density does not multiply draw calls.
+- Near-trail rocks, deadwood and understory should use a small set of
+  prevalidated, mirror-safe verge clusters. Their trail-side pivots, ground
+  contact and component spacing must be explicit so density cannot introduce
+  floating, buried or intersecting props.
 - The approved medium-centre camera keeps the rider low and central while
   showing the next 25-40 m. Vegetation must respect its exclusion corridor.
 - Fog, particles and shadows must remain restrained and bounded. They may add

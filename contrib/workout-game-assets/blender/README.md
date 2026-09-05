@@ -9,8 +9,34 @@ practice hurdle, `generate_drop.py` creates a faceted drop face, and
 mesh set, and `generate_conifer_set.py` creates four low-poly Finnish forest
 groves. `generate_forest_floor_props.py` creates the eight-variant Finnish
 forest-floor prop kit, and `generate_distant_ridges.py` creates the bounded
-distant-terrain ring. None of the generators downloads or embeds external
-assets.
+distant-terrain ring. `generate_forest_verge_clusters.py` composes three
+prevalidated trail-edge clusters from the forest-floor source geometry. None
+of the generators downloads or embeds external assets.
+
+## Forest-verge cluster contract
+
+- Granite with bilberry, stump with fern, and deadwood with heather provide
+  three visibly distinct precomposed trail-edge variants. Their explicit
+  transforms contain no random input and generate byte-identically with the
+  pinned Blender `4.0.2` image.
+- Every component touches canonical `Y = 0`, starts at least `0.14 m` outside
+  the trail-side anchor and has at least `0.025 m` horizontal AABB separation
+  from the other components in its cluster. This prevents floating, buried or
+  intersecting props before runtime terrain placement.
+- The complete source GLB is 382 triangles, 44,964 bytes, four shared opaque
+  materials and zero texture bytes. A variant is at most 150 triangles and
+  keeps a named trail-edge pivot at the origin, bounded UV0 and an applied
+  transform.
+- These clusters are scenery-only source candidates. They have no collision or
+  physics authority and are not packaged or referenced by runtime QML until a
+  separate placement, target-GPU and motion review accepts the integration.
+- Generated geometry and audit images are original project output offered as
+  `CC0-1.0`; their Python sources remain GPL-2.0-or-later. EN-08 is the only
+  geometry dependency, and no external model, texture, image, scan or AI input
+  is used.
+- The EN-09 audit uses matched `960 x 540` before/after catalogs from front and
+  two three-quarter views. All six cells in a catalog share a 47-degree FOV,
+  framing, exposure and 1.36-metre trail-width scale bar.
 
 ## Forest-floor prop contract
 
@@ -244,6 +270,28 @@ docker run --rm --user "$(id -u):$(id -g)" \
   --python contrib/workout-game-assets/blender/render_forest_floor_prop_audit.py \
   -- --asset /work/contrib/workout-game-assets/generated/WG_ForestFloorProps.glb \
   --output-dir /work/contrib/workout-game-assets/audits/EN-08
+```
+
+Generate and audit the precomposed forest-verge clusters:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+  --memory=2g --memory-swap=3g --cpus=2 \
+  -v "$PWD:/work" -w /work \
+  goldencheetah-workout-game-blender:ubuntu24.04 \
+  --background --factory-startup --python-exit-code 1 \
+  --python contrib/workout-game-assets/blender/generate_forest_verge_clusters.py \
+  -- --output /work/contrib/workout-game-assets/generated/WG_ForestVergeClusters.glb
+
+docker run --rm --user "$(id -u):$(id -g)" \
+  --memory=2g --memory-swap=3g --cpus=2 \
+  -v "$PWD:/work" -w /work \
+  goldencheetah-workout-game-blender:ubuntu24.04 \
+  --background --factory-startup --python-exit-code 1 \
+  --python contrib/workout-game-assets/blender/render_forest_verge_cluster_audit.py \
+  -- --source-asset /work/contrib/workout-game-assets/generated/WG_ForestFloorProps.glb \
+  --cluster-asset /work/contrib/workout-game-assets/generated/WG_ForestVergeClusters.glb \
+  --output-dir /work/contrib/workout-game-assets/audits/EN-09
 ```
 
 Determinism is expected for the same Blender 4.x patch release and export

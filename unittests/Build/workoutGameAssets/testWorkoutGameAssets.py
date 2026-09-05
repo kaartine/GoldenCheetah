@@ -80,6 +80,18 @@ FOREST_FLOOR_AUDIT_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/audits/EN-08/EN-08-audit.json"
 )
+FOREST_VERGE_MANIFEST_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/manifests/EN-09-forest-verge-clusters.json"
+)
+FOREST_VERGE_GLB_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/generated/WG_ForestVergeClusters.glb"
+)
+FOREST_VERGE_AUDIT_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/audits/EN-09/EN-09-audit.json"
+)
 DISTANT_MANIFEST_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/manifests/EN-03-distant-ridges.json"
@@ -185,6 +197,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "EN-01-conifer-set",
                 "EN-03-distant-ridges",
                 "EN-08-forest-floor-props",
+                "EN-09-forest-verge-clusters",
                 "FT-01-tabletop-greybox",
                 "FT-02-log-over-greybox",
                 "FT-03-bunny-hop-greybox",
@@ -664,6 +677,132 @@ class TestWorkoutGameAssets(unittest.TestCase):
             [0.0, 45.0, 135.0],
         )
         self.assertEqual(len(set(render_hashes)), 3)
+
+    def test_forest_verge_clusters_are_grounded_separated_and_non_runtime(self) -> None:
+        document, size = assets.read_glb(FOREST_VERGE_GLB_PATH)
+        manifest = assets.load_json_file(FOREST_VERGE_MANIFEST_PATH)
+        assets.validate_glb_document(document, size, manifest)
+
+        expected_triangles = {
+            "GEO_VergeGraniteBilberry_LOD0": 104,
+            "GEO_VergeStumpFern_LOD0": 144,
+            "GEO_VergeDeadwoodHeather_LOD0": 134,
+        }
+        nodes = {node["name"]: node for node in document["nodes"]}
+        mesh_nodes = {
+            name: node for name, node in nodes.items() if "mesh" in node
+        }
+        self.assertEqual(set(mesh_nodes), set(expected_triangles))
+        self.assertEqual(
+            {material["name"] for material in document["materials"]},
+            {
+                "MAT_ForestGranite",
+                "MAT_ForestBark",
+                "MAT_ForestEndGrain",
+                "MAT_ForestUnderstory",
+            },
+        )
+
+        observed_total = 0
+        for name, expected in expected_triangles.items():
+            node = nodes[name]
+            extras = node["extras"]
+            mesh = document["meshes"][node["mesh"]]
+            triangles = sum(
+                document["accessors"][primitive["indices"]]["count"] // 3
+                for primitive in mesh["primitives"]
+            )
+            observed_total += triangles
+            self.assertEqual(triangles, expected)
+            self.assertLessEqual(triangles, 150)
+            self.assertEqual(extras["placement_role"], "scenery-only")
+            self.assertEqual(extras["physics_authority"], "external")
+            self.assertEqual(extras["collision_role"], "none")
+            self.assertEqual(extras["instance_ready"], True)
+            self.assertEqual(extras["ground_contact_y_m"], 0.0)
+            self.assertEqual(extras["trail_edge_clearance_m"], 0.14)
+            self.assertGreaterEqual(extras["component_count"], 3)
+
+            minimum_y = float("inf")
+            maximum_y = float("-inf")
+            minimum_x = float("inf")
+            for primitive in mesh["primitives"]:
+                self.assertIn("TEXCOORD_0", primitive["attributes"])
+                positions = document["accessors"][
+                    primitive["attributes"]["POSITION"]
+                ]
+                minimum_x = min(minimum_x, positions["min"][0])
+                minimum_y = min(minimum_y, positions["min"][1])
+                maximum_y = max(maximum_y, positions["max"][1])
+                for uv in glb_accessor_values(
+                    FOREST_VERGE_GLB_PATH,
+                    document,
+                    primitive["attributes"]["TEXCOORD_0"],
+                ):
+                    self.assertTrue(all(-1.0e-6 <= value <= 1.0 + 1.0e-6
+                                        for value in uv))
+            self.assertEqual(minimum_y, 0.0)
+            self.assertLessEqual(maximum_y, 0.70 + 1.0e-6)
+            self.assertGreaterEqual(minimum_x, 0.14 - 1.0e-6)
+            pivot = name.replace("GEO_", "PIVOT_").replace(
+                "_LOD0", "_TRAIL_EDGE"
+            )
+            self.assertEqual(nodes[pivot].get("translation", [0, 0, 0]),
+                             [0, 0, 0])
+
+        self.assertEqual(observed_total, 382)
+        root = nodes["ROOT_ForestVergeClusters"]["extras"]
+        self.assertEqual(root["project_generated"], True)
+        self.assertEqual(root["generated_output_license"], "CC0-1.0")
+        self.assertEqual(manifest["review"]["status"], "candidate")
+        self.assertEqual(manifest["license"]["spdxId"], "CC0-1.0")
+        self.assertNotIn(
+            "runtime", {entry["purpose"] for entry in manifest["files"]}
+        )
+
+    def test_forest_verge_audits_are_matched_before_after_catalogs(self) -> None:
+        audit = assets.load_json_file(FOREST_VERGE_AUDIT_PATH)
+        catalog = audit["catalog"]
+        self.assertEqual((catalog["widthPixels"], catalog["heightPixels"]),
+                         (960, 540))
+        self.assertEqual((catalog["cellColumns"], catalog["cellRows"]), (3, 2))
+        self.assertEqual(
+            catalog["rows"],
+            ["before-isolated-prop", "after-verge-cluster"],
+        )
+        self.assertEqual(catalog["verticalFovDegrees"], 47.0)
+        self.assertEqual(catalog["cameraDistanceMeters"], 4.45)
+        self.assertEqual(catalog["trailWidthScaleBarMeters"], 1.36)
+        self.assertEqual(
+            audit["clusterGlbSha256"], sha256(FOREST_VERGE_GLB_PATH)
+        )
+        self.assertEqual(
+            audit["sourcePropGlbSha256"], sha256(FOREST_FLOOR_GLB_PATH)
+        )
+
+        render_hashes = []
+        for render in audit["renders"]:
+            path = FOREST_VERGE_AUDIT_PATH.parent / render["path"]
+            data = path.read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", data[16:24]), (960, 540))
+            self.assertEqual(render["sha256"], sha256(path))
+            render_hashes.append(render["sha256"])
+        self.assertEqual(len(render_hashes), 3)
+        self.assertEqual(len(set(render_hashes)), 3)
+
+    def test_forest_verge_generator_is_explicit_and_dependency_is_manifested(self) -> None:
+        generator = (
+            REPOSITORY
+            / "contrib/workout-game-assets/blender/generate_forest_verge_clusters.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("import random", generator)
+        manifest = assets.load_json_file(FOREST_VERGE_MANIFEST_PATH)
+        paths = {entry["path"] for entry in manifest["files"]}
+        self.assertIn(
+            "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
+            paths,
+        )
 
     def test_distant_ridges_are_bounded_socket_free_scenery(self) -> None:
         document, size = assets.read_glb(DISTANT_GLB_PATH)

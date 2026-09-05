@@ -1,0 +1,73 @@
+{
+  "assetId": "EN-09-forest-verge-clusters",
+  "catalog": {
+    "afterCellOrder": [
+      "GEO_VergeGraniteBilberry_LOD0",
+      "GEO_VergeStumpFern_LOD0",
+      "GEO_VergeDeadwoodHeather_LOD0"
+    ],
+    "beforeCellOrder": [
+      "GEO_GraniteLow_LOD0",
+      "GEO_StumpRooted_LOD0",
+      "GEO_DeadwoodFallen_LOD0"
+    ],
+    "cameraDistanceMeters": 4.45,
+    "cameraPositionsMeters": [
+      [
+        1.55,
+        1.42,
+        -4.45
+      ],
+      [
+        -1.6,
+        1.42,
+        -3.15
+      ],
+      [
+        -1.6,
+        1.42,
+        3.15
+      ]
+    ],
+    "cameraTargetMeters": [
+      1.55,
+      0.3,
+      0.0
+    ],
+    "cellColumns": 3,
+    "cellRows": 2,
+    "heightPixels": 540,
+    "look": "Medium High Contrast",
+    "renderEngine": "CYCLES_CPU_12_SAMPLES",
+    "rows": [
+      "before-isolated-prop",
+      "after-verge-cluster"
+    ],
+    "trailWidthScaleBarMeters": 1.36,
+    "verticalFovDegrees": 47.0,
+    "viewTransform": "Standard",
+    "widthPixels": 960
+  },
+  "clusterGlb": "WG_ForestVergeClusters.glb",
+  "clusterGlbSha256": "68aa907039386f964f356e6bada42f1007bf013233843cf8ec65bfa0448fe42d",
+  "format": "goldencheetah-workout-game-asset-audit-1",
+  "renders": [
+    {
+      "path": "EN-09-front.png",
+      "sha256": "57d198a12317c7c07a74b9ca393b69b25ea9e89bb8558342979b995bfd22498e",
+      "view": "front"
+    },
+    {
+      "path": "EN-09-left-three-quarter.png",
+      "sha256": "3c5a53041b2e287cac0e980ec0d85b1cc7f77add9869d34248e232cfafb8c05d",
+      "view": "left-three-quarter"
+    },
+    {
+      "path": "EN-09-rear-three-quarter.png",
+      "sha256": "1f62eefb51b36b796efb2bbaa12f6ffb6140b49ffc0304f539028c3f1d604440",
+      "view": "rear-three-quarter"
+    }
+  ],
+  "sourcePropGlb": "WG_ForestFloorProps.glb",
+  "sourcePropGlbSha256": "ae8b553382ab6d69c2f00306fe0896e32ad761124e7af358641e29e86c540be2"
+}

@@ -1,0 +1,123 @@
+{
+  "assetId": "EN-09-forest-verge-clusters",
+  "displayName": "Workout Game Low-Poly Finnish Forest Verge Clusters",
+  "role": "vegetation",
+  "source": {
+    "kind": "project-authored",
+    "provider": "GoldenCheetah",
+    "author": "GoldenCheetah contributors",
+    "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_forest_verge_clusters.py",
+    "retrievedAt": "2026-09-05",
+    "originalFileName": "generate_forest_verge_clusters.py",
+    "originalSha256": "30a5a36f7ee9aae4b9325120eb507e20e302341a8465ca6d1cbb4b3db6d79f96",
+    "generator": "Blender Python",
+    "generatorVersion": "4.0.2",
+    "promptOrScript": "contrib/workout-game-assets/blender/generate_forest_verge_clusters.py"
+  },
+  "license": {
+    "spdxId": "CC0-1.0",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+    "attribution": "GoldenCheetah contributors",
+    "modificationAllowed": true,
+    "redistributionAllowed": true,
+    "decision": "allow",
+    "policyVersion": "2026-08-25",
+    "distributionScopes": ["source", "screenshots-video"],
+    "conditions": [],
+    "reviewNotes": "The generated cluster geometry and audit images are offered as CC0-1.0 project-generated output. The generator and audit scripts remain part of the GPL-2.0-or-later GoldenCheetah source tree. All geometry is deterministically composed from the original project-authored EN-08 source functions. No external model, texture, image, scan or AI-generated input is used."
+  },
+  "files": [
+    {
+      "path": "contrib/workout-game-assets/blender/generate_forest_verge_clusters.py",
+      "purpose": "source",
+      "sha256": "30a5a36f7ee9aae4b9325120eb507e20e302341a8465ca6d1cbb4b3db6d79f96"
+    },
+    {
+      "path": "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
+      "purpose": "source",
+      "sha256": "26ee68d3551279f428ac7a699d23d0b1446186022f180ec11e283564ba939564"
+    },
+    {
+      "path": "contrib/workout-game-assets/blender/render_forest_verge_cluster_audit.py",
+      "purpose": "source",
+      "sha256": "d0ec46441eb315e50d18e0bafd25d04b552548ccf3ac2e5d42bcf76056146a7a"
+    },
+    {
+      "path": "contrib/workout-game-assets/generated/WG_ForestVergeClusters.glb",
+      "purpose": "intermediate",
+      "sha256": "68aa907039386f964f356e6bada42f1007bf013233843cf8ec65bfa0448fe42d"
+    },
+    {
+      "path": "contrib/workout-game-assets/audits/EN-09/EN-09-audit.json",
+      "purpose": "reference",
+      "sha256": "23b66d331928610b7a31c24204071dc2a27a03ef215d148720475020b75b3b7b"
+    },
+    {
+      "path": "contrib/workout-game-assets/audits/EN-09/EN-09-front.png",
+      "purpose": "preview",
+      "sha256": "57d198a12317c7c07a74b9ca393b69b25ea9e89bb8558342979b995bfd22498e"
+    },
+    {
+      "path": "contrib/workout-game-assets/audits/EN-09/EN-09-left-three-quarter.png",
+      "purpose": "preview",
+      "sha256": "3c5a53041b2e287cac0e980ec0d85b1cc7f77add9869d34248e232cfafb8c05d"
+    },
+    {
+      "path": "contrib/workout-game-assets/audits/EN-09/EN-09-rear-three-quarter.png",
+      "purpose": "preview",
+      "sha256": "1f62eefb51b36b796efb2bbaa12f6ffb6140b49ffc0304f539028c3f1d604440"
+    }
+  ],
+  "processing": {
+    "tool": "Blender",
+    "toolVersion": "4.0.2",
+    "steps": [
+      "Start pinned Blender 4.0.2 with --background --factory-startup.",
+      "Compose three original EN-08 prop arrangements with explicit positions, yaw and scale; use no random source.",
+      "Reject buried, floating, overlapping or trail-intruding component bounds before joining each cluster.",
+      "Generate bounded UV0, apply identity transforms and export one self-contained glTF 2.0 GLB with no camera, light, animation or collision authority.",
+      "Reproduce the GLB byte for byte and validate inventory, topology, pivots, ground contact, trail clearance, materials and budgets.",
+      "Render matched isolated-prop and cluster catalogs at three fixed camera positions with a 1.36-metre scale bar."
+    ]
+  },
+  "technical": {
+    "format": "glb",
+    "unitMeters": 1.0,
+    "upAxis": "+Y",
+    "forwardAxis": "+Z",
+    "glbBytes": 44964,
+    "trianglesLod0": 382,
+    "materials": 4,
+    "textureBytes": 0,
+    "nodes": [
+      "GEO_VergeDeadwoodHeather_LOD0",
+      "GEO_VergeGraniteBilberry_LOD0",
+      "GEO_VergeStumpFern_LOD0",
+      "PIVOT_VergeDeadwoodHeather_TRAIL_EDGE",
+      "PIVOT_VergeGraniteBilberry_TRAIL_EDGE",
+      "PIVOT_VergeStumpFern_TRAIL_EDGE",
+      "ROOT_ForestVergeClusters"
+    ],
+    "animations": [],
+    "allowedExtensions": [],
+    "boundsMeters": {
+      "minimum": [0.15738578140735626, 0.0, -0.6654537916183472],
+      "maximum": [3.0506062507629395, 0.6700000166893005, 0.8102887868881226]
+    },
+    "budgets": {
+      "maxGlbBytes": 65536,
+      "maxTrianglesLod0": 400,
+      "maxMaterials": 4,
+      "maxTextureBytes": 0
+    }
+  },
+  "review": {
+    "status": "candidate",
+    "trademarkStatus": "not-applicable",
+    "personReleaseStatus": "not-applicable",
+    "propertyReleaseStatus": "not-applicable",
+    "reviewer": "GoldenCheetah engineering asset audit",
+    "reviewedAt": "2026-09-05",
+    "notes": "Source-only review candidate. Fixed-camera before/after catalogs show three complete, separated trail-edge clusters at a common world scale. Static checks enforce exact ground contact, minimum trail clearance and non-overlapping component bounds. This does not approve runtime placement, packaging, target-GPU cost or any release checklist item."
+  }
+}

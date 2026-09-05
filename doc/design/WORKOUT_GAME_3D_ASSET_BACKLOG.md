@@ -98,6 +98,7 @@ targets, feature decisions, or trainer resistance.
 | EN-06 | Distant forest/hills | Low-poly or billboard depth layers | Author from owned/generated work |
 | EN-07 | Sky/fog | Flat-color arcade sky and restrained depth fog | Author |
 | EN-08 | Forest-floor prop kit | Three granite silhouettes, one stump, one decorative fallen deadwood form and three low understory silhouettes | Generate from repository-owned Blender Python; no external model or texture input |
+| EN-09 | Forest-verge clusters | Three precomposed, mirror-safe clusters with explicit trail clearance, ground contact and component spacing | Deterministically compose the original EN-08 geometry; no external input |
 | FX-01 | Contact shadow | Ground-fixed rider/bike shadow with airborne scaling | Author |
 | FX-02 | Dirt/dust | Small bounded landing and rear-wheel effects | Author |
 | FX-03 | Success/bypass cue | World-space marker plus HUD response | Author |
@@ -146,6 +147,28 @@ review is complete.
   at `960 x 540`, `47` degrees vertical FOV, identical exposure, lighting,
   camera distance, ground datum and per-cell world scale. The catalogs are
   review evidence only and do not imply runtime or release approval.
+
+### `EN-09` Forest-Verge Cluster Contract
+
+`EN-09` is a source and review package only. Runtime placement and packaging
+remain a separate task after target-GPU and motion acceptance.
+
+- Supply granite-bilberry, stump-fern and deadwood-heather variants composed
+  only from original EN-08 source geometry. Use explicit transforms and no
+  random input.
+- Every component must touch canonical `Y = 0`. Keep the complete cluster at
+  least `0.14 m` from its trail-edge anchor and maintain at least `0.025 m`
+  horizontal AABB separation between component footprints.
+- Keep each variant below `150` LOD0 triangles and the complete GLB below
+  `400` triangles, `64 KiB`, four shared opaque materials and zero texture
+  bytes. Require applied transforms, bounded UV0 and an origin trail-edge
+  pivot on every variant.
+- Mark every mesh scenery-only, mirror-safe, collision-free and subordinate to
+  external physics. The asset must not influence trainer control, recording,
+  feature selection, collision or course distance.
+- Render matched isolated-prop and completed-cluster rows from front and two
+  three-quarter cameras. Each `960 x 540` catalog must preserve common scale,
+  framing, exposure, ground datum and the `1.36 m` trail-width scale bar.
 
 ## Delivery Tasks
 
