@@ -33,6 +33,45 @@ MATRIX_RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui-matrix.sh")
 
 
 class AnalyzeWorkoutGameTest(unittest.TestCase):
+    def gap_line_samples(self, line):
+        safe = line == "safe"
+        locked_line = "none" if safe else line
+        route = "bypass" if safe else "main"
+        outcome = "bypassed" if safe else "completed"
+        states = (
+            (9.0, "measure", 0, 0, "none", "active", "main", 1, 1),
+            (3.0, "committed", 1, 0, locked_line, outcome, route, 1, 1),
+            (2.0, "action", 1, 0, locked_line, outcome, route, 1, 0),
+            (1.0, "action", 1, 0 if safe else 1,
+             locked_line, outcome, route, 1 if safe else 0, 1 if safe else 0),
+            (0.0, "action", 1, 0, locked_line, outcome, route, 1, 1),
+            (-1.0, "recovery", 1, 0, locked_line, outcome, route, 1, 1),
+            (-2.0, "recovery", 1, 0, locked_line, outcome, route, 1, 1),
+        )
+        return [
+            {
+                "feature_terrain": "gap-jump",
+                "distance_to_lip_m": distance,
+                "launch_window": int(3.0 < distance <= 10.0),
+                "line_locked": line_locked,
+                "launch_speed_ready": int(not safe),
+                "launch_power_ready": int(not safe),
+                "power_hold_ms": 0 if safe else 500,
+                "action_id": 41.0,
+                "locked_line": selected_line,
+                "feature_phase": phase,
+                "feature_outcome": sample_outcome,
+                "route": sample_route,
+                "airborne": airborne,
+                "rear_contact": rear_contact,
+                "front_contact": front_contact,
+            }
+            for (
+                distance, phase, line_locked, airborne, selected_line,
+                sample_outcome, sample_route, rear_contact, front_contact,
+            ) in states
+        ]
+
     def renderer_evidence(self, log_text, canvas_name="Workout game 3D canvas"):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -931,6 +970,84 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         self.assertTrue(any("before the 3 m" in item for item in failures))
         self.assertTrue(any("identity changed" in item for item in failures))
         self.assertTrue(any("after lock" in item for item in failures))
+
+    def test_accepts_each_expected_gap_line(self):
+        for line in ("short", "medium", "long", "safe"):
+            with self.subTest(line=line):
+                samples = self.gap_line_samples(line)
+
+                failures = ANALYZER.validate_gap_jump_line(samples, line)
+
+                self.assertEqual(failures, [])
+                if line == "safe":
+                    self.assertEqual(
+                        ANALYZER.validate_gap_jump(
+                            ANALYZER.analyze_gap_jump(samples),
+                            require_launch_readiness=False,
+                        ),
+                        [],
+                    )
+
+    def test_rejects_wrong_expected_gap_line(self):
+        failures = ANALYZER.validate_gap_jump_line(
+            self.gap_line_samples("medium"), "short"
+        )
+
+        self.assertTrue(any("expected short" in item for item in failures))
+        self.assertFalse(any("changed after lock" in item for item in failures))
+
+    def test_rejects_gap_line_change_after_lock(self):
+        samples = self.gap_line_samples("short")
+        samples[-1]["locked_line"] = "medium"
+
+        failures = ANALYZER.validate_gap_jump_line(samples, "short")
+
+        self.assertTrue(any("changed after lock" in item for item in failures))
+
+    def test_rejects_gap_jump_without_airborne_or_landing_evidence(self):
+        for missing in ("airborne", "landing"):
+            with self.subTest(missing=missing):
+                samples = self.gap_line_samples("long")
+                if missing == "airborne":
+                    for sample in samples:
+                        sample["airborne"] = 0
+                else:
+                    samples = samples[:4]
+
+                failures = ANALYZER.validate_gap_jump_line(samples, "long")
+
+                self.assertTrue(
+                    any(missing in item for item in failures), failures
+                )
+
+    def test_rejects_safe_gap_line_with_airborne_frame(self):
+        samples = self.gap_line_samples("safe")
+        samples[3]["airborne"] = 1
+
+        failures = ANALYZER.validate_gap_jump_line(samples, "safe")
+
+        self.assertTrue(any("safe" in item and "airborne" in item
+                            for item in failures))
+
+    def test_rejects_malformed_expected_gap_line_option(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "application.log"
+            log.write_text("", encoding="utf-8")
+            arguments = [
+                "analyze_workout_game.py",
+                str(log),
+                "--expected-gap-line",
+                "extra-long",
+            ]
+
+            error_output = io.StringIO()
+            with contextlib.redirect_stderr(error_output):
+                with mock.patch.object(sys, "argv", arguments):
+                    with self.assertRaises(SystemExit) as error:
+                        ANALYZER.main()
+
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn("invalid choice", error_output.getvalue())
 
     def test_ui_runner_requires_gap_acceptance_for_feature_lab(self):
         runner = RUNNER_PATH.read_text(encoding="utf-8")
