@@ -57,8 +57,11 @@ forces the QPainter fallback, the second exercises the packaged Scene Graph
 path with trace validation, and the third selects the production Qt Quick 3D
 renderer and requires renderer and cold-start trace evidence. The Quick 3D leg
 defers synchronous pixel readback until after the measured ten-second
-cold-start window, then requires a nonblank canvas image. This avoids
-distorting the frame intervals while still detecting a blank renderer. The
+cold-start window, then requires nonblank canvas images. Motion remains
+trace-authoritative because synchronous X11 readback can block long enough for
+a short test course to finish; comparing those final images would report a
+false freeze. This avoids distorting the frame intervals while still detecting
+a blank renderer. The
 harness uses the visible Data Generator and perspective controls; it does not
 require Feature Lab or another hidden course-selection switch. To run only the
 Scene Graph leg:

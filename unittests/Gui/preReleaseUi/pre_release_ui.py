@@ -931,20 +931,16 @@ class WorkoutGameUiWorkflow:
                     )
         elif os.environ.get("GC_UI_REQUIRE_QUICK3D_EVIDENCE") == "1":
             # Synchronous X11 readback can perturb the measured cold-start
-            # window, so capture visual evidence only after that window ends.
-            first = self.driver.screenshot(
+            # window, so capture nonblank evidence only after that window.
+            # Motion remains trace-authoritative: readback itself can block
+            # long enough for a short Feature Lab course to finish.
+            self.driver.screenshot(
                 "04-workout-game-quick3d-post-cold-start-first", self.canvas
             )
             time.sleep(0.4)
-            second = self.driver.screenshot(
+            self.driver.screenshot(
                 "04-workout-game-quick3d-post-cold-start-second", self.canvas
             )
-            changed = self.driver.changed_pixels(first, second)
-            if changed < 1200:
-                raise UiFailure(
-                    "Quick3D scene appears frozen after cold start: "
-                    f"only {changed} sampled pixels changed"
-                )
 
         self.activate_stop_training()
         continue_button = self.driver.find(

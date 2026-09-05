@@ -388,13 +388,12 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
         driver.activate.assert_called_once_with(control)
 
-    def test_quick3d_visual_capture_runs_after_the_cold_start_window(self):
+    def test_quick3d_capture_defers_motion_validation_to_renderer_trace(self):
         with tempfile.TemporaryDirectory() as directory:
             recording = Path(directory) / "recording.csv"
             recording.write_text("secs,watts\n0,190\n", encoding="ascii")
             driver = mock.Mock()
             driver.find.side_effect = [object(), object()]
-            driver.changed_pixels.return_value = 2000
             workflow = object.__new__(UI.WorkoutGameUiWorkflow)
             workflow.driver = driver
             workflow.capture_screenshots = False
@@ -419,9 +418,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                     ),
                 ],
             )
-            driver.changed_pixels.assert_called_once_with(
-                driver.screenshot.return_value, driver.screenshot.return_value
-            )
+            driver.changed_pixels.assert_not_called()
 
 
 if __name__ == "__main__":
