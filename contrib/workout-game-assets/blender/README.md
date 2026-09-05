@@ -19,15 +19,19 @@ assets.
   fern, bilberry and heather-like understory forms use 20, 40 and 42.
 - Every variant is a separately instancing-ready mesh with an applied
   transform, UV0, a named base pivot at the origin and exact ground contact at
-  canonical `Y = 0`. The complete source kit is 320 triangles and 39,236 bytes.
+  canonical `Y = 0`. The complete source kit is 320 triangles and 38,892 bytes.
 - Four opaque shared materials cover granite, bark, cut end grain and
   understory. Rocks and shrubs use one material primitive each; stump and
   deadwood use two. There is no embedded texture, external URI, animation,
   collision or physics authority.
-- The crooked 1.95-metre deadwood is only 0.32 metres high and explicitly records
-  `scenery-only`, `collision_role=none` and `feature_role=none`. It is not the
-  taller trail-spanning `FT-02` obstacle and may only be placed off trail in a
-  later integration task.
+- The granite material is a cool restrained mid-grey; flat-shaded irregular
+  facets distinguish the three rock silhouettes without another material pass.
+- The crooked 2.07-metre deadwood has varying seven-sided cross-sections, two
+  tapered branch stubs and uneven broken ends. It rests on several ground
+  contacts, is only 0.302 metres high and explicitly records `scenery-only`,
+  `collision_role=none` and `feature_role=none`. It is not the taller
+  trail-spanning `FT-02` obstacle and may only be placed off trail in a later
+  integration task.
 - Generated geometry and audit images are offered as project-generated
   `CC0-1.0` output; the two Python generators remain part of GoldenCheetah's
   GPL source. No external model, texture, image, scan or AI input is used.

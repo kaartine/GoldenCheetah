@@ -60,6 +60,9 @@ MAXIMUM_WIDTH_METERS = 2.20
 MAXIMUM_DEPTH_METERS = 0.80
 MAXIMUM_HEIGHT_METERS = 0.70
 DEADWOOD_MAXIMUM_HEIGHT_METERS = 0.34
+DEADWOOD_CROSS_SECTION_SIDES = 7
+DEADWOOD_BRANCH_STUB_COUNT = 2
+GRANITE_BASE_COLOR = (0.12, 0.14, 0.15, 1.0)
 EPSILON = 1.0e-7
 
 
@@ -166,27 +169,91 @@ def rooted_stump():
     return vertices, faces, material_indices
 
 
+def tapered_branch_stub(
+    vertices, faces, material_indices, start, end, base_radius, phase
+):
+    direction = tuple(end[axis] - start[axis] for axis in range(3))
+    length = math.sqrt(sum(component * component for component in direction))
+    axis = tuple(component / length for component in direction)
+    reference = (0.0, 1.0, 0.0)
+    first = (
+        axis[1] * reference[2] - axis[2] * reference[1],
+        axis[2] * reference[0] - axis[0] * reference[2],
+        axis[0] * reference[1] - axis[1] * reference[0],
+    )
+    first_length = math.sqrt(sum(component * component for component in first))
+    first = tuple(component / first_length for component in first)
+    second = (
+        axis[1] * first[2] - axis[2] * first[1],
+        axis[2] * first[0] - axis[0] * first[2],
+        axis[0] * first[1] - axis[1] * first[0],
+    )
+
+    base = len(vertices)
+    for center, radius, angle_offset in (
+        (start, base_radius, phase),
+        (end, base_radius * 0.48, phase + 0.31),
+    ):
+        for side in range(3):
+            angle = angle_offset + 2.0 * math.pi * side / 3.0
+            uneven = 1.0 + 0.10 * math.sin(phase * 2.3 + side * 1.7)
+            vertices.append(tuple(
+                center[axis_index] + radius * uneven * (
+                    math.cos(angle) * first[axis_index]
+                    + math.sin(angle) * second[axis_index]
+                )
+                for axis_index in range(3)
+            ))
+    for side in range(3):
+        following = (side + 1) % 3
+        add_face(faces, material_indices,
+                 (base + side, base + 3 + side, base + 3 + following), 0)
+        add_face(faces, material_indices,
+                 (base + side, base + 3 + following, base + following), 0)
+    add_face(faces, material_indices, (base, base + 2, base + 1), 0)
+    add_face(faces, material_indices, (base + 3, base + 4, base + 5), 1)
+
+
 def fallen_deadwood():
     vertices = []
     faces = []
     material_indices = []
-    sides = 8
+    sides = DEADWOOD_CROSS_SECTION_SIDES
     rings = (
-        (-0.98, 0.130, -0.090, 0.130),
-        (-0.34, 0.160, 0.035, 0.160),
-        (0.48, 0.130, 0.065, 0.120),
-        (0.97, 0.070, -0.040, 0.065),
+        (-0.97, 0.105, -0.090, 0.105, 0.125, -0.18),
+        (-0.40, 0.145, 0.025, 0.142, 0.145, 0.05),
+        (0.25, 0.105, 0.082, 0.103, 0.120, 0.32),
+        (0.94, 0.075, -0.045, 0.072, 0.083, 0.51),
+    )
+    broken_offsets = (
+        (-0.050, 0.018, -0.022, 0.040, -0.032, 0.011, -0.015),
+        (0.031, -0.043, 0.014, -0.020, 0.048, -0.009, 0.022),
     )
     starts = []
-    for x_value, center_y, center_z, radius in rings:
+    for ring_index, (
+        x_value, center_y, center_z, radius_y, radius_z, twist
+    ) in enumerate(rings):
         starts.append(len(vertices))
+        ring_vertices = []
         for side in range(sides):
-            angle = 2.0 * math.pi * side / sides
-            vertices.append((
-                x_value,
-                center_y + radius * math.sin(angle),
-                center_z + radius * math.cos(angle),
+            angle = 2.0 * math.pi * side / sides - math.pi / 2.0 + twist
+            radial_y = 1.0 + 0.065 * math.sin(ring_index * 1.7 + side * 2.1)
+            radial_z = 1.0 + 0.080 * math.cos(ring_index * 1.3 + side * 1.9)
+            x_offset = 0.009 * math.sin(ring_index * 1.4 + side * 1.6)
+            if ring_index == 0:
+                x_offset += broken_offsets[0][side]
+            elif ring_index == len(rings) - 1:
+                x_offset += broken_offsets[1][side]
+            ring_vertices.append((
+                x_value + x_offset,
+                center_y + radius_y * radial_y * math.sin(angle),
+                center_z + radius_z * radial_z * math.cos(angle),
             ))
+        ring_ground = min(vertex[1] for vertex in ring_vertices)
+        vertices.extend(
+            (vertex[0], vertex[1] - ring_ground, vertex[2])
+            for vertex in ring_vertices
+        )
     for first, second in zip(starts, starts[1:]):
         for side in range(sides):
             following = (side + 1) % sides
@@ -194,8 +261,10 @@ def fallen_deadwood():
                      (first + side, second + side, second + following), 0)
             add_face(faces, material_indices,
                      (first + side, second + following, first + following), 0)
-    for ring_index, center in ((0, (-0.98, 0.130, -0.090)),
-                               (3, (0.97, 0.070, -0.040))):
+    for ring_index, center in (
+        (0, (-1.045, 0.105, -0.090)),
+        (3, (1.025, 0.075, -0.045)),
+    ):
         center_index = len(vertices)
         vertices.append(center)
         start = starts[ring_index]
@@ -206,17 +275,18 @@ def fallen_deadwood():
                 order = (center_index, start + following, start + side)
             add_face(faces, material_indices, order, 1)
 
-    for base_x, direction in ((-0.30, -1.0), (0.48, 1.0)):
-        base = len(vertices)
-        vertices.extend((
-            (base_x - 0.06, 0.20, -0.08),
-            (base_x + 0.06, 0.19, -0.06),
-            (base_x, 0.28, -0.02),
-            (base_x + direction * 0.26, 0.055, -0.22),
-        ))
-        for indices in ((0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)):
-            add_face(faces, material_indices,
-                     tuple(base + index for index in indices), 0)
+    branches = (
+        ((-0.48, 0.175, -0.075), (-0.60, 0.285, -0.285), 0.040, 0.20),
+        ((0.24, 0.145, 0.105), (0.40, 0.275, 0.300), 0.038, 0.95),
+    )
+    for branch in branches:
+        tapered_branch_stub(vertices, faces, material_indices, *branch)
+
+    ground_offset = min(vertex[1] for vertex in vertices)
+    vertices = [
+        (vertex[0], vertex[1] - ground_offset, vertex[2])
+        for vertex in vertices
+    ]
     return vertices, faces, material_indices
 
 
@@ -341,7 +411,9 @@ def create_mesh(root, name, geometry, materials, material_slots, properties):
     assign_uv0(mesh)
     for polygon, material_index in zip(mesh.polygons, material_indices):
         polygon.material_index = material_index
-        polygon.use_smooth = False
+        polygon.use_smooth = (
+            name == "GEO_DeadwoodFallen_LOD0" and material_index == 0
+        )
     result = bpy.data.objects.new(name=name, object_data=mesh)
     bpy.context.collection.objects.link(result)
     result.parent = root
@@ -374,7 +446,7 @@ def build_scene():
 
     materials = {
         MATERIAL_NAMES[0]: make_material(MATERIAL_NAMES[0],
-                                         (0.34, 0.36, 0.37, 1.0)),
+                                         GRANITE_BASE_COLOR),
         MATERIAL_NAMES[1]: make_material(MATERIAL_NAMES[1],
                                          (0.25, 0.14, 0.065, 1.0)),
         MATERIAL_NAMES[2]: make_material(MATERIAL_NAMES[2],
@@ -398,6 +470,8 @@ def build_scene():
         VARIANT_NAMES[4]: (fallen_deadwood(),
                            (MATERIAL_NAMES[1], MATERIAL_NAMES[2]),
                            {"silhouette": "crooked-tapered-deadwood",
+                            "cross_section_sides": DEADWOOD_CROSS_SECTION_SIDES,
+                            "branch_stub_count": DEADWOOD_BRANCH_STUB_COUNT,
                             "placement_role": "scenery-only",
                             "collision_role": "none",
                             "feature_role": "none"}),
@@ -494,6 +568,24 @@ def self_check(root):
     deadwood_bounds = canonical_bounds(objects["GEO_DeadwoodFallen_LOD0"])
     if deadwood_bounds[1][1] > DEADWOOD_MAXIMUM_HEIGHT_METERS + EPSILON:
         raise RuntimeError("Decorative deadwood exceeds non-feature height")
+    deadwood = objects["GEO_DeadwoodFallen_LOD0"]
+    if len(deadwood.data.vertices) != 42:
+        raise RuntimeError("Decorative deadwood structure changed")
+    deadwood_material_counts = [
+        sum(polygon.material_index == index for polygon in deadwood.data.polygons)
+        for index in range(2)
+    ]
+    if deadwood_material_counts != [56, 16]:
+        raise RuntimeError("Decorative deadwood material topology changed")
+    if deadwood.get("cross_section_sides") not in {6, 7, 8} \
+            or deadwood.get("branch_stub_count") != 2:
+        raise RuntimeError("Decorative deadwood organic silhouette changed")
+    granite = bpy.data.materials[MATERIAL_NAMES[0]].diffuse_color
+    granite_luminance = (
+        0.2126 * granite[0] + 0.7152 * granite[1] + 0.0722 * granite[2]
+    )
+    if not 0.10 <= granite_luminance <= 0.18 or granite[2] - granite[0] < 0.02:
+        raise RuntimeError("Granite is outside the cool mid-grey contract")
     if len({material.name for material in bpy.data.materials}) != 4:
         raise RuntimeError("Forest-floor shared material inventory changed")
     if total_triangles > MAXIMUM_TRIANGLES:

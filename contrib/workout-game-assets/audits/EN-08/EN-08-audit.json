@@ -37,22 +37,22 @@
     {
       "assetRotationDegrees": 0.0,
       "path": "EN-08-front.png",
-      "sha256": "52c5292c7485dc2a94c158243fb119e1d9b4d4853d9dfb681a8aef589bbbf1ed",
+      "sha256": "11d16f5b9883a49280b85936a68b8e7484ff3f41e1dd0caa692a6b62d965212f",
       "view": "front"
     },
     {
       "assetRotationDegrees": 45.0,
       "path": "EN-08-left-three-quarter.png",
-      "sha256": "038c9aa00c93002d1ac2713c399707d0032806b949ee057d8b83c0396d42f7ac",
+      "sha256": "7f7bf4f39421b41134a36eacbdb23aff9c509d64c0e3c69c2c48c211e14e6c8e",
       "view": "left-three-quarter"
     },
     {
       "assetRotationDegrees": 135.0,
       "path": "EN-08-rear-three-quarter.png",
-      "sha256": "9ce63f6446e52ceb649d80b37d6ebb793493a480784be9f96e0f4c45210922ac",
+      "sha256": "cb18d8e973db8f0cddd03a3b05026e18bd87c2aee4d5ed37acf2c7c4c1cdbc0d",
       "view": "rear-three-quarter"
     }
   ],
   "sourceGlb": "WG_ForestFloorProps.glb",
-  "sourceGlbSha256": "8a02afdcd9a10778de9fdb3f503e84e4a8218b3578de338984cf9d7ede43ab14"
+  "sourceGlbSha256": "ae8b553382ab6d69c2f00306fe0896e32ad761124e7af358641e29e86c540be2"
 }

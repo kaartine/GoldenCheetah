@@ -109,6 +109,43 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def glb_accessor_values(path: Path, document: dict, accessor_index: int) -> list:
+    """Decode the uncompressed scalar/vector accessors used by authored GLBs."""
+    data = path.read_bytes()
+    offset = 12
+    binary = None
+    while offset < len(data):
+        chunk_length, chunk_type = struct.unpack_from("<II", data, offset)
+        offset += 8
+        chunk = data[offset:offset + chunk_length]
+        offset += chunk_length
+        if chunk_type == assets.GLB_BINARY_CHUNK:
+            binary = chunk
+    if binary is None:
+        raise AssertionError("GLB has no binary payload")
+
+    accessor = document["accessors"][accessor_index]
+    view = document["bufferViews"][accessor["bufferView"]]
+    component_formats = {
+        5120: "b", 5121: "B", 5122: "h", 5123: "H",
+        5125: "I", 5126: "f",
+    }
+    component_counts = {
+        "SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4,
+    }
+    component_count = component_counts[accessor["type"]]
+    value_format = "<" + (
+        component_formats[accessor["componentType"]] * component_count
+    )
+    value_size = struct.calcsize(value_format)
+    stride = view.get("byteStride", value_size)
+    start = view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
+    return [
+        struct.unpack_from(value_format, binary, start + index * stride)
+        for index in range(accessor["count"])
+    ]
+
+
 class AssetFixture:
     def __init__(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="gc-workout-assets-")
@@ -541,6 +578,66 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertNotIn(
             "runtime", {entry["purpose"] for entry in manifest["files"]}
         )
+
+    def test_forest_floor_deadwood_is_an_irregular_branched_log(self) -> None:
+        document, _ = assets.read_glb(FOREST_FLOOR_GLB_PATH)
+        nodes = {node["name"]: node for node in document["nodes"]}
+        node = nodes["GEO_DeadwoodFallen_LOD0"]
+        extras = node["extras"]
+        self.assertEqual(extras["cross_section_sides"], 7)
+        self.assertEqual(extras["branch_stub_count"], 2)
+        self.assertEqual(extras["placement_role"], "scenery-only")
+        self.assertEqual(extras["collision_role"], "none")
+        self.assertEqual(extras["feature_role"], "none")
+
+        mesh = document["meshes"][node["mesh"]]
+        primitive_triangles = [
+            document["accessors"][primitive["indices"]]["count"] // 3
+            for primitive in mesh["primitives"]
+        ]
+        # A seven-sided four-ring trunk contributes 42 bark triangles. Two
+        # tapered triangular branch stubs add 14 bark triangles, while their
+        # broken tips join the 14 trunk-end triangles in the end-grain pass.
+        self.assertEqual(primitive_triangles, [56, 16])
+
+        positions = glb_accessor_values(
+            FOREST_FLOOR_GLB_PATH,
+            document,
+            mesh["primitives"][0]["attributes"]["POSITION"],
+        )
+        unique_positions = {tuple(round(value, 5) for value in p) for p in positions}
+        self.assertEqual(len(unique_positions), 40)
+        self.assertGreaterEqual(len({p[0] for p in unique_positions}), 12)
+        self.assertGreater(max(p[2] for p in unique_positions)
+                           - min(p[2] for p in unique_positions), 0.55)
+
+        end_positions = glb_accessor_values(
+            FOREST_FLOOR_GLB_PATH,
+            document,
+            mesh["primitives"][1]["attributes"]["POSITION"],
+        )
+        unique_ends = {tuple(round(value, 5) for value in p) for p in end_positions}
+        self.assertEqual(len(unique_ends), 22)
+        left = sorted(unique_ends)[:8]
+        right = sorted(unique_ends)[-8:]
+        self.assertGreater(max(p[0] for p in left) - min(p[0] for p in left), 0.04)
+        self.assertGreater(max(p[0] for p in right) - min(p[0] for p in right), 0.04)
+
+    def test_forest_floor_granite_is_cool_mid_grey(self) -> None:
+        document, _ = assets.read_glb(FOREST_FLOOR_GLB_PATH)
+        material = next(
+            item for item in document["materials"]
+            if item["name"] == "MAT_ForestGranite"
+        )
+        red, green, blue, alpha = material[
+            "pbrMetallicRoughness"
+        ]["baseColorFactor"]
+        luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        self.assertGreaterEqual(luminance, 0.10)
+        self.assertLessEqual(luminance, 0.18)
+        self.assertGreaterEqual(blue - red, 0.02)
+        self.assertLessEqual(max(red, green, blue), 0.18)
+        self.assertEqual(alpha, 1.0)
 
     def test_forest_floor_audits_use_fixed_camera_scale_and_distinct_angles(self) -> None:
         audit = assets.load_json_file(FOREST_FLOOR_AUDIT_PATH)
