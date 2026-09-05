@@ -11,8 +11,9 @@ version and seed.
 The workout prescription is authoritative. In decreasing priority, conversion
 preserves the training stimulus, key efforts, recovery safety and only then
 optimizes ride flow. Terrain, feature density, grade scale and the estimated
-distance are the primary ways in which the modes differ. Route curvature is
-governed separately by the common road-quality contract.
+distance are the primary ways in which the modes differ. Route curvature also
+increases deterministically from Workout first through Balanced to Ride first,
+while every result remains inside the common road-quality contract.
 
 The prescription transform audits every duration or power change before the
 distance-course builder fits terrain and distance around it. A failed audit,
@@ -32,9 +33,9 @@ Consequently, absent prescription metadata makes every source interval
 prescribed. No conversion mode may shorten the nominal duration of any such
 interval. Runtime progression may reach a section boundary only after that
 mode's separately declared minimum exposure. Malformed, length-mismatched,
-unknown or unsupported metadata fails conversion closed. A schema-3
-`source.prescriptionMetadata` version 1 accepts one explicit role per source
-interval:
+unknown or unsupported metadata fails conversion closed. Schema 3 introduced
+`source.prescriptionMetadata`; its version 1 format accepts one explicit role
+per source interval:
 
 - `prescribed` (the default, including ordinary recoveries);
 - `non-prescriptive-warmup`;
@@ -140,16 +141,20 @@ Every prescribed interval has 100% minimum runtime exposure in every mode.
 Only explicitly versioned non-prescriptive roles may use a lower mode-specific
 minimum in a future transform.
 
-`maximumDurationMs` is an advisory ETA envelope, not permission to move a
-stationary rider. Exceeding it sets `maximumExposureExceeded` in the runtime
-snapshot so presentation code can report an overdue section; it never forces
-distance, changes target power or ends recording.
+`maximumDurationMs` is a bounded active-riding envelope, not permission to move
+a stationary rider. When a moving rider reaches the maximum, playback advances
+deterministically to the next section (or finishes the course), reports that
+forced transition for the update and discards rejected trainer distance. Any
+active-time overrun is carried into the next section so a delayed update cannot
+extend a prescribed target without bound. This changes neither recorded data
+nor the immutable source prescription.
 
 ## Measurable terrain and feature guarantees
 
 The current generator supplies the mode anchors `gradeScale` 0.82/1.00/1.18 and
-`technicality` 0.15/0.55/0.95. The low (`<= 0.25`), middle and high (`>= 0.85`)
-palette branches define the terrain bands below. The common safety envelope is
+`technicality` 0.15/0.55/0.95 and route-turn scales 1.00/1.30/2.60. The low
+(`<= 0.25`), middle and high (`>= 0.85`) palette branches define the terrain
+bands below. The common safety envelope is
 grade `[-12%, +12%]`, at most 85 degrees per non-berm road piece, no more than
 25 m near-straight, at least three alternating deliberate bends and at least 45
 degrees accumulated turn in every ordinary 100 m window, plus a 75--85 degree
@@ -170,6 +175,7 @@ palette-eligible distance reports exposure and density as `N/A`, not zero.
 | --- | ---: | ---: | ---: |
 | `gradeScale` | 0.82 | 1.00 | 1.18 |
 | `technicality` | 0.15 | 0.55 | 0.95 |
+| deterministic route-turn scale | 1.00 | 1.30 | 2.60 |
 | Palette-eligible technical terrain exposure target | 25--45% | 50--75% | 75--100% |
 | Technical feature density | 2--4 / 10 sections | 5--7 / 10 sections | 8--10 / 10 sections |
 | Palette | roots, rollers, easy rock garden and log-over mixed with smooth trail; climbs retained; no gap jump | roots, rollers, rock garden, log-over and skinny mixed with smooth trail; no gap jump | skinny, rock garden or rock slab trail; berm recovery; log-over, tabletop or gated gap jump sprint |
@@ -233,13 +239,16 @@ neither the course nor its sidecar exists or changes before the user invokes
 Create/Save. Create/Save persists the already-previewed deterministic result,
 apart from user-edited title/path metadata.
 
-New or explicitly regenerated documents use schema version 3, record the
+New or explicitly regenerated documents use schema version 4, record the
 conversion algorithm version and may record prescription metadata version 1.
-Schema-1 and schema-2 documents remain readable and canonical: loading never
-regenerates or silently adds metadata, and their missing metadata invokes the
-fail-safe prescribed role for every interval. An explicit save may upgrade the
-container while preserving the legacy conversion-algorithm identity. Unknown
-schema, algorithm or prescription-metadata versions fail closed.
+Schema 4 also stores the original workout's ordered lap markers and timed text
+instructions; CRS export maps their source times onto generated course distance
+without changing target power or section timing. Schema 1 through 3 documents
+remain readable and canonical: loading never regenerates or silently adds
+metadata, and their missing metadata invokes the fail-safe prescribed role for
+every interval. An explicit save may upgrade the container while preserving
+the legacy conversion-algorithm identity and the selected mode's route shape.
+Unknown schema, algorithm or prescription-metadata versions fail closed.
 
 ## Verification
 

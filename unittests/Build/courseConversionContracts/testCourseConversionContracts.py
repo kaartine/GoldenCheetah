@@ -158,8 +158,9 @@ class CourseConversionContractTest(unittest.TestCase):
             "Create/Save",
             "preserved/total key efforts and preserved/total recoveries",
             "must never be inferred only from aggregate work/rest percentages",
-            "schema version 3",
-            "Schema-1 and schema-2 documents remain readable and canonical",
+            "schema version 4",
+            "original workout's ordered lap markers and timed text instructions",
+            "Schema 1 through 3 documents remain readable and canonical",
         )
         for phrase in required:
             with self.subTest(phrase=phrase):
