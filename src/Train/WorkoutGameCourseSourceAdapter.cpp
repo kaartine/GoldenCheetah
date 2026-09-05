@@ -39,7 +39,10 @@ bool validTitle(const QString &title)
             && !title.contains(QLatin1Char('\r'));
 }
 
-bool attachRoadPlan(WorkoutGameDistanceCourse &course, double ftpWatts)
+bool attachRoadPlan(
+        WorkoutGameDistanceCourse &course,
+        const std::vector<WorkoutGameInterval> &sourceIntervals,
+        double ftpWatts)
 {
     const WorkoutGameCourse visual =
             WorkoutGameDistancePlayback::visualCourse(course);
@@ -49,6 +52,14 @@ bool attachRoadPlan(WorkoutGameDistanceCourse &course, double ftpWatts)
             != WorkoutGameRoadPlanValidationStatus::Ready
             || !WorkoutGameRoadQuality::audit(plan).accepted()) {
         return false;
+    }
+    for (const WorkoutGameRoadPiece &piece : plan.pieces) {
+        if (piece.sourceSectionIndex >= sourceIntervals.size()) return false;
+        if (WorkoutGameCoursePrescription::isRecovery(
+                    sourceIntervals[piece.sourceSectionIndex], ftpWatts)
+                && piece.challenge.enabled) {
+            return false;
+        }
     }
     course.roadPlan = std::make_shared<const WorkoutGameRoadPlan>(plan);
     return true;
@@ -91,6 +102,7 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
     conversionRequest.ftpWatts = request.ftpWatts;
     conversionRequest.preset = request.preset;
     conversionRequest.roadPhysics = request.roadPhysics;
+    conversionRequest.prescriptionMetadata = request.prescriptionMetadata;
     conversionRequest.seed = request.seed;
     WorkoutGameCourseConversionResult conversion =
             WorkoutGameCourseConverter::convert(conversionRequest);
@@ -98,7 +110,8 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }
-    if (!attachRoadPlan(conversion.course, request.ftpWatts)) {
+    if (!attachRoadPlan(
+                conversion.course, workout.intervals, request.ftpWatts)) {
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }
@@ -111,6 +124,7 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
             QCryptographicHash::hash(
                 request.sourceContents, QCryptographicHash::Sha256).toHex());
     result.document.sourceIntervals = workout.intervals;
+    result.document.prescriptionMetadata = request.prescriptionMetadata;
     result.document.ftpWatts = request.ftpWatts;
     result.document.preset = request.preset;
     result.document.generationParameters = conversion.generationParameters;
@@ -142,6 +156,7 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
     request.ftpWatts = source.ftpWatts;
     request.preset = preset;
     request.roadPhysics = source.generationParameters.roadPhysics;
+    request.prescriptionMetadata = source.prescriptionMetadata;
     request.seed = source.course.seed;
     WorkoutGameCourseConversionResult conversion =
             WorkoutGameCourseConverter::convert(request);
@@ -149,7 +164,8 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }
-    if (!attachRoadPlan(conversion.course, source.ftpWatts)) {
+    if (!attachRoadPlan(
+                conversion.course, source.sourceIntervals, source.ftpWatts)) {
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }
@@ -157,6 +173,8 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
     result.document = source;
     result.document.schemaVersion =
             WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
+    result.document.conversionAlgorithmVersion =
+            WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion;
     result.document.title = title;
     result.document.preset = preset;
     result.document.generationParameters = conversion.generationParameters;

@@ -140,6 +140,9 @@ private slots:
                  WorkoutGameDistanceCourseStatus::Ready);
         QCOMPARE(result.document.schemaVersion,
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QCOMPARE(result.document.conversionAlgorithmVersion,
+                 WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
+        QVERIFY(result.document.course.seed != 0u);
         QVERIFY(result.document.course.roadPlan);
         QCOMPARE(WorkoutGameRoadPlanValidator::validate(
                     *result.document.course.roadPlan,
@@ -150,6 +153,32 @@ private slots:
         QCOMPARE(result.summary.distanceMeters,
                  result.document.course.totalDistanceMeters);
         QCOMPARE(request.points.front().watts, 140.0);
+    }
+
+    void versionedPrescriptionMetadataIsPersistedExactly()
+    {
+        WorkoutGameCourseSourceRequest request = sampleRequest();
+        const WorkoutGameWorkout workout =
+                WorkoutGameWorkoutAdapter::normalize(request.points);
+        QCOMPARE(workout.status, WorkoutGameWorkoutStatus::Ready);
+        request.prescriptionMetadata.version =
+                WorkoutGameCoursePrescriptionMetadata::CurrentVersion;
+        request.prescriptionMetadata.intervalRoles.assign(
+                workout.intervals.size(),
+                WorkoutGameCourseIntervalRole::Prescribed);
+
+        const WorkoutGameCourseSourceResult result =
+                WorkoutGameCourseSourceAdapter::convert(request);
+
+        QCOMPARE(result.status, WorkoutGameCourseSourceStatus::Ready);
+        QCOMPARE(result.document.prescriptionMetadata.version,
+                 request.prescriptionMetadata.version);
+        QVERIFY(result.document.prescriptionMetadata.intervalRoles
+                == request.prescriptionMetadata.intervalRoles);
+        const QByteArray encoded =
+                WorkoutGameCourseDocumentCodec::encode(result.document);
+        QVERIFY(encoded.contains("\"prescriptionMetadata\""));
+        QVERIFY(encoded.contains("\"algorithmVersion\":2"));
     }
 
     void callerTitleAndPresetArePreserved()

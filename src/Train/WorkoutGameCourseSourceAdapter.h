@@ -37,6 +37,7 @@ struct WorkoutGameCourseSourceRequest
     double ftpWatts = 0.0;
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
     WorkoutGameRoadPhysicsParameters roadPhysics;
+    WorkoutGameCoursePrescriptionMetadata prescriptionMetadata;
     std::uint32_t seed = 0;
 };
 

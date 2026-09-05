@@ -352,6 +352,19 @@ private slots:
         QVERIFY(encoded.isEmpty());
     }
 
+    void schemaThreeRejectsUnsafePrescribedRecoveryExposure()
+    {
+        WorkoutGameCourseDocument source = sampleDocument();
+        source.sourceIntervals = {
+            {0, 10000, 150.0, 250.0},
+            {10000, 20000, 100.0, 100.0}
+        };
+        QCOMPARE(source.course.sections[1].minimumDurationMs,
+                 std::int64_t(14000));
+
+        QVERIFY(WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
+    }
+
     void schemaThreeRoundTripsExplicitVersionedCooldownMetadata()
     {
         QJsonObject root = QJsonDocument::fromJson(
@@ -449,6 +462,22 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
                     QJsonDocument(canonical).toJson(), decoded),
                  WorkoutGameCourseDocumentStatus::InvalidDocument);
+    }
+
+    void unknownConversionAlgorithmVersionFailsClosed()
+    {
+        QJsonObject root = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
+                .object();
+        QJsonObject conversion =
+                root.value(QStringLiteral("conversion")).toObject();
+        conversion.insert(QStringLiteral("algorithmVersion"), 99);
+        root.insert(QStringLiteral("conversion"), conversion);
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(root).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::UnsupportedVersion);
     }
 
     void unknownRoadGenerationVersionFailsClosed()

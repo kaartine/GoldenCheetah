@@ -28,11 +28,16 @@ enum class WorkoutGameCourseDocumentStatus
 
 struct WorkoutGameCourseDocument
 {
-    int schemaVersion = 2;
+    static constexpr int LegacyConversionAlgorithmVersion = 1;
+    static constexpr int CurrentConversionAlgorithmVersion = 2;
+
+    int schemaVersion = 3;
+    int conversionAlgorithmVersion = CurrentConversionAlgorithmVersion;
     QString title;
     QString sourceFileName;
     QString sourceSha256;
     std::vector<WorkoutGameInterval> sourceIntervals;
+    WorkoutGameCoursePrescriptionMetadata prescriptionMetadata;
     double ftpWatts = 0.0;
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
     WorkoutGameDistanceCourseGenerationParameters generationParameters;
@@ -42,7 +47,7 @@ struct WorkoutGameCourseDocument
 class WorkoutGameCourseDocumentCodec
 {
 public:
-    static constexpr int CurrentSchemaVersion = 2;
+    static constexpr int CurrentSchemaVersion = 3;
     static constexpr qsizetype MaximumDocumentBytes = 1024 * 1024;
 
     static bool valid(const WorkoutGameCourseDocument &document);

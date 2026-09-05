@@ -61,6 +61,94 @@ bool parsePreset(const QString &name, WorkoutGameCoursePreset &preset)
     return false;
 }
 
+bool integerNumber(
+        const QJsonObject &object,
+        const char *key,
+        std::int64_t &value);
+
+QString intervalRoleName(WorkoutGameCourseIntervalRole role)
+{
+    switch (role) {
+    case WorkoutGameCourseIntervalRole::Prescribed:
+        return QStringLiteral("prescribed");
+    case WorkoutGameCourseIntervalRole::NonPrescriptiveWarmup:
+        return QStringLiteral("non-prescriptive-warmup");
+    case WorkoutGameCourseIntervalRole::NonPrescriptiveCooldown:
+        return QStringLiteral("non-prescriptive-cooldown");
+    case WorkoutGameCourseIntervalRole::NonPrescriptiveTransition:
+        return QStringLiteral("non-prescriptive-transition");
+    }
+    return {};
+}
+
+bool parseIntervalRole(
+        const QString &name,
+        WorkoutGameCourseIntervalRole &role)
+{
+    const std::pair<const char *, WorkoutGameCourseIntervalRole> values[] = {
+        {"prescribed", WorkoutGameCourseIntervalRole::Prescribed},
+        {"non-prescriptive-warmup",
+            WorkoutGameCourseIntervalRole::NonPrescriptiveWarmup},
+        {"non-prescriptive-cooldown",
+            WorkoutGameCourseIntervalRole::NonPrescriptiveCooldown},
+        {"non-prescriptive-transition",
+            WorkoutGameCourseIntervalRole::NonPrescriptiveTransition}
+    };
+    for (const auto &value : values) {
+        if (name == QLatin1String(value.first)) {
+            role = value.second;
+            return true;
+        }
+    }
+    return false;
+}
+
+QJsonObject prescriptionMetadataToJson(
+        const WorkoutGameCoursePrescriptionMetadata &metadata)
+{
+    QJsonArray roles;
+    for (WorkoutGameCourseIntervalRole role : metadata.intervalRoles) {
+        roles.append(intervalRoleName(role));
+    }
+    return {
+        {QStringLiteral("version"), metadata.version},
+        {QStringLiteral("intervalRoles"), roles}
+    };
+}
+
+WorkoutGameCourseDocumentStatus parsePrescriptionMetadata(
+        const QJsonValue &value,
+        WorkoutGameCoursePrescriptionMetadata &metadata)
+{
+    metadata = WorkoutGameCoursePrescriptionMetadata();
+    if (value.isUndefined()) return WorkoutGameCourseDocumentStatus::Ready;
+    if (!value.isObject()) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    const QJsonObject object = value.toObject();
+    std::int64_t version = 0;
+    if (!integerNumber(object, "version", version)) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    if (version != WorkoutGameCoursePrescriptionMetadata::CurrentVersion) {
+        return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+    }
+    const QJsonValue roles = object.value(QStringLiteral("intervalRoles"));
+    if (!roles.isArray() || roles.toArray().size() > 10000) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    metadata.version = int(version);
+    metadata.intervalRoles.reserve(std::size_t(roles.toArray().size()));
+    for (const QJsonValue &value : roles.toArray()) {
+        WorkoutGameCourseIntervalRole role;
+        if (!value.isString() || !parseIntervalRole(value.toString(), role)) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        metadata.intervalRoles.push_back(role);
+    }
+    return WorkoutGameCourseDocumentStatus::Ready;
+}
+
 QString featureName(WorkoutGameFeature feature)
 {
     switch (feature) {
@@ -457,6 +545,24 @@ bool validIntervals(
         expectedStart += interval.durationMs;
     }
     return expectedStart == nominalDurationMs;
+}
+
+std::vector<WorkoutGameInterval> generatedIntervals(
+        const WorkoutGameDistanceCourse &course)
+{
+    std::vector<WorkoutGameInterval> result;
+    result.reserve(course.sections.size());
+    std::int64_t startMs = 0;
+    for (const WorkoutGameDistanceCourseSection &section : course.sections) {
+        result.push_back({
+            startMs,
+            section.nominalDurationMs,
+            section.targetStartWatts,
+            section.targetEndWatts
+        });
+        startMs += section.nominalDurationMs;
+    }
+    return result;
 }
 
 QJsonObject sectionToJson(const WorkoutGameDistanceCourseSection &section)
@@ -1044,7 +1150,8 @@ bool documentForPersistence(
             return true;
         }
     }
-    else if (destination.schemaVersion != 1
+    else if ((destination.schemaVersion != 1
+                && destination.schemaVersion != 2)
             || !WorkoutGameCourseDocumentCodec::valid(destination)) {
         return false;
     }
@@ -1061,6 +1168,12 @@ bool documentForPersistence(
     }
     destination.schemaVersion =
             WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
+    if (source.schemaVersion < 3) {
+        destination.conversionAlgorithmVersion =
+                WorkoutGameCourseDocument::LegacyConversionAlgorithmVersion;
+        destination.prescriptionMetadata =
+                WorkoutGameCoursePrescriptionMetadata();
+    }
     destination.course.roadPlan =
             std::make_shared<const WorkoutGameRoadPlan>(plan);
     return WorkoutGameCourseDocumentCodec::valid(destination);
@@ -1091,13 +1204,76 @@ bool WorkoutGameCourseDocumentCodec::valid(
     static const QRegularExpression sha256Pattern(
             QStringLiteral("^[0-9a-f]{64}$"));
     const QFileInfo sourceInfo(document.sourceFileName);
-    const bool sourceIntervalsValid = document.sourceIntervals.empty()
-            || validIntervals(document.sourceIntervals,
-                              document.course.nominalDurationMs);
+    bool sourceIntervalsValid = document.sourceIntervals.empty();
+    if (!document.sourceIntervals.empty()) {
+        if (document.schemaVersion < 3) {
+            sourceIntervalsValid = validIntervals(
+                    document.sourceIntervals, document.course.nominalDurationMs);
+        } else {
+            const WorkoutGameCoursePrescriptionAudit audit =
+                    WorkoutGameCoursePrescription::audit(
+                        document.sourceIntervals,
+                        generatedIntervals(document.course),
+                        document.ftpWatts,
+                        document.preset,
+                        document.prescriptionMetadata);
+            sourceIntervalsValid = audit.status
+                    == WorkoutGameCoursePrescriptionStatus::Ready;
+            if (sourceIntervalsValid) {
+                const WorkoutGameCourseModeContract contract =
+                        WorkoutGameCoursePrescription::contractFor(
+                            document.preset);
+                for (std::size_t index = 0;
+                        index < document.sourceIntervals.size(); ++index) {
+                    const bool prescribedRecovery =
+                            WorkoutGameCoursePrescription::isRecovery(
+                                document.sourceIntervals[index],
+                                document.ftpWatts)
+                            && WorkoutGameCoursePrescription::roleAt(
+                                document.prescriptionMetadata, index)
+                                == WorkoutGameCourseIntervalRole::Prescribed;
+                    if (prescribedRecovery
+                            && double(document.course.sections[index]
+                                        .minimumDurationMs) + 1.0
+                                < double(document.sourceIntervals[index]
+                                            .durationMs)
+                                    * contract.minimumRecoveryExposure) {
+                        sourceIntervalsValid = false;
+                        break;
+                    }
+                }
+                if (sourceIntervalsValid && document.course.roadPlan) {
+                    for (const WorkoutGameRoadPiece &piece
+                            : document.course.roadPlan->pieces) {
+                        if (piece.sourceSectionIndex
+                                    >= document.sourceIntervals.size()
+                                || (WorkoutGameCoursePrescription::isRecovery(
+                                        document.sourceIntervals[
+                                            piece.sourceSectionIndex],
+                                        document.ftpWatts)
+                                    && piece.challenge.enabled)) {
+                            sourceIntervalsValid = false;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    } else if (document.prescriptionMetadata.present()) {
+        sourceIntervalsValid = false;
+    }
     const bool schemaValid = document.schemaVersion == 1
             ? !document.course.roadPlan
-            : document.schemaVersion == CurrentSchemaVersion
-                && roadPlanMatchesCourse(document.course);
+                && !document.prescriptionMetadata.present()
+            : (document.schemaVersion == 2
+                    || document.schemaVersion == CurrentSchemaVersion)
+                && roadPlanMatchesCourse(document.course)
+                && (document.schemaVersion == 2
+                    ? !document.prescriptionMetadata.present()
+                    : document.conversionAlgorithmVersion
+                            >= WorkoutGameCourseDocument::LegacyConversionAlgorithmVersion
+                        && document.conversionAlgorithmVersion
+                            <= WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
     return schemaValid
             && !document.title.trimmed().isEmpty()
             && document.title.size() <= 200
@@ -1130,12 +1306,21 @@ QByteArray WorkoutGameCourseDocumentCodec::encode(
         source.insert(QStringLiteral("intervals"),
                       intervalsToJson(document.sourceIntervals));
     }
-    const QJsonObject conversion {
+    QJsonObject conversion {
         {QStringLiteral("ftpWatts"), document.ftpWatts},
         {QStringLiteral("preset"), presetName(document.preset)},
         {QStringLiteral("parameters"), generationToJson(
             document.generationParameters)}
     };
+    if (document.schemaVersion == CurrentSchemaVersion) {
+        conversion.insert(QStringLiteral("algorithmVersion"),
+                          document.conversionAlgorithmVersion);
+        if (document.prescriptionMetadata.present()) {
+            source.insert(QStringLiteral("prescriptionMetadata"),
+                          prescriptionMetadataToJson(
+                              document.prescriptionMetadata));
+        }
+    }
     QJsonObject root {
         {QStringLiteral("schemaVersion"), document.schemaVersion},
         {QStringLiteral("title"), document.title},
@@ -1143,7 +1328,7 @@ QByteArray WorkoutGameCourseDocumentCodec::encode(
         {QStringLiteral("conversion"), conversion},
         {QStringLiteral("course"), courseToJson(document.course)}
     };
-    if (document.schemaVersion == CurrentSchemaVersion) {
+    if (document.schemaVersion >= 2) {
         root.insert(QStringLiteral("roadPlan"),
                     roadPlanToJson(*document.course.roadPlan));
     }
@@ -1170,7 +1355,8 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
     if (!integerNumber(root, "schemaVersion", schemaVersion)) {
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
-    if (schemaVersion != 1 && schemaVersion != CurrentSchemaVersion) {
+    if (schemaVersion != 1 && schemaVersion != 2
+            && schemaVersion != CurrentSchemaVersion) {
         return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
     }
     const QJsonValue title = root.value(QStringLiteral("title"));
@@ -1191,6 +1377,8 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
     const QJsonValue preset = conversion.value(QStringLiteral("preset"));
     const QJsonValue parameters = conversion.value(QStringLiteral("parameters"));
     document.schemaVersion = int(schemaVersion);
+    document.conversionAlgorithmVersion =
+            WorkoutGameCourseDocument::LegacyConversionAlgorithmVersion;
     document.title = title.toString();
     if (!sourceFileName.isString()
             || !sourceSha256.isString()
@@ -1205,6 +1393,30 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
     }
     document.sourceFileName = sourceFileName.toString();
     document.sourceSha256 = sourceSha256.toString();
+    if (document.schemaVersion == CurrentSchemaVersion) {
+        std::int64_t algorithmVersion = 0;
+        if (!integerNumber(
+                    conversion, "algorithmVersion", algorithmVersion)) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        if (algorithmVersion
+                    < WorkoutGameCourseDocument::LegacyConversionAlgorithmVersion
+                || algorithmVersion
+                    > WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion) {
+            return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+        }
+        document.conversionAlgorithmVersion = int(algorithmVersion);
+        const WorkoutGameCourseDocumentStatus metadataStatus =
+                parsePrescriptionMetadata(
+                    source.value(QStringLiteral("prescriptionMetadata")),
+                    document.prescriptionMetadata);
+        if (metadataStatus != WorkoutGameCourseDocumentStatus::Ready) {
+            return metadataStatus;
+        }
+    } else if (conversion.contains(QStringLiteral("algorithmVersion"))
+            || source.contains(QStringLiteral("prescriptionMetadata"))) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
     const QJsonValue intervals = source.value(QStringLiteral("intervals"));
     if (!intervals.isUndefined()
             && (!intervals.isArray()
