@@ -46,9 +46,15 @@ constexpr double TreeSpacingMeters = 7.0;
 constexpr double TreeBehindMeters = 14.0;
 constexpr double TreeAheadMeters = 49.0;
 constexpr double TreeRefreshAheadMeters = 14.0;
-constexpr int MaximumVisibleTrees = 18;
+constexpr int MaximumVisibleTrees = 14;
+constexpr int MaximumVisibleForestFloorProps = 4;
+constexpr int MaximumVisibleForestVergeClusters = 3;
+constexpr double ForestDressingSpacingMeters = 8.5;
 constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double CameraCorridorClearanceMeters = 0.85;
+constexpr double ForestDressingCameraClearanceMeters = 1.70;
+constexpr double ForestDressingCorridorBehindMeters = 8.2;
+constexpr double ForestDressingCorridorAheadMeters = 12.0;
 constexpr double CameraIntegrationStepSeconds = 0.05;
 constexpr double MaximumCameraCatchupSeconds = 0.25;
 constexpr double MaximumCameraSpeedMetersPerSecond = 16.0;
@@ -296,7 +302,11 @@ void WorkoutGame3DViewModel::setCourse(
     requestedFloorCoverage = {};
     featureCoverage = {};
     treeCoverage = {};
+    forestDressingFirstSlot = std::numeric_limits<int>::min();
+    forestDressingLastSlot = std::numeric_limits<int>::min();
     visibleTrees.clear();
+    visibleForestFloorProps.clear();
+    visibleForestVergeClusters.clear();
     currentFeatureHud = {};
     currentFeatureName.clear();
     currentFeatureActionText.clear();
@@ -353,6 +363,7 @@ void WorkoutGame3DViewModel::setCourse(
         lastCameraPoseTimeMs = 0;
     } else {
         emit treesChanged();
+        emit forestDressingChanged();
     }
     emit courseChanged();
     emit sceneChanged();
@@ -1597,6 +1608,7 @@ void WorkoutGame3DViewModel::updateVisibleTriangleCount()
 void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
 {
     if (!roadCourse.ready) return;
+    rebuildForestDressing(distanceMeters);
     const bool sidePresentation =
             cameraPresentationSnapshot.sideBlend > 0.0;
     bool cameraClearanceChanged = false;
@@ -1691,5 +1703,138 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
         }
         if (visibleTrees.size() >= MaximumVisibleTrees) break;
     }
+
     emit treesChanged();
+}
+
+void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
+{
+    const double courseEnd = std::max(
+            roadCourse.totalLengthMeters, roadCourse.visualLengthMeters);
+    const double coverageStart = std::max(
+            0.0, distanceMeters - TreeBehindMeters);
+    const double coverageEnd = std::min(
+            courseEnd, distanceMeters + TreeAheadMeters);
+    const double halfSpacing = ForestDressingSpacingMeters * 0.5;
+    const int firstSlot = std::max(0, int(std::ceil(
+            (coverageStart - halfSpacing) / ForestDressingSpacingMeters
+                    - 1.0e-9)));
+    int lastSlot = int(std::floor(
+            (coverageEnd - halfSpacing) / ForestDressingSpacingMeters
+                    + 1.0e-9));
+    lastSlot = std::min(
+            lastSlot,
+            firstSlot + MaximumVisibleForestFloorProps
+                    + MaximumVisibleForestVergeClusters - 1);
+    if (firstSlot == forestDressingFirstSlot
+            && lastSlot == forestDressingLastSlot) {
+        return;
+    }
+    forestDressingFirstSlot = firstSlot;
+    forestDressingLastSlot = lastSlot;
+
+    QVariantList floorProps;
+    QVariantList vergeClusters;
+    for (int slot = firstSlot; slot <= lastSlot; ++slot) {
+        const double distance = (double(slot) + 0.5)
+                * ForestDressingSpacingMeters;
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sampleVisual(
+                        roadCourse, distance);
+        if (!sample.ready) continue;
+        const WorkoutGame3DTerrainProfileSnapshot terrain =
+                WorkoutGame3DTerrainProfile::build(
+                        sample, distance, roadCourse.seed);
+        if (!terrain.ready) continue;
+
+        const std::uint32_t random = mix(
+                roadCourse.seed
+                ^ std::uint32_t((slot + 1) * 0x27d4eb2du));
+        const int cycleSlot = slot % 7;
+        const bool cluster = cycleSlot == 1
+                || cycleSlot == 3 || cycleSlot == 5;
+        const double side = ((random >> 27) & 1u) == 0u ? -1.0 : 1.0;
+        double lateral = side * (
+                sample.center.halfWidthMeters
+                + (cluster ? 2.05 : 2.45)
+                + double(random & 255u) / 1020.0);
+        const double rightX = std::cos(sample.center.headingRadians);
+        const double rightZ = -std::sin(sample.center.headingRadians);
+        auto horizontalPosition = [&sample, rightX, rightZ](
+                double offset) {
+            return std::pair<double, double>(
+                    sample.center.xMeters + offset * rightX,
+                    sample.center.zMeters + offset * rightZ);
+        };
+        const WorkoutGameRoadSample corridorStart =
+                WorkoutGameRoadCourseBuilder::sampleVisual(
+                    roadCourse, std::max(
+                        0.0, distance - ForestDressingCorridorBehindMeters));
+        const WorkoutGameRoadSample corridorEnd =
+                WorkoutGameRoadCourseBuilder::sampleVisual(
+                    roadCourse, std::min(
+                        courseEnd,
+                        distance + ForestDressingCorridorAheadMeters));
+        auto position = horizontalPosition(lateral);
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            if (horizontalDistanceToSegmentSquared(
+                        position.first, position.second,
+                        corridorStart.center.xMeters,
+                        corridorStart.center.zMeters,
+                        corridorEnd.center.xMeters,
+                        corridorEnd.center.zMeters)
+                    >= ForestDressingCameraClearanceMeters
+                            * ForestDressingCameraClearanceMeters) {
+                break;
+            }
+            lateral += side * 0.45;
+            position = horizontalPosition(lateral);
+        }
+
+        const double halfSlopeSampleMeters = 0.25;
+        const double innerElevation =
+                WorkoutGame3DTerrainProfile::elevationAtLateral(
+                        terrain, lateral - side * halfSlopeSampleMeters);
+        const double outerElevation =
+                WorkoutGame3DTerrainProfile::elevationAtLateral(
+                        terrain, lateral + side * halfSlopeSampleMeters);
+        QVariantMap prop;
+        prop.insert(QStringLiteral("x"), position.first);
+        prop.insert(QStringLiteral("y"),
+                    WorkoutGame3DTerrainProfile::elevationAtLateral(
+                            terrain, lateral));
+        prop.insert(QStringLiteral("z"), position.second);
+        prop.insert(QStringLiteral("distance"), distance);
+        prop.insert(QStringLiteral("lateral"), lateral);
+        prop.insert(QStringLiteral("yaw"),
+                    sample.center.headingRadians * 180.0 / Pi);
+        prop.insert(QStringLiteral("pitch"),
+                    -std::atan(sample.baseGradePercent / 100.0)
+                            * 180.0 / Pi);
+        prop.insert(QStringLiteral("terrainRoll"),
+                    side * std::atan2(
+                            outerElevation - innerElevation,
+                            2.0 * halfSlopeSampleMeters) * 180.0 / Pi);
+        prop.insert(QStringLiteral("scale"),
+                    0.72 + double((random >> 8) & 255u) / 708.0);
+        prop.insert(QStringLiteral("mirror"), side < 0.0);
+        if (cluster) {
+            prop.insert(QStringLiteral("variant"),
+                        int((random >> 20) % 3u));
+            if (vergeClusters.size()
+                    < MaximumVisibleForestVergeClusters) {
+                vergeClusters.push_back(prop);
+            }
+        } else {
+            prop.insert(QStringLiteral("variant"),
+                        int((random >> 20) % 8u));
+            if (floorProps.size()
+                    < MaximumVisibleForestFloorProps) {
+                floorProps.push_back(prop);
+            }
+        }
+    }
+    visibleForestFloorProps = floorProps;
+    visibleForestVergeClusters = vergeClusters;
+    emit forestDressingChanged();
 }

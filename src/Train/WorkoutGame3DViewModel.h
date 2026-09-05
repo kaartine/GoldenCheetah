@@ -127,6 +127,10 @@ class WorkoutGame3DViewModel : public QObject
                NOTIFY courseChanged)
     Q_PROPERTY(QVariantList features READ features NOTIFY courseChanged)
     Q_PROPERTY(QVariantList trees READ trees NOTIFY treesChanged)
+    Q_PROPERTY(QVariantList forestFloorProps READ forestFloorProps
+               NOTIFY forestDressingChanged)
+    Q_PROPERTY(QVariantList forestVergeClusters READ forestVergeClusters
+               NOTIFY forestDressingChanged)
     Q_PROPERTY(QString cameraComposition READ cameraComposition CONSTANT)
     Q_PROPERTY(QString cameraPresentation READ cameraPresentation
                NOTIFY sceneChanged)
@@ -300,6 +304,11 @@ public:
     }
     QVariantList features() const { return courseFeatures; }
     QVariantList trees() const { return visibleTrees; }
+    QVariantList forestFloorProps() const { return visibleForestFloorProps; }
+    QVariantList forestVergeClusters() const
+    {
+        return visibleForestVergeClusters;
+    }
     QString cameraComposition() const { return currentCameraComposition; }
     QString cameraPresentation() const;
     double cameraPresentationBlend() const
@@ -332,6 +341,7 @@ signals:
     void generatorStateChanged();
     void courseChanged();
     void treesChanged();
+    void forestDressingChanged();
     void floorGeometryChanged();
 
 private:
@@ -350,6 +360,7 @@ private:
     void scheduleReadyFloorChunk();
     void updateVisibleTriangleCount();
     void rebuildTrees(double distanceMeters);
+    void rebuildForestDressing(double distanceMeters);
     void rebuildPowerProfile(const WorkoutGameCourse &course);
     void updateCameraPose(double distanceMeters, double lateralMeters,
                           std::int64_t workoutTimeMs);
@@ -376,6 +387,10 @@ private:
     double currentPowerProfileMaximumWatts = 1.0;
     QVariantList courseFeatures;
     QVariantList visibleTrees;
+    QVariantList visibleForestFloorProps;
+    QVariantList visibleForestVergeClusters;
+    int forestDressingFirstSlot = std::numeric_limits<int>::min();
+    int forestDressingLastSlot = std::numeric_limits<int>::min();
     bool sceneReady = false;
     int floorBucket = std::numeric_limits<int>::min();
     int requestedFloorBucket = std::numeric_limits<int>::min();

@@ -7,5 +7,6 @@
         <file alias="qml/assets/BunnyHopAssetHarness.qml">BunnyHopAssetHarness.qml</file>
         <file alias="qml/assets/DropAssetHarness.qml">DropAssetHarness.qml</file>
         <file alias="qml/assets/ConiferAssetHarness.qml">ConiferAssetHarness.qml</file>
+        <file alias="qml/assets/ForestDressingAssetHarness.qml">ForestDressingAssetHarness.qml</file>
     </qresource>
 </RCC>

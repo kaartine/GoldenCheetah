@@ -70,6 +70,12 @@ Item {
         return Math.min(behind, ahead)
     }
 
+    function dressingEdgeOpacity(relativeMeters) {
+        const behind = Math.max(0, Math.min(1, (relativeMeters + 14) / 4))
+        const ahead = Math.max(0, Math.min(1, (46 - relativeMeters) / 8))
+        return Math.min(behind, ahead)
+    }
+
     View3D {
         id: gameView
         objectName: "workoutGame3DView"
@@ -374,6 +380,40 @@ Item {
                 WorkoutGameConifer {
                     variant: modelData.variant
                 }
+            }
+        }
+
+        Repeater3D {
+            model: workoutGame3D.forestFloorProps
+            delegate: WorkoutGameForestFloorProp {
+                required property var modelData
+                readonly property real relativeDistance:
+                    modelData.distance - workoutGame3D.distanceMeters
+                position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
+                eulerRotation: Qt.vector3d(
+                    modelData.pitch, modelData.yaw, modelData.terrainRoll)
+                scale: Qt.vector3d(
+                    modelData.mirror ? -modelData.scale : modelData.scale,
+                    modelData.scale,
+                    modelData.scale)
+                opacity: root.dressingEdgeOpacity(relativeDistance)
+            }
+        }
+
+        Repeater3D {
+            model: workoutGame3D.forestVergeClusters
+            delegate: WorkoutGameForestVergeCluster {
+                required property var modelData
+                readonly property real relativeDistance:
+                    modelData.distance - workoutGame3D.distanceMeters
+                position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
+                eulerRotation: Qt.vector3d(
+                    modelData.pitch, modelData.yaw, modelData.terrainRoll)
+                scale: Qt.vector3d(
+                    modelData.mirror ? -modelData.scale : modelData.scale,
+                    modelData.scale,
+                    modelData.scale)
+                opacity: root.dressingEdgeOpacity(relativeDistance)
             }
         }
 

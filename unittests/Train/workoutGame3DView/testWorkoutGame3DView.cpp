@@ -31,6 +31,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QGuiApplication>
+#include <QHash>
 #include <QImage>
 #include <QImageWriter>
 #include <QJsonDocument>
@@ -1353,7 +1354,9 @@ private slots:
         QVERIFY(viewModel);
         QTRY_VERIFY_WITH_TIMEOUT(viewModel->visibleTriangles() > 0, 3000);
         QVERIFY(viewModel->visibleTriangles() < 30000);
-        QVERIFY(viewModel->trees().size() <= 18);
+        QVERIFY(viewModel->trees().size() <= 14);
+        QCOMPARE(viewModel->forestFloorProps().size(), 4);
+        QCOMPARE(viewModel->forestVergeClusters().size(), 3);
         QVERIFY(viewModel->geometryQueueDepth() <= 1);
 
         QObject *view = window.rootObject()->findChild<QObject *>(
@@ -1950,6 +1953,192 @@ private slots:
         }
         QVERIFY2(reliefAnchors > 0,
                  "trees still appear to use the former flat floor elevation");
+    }
+
+    void forestDressingIsBoundedGroundedAndOutsideTheSingletrack()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 42.0), 220.0, 220.0, 88, 150, 7);
+
+        const QVariantList floorProps = viewModel.forestFloorProps();
+        const QVariantList vergeClusters = viewModel.forestVergeClusters();
+        QCOMPARE(floorProps.size(), 4);
+        QCOMPARE(vergeClusters.size(), 3);
+        QCOMPARE(floorProps.size() + vergeClusters.size(), 7);
+
+        const auto verifyPlacement = [&road, &viewModel](
+                const QVariant &entry, int maximumVariant) {
+            const QVariantMap prop = entry.toMap();
+            const double distance = prop.value(
+                    QStringLiteral("distance")).toDouble();
+            const double lateral = prop.value(
+                    QStringLiteral("lateral")).toDouble();
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                            road, distance);
+            QVERIFY(sample.ready);
+            QVERIFY(std::abs(lateral)
+                    >= sample.center.halfWidthMeters + 1.70);
+            const WorkoutGame3DTerrainProfileSnapshot terrain =
+                    WorkoutGame3DTerrainProfile::build(
+                            sample, distance, road.seed);
+            QVERIFY(terrain.ready);
+            const double expectedY =
+                    WorkoutGame3DTerrainProfile::elevationAtLateral(
+                            terrain, lateral);
+            QVERIFY(std::abs(prop.value(QStringLiteral("y")).toDouble()
+                             - expectedY) < 1.0e-9);
+            QVERIFY(std::isfinite(
+                    prop.value(QStringLiteral("yaw")).toDouble()));
+            QVERIFY(std::isfinite(
+                    prop.value(QStringLiteral("terrainRoll")).toDouble()));
+            QVERIFY(prop.value(QStringLiteral("scale")).toDouble() >= 0.72);
+            QVERIFY(prop.value(QStringLiteral("scale")).toDouble() <= 1.08);
+            const int variant = prop.value(
+                    QStringLiteral("variant")).toInt();
+            QVERIFY(variant >= 0);
+            QVERIFY(variant <= maximumVariant);
+            QCOMPARE(prop.value(QStringLiteral("mirror")).toBool(),
+                     lateral < 0.0);
+
+            const double clearance = horizontalDistanceToSegment(
+                    prop.value(QStringLiteral("x")).toDouble(),
+                    prop.value(QStringLiteral("z")).toDouble(),
+                    viewModel.cameraX(), viewModel.cameraZ(),
+                    viewModel.cameraTargetX(), viewModel.cameraTargetZ());
+            QVERIFY2(clearance >= 1.70,
+                     "forest dressing entered the camera/cue corridor");
+        };
+        for (const QVariant &entry : floorProps) verifyPlacement(entry, 7);
+        for (const QVariant &entry : vergeClusters) verifyPlacement(entry, 2);
+    }
+
+    void forestDressingDelegatesUseResidentEdgeFades()
+    {
+        const WorkoutGameCourse course = cameraMotionCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 42.0), 220.0, 220.0, 88, 150, 7);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QTest::qWait(500);
+
+        const QList<QObject *> floorProps =
+                window.rootObject()->findChildren<QObject *>(
+                    QStringLiteral("workoutGameForestFloorProp"));
+        const QList<QObject *> vergeClusters =
+                window.rootObject()->findChildren<QObject *>(
+                    QStringLiteral("workoutGameForestVergeCluster"));
+        QCOMPARE(floorProps.size(), viewModel.forestFloorProps().size());
+        QCOMPARE(vergeClusters.size(),
+                 viewModel.forestVergeClusters().size());
+        QVERIFY(floorProps.size() + vergeClusters.size() <= 7);
+        bool foundOpaque = false;
+        for (QObject *object : floorProps + vergeClusters) {
+            const double relative = object->property(
+                    "relativeDistance").toDouble();
+            const double opacity = object->property("opacity").toDouble();
+            QVERIFY(opacity >= 0.0);
+            QVERIFY(opacity <= 1.0);
+            if (relative >= -10.0 && relative <= 31.0
+                    && opacity > 0.95) {
+                foundOpaque = true;
+            }
+        }
+        QVERIFY(foundOpaque);
+
+        const auto edgeOpacity = [&window](double distance) {
+            QVariant result;
+            const bool invoked = QMetaObject::invokeMethod(
+                    window.rootObject(), "dressingEdgeOpacity",
+                    Q_RETURN_ARG(QVariant, result),
+                    Q_ARG(QVariant, QVariant(distance)));
+            return invoked ? result.toDouble() : -1.0;
+        };
+        QCOMPARE(edgeOpacity(-14.0), 0.0);
+        QCOMPARE(edgeOpacity(-10.0), 1.0);
+        QCOMPARE(edgeOpacity(38.0), 1.0);
+        QCOMPARE(edgeOpacity(46.0), 0.0);
+    }
+
+    void forestDressingOnlyChangesAtTransparentResidentEdges()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+
+        const auto placements = [&viewModel]() {
+            QHash<qint64, QVariantMap> result;
+            for (const QVariant &entry : viewModel.forestFloorProps()
+                    + viewModel.forestVergeClusters()) {
+                const QVariantMap prop = entry.toMap();
+                result.insert(qRound64(
+                        prop.value(QStringLiteral("distance")).toDouble()
+                            * 1000.0), prop);
+            }
+            return result;
+        };
+
+        QHash<qint64, QVariantMap> previous;
+        double previousDistance = 0.0;
+        for (int step = 0; step <= 120; ++step) {
+            const double distance = 20.0 + 0.5 * step;
+            WorkoutGameVisualSnapshot frame = frameAt(road, distance);
+            frame.simulation.workoutTimeMs = 5000 + step * 50;
+            frame.presentationTimeMs = frame.simulation.workoutTimeMs;
+            viewModel.setFrame(frame, 225.0, 225.0, 88, 150, 7);
+            const QHash<qint64, QVariantMap> current = placements();
+            if (!previous.isEmpty()) {
+                for (auto item = current.cbegin(); item != current.cend(); ++item) {
+                    if (!previous.contains(item.key())) {
+                        const double relative = item.value().value(
+                                QStringLiteral("distance")).toDouble()
+                                - distance;
+                        QVERIFY2(relative >= 38.0,
+                                 "forest dressing popped in near the rider");
+                    } else {
+                        const QVariantMap prior = previous.value(item.key());
+                        QCOMPARE(item.value().value(QStringLiteral("x")),
+                                 prior.value(QStringLiteral("x")));
+                        QCOMPARE(item.value().value(QStringLiteral("y")),
+                                 prior.value(QStringLiteral("y")));
+                        QCOMPARE(item.value().value(QStringLiteral("z")),
+                                 prior.value(QStringLiteral("z")));
+                        QCOMPARE(item.value().value(QStringLiteral("lateral")),
+                                 prior.value(QStringLiteral("lateral")));
+                    }
+                }
+                for (auto item = previous.cbegin();
+                     item != previous.cend(); ++item) {
+                    if (!current.contains(item.key())) {
+                        const double relative = item.value().value(
+                                QStringLiteral("distance")).toDouble()
+                                - previousDistance;
+                        QVERIFY2(relative <= -10.0,
+                                 "forest dressing disappeared near the rider");
+                    }
+                }
+            }
+            previous = current;
+            previousDistance = distance;
+        }
     }
 
     void treesFadeAtTheResidentWindowEdges()
@@ -5018,6 +5207,127 @@ private slots:
         QCOMPARE(pineCrown.size(), qint64(6948));
         QCOMPARE(birchTrunk.size(), qint64(2624));
         QCOMPARE(birchCrown.size(), qint64(6944));
+    }
+
+    void rendersPackagedForestDressingCatalog()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.setSource(QUrl(QStringLiteral(
+                "qrc:/qml/assets/ForestDressingAssetHarness.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        window.resize(1280, 720);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTest::qWait(500);
+
+        const QImage rendered = window.grabWindow();
+        QVERIFY(!rendered.isNull());
+        QCOMPARE(rendered.size(), QSize(1280, 720));
+        QVERIFY2(sampledColorCount(rendered) > 18,
+                 "packaged forest-dressing catalog appears blank");
+        const QString screenshot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_FOREST_DRESSING_ASSET_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            QVERIFY2(rendered.save(screenshot), qPrintable(screenshot));
+        }
+
+        QCOMPARE(window.rootObject()->property(
+                    "loadedFloorProps").toInt(), 8);
+        QCOMPARE(window.rootObject()->property(
+                    "loadedVergeClusters").toInt(), 3);
+    }
+
+    void rendersForestDressingWithoutObscuringTheChaseScene()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(road, 42.0);
+        frame.simulation.workoutTimeMs = 0;
+        frame.presentationTimeMs = 0;
+        viewModel.setFrame(frame, 225.0, 225.0, 88, 150, 7);
+        constexpr int SettleFrames = 313;
+        for (int index = 1; index <= SettleFrames; ++index) {
+            const double progress = double(index) / double(SettleFrames);
+            frame = frameAt(road, 42.0 + 18.0 * progress);
+            frame.simulation.workoutTimeMs = index * 16;
+            frame.presentationTimeMs = frame.simulation.workoutTimeMs;
+            viewModel.setFrame(frame, 225.0, 225.0, 88, 150, 7);
+        }
+        QCOMPARE(viewModel.cameraPresentation(), QStringLiteral("chase"));
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        window.resize(1280, 720);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTest::qWait(700);
+
+        const QList<QObject *> floorProps =
+                window.rootObject()->findChildren<QObject *>(
+                    QStringLiteral("workoutGameForestFloorProp"));
+        const QList<QObject *> vergeClusters =
+                window.rootObject()->findChildren<QObject *>(
+                    QStringLiteral("workoutGameForestVergeCluster"));
+        QCOMPARE(floorProps.size(), 4);
+        QCOMPARE(vergeClusters.size(), 3);
+
+        const QImage dressed = window.grabWindow();
+        QVERIFY(!dressed.isNull());
+        const QString screenshot = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_FOREST_DRESSING_SCENE_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            QVERIFY2(dressed.save(screenshot), qPrintable(screenshot));
+        }
+        QVERIFY2(sampledColorCount(dressed) > 45,
+                 "forest-dressed chase scene appears blank");
+        const QRect lowerScene(
+                0, dressed.height() * 2 / 5,
+                dressed.width(), dressed.height() * 3 / 5);
+        QVERIFY2(riderBluePixels(dressed, lowerScene) > 20,
+                 "forest dressing obscures the rider");
+        const QVariantList riderPoints = window.rootObject()->property(
+                "riderWheelFrustumScreenPoints").toList();
+        QVERIFY(riderPoints.size() >= 17);
+        QRectF riderBounds;
+        for (const QVariant &pointValue : riderPoints) {
+            const QVector3D point = pointValue.value<QVector3D>();
+            riderBounds |= QRectF(point.x(), point.y(), 1.0, 1.0);
+        }
+        const int trailTop = std::clamp(
+                int(std::floor(riderBounds.bottom() - 8.0)),
+                lowerScene.top(), dressed.height() - 1);
+        const QRect trailRegion(
+                dressed.width() * 3 / 10, trailTop,
+                dressed.width() * 4 / 10, dressed.height() - trailTop);
+        QVERIFY2(trailDirtPixels(dressed, trailRegion) > 120,
+                 "forest dressing obscures the singletrack");
+
+        for (QObject *object : floorProps + vergeClusters) {
+            QVERIFY(object->setProperty("visible", false));
+        }
+        window.update();
+        QTest::qWait(200);
+        const QImage bare = window.grabWindow();
+        QVERIFY(!bare.isNull());
+        QVERIFY2(changedPixels(dressed, bare) > 20,
+                 "forest dressing has no visible production-scene pixels");
+
     }
 
     void loadsRendersAndMovesScene()

@@ -22,7 +22,7 @@
     "redistributionAllowed": true,
     "decision": "allow",
     "policyVersion": "2026-08-25",
-    "distributionScopes": ["source", "screenshots-video"],
+    "distributionScopes": ["source", "screenshots-video", "appimage"],
     "conditions": [],
     "reviewNotes": "The generated cluster geometry and audit images are offered as CC0-1.0 project-generated output. The generator and audit scripts remain part of the GPL-2.0-or-later GoldenCheetah source tree. All geometry is deterministically composed from the original project-authored EN-08 source functions. No external model, texture, image, scan or AI-generated input is used."
   },
@@ -48,6 +48,26 @@
       "sha256": "68aa907039386f964f356e6bada42f1007bf013233843cf8ec65bfa0448fe42d"
     },
     {
+      "path": "src/Train/qml/WorkoutGameForestVergeCluster.qml",
+      "purpose": "runtime",
+      "sha256": "99f6126cd10e3659b0914688614fb923c2cab587f93c4abe826c0e6d1a6eff00"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_VergeDeadwoodHeather_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "1f7bb8cbf2e819e7fa316934831ea5ce148a8cc6e4e07ed9f9f65266b73adb31"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_VergeGraniteBilberry_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "b2e1e24141222beb274f5df58909608bc2cdbffc5ea2445419d852f9803b7dcd"
+    },
+    {
+      "path": "src/Train/qml/assets/meshes/geo_VergeStumpFern_LOD0_mesh.mesh",
+      "purpose": "runtime",
+      "sha256": "f46842609dd9e2d41d5f6eb9f53f9c0a968e87b7c6b89ebb3d1e4275ec28f2ac"
+    },
+    {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-audit.json",
       "purpose": "reference",
       "sha256": "23b66d331928610b7a31c24204071dc2a27a03ef215d148720475020b75b3b7b"
@@ -69,15 +89,17 @@
     }
   ],
   "processing": {
-    "tool": "Blender",
-    "toolVersion": "4.0.2",
+    "tool": "Blender and Qt Balsam",
+    "toolVersion": "Blender 4.0.2; Qt Balsam 6.8.3",
     "steps": [
       "Start pinned Blender 4.0.2 with --background --factory-startup.",
       "Compose three original EN-08 prop arrangements with explicit positions, yaw and scale; use no random source.",
       "Reject buried, floating, overlapping or trail-intruding component bounds before joining each cluster.",
       "Generate bounded UV0, apply identity transforms and export one self-contained glTF 2.0 GLB with no camera, light, animation or collision authority.",
       "Reproduce the GLB byte for byte and validate inventory, topology, pivots, ground contact, trail clearance, materials and budgets.",
-      "Render matched isolated-prop and cluster catalogs at three fixed camera positions with a 1.36-metre scale bar."
+      "Render matched isolated-prop and cluster catalogs at three fixed camera positions with a 1.36-metre scale bar.",
+      "Convert the reviewed GLB twice with Qt Balsam 6.8.3 and compare every generated mesh byte.",
+      "Package the three meshes behind one bounded scenery-only Qt Quick 3D variant component."
     ]
   },
   "technical": {
@@ -112,12 +134,12 @@
     }
   },
   "review": {
-    "status": "candidate",
+    "status": "approved",
     "trademarkStatus": "not-applicable",
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering asset audit",
     "reviewedAt": "2026-09-05",
-    "notes": "Source-only review candidate. Fixed-camera before/after catalogs show three complete, separated trail-edge clusters at a common world scale. Static checks enforce exact ground contact, minimum trail clearance and non-overlapping component bounds. This does not approve runtime placement, packaging, target-GPU cost or any release checklist item."
+    "notes": "Approved for deterministic AppImage runtime packaging as scenery-only geometry. Static policy checks, packaged Qt Quick 3D catalog renders and production chase-scene renders verify all three clusters, terrain anchoring, trail and camera-corridor clearance, resident-edge fading and rider/trail readability. The unchanged 80-draw-call scene budget passes under Xvfb software OpenGL; no target-GPU performance claim is made."
   }
 }

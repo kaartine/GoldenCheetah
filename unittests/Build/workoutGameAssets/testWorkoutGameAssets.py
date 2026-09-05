@@ -683,7 +683,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertIn("RUNTIME_VARIANT_PAIRS", generator)
         self.assertIn("does not touch its terrain anchor", generator)
 
-    def test_forest_floor_props_are_grounded_atlas_ready_and_non_runtime(self) -> None:
+    def test_forest_floor_props_are_grounded_atlas_ready_and_runtime_approved(self) -> None:
         document, size = assets.read_glb(FOREST_FLOOR_GLB_PATH)
         manifest = assets.load_json_file(FOREST_FLOOR_MANIFEST_PATH)
         assets.validate_glb_document(document, size, manifest)
@@ -753,11 +753,36 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertLessEqual(
             manifest["technical"]["boundsMeters"]["maximum"][1], 0.70 + 1.0e-6
         )
-        self.assertEqual(manifest["review"]["status"], "candidate")
+        self.assertEqual(manifest["review"]["status"], "approved")
         self.assertEqual(manifest["license"]["spdxId"], "CC0-1.0")
-        self.assertNotIn(
-            "runtime", {entry["purpose"] for entry in manifest["files"]}
+        self.assertIn("appimage", manifest["license"]["distributionScopes"])
+        runtime_paths = {
+            entry["path"] for entry in manifest["files"]
+            if entry["purpose"] == "runtime"
+        }
+        expected_meshes = {
+            "src/Train/qml/assets/meshes/"
+            f"geo_{name[4:]}_mesh.mesh"
+            for name in expected_triangles
+        }
+        self.assertEqual(
+            runtime_paths,
+            {"src/Train/qml/WorkoutGameForestFloorProp.qml"}
+            | expected_meshes,
         )
+        runtime_qml = (
+            REPOSITORY / "src/Train/qml/WorkoutGameForestFloorProp.qml"
+        ).read_text(encoding="utf-8")
+        for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
+            self.assertNotIn(primitive, runtime_qml)
+        for path in expected_meshes:
+            self.assertIn(Path(path).name, runtime_qml)
+        qrc = (
+            REPOSITORY / "src/Resources/workout-game-assets.qrc"
+        ).read_text(encoding="utf-8")
+        self.assertIn("WorkoutGameForestFloorProp.qml", qrc)
+        for path in expected_meshes:
+            self.assertIn(Path(path).name, qrc)
 
     def test_forest_floor_deadwood_is_an_irregular_branched_log(self) -> None:
         document, _ = assets.read_glb(FOREST_FLOOR_GLB_PATH)
@@ -845,7 +870,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertEqual(len(set(render_hashes)), 3)
 
-    def test_forest_verge_clusters_are_grounded_separated_and_non_runtime(self) -> None:
+    def test_forest_verge_clusters_are_grounded_separated_and_runtime_approved(self) -> None:
         document, size = assets.read_glb(FOREST_VERGE_GLB_PATH)
         manifest = assets.load_json_file(FOREST_VERGE_MANIFEST_PATH)
         assets.validate_glb_document(document, size, manifest)
@@ -921,11 +946,41 @@ class TestWorkoutGameAssets(unittest.TestCase):
         root = nodes["ROOT_ForestVergeClusters"]["extras"]
         self.assertEqual(root["project_generated"], True)
         self.assertEqual(root["generated_output_license"], "CC0-1.0")
-        self.assertEqual(manifest["review"]["status"], "candidate")
+        self.assertEqual(manifest["review"]["status"], "approved")
         self.assertEqual(manifest["license"]["spdxId"], "CC0-1.0")
-        self.assertNotIn(
-            "runtime", {entry["purpose"] for entry in manifest["files"]}
+        self.assertIn("appimage", manifest["license"]["distributionScopes"])
+        runtime_paths = {
+            entry["path"] for entry in manifest["files"]
+            if entry["purpose"] == "runtime"
+        }
+        expected_meshes = {
+            "src/Train/qml/assets/meshes/"
+            f"geo_{name[4:]}_mesh.mesh"
+            for name in expected_triangles
+        }
+        self.assertEqual(
+            runtime_paths,
+            {"src/Train/qml/WorkoutGameForestVergeCluster.qml"}
+            | expected_meshes,
         )
+        runtime_qml = (
+            REPOSITORY / "src/Train/qml/WorkoutGameForestVergeCluster.qml"
+        ).read_text(encoding="utf-8")
+        for primitive in ("#Cube", "#Cylinder", "#Cone", "#Sphere"):
+            self.assertNotIn(primitive, runtime_qml)
+        for path in expected_meshes:
+            self.assertIn(Path(path).name, runtime_qml)
+        production_qml = (
+            REPOSITORY / "src/Train/qml/WorkoutGame3D.qml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("WorkoutGameForestFloorProp", production_qml)
+        self.assertIn("WorkoutGameForestVergeCluster", production_qml)
+        qrc = (
+            REPOSITORY / "src/Resources/workout-game-assets.qrc"
+        ).read_text(encoding="utf-8")
+        self.assertIn("WorkoutGameForestVergeCluster.qml", qrc)
+        for path in expected_meshes:
+            self.assertIn(Path(path).name, qrc)
 
     def test_forest_verge_audits_are_matched_before_after_catalogs(self) -> None:
         audit = assets.load_json_file(FOREST_VERGE_AUDIT_PATH)
@@ -970,6 +1025,26 @@ class TestWorkoutGameAssets(unittest.TestCase):
             "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
             paths,
         )
+
+    def test_forest_dressing_runtime_stays_within_resident_asset_budget(self) -> None:
+        manifests = (
+            assets.load_json_file(FOREST_FLOOR_MANIFEST_PATH),
+            assets.load_json_file(FOREST_VERGE_MANIFEST_PATH),
+        )
+        runtime_paths = [
+            entry["path"]
+            for manifest in manifests
+            for entry in manifest["files"]
+            if entry["purpose"] == "runtime"
+        ]
+        self.assertEqual(len(runtime_paths), 13)
+        self.assertLessEqual(
+            sum((REPOSITORY / path).stat().st_size for path in runtime_paths),
+            80 * 1024,
+        )
+        # The production resident window selects four floor props and three
+        # verge clusters. Keep its worst-case authored mesh cost explicit.
+        self.assertLessEqual(4 * 96 + 3 * 150, 850)
 
     def test_distant_ridges_are_bounded_socket_free_scenery(self) -> None:
         document, size = assets.read_glb(DISTANT_GLB_PATH)
