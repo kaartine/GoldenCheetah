@@ -963,6 +963,12 @@ def validate_selected_gap_jump_line(
     ]
 
     if expected_line == "safe":
+        if any(numeric(sample, "launch_power_ready") != 0.0
+               for sample in selected_samples):
+            failures.append("safe gap line power gate became ready")
+        if any((numeric(sample, "power_hold_ms") or 0.0) >= 500.0
+               for sample in selected_samples):
+            failures.append("safe gap line power hold reached jump threshold")
         if not bypassed:
             failures.append("safe gap line did not produce a bypass outcome")
         if airborne_indexes:

@@ -1198,6 +1198,26 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
 
         self.assertEqual(failures, [])
 
+    def test_rejects_safe_gap_line_with_ready_power_gate(self):
+        cases = (
+            ("launch_power_ready", 1, "became ready"),
+            ("power_hold_ms", 500, "hold reached"),
+        )
+        for field, value, message in cases:
+            with self.subTest(field=field):
+                samples = self.gap_line_samples("safe")
+                for sample in samples:
+                    sample["launch_power_ready"] = 0
+                    sample["power_hold_ms"] = 0
+                samples[-2][field] = value
+
+                unused, failures = ANALYZER.validate_expected_gap_jump(
+                    samples, "safe"
+                )
+
+                self.assertTrue(any(message in item for item in failures),
+                                failures)
+
     def test_rejects_safe_gap_line_truncated_before_recovery_merge(self):
         samples = self.gap_line_samples("safe")[:5]
 
