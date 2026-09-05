@@ -44,6 +44,8 @@ RUNTIME_VARIANT_PAIRS = (
     ("GEO_ScotsPineTrunk_LOD0", "GEO_ScotsPineCrown_LOD0"),
 )
 MAXIMUM_RUNTIME_VARIANT_TRIANGLES = 136
+SCOTS_PINE_CLUMP_TRIANGLES = 72
+SCOTS_PINE_FACES_PER_SIDE = 4
 
 
 def append_ring(
@@ -320,6 +322,16 @@ def self_check(root):
             raise RuntimeError(
                 f"{name} triangle contract changed: {triangle_counts[name]}"
             )
+        if name == "GEO_ScotsPineCrown_LOD0":
+            lower_clump_faces = (
+                obj.data.polygons[index]
+                for index in range(
+                    0, SCOTS_PINE_CLUMP_TRIANGLES,
+                    SCOTS_PINE_FACES_PER_SIDE
+                )
+            )
+            if any(face.normal.z >= -EPSILON for face in lower_clump_faces):
+                raise RuntimeError("Scots-pine lower clump winding faces inward")
         triangles += triangle_counts[name]
     if triangles > TRIANGLE_BUDGET:
         raise RuntimeError(f"Conifer set exceeds triangle budget: {triangles}")

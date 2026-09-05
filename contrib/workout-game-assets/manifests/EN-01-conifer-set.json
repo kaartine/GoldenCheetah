@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_conifer_set.py",
     "retrievedAt": "2026-09-05",
     "originalFileName": "generate_conifer_set.py",
-    "originalSha256": "6d823cf425dd64aad4d204f0ddaea0194760758cd27a3286ec06f1ea1e9440db",
+    "originalSha256": "30df411384ce8e33d5dc6037fc9c51b9440a39c21bac505661d7fbf09179426e",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_conifer_set.py"
@@ -31,7 +31,7 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_conifer_set.py",
       "purpose": "source",
-      "sha256": "6d823cf425dd64aad4d204f0ddaea0194760758cd27a3286ec06f1ea1e9440db"
+      "sha256": "30df411384ce8e33d5dc6037fc9c51b9440a39c21bac505661d7fbf09179426e"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_ConiferSet.glb",
