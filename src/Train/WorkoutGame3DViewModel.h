@@ -491,6 +491,8 @@ private:
     bool cameraPoseInitialized = false;
     double cameraYawRadians = 0.0;
     double cameraYawVelocityRadiansPerSecond = 0.0;
+    double cameraPitchRadians = 0.0;
+    double cameraPresentationPoseBlend = 1.0;
     std::int64_t lastCameraPoseTimeMs = 0;
     std::uint64_t courseGeneration = 0;
     WorkoutGame3DChunkBuilder chunkBuilder;
