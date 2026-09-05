@@ -30,6 +30,7 @@ void WorkoutGameDistancePlayback::resetProgress()
     progressSectionIndex = 0;
     progressSectionActiveTimeMs = 0;
     lastProgressTimeMs = 0;
+    maximumExposureExceededOnLastAdvance = false;
 }
 
 WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::atDistance(
@@ -88,6 +89,7 @@ WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::atProgress(
     }
 
     const double rawDistance = std::max(0.0, rawDistanceMeters);
+    maximumExposureExceededOnLastAdvance = false;
     if (rawDistance < lastRawDistanceMeters) {
         lastRawDistanceMeters = rawDistance;
         lastProgressTimeMs = elapsedTimeMs;
@@ -107,8 +109,18 @@ WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::atProgress(
             configuredCourse.sections[progressSectionIndex];
     const double sectionEnd = section.startDistanceMeters
             + section.lengthMeters;
+    bool reachedMaximumExposure = false;
+    std::int64_t carriedActiveTimeMs = 0;
     if (rawAdvance > 1.0e-9) {
-        progressSectionActiveTimeMs += elapsedAdvanceMs;
+        const std::int64_t timeUntilMaximum =
+                section.maximumDurationMs - progressSectionActiveTimeMs;
+        if (elapsedAdvanceMs >= timeUntilMaximum) {
+            progressSectionActiveTimeMs = section.maximumDurationMs;
+            carriedActiveTimeMs = elapsedAdvanceMs - timeUntilMaximum;
+            reachedMaximumExposure = true;
+        } else {
+            progressSectionActiveTimeMs += elapsedAdvanceMs;
+        }
     }
     const double timeProgress = std::clamp(
             double(progressSectionActiveTimeMs)
@@ -121,11 +133,28 @@ WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::atProgress(
     progressDistanceMeters += std::min(rawAdvance, availableAdvance);
 
     constexpr double BoundaryEpsilonMeters = 1.0e-9;
-    if (progressDistanceMeters >= sectionEnd - BoundaryEpsilonMeters) {
+    const bool sectionBoundaryReached =
+            progressDistanceMeters >= sectionEnd - BoundaryEpsilonMeters;
+    if (sectionBoundaryReached || reachedMaximumExposure) {
         progressDistanceMeters = sectionEnd;
-        if (progressSectionIndex + 1 < configuredCourse.sections.size()) {
+        maximumExposureExceededOnLastAdvance =
+                reachedMaximumExposure && carriedActiveTimeMs > 0;
+        while (progressSectionIndex + 1 < configuredCourse.sections.size()) {
             ++progressSectionIndex;
-            progressSectionActiveTimeMs = 0;
+            if (!reachedMaximumExposure) {
+                progressSectionActiveTimeMs = 0;
+                break;
+            }
+            const WorkoutGameDistanceCourseSection &nextSection =
+                    configuredCourse.sections[progressSectionIndex];
+            if (carriedActiveTimeMs < nextSection.maximumDurationMs) {
+                progressSectionActiveTimeMs = carriedActiveTimeMs;
+                break;
+            }
+            carriedActiveTimeMs -= nextSection.maximumDurationMs;
+            progressSectionActiveTimeMs = nextSection.maximumDurationMs;
+            progressDistanceMeters = nextSection.startDistanceMeters
+                    + nextSection.lengthMeters;
         }
     }
     return progressSnapshot();
@@ -154,6 +183,7 @@ void WorkoutGameDistancePlayback::anchorProgress(
     const WorkoutGameDistancePlaybackSnapshot snapshot =
             atDistance(progressDistanceMeters);
     progressSectionIndex = snapshot.sectionIndex;
+    maximumExposureExceededOnLastAdvance = false;
     const WorkoutGameDistanceCourseSection &section =
             configuredCourse.sections[progressSectionIndex];
     progressSectionActiveTimeMs = std::int64_t(std::llround(
@@ -179,11 +209,12 @@ WorkoutGameDistancePlayback::progressSnapshot() const
             ? configuredCourse.nominalDurationMs
             : section.sourceStartMs + std::int64_t(std::llround(
                 targetProgress * double(section.nominalDurationMs)));
-    result.targetWatts = section.targetStartWatts
-            + (section.targetEndWatts - section.targetStartWatts)
-                * targetProgress;
-    result.maximumExposureExceeded = !result.finished
-            && result.sectionElapsedMs > section.maximumDurationMs;
+    result.targetWatts = result.finished
+            ? 0.0
+            : section.targetStartWatts
+                + (section.targetEndWatts - section.targetStartWatts)
+                    * targetProgress;
+    result.maximumExposureExceeded = maximumExposureExceededOnLastAdvance;
     return result;
 }
 

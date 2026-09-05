@@ -58,6 +58,7 @@ private:
     std::size_t progressSectionIndex = 0;
     std::int64_t progressSectionActiveTimeMs = 0;
     std::int64_t lastProgressTimeMs = 0;
+    bool maximumExposureExceededOnLastAdvance = false;
 };
 
 #endif

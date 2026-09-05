@@ -147,14 +147,14 @@ private slots:
         WorkoutGameDistancePlayback playback;
         QVERIFY(playback.configure(sampleCourse()));
 
-        QCOMPARE(playback.atProgress(50.0, 20000).distanceMeters, 50.0);
+        QCOMPARE(playback.atProgress(50.0, 12000).distanceMeters, 50.0);
         const WorkoutGameDistancePlaybackSnapshot boundary =
-                playback.atProgress(100.0, 21000);
+                playback.atProgress(100.0, 12500);
         QCOMPARE(boundary.sectionIndex, std::size_t(1));
         QCOMPARE(boundary.distanceMeters, 100.0);
 
         const WorkoutGameDistancePlaybackSnapshot next =
-                playback.atProgress(150.0, 21100);
+                playback.atProgress(150.0, 12600);
         QCOMPARE(next.sectionIndex, std::size_t(1));
         QVERIFY(next.distanceMeters >= 100.0);
         QVERIFY(next.distanceMeters < 102.0);
@@ -216,15 +216,82 @@ private slots:
         QCOMPARE(resumed.sectionElapsedMs, std::int64_t(1000));
     }
 
-    void maximumExposureReportsExcessActiveRidingOnly()
+    void maximumExposureAdvancesToNextSectionAtTheExactLimit()
+    {
+        WorkoutGameDistancePlayback playback;
+        QVERIFY(playback.configure(sampleCourse()));
+
+        const WorkoutGameDistancePlaybackSnapshot before =
+                playback.atProgress(49.0, 12499);
+        QCOMPARE(before.sectionIndex, std::size_t(0));
+        QCOMPARE(before.distanceMeters, 49.0);
+        QCOMPARE(before.targetWatts, 250.0);
+
+        const WorkoutGameDistancePlaybackSnapshot boundary =
+                playback.atProgress(50.0, 12500);
+        QCOMPARE(boundary.sectionIndex, std::size_t(1));
+        QCOMPARE(boundary.distanceMeters, 100.0);
+        QCOMPARE(boundary.sectionElapsedMs, std::int64_t(0));
+        QCOMPARE(boundary.nominalTimeMs, std::int64_t(10000));
+        QCOMPARE(boundary.targetWatts, 100.0);
+        QVERIFY(!boundary.maximumExposureExceeded);
+    }
+
+    void maximumExposureCarriesUpdateOverrunWithoutBankingDistance()
     {
         WorkoutGameDistancePlayback playback;
         QVERIFY(playback.configure(sampleCourse()));
 
         const WorkoutGameDistancePlaybackSnapshot overdue =
                 playback.atProgress(50.0, 13000);
-        QCOMPARE(overdue.sectionElapsedMs, std::int64_t(13000));
+        QCOMPARE(overdue.sectionIndex, std::size_t(1));
+        QCOMPARE(overdue.distanceMeters, 100.0);
+        QCOMPARE(overdue.sectionElapsedMs, std::int64_t(500));
+        QCOMPARE(overdue.nominalTimeMs, std::int64_t(10500));
+        QCOMPARE(overdue.targetWatts, 100.0);
         QVERIFY(overdue.maximumExposureExceeded);
+
+        WorkoutGameDistancePlayback boundaryPlayback;
+        QVERIFY(boundaryPlayback.configure(sampleCourse()));
+        const WorkoutGameDistancePlaybackSnapshot boundaryOverdue =
+                boundaryPlayback.atProgress(100.0, 13000);
+        QCOMPARE(boundaryOverdue.sectionIndex, overdue.sectionIndex);
+        QCOMPARE(boundaryOverdue.distanceMeters, overdue.distanceMeters);
+        QCOMPARE(boundaryOverdue.sectionElapsedMs, overdue.sectionElapsedMs);
+        QCOMPARE(boundaryOverdue.nominalTimeMs, overdue.nominalTimeMs);
+        QCOMPARE(boundaryOverdue.targetWatts, overdue.targetWatts);
+        QCOMPARE(boundaryOverdue.maximumExposureExceeded,
+                 overdue.maximumExposureExceeded);
+
+        const WorkoutGameDistancePlaybackSnapshot noMovement =
+                playback.atProgress(50.0, 14000);
+        QCOMPARE(noMovement.distanceMeters, overdue.distanceMeters);
+        QCOMPARE(noMovement.sectionElapsedMs, overdue.sectionElapsedMs);
+        QVERIFY(!noMovement.maximumExposureExceeded);
+
+        const WorkoutGameDistancePlaybackSnapshot resumed =
+                playback.atProgress(51.0, 14500);
+        QCOMPARE(resumed.sectionIndex, std::size_t(1));
+        QCOMPARE(resumed.distanceMeters, 101.0);
+        QCOMPARE(resumed.sectionElapsedMs, std::int64_t(1000));
+    }
+
+    void finalMaximumExposureFinishesAndClearsRuntimeTarget()
+    {
+        WorkoutGameDistancePlayback playback;
+        QVERIFY(playback.configure(sampleCourse()));
+
+        QCOMPARE(playback.atProgress(50.0, 13000).sectionIndex,
+                 std::size_t(1));
+        const WorkoutGameDistancePlaybackSnapshot finish =
+                playback.atProgress(60.0, 42500);
+        QVERIFY(finish.finished);
+        QCOMPARE(finish.sectionIndex, std::size_t(1));
+        QCOMPARE(finish.distanceMeters, 300.0);
+        QCOMPARE(finish.sectionElapsedMs, std::int64_t(30000));
+        QCOMPARE(finish.nominalTimeMs, std::int64_t(30000));
+        QCOMPARE(finish.targetWatts, 0.0);
+        QVERIFY(!finish.maximumExposureExceeded);
     }
 
     void inactiveDistanceDriftDoesNotOpenTheExposureGate()
