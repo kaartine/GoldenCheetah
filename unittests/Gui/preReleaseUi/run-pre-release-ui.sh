@@ -247,7 +247,12 @@ if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
         )
     fi
     if [ "${GC_WORKOUT_GAME_FEATURE_LAB:-0}" = 1 ]; then
-        ANALYZER_ARGS+=(--require-gap-launch-window)
+        GAP_SCENARIO=${GC_WORKOUT_GAME_FEATURE_LAB_GAP_SCENARIO:-}
+        if [ -n "$GAP_SCENARIO" ]; then
+            ANALYZER_ARGS+=(--expected-gap-line "$GAP_SCENARIO")
+        else
+            ANALYZER_ARGS+=(--require-gap-launch-window)
+        fi
     fi
     if [ "${GC_UI_VALIDATE_TRAINER_ACCEPTANCE:-0}" = 1 ]; then
         RECORDING=$ARTIFACT_DIR/game-training-recording.csv

@@ -1359,6 +1359,8 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         runner = RUNNER_PATH.read_text(encoding="utf-8")
 
         self.assertIn('GC_WORKOUT_GAME_FEATURE_LAB:-0', runner)
+        self.assertIn('GC_WORKOUT_GAME_FEATURE_LAB_GAP_SCENARIO:-', runner)
+        self.assertIn('--expected-gap-line "$GAP_SCENARIO"', runner)
         self.assertIn("--require-gap-launch-window", runner)
 
     def test_ui_runner_requires_cold_start_continuity_for_quick3d(self):
