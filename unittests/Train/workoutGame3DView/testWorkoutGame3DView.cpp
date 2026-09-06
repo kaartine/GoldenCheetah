@@ -1881,6 +1881,21 @@ private slots:
         window.setSessionRunning(false);
         QVERIFY(!frameAnimation->property("running").toBool());
         QTRY_VERIFY_WITH_TIMEOUT(!window.diagnosticsSnapshot().ready, 1000);
+
+        window.beginTrainingSessionTiming();
+        window.setSessionRunning(true);
+        QTest::qWait(100);
+        QVERIFY(!window.diagnosticsSnapshot().ready);
+
+        WorkoutGameVisualSnapshot restarted = frameAt(road, 2.0);
+        restarted.simulation.workoutTimeMs = 100;
+        window.setFrame(restarted, 180.0, 190.0, 82, 140, 6);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                window.diagnosticsSnapshot().ready
+                && window.diagnosticsSnapshot().input
+                    .renderedRoadDistanceMeters < 4.0,
+                3000);
+        window.setSessionRunning(false);
     }
 
     void movingVisualStateTracksDeliveredSourceFrames()

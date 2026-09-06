@@ -269,6 +269,41 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             ],
         )
 
+    def test_mtb_course_lifecycle_rides_each_persisted_mode(self):
+        workflow = object.__new__(UI.MtbCourseUiWorkflow)
+        prescription = [{"durationMs": 6000, "startWatts": 100.0}]
+        results = [
+            {
+                "preset": preset,
+                "workout_name": "ui-test-mtb",
+                "source_intervals": prescription,
+                "route_fingerprint": f"route-{index}",
+                "grade_scale": 0.7 + index * 0.3,
+                "technicality": 0.1 + index * 0.4,
+                "technical_section_count": 3 + index * 3,
+                "total_absolute_turn_radians": 1.0 + index,
+            }
+            for index, preset in enumerate(
+                ("workout-first", "balanced", "ride-first")
+            )
+        ]
+        workflow.create = mock.Mock(return_value=results[0])
+        workflow.edit = mock.Mock(side_effect=results[1:])
+        workflow.ride_course = mock.Mock()
+
+        with tempfile.TemporaryDirectory() as directory:
+            workflow.artifacts = Path(directory)
+            workflow.run()
+
+        self.assertEqual(
+            workflow.ride_course.call_args_list,
+            [
+                mock.call("workout-first", results[0]),
+                mock.call("balanced", results[1]),
+                mock.call("ride-first", results[2]),
+            ],
+        )
+
     def test_mtb_course_lifecycle_rejects_identical_routes(self):
         workflow = object.__new__(UI.MtbCourseUiWorkflow)
         result = {
@@ -417,6 +452,35 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                 ),
                 "Workout game 3D canvas\n",
             )
+
+    def test_preset_smoke_ride_records_motion_and_discards_recording(self):
+        with tempfile.TemporaryDirectory() as directory:
+            recording = Path(directory) / "recording.csv"
+            recording.write_text("secs,watts\n0,190\n", encoding="ascii")
+            cancel = object()
+            driver = mock.Mock()
+            driver.find.return_value = cancel
+            workflow = object.__new__(UI.WorkoutGameUiWorkflow)
+            workflow.driver = driver
+            workflow.capture_screenshots = False
+            workflow.open_game = mock.Mock()
+            workflow.start = mock.Mock(return_value=recording)
+            workflow.activate_stop_training = mock.Mock()
+
+            with mock.patch.object(UI.time, "sleep"):
+                workflow.run_smoke_and_discard("balanced")
+
+            workflow.open_game.assert_called_once_with()
+            workflow.start.assert_called_once_with("04-mtb-course-balanced-first")
+            driver.wait_file_growth.assert_called_once_with(
+                recording, recording.stat().st_size
+            )
+            workflow.activate_stop_training.assert_called_once_with()
+            driver.find.assert_called_once_with(
+                "Cancel", "push button", showing=True, timeout=8.0
+            )
+            driver.activate.assert_called_once_with(cancel)
+            driver.wait_file_removed.assert_called_once_with(recording)
 
     def test_prepare_uses_only_the_requested_isolated_library(self):
         with tempfile.TemporaryDirectory() as directory:

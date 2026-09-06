@@ -1024,6 +1024,64 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertEqual(samples[0]["camera_presentation"], "idle-side")
             self.assertEqual(samples[0]["camera_side_blend"], 0.75)
 
+    def test_latest_training_session_keeps_stop_continue_but_not_prior_rides(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app.log"
+            path.write_text(
+                "Workout Game renderer selection: Qt Quick 3D\n"
+                "workout-game-3d-trace frame=1 session_elapsed_ms=20 "
+                "render_road_m=0.1\n"
+                "workout-game-3d-trace frame=60 session_elapsed_ms=1020 "
+                "render_road_m=3.0\n"
+                "workout-game-3d-trace frame=1 session_elapsed_ms=30 "
+                "render_road_m=0.2\n"
+                "workout-game-3d-trace frame=90 session_elapsed_ms=1530 "
+                "render_road_m=4.0\n"
+                "workout-game-3d-trace frame=1 session_elapsed_ms=1800 "
+                "render_road_m=4.8\n",
+                encoding="utf-8",
+            )
+
+            samples = ANALYZER.parse_trace(
+                path,
+                quick3d_session=True,
+                latest_training_session=True,
+            )
+
+            self.assertEqual(
+                [sample["render_road_m"] for sample in samples],
+                [0.2, 4.0, 4.8],
+            )
+
+    def test_trainer_targets_are_scoped_to_latest_training_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app.log"
+            path.write_text(
+                "Workout Game renderer selection: Qt Quick 3D\n"
+                "workout-game-3d-trace frame=1 session_elapsed_ms=20\n"
+                "workout-game-trainer-target mode=slope value=1 "
+                "workout_pos=1 devices=1\n"
+                "workout-game-3d-trace frame=60 session_elapsed_ms=1020\n"
+                "workout-game-3d-trace frame=1 session_elapsed_ms=30\n"
+                "workout-game-trainer-target mode=slope value=4 "
+                "workout_pos=2 devices=1\n"
+                "workout-game-3d-trace frame=90 session_elapsed_ms=1530\n"
+                "workout-game-3d-trace frame=1 session_elapsed_ms=1800\n"
+                "workout-game-trainer-target mode=slope value=5 "
+                "workout_pos=3 devices=1\n"
+                "workout-game-3d-trace frame=30 session_elapsed_ms=2200\n",
+                encoding="utf-8",
+            )
+
+            targets = ANALYZER.parse_trainer_targets(
+                path,
+                within_trace=True,
+                quick3d_session=True,
+                latest_training_session=True,
+            )
+
+            self.assertEqual([target["value"] for target in targets], [4.0, 5.0])
+
     def test_accepts_gap_launch_window_between_ten_and_three_meters(self):
         samples = [
             {

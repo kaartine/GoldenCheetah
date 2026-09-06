@@ -986,11 +986,13 @@ class MtbCourseUiWorkflow:
         artifacts: Path,
         capture_screenshots: bool,
         enter_train,
+        ride_course=None,
     ):
         self.driver = driver
         self.artifacts = artifacts
         self.capture_screenshots = capture_screenshots
         self.enter_train = enter_train
+        self.ride_course = ride_course
         self.workouts = root / "library" / ATHLETE / "workouts"
         self.course_path = self.workouts / "ui-test-mtb.crs"
         self.sidecar_path = self.workouts / "ui-test-mtb.gcmtb.json"
@@ -998,11 +1000,17 @@ class MtbCourseUiWorkflow:
         self.workout_name = "ui-test-mtb"
 
     def run(self) -> dict:
-        results = [
-            self.create("workout-first"),
-            self.edit("balanced"),
-            self.edit("ride-first"),
-        ]
+        results = []
+        for operation, preset in (
+            (self.create, "workout-first"),
+            (self.edit, "balanced"),
+            (self.edit, "ride-first"),
+        ):
+            result = operation(preset)
+            results.append(result)
+            ride_course = getattr(self, "ride_course", None)
+            if ride_course is not None:
+                ride_course(preset, result)
         prescriptions = [result["source_intervals"] for result in results]
         if prescriptions[0] != prescriptions[1] or prescriptions[1] != prescriptions[2]:
             raise UiFailure("Create MTB Course changed the source prescription")
@@ -1221,7 +1229,7 @@ class WorkoutGameUiWorkflow:
         self.existing_records = set(self.records.glob("*.csv"))
         self.existing_activities = set(self.activities.glob("*.json"))
 
-    def start(self) -> Path:
+    def start(self, screenshot_name="04-workout-game-first") -> Path:
         self.driver.activate(
             self.driver.find(
                 "Start or pause training", "push button", showing=True
@@ -1235,9 +1243,34 @@ class WorkoutGameUiWorkflow:
         if self.capture_screenshots:
             time.sleep(1.2)
             self.first_frame = self.driver.screenshot(
-                "04-workout-game-first", self.canvas
+                screenshot_name, self.canvas
             )
         return recording
+
+    def run_smoke_and_discard(self, preset: str) -> None:
+        self.open_game()
+        recording = self.start(f"04-mtb-course-{preset}-first")
+        initial_size = recording.stat().st_size
+        time.sleep(1.2)
+        self.driver.wait_file_growth(recording, initial_size)
+        if self.capture_screenshots:
+            second = self.driver.screenshot(
+                f"04-mtb-course-{preset}-running", self.canvas
+            )
+            if canvas_requires_pixel_motion(self.driver.name(self.canvas)):
+                changed = self.driver.changed_pixels(self.first_frame, second)
+                if changed < 1200:
+                    raise UiFailure(
+                        f"{preset} MTB course appears static: "
+                        f"only {changed} sampled pixels changed"
+                    )
+        self.activate_stop_training()
+        self.driver.activate(
+            self.driver.find(
+                "Cancel", "push button", showing=True, timeout=8.0
+            )
+        )
+        self.driver.wait_file_removed(recording)
 
     def shift_up(self) -> None:
         time.sleep(self.run_delays[0])
@@ -1569,12 +1602,24 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 stop_without_saving()
 
         def mtb_course_lifecycle():
+            def ride_generated_course(preset: str, result: dict) -> None:
+                workflow = WorkoutGameUiWorkflow(
+                    driver,
+                    root,
+                    artifacts,
+                    capture_screenshots,
+                    enter_train,
+                    (result["workout_name"],),
+                )
+                workflow.run_smoke_and_discard(preset)
+
             workflow = MtbCourseUiWorkflow(
                 driver,
                 root,
                 artifacts,
                 capture_screenshots,
                 enter_train,
+                ride_generated_course,
             )
             generated_course.update(workflow.run())
 

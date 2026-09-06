@@ -25,6 +25,10 @@ accessible description must identify the exact new activity file in the
 single-activity isolated library. The saved file and reopen result are recorded
 in `reopened-activity.txt`. All application and XDG persistence paths run only
 inside the temporary athlete library and test home.
+When the MTB conversion gate is enabled, the workflow also starts and advances
+each of the three generated presets. Earlier smoke rides are discarded, and
+trace/recording reconciliation is scoped to the final complete training
+session while preserving its Stop/Continue segments.
 
 Set `GC_UI_GENERATOR_MODE` to `on-target`, `over-target`, `under-target`,
 `cadence-low`, `cadence-high` or `follow-target` to select the isolated Data

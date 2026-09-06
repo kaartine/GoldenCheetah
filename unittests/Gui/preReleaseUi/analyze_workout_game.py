@@ -219,8 +219,43 @@ def parse_fields(text: str) -> TraceSample:
     return fields
 
 
+def latest_training_session_bounds(
+    lines: list[str], markers: tuple[str, ...]
+) -> tuple[int, int] | None:
+    traces: list[tuple[int, TraceSample]] = []
+    for index, line in enumerate(lines):
+        marker = next((value for value in markers if value in line), None)
+        if marker is None:
+            continue
+        fields = parse_fields(line.split(marker, 1)[1])
+        if fields:
+            traces.append((index, fields))
+    if not traces:
+        return None
+
+    session_start = 0
+    for position in range(1, len(traces)):
+        previous = traces[position - 1][1]
+        current = traces[position][1]
+        previous_elapsed = numeric(previous, "session_elapsed_ms")
+        current_elapsed = numeric(current, "session_elapsed_ms")
+        if (previous_elapsed is not None and current_elapsed is not None
+                and current_elapsed < previous_elapsed):
+            session_start = position
+            continue
+        if previous_elapsed is None or current_elapsed is None:
+            previous_frame = numeric(previous, "frame")
+            current_frame = numeric(current, "frame")
+            if (previous_frame is not None and current_frame is not None
+                    and current_frame <= previous_frame):
+                session_start = position
+    return traces[session_start][0], traces[-1][0]
+
+
 def parse_trace(
-    path: Path, quick3d_session: bool = False
+    path: Path,
+    quick3d_session: bool = False,
+    latest_training_session: bool = False,
 ) -> list[TraceSample]:
     samples = []
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -228,6 +263,12 @@ def parse_trace(
     if quick3d_session:
         lines, unused = latest_renderer_session(lines)
         markers = (QUICK3D_TRACE_MARKER,)
+    if latest_training_session:
+        bounds = latest_training_session_bounds(lines, markers)
+        if bounds is None:
+            return []
+        first_trace, last_trace = bounds
+        lines = lines[first_trace:last_trace + 1]
     for line in lines:
         match = next(
             (
@@ -250,12 +291,19 @@ def parse_trainer_targets(
     path: Path,
     within_trace: bool = False,
     quick3d_session: bool = False,
+    latest_training_session: bool = False,
 ) -> list[TraceSample]:
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     trace_markers = TRACE_MARKERS
     if quick3d_session:
         lines, unused = latest_renderer_session(lines)
         trace_markers = (QUICK3D_TRACE_MARKER,)
+    if latest_training_session:
+        bounds = latest_training_session_bounds(lines, trace_markers)
+        if bounds is None:
+            return []
+        session_first_trace, session_last_trace = bounds
+        lines = lines[session_first_trace:session_last_trace + 1]
     first_trace = 0
     last_trace = len(lines) - 1
     if within_trace:
@@ -1320,7 +1368,9 @@ def main() -> int:
             return 0
 
     trace = parse_trace(
-        args.log, quick3d_session=args.require_quick3d_evidence
+        args.log,
+        quick3d_session=args.require_quick3d_evidence,
+        latest_training_session=True,
     )
     summary = analyze(trace)
     failures = validate(
@@ -1362,6 +1412,7 @@ def main() -> int:
                 args.log,
                 within_trace=True,
                 quick3d_session=args.require_quick3d_evidence,
+                latest_training_session=True,
             ),
             parse_recording(args.recording),
         )

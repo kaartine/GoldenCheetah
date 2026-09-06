@@ -369,6 +369,11 @@ void WorkoutGame3DWindow::beginTrainingSessionTiming()
 {
     activeSessionClock.begin(monotonicMilliseconds());
     gearShiftDiagnostics.reset();
+    visualSmoother.reset();
+    sourceFrame = {};
+    presentedFrame = {};
+    hasFrame = false;
+    hasPresentedVisualState = false;
 }
 
 void WorkoutGame3DWindow::pauseTrainingSessionTiming()
