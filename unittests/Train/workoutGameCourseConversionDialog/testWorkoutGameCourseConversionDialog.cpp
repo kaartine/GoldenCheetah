@@ -248,9 +248,10 @@ private slots:
             const QString text = requiredChild<QLabel>(dialog, name)->text();
             const QByteArray details = QStringLiteral("%1: %2")
                     .arg(QLatin1String(name), text).toLatin1();
-            QVERIFY2(text.contains("hard segments", Qt::CaseInsensitive),
+            QVERIFY2(text.contains("key efforts", Qt::CaseInsensitive),
                      details.constData());
-            QVERIFY2(text.contains("easy segments", Qt::CaseInsensitive),
+            QVERIFY2(text.contains(
+                             "prescribed recoveries", Qt::CaseInsensitive),
                      details.constData());
         }
         QVERIFY(requiredChild<QPushButton>(dialog, "createCourseButton")

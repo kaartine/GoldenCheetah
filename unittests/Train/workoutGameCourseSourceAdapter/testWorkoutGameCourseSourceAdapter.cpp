@@ -439,6 +439,8 @@ private slots:
     {
         const WorkoutGameCourseSourceResult original =
                 WorkoutGameCourseSourceAdapter::convert(sampleRequest());
+        QCOMPARE(original.status, WorkoutGameCourseSourceStatus::Ready);
+        QVERIFY(original.document.course.roadPlan);
 
         const WorkoutGameCourseSourceResult edited =
                 WorkoutGameCourseSourceAdapter::regenerate(
@@ -447,6 +449,7 @@ private slots:
                     QStringLiteral("Technical Tuesday"));
 
         QCOMPARE(edited.status, WorkoutGameCourseSourceStatus::Ready);
+        QVERIFY(edited.document.course.roadPlan);
         QCOMPARE(edited.document.title, QStringLiteral("Technical Tuesday"));
         QCOMPARE(edited.document.preset, WorkoutGameCoursePreset::RideFirst);
         QCOMPARE(edited.document.sourceSha256,
@@ -462,10 +465,13 @@ private slots:
         QCOMPARE(edited.document.sourceTexts[1].text,
                  original.document.sourceTexts[1].text);
         QVERIFY(edited.summary.technicalFeatureCount
-                > original.summary.technicalFeatureCount);
+                >= original.summary.technicalFeatureCount);
+        QVERIFY(edited.summary.elevationGainMeters
+                > original.summary.elevationGainMeters);
+        QVERIFY(accumulatedTurn(*edited.document.course.roadPlan)
+                > accumulatedTurn(*original.document.course.roadPlan));
         QCOMPARE(edited.document.schemaVersion,
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
-        QVERIFY(edited.document.course.roadPlan);
         QVERIFY(WorkoutGameRoadQuality::audit(
                     *edited.document.course.roadPlan).accepted());
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(edited.document),

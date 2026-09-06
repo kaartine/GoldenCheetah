@@ -175,7 +175,7 @@ QString comparisonText(const WorkoutGameCourseSourceResult &result)
     const WorkoutGameCourseConversionSummary &value = result.summary;
     return QObject::tr(
             "%1 | %2 km | +%3 m | technical %4 | "
-            "hard segments %5/%6 | easy segments %7/%8")
+            "key efforts %5/%6 | prescribed recoveries %7/%8")
             .arg(durationText(value.nominalDurationMs))
             .arg(value.distanceMeters / 1000.0, 0, 'f', 1)
             .arg(std::lround(value.elevationGainMeters))
