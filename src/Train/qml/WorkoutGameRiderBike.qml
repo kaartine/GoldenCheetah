@@ -8,6 +8,7 @@ Node {
     required property real distanceMeters
     required property real pedalAngle
     required property real airHeight
+    required property bool rendererPrewarming
     required property real pump
     required property real standingBlend
     required property real pedalEffort
@@ -243,7 +244,7 @@ Node {
 
     Model {
         objectName: "riderGroundShadow"
-        visible: root.airHeight > 0.015
+        visible: root.rendererPrewarming || root.airHeight > 0.015
         source: "assets/meshes/geo_Shadow_LOD0_mesh.mesh"
         y: -airHeight
         scale: Qt.vector3d(

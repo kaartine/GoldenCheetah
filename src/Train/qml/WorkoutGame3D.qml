@@ -498,6 +498,7 @@ Item {
             distanceMeters: workoutGame3D.distanceMeters
             pedalAngle: workoutGame3D.pedalAngle
             airHeight: workoutGame3D.riderAirHeight
+            rendererPrewarming: root.rendererPrewarming
             pump: workoutGame3D.riderPump
             standingBlend: workoutGame3D.riderStandingBlend
             pedalEffort: workoutGame3D.riderPedalEffort

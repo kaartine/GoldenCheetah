@@ -1646,6 +1646,11 @@ private slots:
         QVERIFY(shadow);
         QCOMPARE(shadow->property("visible").toBool(), false);
 
+        window.rootObject()->setProperty("rendererPrewarming", true);
+        QTRY_COMPARE(shadow->property("visible").toBool(), true);
+        window.rootObject()->setProperty("rendererPrewarming", false);
+        QTRY_COMPARE(shadow->property("visible").toBool(), false);
+
         frame.world.rider.airborne = true;
         frame.world.rider.clearanceMeters = 1.20;
         frame.simulation.workoutTimeMs += 16;
