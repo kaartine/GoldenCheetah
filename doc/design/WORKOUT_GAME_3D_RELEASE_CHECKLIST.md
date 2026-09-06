@@ -1168,13 +1168,14 @@ CI debt rather than being treated as a passing gate.
 - [x] `REL-01A` Preserve every source target, interval time, key effort,
   prescribed recovery and calculated load in all three Create MTB Course
   modes.
-- [x] `REL-01B` Produce measurably distinct Calm, Varied and Technical trails
-  from the same source: grade relief, curvature, technical exposure, density
-  and feature palette increase monotonically without changing the workout.
+- [x] `REL-01B` Produce measurably distinct Workout first, Balanced and Ride
+  first trails from the same source: grade relief, curvature, technical
+  exposure, density and feature palette increase monotonically without
+  changing the workout.
 - [x] `REL-01C` Preview all three deterministic results side by side, keep the
   source power profile on a time axis and generated terrain on a distance
   axis, and permit mode changes when editing an existing generated course.
-- [ ] `REL-01D` Exercise create, edit-mode switch, replace, reopen and ride for
+- [x] `REL-01D` Exercise create, edit-mode switch, replace, reopen and ride for
   all three modes through the isolated packaged-AppImage UI workflow.
 - [x] `REL-02` Verify stop/save/cancel/continue and accidental-stop recovery.
 - [x] `REL-03` Verify AppImage startup, QML/Quick 3D modules, assets, licenses,
@@ -1189,6 +1190,24 @@ prescription retention and strictly increasing distance-weighted technical
 exposure. Its 900x700 dialog gate must keep the compact three-mode comparison
 visible, show original power against time separately from terrain against
 distance, and report coherent curve events rather than raw road-piece counts.
+
+**REL-01D evidence (`d082b4b`, 2026-09-06):** the isolated packaged Quick 3D
+workflow creates Workout first, edits the same course to Balanced, then edits
+it to Ride first. After each persisted result it reopens the generated course
+from the Train library, starts Data Generator training, observes the raw
+recording advance and verifies visible canvas motion before discarding the two
+smoke rides. The final Ride first session additionally shifts both virtual
+gears, exercises Stop/Continue on the same recording, saves and reopens the
+activity. The complete eight-stage UI run passed. Final-session reconciliation
+matched 14/14 recording samples and 17/17 trainer targets, observed two gear
+changes with a 0.18 km/h maximum immediate speed step, and reported zero
+distance regressions, dropped frames, skipped simulation ticks or unexpected
+airborne frames. The software-X11 cold-start sample sustained a 20.16 ms p99
+and 21.54 ms maximum frame interval. A separate 120-case real-X11 Quick 3D
+suite and 93-case offscreen suite passed without failures. A fresh-session
+renderer regression test proves the previous ride's retained frame cannot be
+presented before the first frame of the new ride; Stop/Continue remains in the
+same active-session clock and does not reset distance or elapsed time.
 
 **REL-06 retirement inventory:** the legacy game renderer is the complete
 Painter/OpenGL/Scene Graph fallback chain, not every use of `QPainter` in the
