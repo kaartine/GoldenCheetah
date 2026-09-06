@@ -286,8 +286,8 @@
     "unittests/Build/appImagePackaging/testWindowsPackaging.ps1": "6fc97e5353b278f573e3d5f555d610e0d0e10bd58f4c3bccbee055670d15d06f",
     "unittests/Build/ciTestRunner/ciTestRunner.pro": "2f0afcc5fea392caf3c728960171159afbe1464404a30e9da65256968a284234",
     "unittests/Build/ciTestRunner/testCiTestRunner.py": "e04e03bc3482957665a4cabe31b4f2412deb6e4a4669296b47472276685b05d2",
-    "unittests/ci-required-tests.txt": "21a764a261783d48f633c7a45264a6690bccb848fa10b5839128560215836988",
+    "unittests/ci-required-tests.txt": "56698b88b93eb265587f187a15eef1e826aaa44182d430217bdda477821607ed",
     "unittests/unittests.pri.in": "58c1673c4ed201bb91b0c82375265dfa10011c3401f9529c59bd5ef4691ca69d",
-    "unittests/unittests.pro": "09081d7bb5e9d10f3f4abfdac971414c58dae65a18ebc32ad4f3f45120d53c7d"
+    "unittests/unittests.pro": "7bd92823269e9a7e030f4c168d852c9702bf305a558e14fb68a95652eb37adde"
   }
 }
