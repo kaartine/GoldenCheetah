@@ -460,8 +460,11 @@ and a runtime/geometry regression test.
 - [x] `FTR-12A` Gap-jump asset package: deterministic project-authored GLB,
   exact sockets and markers, Qt Balsam component, provenance, structural
   validation and fixed-camera catalog audit.
-- [ ] `FTR-12B` Integrate the packaged asset as the sole gap visual surface and
-  complete packaged motion, target-GPU and interactive user acceptance.
+- [x] `FTR-12B` Integrate the packaged asset as the sole gap visual surface and
+  complete source-level and packaged-AppImage visual, motion and endurance
+  acceptance.
+- [ ] `FTR-12C` Complete target-GPU and interactive real-trainer user
+  acceptance for all three jump lines and the grounded fallback.
 
 **FTR-01 evidence:** a 16-sided transverse log now extends beyond both
 trail edges, includes end-grain faces and a buried lower hull, and scales from
@@ -827,8 +830,7 @@ asynchronous floor request/completion/install cycles. The complete offscreen
 View/QML suite passes 86 cases with 39 explicit graphics/export skips, normally
 and under ASan/UBSan, and the complete GoldenCheetah application target
 compiles and links in the remote Qt 6.8.3 container. This closes the
-source-level synchronous-`setFrame` endurance blocker. Packaged execution and
-signed interactive review remain release gates.
+source-level synchronous-`setFrame` endurance blocker.
 
 The `FTR-12A` asset package is complete. A pinned Blender 4.0.2 generator
 produces one original `40.70 m` three-line tile with exact `0.68 m` input and
@@ -842,9 +844,21 @@ an authored gap.
 Two clean Blender exports and two Qt Balsam 6.8.3 conversions are
 byte-identical. Khronos glTF Validator 2.0.0-dev.3.10 reports zero errors,
 warnings, infos and hints. Five content-anchored 960 by 540 audit renders cover
-the chase, overhead and individual line-side views. The package remains a
-candidate until `FTR-12B` replaces, rather than overlays, the procedural gap
-surface and passes integrated motion, target-GPU and user review.
+the chase, overhead and individual line-side views. It is now the sole
+production visual: production QML contains exactly one authored gap component
+and no procedural gap surface.
+
+The final packaged AppImage passed a 46-second isolated Feature Lab lifecycle
+with the long-line scenario, Data Generator, virtual shifts, stop/continue,
+save and reopen. Its 47 gap samples covered approach, measure, committed,
+action and recovery; the long line locked once, had no post-lock line change,
+and was airborne with both wheel contacts open before landing on the shared
+trail. The accepted launch window was `4.249--9.737 m`, there were zero
+backward frames, skipped simulation ticks, deadline errors or unexpected
+airborne frames, and software-rendered frame timing was `54.4 fps` median with
+`24 ms` p99. The complete session video SHA-256 is
+`5138d8a731bba5b6a73203ab14de0982ec2bbe4036750aeddfddb6e805d1d874`.
+This closes `FTR-12B`; `FTR-12C` remains a physical acceptance gate.
 
 **Feature acceptance:** each feature is identifiable without its name, joins
 ordinary trail without a crack or width jump, and produces a visibly correct
@@ -1151,6 +1165,17 @@ of a regression in an individual Workout Game change, but it remains visible
 CI debt rather than being treated as a passing gate.
 
 - [ ] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
+- [x] `REL-01A` Preserve every source target, interval time, key effort,
+  prescribed recovery and calculated load in all three Create MTB Course
+  modes.
+- [x] `REL-01B` Produce measurably distinct Calm, Varied and Technical trails
+  from the same source: grade relief, curvature, technical exposure, density
+  and feature palette increase monotonically without changing the workout.
+- [x] `REL-01C` Preview all three deterministic results side by side, keep the
+  source power profile on a time axis and generated terrain on a distance
+  axis, and permit mode changes when editing an existing generated course.
+- [ ] `REL-01D` Exercise create, edit-mode switch, replace, reopen and ride for
+  all three modes through the isolated packaged-AppImage UI workflow.
 - [x] `REL-02` Verify stop/save/cancel/continue and accidental-stop recovery.
 - [x] `REL-03` Verify AppImage startup, QML/Quick 3D modules, assets, licenses,
   attribution, SBOM and isolated production-like athlete data.

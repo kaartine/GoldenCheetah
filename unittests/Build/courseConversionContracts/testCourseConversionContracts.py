@@ -154,7 +154,7 @@ class CourseConversionContractTest(unittest.TestCase):
             "Runtime progression may reach a section boundary only after",
             "ordinary 5:00",
             "technical terrain exposure",
-            "Workout first is not a no-game mode",
+            "Calm training trail is not a no-game mode",
             "Prescribed recovery never receives a scored challenge",
             "feature count and density",
             "Create/Save",

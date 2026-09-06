@@ -82,7 +82,7 @@ are signed; negative means shorter or lighter. Per-interval retention is
 
 ## Measurable prescription guarantees
 
-| Guarantee | Workout first | Balanced | Ride first |
+| Guarantee | Calm training trail | Varied training trail | Technical game trail |
 | --- | ---: | ---: | ---: |
 | Every start/end target-power error | 0 W | 0 W | 0 W |
 | Every key-effort duration error | 0 ms | 0 ms | 0 ms |
@@ -97,21 +97,22 @@ are signed; negative means shorter or lighter. Per-interval retention is
 | Minimum runtime prescribed work exposure | 100% | 100% | 100% |
 | Minimum runtime prescribed recovery exposure | 100% | 100% | 100% |
 
-Workout first copies the duration and start/end watts of every interval exactly
-(0 ms and 0 W difference). Its runtime minimum exposure for each section is
-also the source duration; terrain must fit the prescription.
+Calm training trail copies the duration and start/end watts of every interval
+exactly (0 ms and 0 W difference). Its runtime minimum exposure for each
+section is also the source duration; terrain must fit the prescription.
 
-Balanced copies every prescribed interval exactly. It may
+Varied training trail copies every prescribed interval exactly. It may
 adjust only an explicitly annotated non-prescriptive warmup, cooldown or
 transition, by at most 3% in either direction. Ordinary recovery must not be
 treated as a transition. Every adjustment and its metadata role is reported in
 the preview.
 
-Ride first also copies every prescribed interval exactly. It can change only an
-explicitly annotated non-prescriptive warmup, cooldown or transition, and total
-nominal duration remains within 8% of the source. Compactness, target distance
-and trail flow never authorize changing a prescribed interval. Stimulus, key
-efforts and recovery safety take precedence over flow.
+Technical game trail also copies every prescribed interval exactly. It can
+change only an explicitly annotated non-prescriptive warmup, cooldown or
+transition, and total nominal duration remains within 8% of the source.
+Compactness, target distance and trail flow never authorize changing a
+prescribed interval. Stimulus, key efforts and recovery safety take precedence
+over flow.
 
 All allowed scaling is rounded once to integer milliseconds. The converter
 backs an authorized change off deterministically when any aggregate limit would
@@ -178,7 +179,7 @@ scored challenge. A workout with fewer than two palette-eligible work sections
 does not have enough granularity for three honest exposure levels; it also uses
 the safe smooth fallback and reports exposure as `N/A`.
 
-| Terrain/flow metric | Workout first | Balanced | Ride first |
+| Terrain/flow metric | Calm training trail | Varied training trail | Technical game trail |
 | --- | ---: | ---: | ---: |
 | `gradeScale` | 0.82 | 1.00 | 1.18 |
 | `technicality` | 0.15 | 0.55 | 0.95 |
@@ -189,15 +190,16 @@ the safe smooth fallback and reports exposure as `N/A`.
 | Scored challenge on a suitable prescribed work/key-effort section | allowed without changing start/end power, interval time or minimum exposure | allowed without changing start/end power, interval time or minimum exposure | allowed without changing start/end power, interval time or minimum exposure |
 | Scored challenge on a prescribed recovery | never | never | never |
 
-Workout first is not a no-game mode: roots, rollers, an easy rock garden and a
-log-over are available inside its lower exposure and density bands. A scored
-challenge may be attached to a suitable work or key-effort section in any mode,
-provided it does not change the section's start/end target power, interval
-duration, minimum exposure or any other prescription guarantee. Prescribed
-recovery never receives a scored challenge in any mode. Balanced and Ride first
-increase technical difficulty and variety through the existing safe feature
-catalog; their distinction from Workout first is technical intensity, density,
-`gradeScale` and flow, not game versus no-game.
+Calm training trail is not a no-game mode: roots, rollers, an easy rock garden
+and a log-over are available inside its lower exposure and density bands. A
+scored challenge may be attached to a suitable work or key-effort section in
+any mode, provided it does not change the section's start/end target power,
+interval duration, minimum exposure or any other prescription guarantee.
+Prescribed recovery never receives a scored challenge in any mode. Varied
+training trail and Technical game trail increase technical difficulty and
+variety through the existing safe feature catalog; their distinction from
+Calm training trail is technical intensity, density, `gradeScale` and flow,
+not game versus no-game.
 
 For the same source and seed with at least two palette-eligible work sections,
 both technical-section density and distance-weighted technical exposure must
@@ -214,10 +216,11 @@ mathematically unreachable. Conversion preserves the workout and reports the
 actual strictly ordered exposure instead of splitting or changing a prescribed
 interval.
 
-Gap jumps remain Ride-first-only and deterministic. They retain the existing
-safe line, power, geometry and road-quality gates. A recovery section never
-becomes a jump. Every complete plan must pass `WorkoutGameRoadPlanValidator`
-and `WorkoutGameRoadQuality`; fast, nominal and slow estimates must all finish.
+Gap jumps remain Technical-game-trail-only and deterministic. They retain the
+existing safe line, power, geometry and road-quality gates. A recovery section
+never becomes a jump. Every complete plan must pass
+`WorkoutGameRoadPlanValidator` and `WorkoutGameRoadQuality`; fast, nominal and
+slow estimates must all finish.
 
 ## Preview and persistence contract
 

@@ -152,7 +152,7 @@ recorded.
 | WG-10 | P0 | partial | Distinct feature geometry integrated into trail tiles | Every supported feature is recognizable without HUD text at approach distance and joins exact trail/terrain sockets without pasted-on edges, clipping, gaps, z-fighting or visible undersides. | `LIVE-WORLD-03`, `LIVE-WORLD-04`, `VIS-06`, `VIS-07` |
 | WG-11 | P0 | partial | Continuous feature action physics | Jump, drop, main-line, bypass and recovery traces remain continuous, bounded and forward-only, and wheel contact agrees with the rendered trail geometry. | `LIVE-GAME-02` |
 | WG-12 | P0 | partial | Reliable feature guidance and outcome feedback | Distance, target power, cadence readiness, commitment, completion and bypass use the same target authority as trainer and generator. Short visual feedback makes the outcome obvious without changing simulation timing. | `LIVE-GAME-01`, `VIS-14` |
-| WG-13 | P0 | partial | Progressive gap-jump choice | One approach fans into clearly different short, medium and long gaps. Predicted speed from the final 10-3 m selects and locks a reachable line; unsafe speed uses a grounded route; take-off, flight, landing and merge are visually and physically continuous. | `FTR-12`, `VIS-16` |
+| WG-13 | P0 | partial | Progressive gap-jump choice | One approach fans into clearly different short, medium and long gaps. Predicted speed from the final 10-3 m selects and locks a reachable line; unsafe speed uses a grounded route; take-off, flight, landing and merge are visually and physically continuous. Source and packaged-AppImage automation pass; target-GPU and interactive real-trainer review remain. | `FTR-12`, `VIS-16` |
 | WG-14 | P0 | partial | Progressive virtual gearing and trainer feel | A shift changes cadence/torque response through inertia on flats and climbs instead of changing speed discontinuously, while manual virtual gears remain usable outside Game view. | `PHY-03`, `LIVE-RIDER-06` |
 | WG-15 | P0 | partial | Forest density, materials, depth and stable placement | A varied Finnish forest uses terrain-anchored trees, rocks, stumps, shrubs, roots, dead wood and undergrowth with coherent surfaces, depth and lighting. Nothing visibly pops, floats, intersects or exposes its buried part, and the target laptop stays within measured draw, triangle, chunk-build and frame budgets. | `LIVE-WORLD-01`, `LIVE-WORLD-02`, `LIVE-WORLD-05`, `LIVE-WORLD-07`, `VIS-10`, `VIS-11`, `VIS-12`, `VIS-13` |
 | WG-16 | P0 | partial | Complete, repeatable UI and visual verification | A short persisted lab course exercises every scored feature plus berms and terrain forms. Visible isolated Data Generator controls, workout creation/save, three purpose-named prescription-safe trail choices, a time-accurate original-workout preview, a visible compact mode comparison, Game entry, gears, stop/continue, activity save/reopen, compact HUD/profile and automated trace/still/video checks all work without production athlete data or hidden environment variables. Recovery-only conversion stays smooth and nontechnical, and representative endurance/interval profiles prove strictly increasing distance-weighted technical exposure. Every current unit-test project is present in the required inventory and the full required suite passes. | `LIVE-GAME-03`, `LIVE-GAME-04`, `LIVE-GAME-05`, `LIVE-GAME-06`, `VIS-15`, `REL-01` |
@@ -174,10 +174,12 @@ recorded.
   both regressions also pass 25 repeated runs. Keep the strict tests, but do not
   schedule duplicate implementation work for them.
 - Current gap-jump evidence proves the three rideable lines and grounded safe
-  line in a 305-artifact X11/Quick 3D matrix. A capture-free five-minute,
-  15,000-step endurance run reports 1.90 ms p95, 15.38 ms maximum update time
-  and zero queued geometry. Packaged execution and signed interactive review
-  remain open, so WG-13 remains partial.
+  line in the source X11/Quick 3D matrix. A capture-free 15,000-step endurance
+  run remains below its fixed frame-path budgets. The final packaged AppImage
+  additionally completes the long-line approach, lock, flight, landing,
+  stop/continue, save and reopen lifecycle with zero backward frames, skipped
+  ticks or deadline errors. Target-GPU and signed interactive real-trainer
+  review remain open, so WG-13 remains partial.
 - The short-section preparation-order defect and the camera yaw-step failure
   are closed in the current B1 aggregate gate. Their strict regressions remain
   in the required suite; neither threshold was weakened.
