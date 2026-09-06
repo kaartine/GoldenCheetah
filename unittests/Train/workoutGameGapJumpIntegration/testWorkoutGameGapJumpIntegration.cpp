@@ -257,7 +257,7 @@ private slots:
         QCOMPARE(int(WorkoutGameTerrainKind::Tabletop), 10);
         QCOMPARE(int(WorkoutGameTerrainKind::RockSlab), 11);
         QCOMPARE(int(WorkoutGameTerrainKind::GapJump), 12);
-        QCOMPARE(WorkoutGameCourseDocumentCodec::CurrentSchemaVersion, 2);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::CurrentSchemaVersion, 4);
     }
 };
 
