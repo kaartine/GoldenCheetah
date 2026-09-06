@@ -55,14 +55,15 @@ WorkoutGameCourseConverter::parametersForPreset(
     parameters.simulationStepMs = 200;
     switch (preset) {
     case WorkoutGameCoursePreset::WorkoutFirst:
-        parameters.gradeScale = 0.82;
-        parameters.technicality = 0.15;
+        parameters.gradeScale = 0.70;
+        parameters.technicality = 0.10;
         parameters.workMinimumDurationScale = 1.0;
         parameters.workMaximumDurationScale = 1.0;
         parameters.recoveryMinimumDurationScale = 1.0;
         parameters.recoveryMaximumDurationScale = 1.0;
         break;
     case WorkoutGameCoursePreset::Balanced:
+        parameters.gradeScale = 1.00;
         parameters.technicality = 0.55;
         parameters.workMinimumDurationScale = 1.0;
         parameters.workMaximumDurationScale = 1.03;
@@ -70,7 +71,7 @@ WorkoutGameCourseConverter::parametersForPreset(
         parameters.recoveryMaximumDurationScale = 1.03;
         break;
     case WorkoutGameCoursePreset::RideFirst:
-        parameters.gradeScale = 1.18;
+        parameters.gradeScale = 1.30;
         parameters.technicality = 0.95;
         parameters.workMinimumDurationScale = 1.0;
         parameters.workMaximumDurationScale = 1.08;

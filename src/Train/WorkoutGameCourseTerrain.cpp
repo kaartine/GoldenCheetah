@@ -22,9 +22,7 @@ WorkoutGameTerrainKind workoutFirstTerrain(std::size_t index)
 {
     static constexpr WorkoutGameTerrainKind Palette[] = {
         WorkoutGameTerrainKind::Roots,
-        WorkoutGameTerrainKind::Rollers,
-        WorkoutGameTerrainKind::RockGarden,
-        WorkoutGameTerrainKind::LogOver
+        WorkoutGameTerrainKind::Rollers
     };
     return Palette[index % std::size(Palette)];
 }
@@ -61,7 +59,7 @@ WorkoutGameTerrainKind rideFirstTerrain(std::size_t index)
 double technicalShare(WorkoutGameCoursePreset preset)
 {
     switch (preset) {
-    case WorkoutGameCoursePreset::WorkoutFirst: return 0.35;
+    case WorkoutGameCoursePreset::WorkoutFirst: return 0.20;
     case WorkoutGameCoursePreset::Balanced: return 0.60;
     case WorkoutGameCoursePreset::RideFirst: return 0.90;
     }
@@ -167,7 +165,7 @@ WorkoutGameCourseTerrain::selectTechnicalTerrain(
     if (!std::isfinite(totalDistance) || totalDistance <= 0.0) return {};
 
     const std::array<std::size_t, 3> counts = nestedTechnicalCounts(count);
-    const std::array<double, 3> targets {0.35, 0.60, 0.90};
+    const std::array<double, 3> targets {0.20, 0.60, 0.90};
     std::set<TerrainCandidate, TerrainCandidateLess> candidates;
     for (std::size_t index = 0; index < count; ++index) {
         candidates.insert({eligibleDistancesMeters[index],
@@ -245,7 +243,7 @@ void WorkoutGameCourseTerrain::apply(
 
     if (section.feature == WorkoutGameFeature::SprintJump) {
         if (preset == WorkoutGameCoursePreset::WorkoutFirst) {
-            section.terrain = WorkoutGameTerrainKind::LogOver;
+            section.terrain = WorkoutGameTerrainKind::Rollers;
         } else if (preset == WorkoutGameCoursePreset::RideFirst) {
             switch ((std::size_t(section.visualVariant) + seed) % 3u) {
             case 0u: section.terrain = WorkoutGameTerrainKind::LogOver; break;

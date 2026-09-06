@@ -77,13 +77,25 @@ QString terrainSignatureText(const WorkoutGameCourseSourceResult &result)
                 *result.document.course.roadPlan);
     }
     return QObject::tr(
-            "grade %1 | +%2 m | %3 technical / %4 sections | "
+            "grade scale %1x | +%2 m | %3 technical / %4 sections | "
             "%5 curve events")
             .arg(result.document.generationParameters.gradeScale, 0, 'f', 2)
             .arg(std::lround(result.summary.elevationGainMeters))
             .arg(result.summary.technicalFeatureCount)
             .arg(qulonglong(result.document.course.sections.size()))
             .arg(roadMetrics.curveEventCount);
+}
+
+double totalAbsoluteTurnDegrees(const WorkoutGameCourseSourceResult &result)
+{
+    if (!result.document.course.roadPlan) return 0.0;
+    double radians = 0.0;
+    for (const WorkoutGameRoadPiece &piece
+            : result.document.course.roadPlan->pieces) {
+        radians += std::abs(piece.turnRadians);
+    }
+    constexpr double DegreesPerRadian = 57.29577951308232;
+    return radians * DegreesPerRadian;
 }
 
 QString technicalExposureText(
@@ -99,39 +111,34 @@ QString presetDescriptionText(WorkoutGameCoursePreset preset)
     switch (preset) {
     case WorkoutGameCoursePreset::WorkoutFirst:
         return QObject::tr(
-            "Calm training trail keeps attention on the workout with gentler "
-            "terrain and fewer technical sections. All prescribed power "
-            "targets and timings stay unchanged.");
+            "Workout first assigns only roots or rollers to about 2 of 10 "
+            "eligible trail sections. Prescribed power targets and interval "
+            "times stay unchanged.");
     case WorkoutGameCoursePreset::Balanced:
         return QObject::tr(
-            "Varied training trail balances workout focus with more varied "
-            "terrain and technical sections. All prescribed power targets "
-            "and timings stay unchanged.");
+            "Balanced uses roots, rollers, rock gardens, logs, and skinnies on "
+            "about 6 of 10 eligible sections. Prescribed power targets and "
+            "interval times stay unchanged.");
     case WorkoutGameCoursePreset::RideFirst:
         return QObject::tr(
-            "Technical game trail adds the densest features and sharper curves "
-            "while all prescribed power targets and timings stay unchanged.");
+            "Ride first uses technical terrain on about 9 of 10 eligible sections "
+            "and can add rock slabs, tabletops, and gap jumps. Prescribed power "
+            "targets and interval times stay unchanged.");
     }
     return {};
 }
 
-QString presetMetricsText(WorkoutGameCoursePreset preset)
+QString presetMetricsText(const WorkoutGameCourseSourceResult &result)
 {
-    switch (preset) {
-    case WorkoutGameCoursePreset::WorkoutFirst:
-        return QObject::tr(
-            "Generation details: grade 0.82x | curvature 1.00x | "
-            "2-4 technical segments per 10 eligible segments");
-    case WorkoutGameCoursePreset::Balanced:
-        return QObject::tr(
-            "Generation details: grade 1.00x | curvature 1.30x | "
-            "5-7 technical segments per 10 eligible segments");
-    case WorkoutGameCoursePreset::RideFirst:
-        return QObject::tr(
-            "Generation details: grade 1.18x | curvature 2.60x | "
-            "8-10 technical segments per 10 eligible segments");
-    }
-    return {};
+    if (result.status != WorkoutGameCourseSourceStatus::Ready) return {};
+    return QObject::tr(
+            "Preview: grade scale %1x | ascent %2 m | curvature %3 deg total turn | "
+            "technical exposure %4 (%5/10 eligible sections)")
+            .arg(result.document.generationParameters.gradeScale, 0, 'f', 2)
+            .arg(std::lround(result.summary.elevationGainMeters))
+            .arg(std::lround(totalAbsoluteTurnDegrees(result)))
+            .arg(technicalExposureText(result.summary))
+            .arg(result.summary.technicalFeatureDensityPerTenSections, 0, 'f', 1);
 }
 
 QString runtimeExposureText(const WorkoutGameCourseSourceResult &result)
@@ -174,12 +181,14 @@ QString comparisonText(const WorkoutGameCourseSourceResult &result)
     }
     const WorkoutGameCourseConversionSummary &value = result.summary;
     return QObject::tr(
-            "%1 | %2 km | +%3 m | technical %4 | "
-            "key efforts %5/%6 | prescribed recoveries %7/%8")
+            "%1 | %2 km | +%3 m | %4 deg total turn | technical %5 (%6/10) | "
+            "key efforts %7/%8 | prescribed recoveries %9/%10")
             .arg(durationText(value.nominalDurationMs))
             .arg(value.distanceMeters / 1000.0, 0, 'f', 1)
             .arg(std::lround(value.elevationGainMeters))
+            .arg(std::lround(totalAbsoluteTurnDegrees(result)))
             .arg(technicalExposureText(value))
+            .arg(value.technicalFeatureDensityPerTenSections, 0, 'f', 1)
             .arg(value.preservedKeyEffortCount)
             .arg(value.keyEffortCount)
             .arg(value.preservedRecoveryCount)
@@ -213,8 +222,8 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     layout->addWidget(heading);
 
     QLabel *prescriptionGuarantee = new QLabel(tr(
-            "All presets preserve prescribed targets and timing. "
-            "Choose the trail character."), this);
+            "All presets preserve prescribed power targets and interval timing "
+            "unchanged. Only elevation, curvature, and technical terrain change."), this);
     prescriptionGuarantee->setObjectName(
             QStringLiteral("prescriptionGuaranteeLabel"));
     prescriptionGuarantee->setWordWrap(true);
@@ -236,11 +245,11 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
         return button;
     };
     workoutFirstButton = addPreset(
-            tr("Calm training trail"), "workoutFirstPresetButton");
+            tr("Workout first"), "workoutFirstPresetButton");
     balancedButton = addPreset(
-            tr("Varied training trail"), "balancedPresetButton");
+            tr("Balanced"), "balancedPresetButton");
     rideFirstButton = addPreset(
-            tr("Technical game trail"), "rideFirstPresetButton");
+            tr("Ride first"), "rideFirstPresetButton");
     balancedButton->setChecked(true);
     const QString segmentStyle = QStringLiteral(
             "QToolButton { border: 1px solid palette(mid); padding: 6px 12px; }"
@@ -471,9 +480,9 @@ void WorkoutGameCourseConversionDialog::selectPreset(
     workoutFirstButton->setChecked(preset == WorkoutGameCoursePreset::WorkoutFirst);
     balancedButton->setChecked(preset == WorkoutGameCoursePreset::Balanced);
     rideFirstButton->setChecked(preset == WorkoutGameCoursePreset::RideFirst);
-    presetDescriptionLabel->setText(presetDescriptionText(preset));
-    presetMetricsLabel->setText(presetMetricsText(preset));
     previewResult = modePreviews[presetIndex(preset)];
+    presetDescriptionLabel->setText(presetDescriptionText(preset));
+    presetMetricsLabel->setText(presetMetricsText(previewResult));
     preview->setResult(previewResult);
     refreshSummary();
 }

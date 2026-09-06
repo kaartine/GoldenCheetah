@@ -20,6 +20,7 @@
 #include <array>
 #include <cmath>
 #include <set>
+#include <utility>
 
 namespace {
 
@@ -151,8 +152,19 @@ private slots:
             const WorkoutGameWorkout workout =
                     WorkoutGameWorkoutAdapter::normalize(fixture.points);
             QCOMPARE(workout.status, WorkoutGameWorkoutStatus::Ready);
+            QVERIFY2(workout.intervals.size() >= 10u, fixture.name);
+            std::set<std::int64_t> durations;
+            std::set<std::pair<double, double>> targets;
+            for (const WorkoutGameInterval &interval : workout.intervals) {
+                durations.insert(interval.durationMs);
+                targets.insert({interval.startWatts, interval.endWatts});
+            }
+            QVERIFY2(durations.size() >= 3u, fixture.name);
+            QVERIFY2(targets.size() >= 4u, fixture.name);
 
             std::array<WorkoutGameCourseConversionResult, 3> results;
+            const std::array<double, 3> expectedGradeScale {0.70, 1.00, 1.30};
+            const std::array<double, 3> expectedTechnicality {0.10, 0.55, 0.95};
             for (std::size_t mode = 0; mode < results.size(); ++mode) {
                 WorkoutGameCourseConversionRequest request;
                 request.intervals = workout.intervals;
@@ -166,6 +178,10 @@ private slots:
                          context.constData());
                 QCOMPARE(results[mode].course.sections.size(),
                          workout.intervals.size());
+                QCOMPARE(results[mode].generationParameters.gradeScale,
+                         expectedGradeScale[mode]);
+                QCOMPARE(results[mode].generationParameters.technicality,
+                         expectedTechnicality[mode]);
                 for (std::size_t index = 0;
                         index < workout.intervals.size(); ++index) {
                     const WorkoutGameInterval &source = workout.intervals[index];
@@ -187,6 +203,14 @@ private slots:
                      fixture.name);
             QVERIFY2(results[1].summary.technicalTerrainExposurePercent
                             < results[2].summary.technicalTerrainExposurePercent,
+                     fixture.name);
+            QVERIFY2(results[0].summary.technicalTerrainExposurePercent <= 30.0,
+                     fixture.name);
+            QVERIFY2(results[0].summary.elevationGainMeters
+                            < results[1].summary.elevationGainMeters,
+                     fixture.name);
+            QVERIFY2(results[1].summary.elevationGainMeters
+                            < results[2].summary.elevationGainMeters,
                      fixture.name);
             QVERIFY2(results[0].summary.technicalFeatureDensityPerTenSections
                             < results[1].summary.technicalFeatureDensityPerTenSections,
@@ -379,7 +403,7 @@ private slots:
                 }
             }
         }
-        QVERIFY(std::abs(exposure[0] / 1000.0 - 0.35) < 1.0e-12);
+        QVERIFY(std::abs(exposure[0] / 1000.0 - 0.20) < 1.0e-12);
         QVERIFY(exposure[0] < exposure[1]);
         QVERIFY(exposure[1] < exposure[2]);
     }
@@ -586,13 +610,14 @@ private slots:
                     || section.terrain == WorkoutGameTerrainKind::RockGarden
                     || section.terrain == WorkoutGameTerrainKind::LogOver;
             QVERIFY(section.terrain != WorkoutGameTerrainKind::GapJump);
+            if (section.feature == WorkoutGameFeature::SprintJump) {
+                QCOMPARE(section.terrain, WorkoutGameTerrainKind::Rollers);
+            }
         }
         QVERIFY(workoutFirstHasTechnicalPlay);
         const std::set<WorkoutGameTerrainKind> expectedWorkoutFirstTerrain {
             WorkoutGameTerrainKind::Roots,
-            WorkoutGameTerrainKind::Rollers,
-            WorkoutGameTerrainKind::RockGarden,
-            WorkoutGameTerrainKind::LogOver
+            WorkoutGameTerrainKind::Rollers
         };
         std::set<WorkoutGameTerrainKind> actualWorkoutFirstTerrain;
         for (const WorkoutGameDistanceCourseSection &section

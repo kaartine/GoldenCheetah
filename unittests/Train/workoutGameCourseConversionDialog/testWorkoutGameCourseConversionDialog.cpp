@@ -26,6 +26,7 @@
 #include <QToolButton>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <set>
 
@@ -56,6 +57,17 @@ WorkoutGameCourseSourceRequest sampleRequest()
     request.sourceFileName = QStringLiteral("intervals.erg");
     request.ftpWatts = 190.0;
     return request;
+}
+
+double totalAbsoluteTurn(const WorkoutGameCourseSourceResult &result)
+{
+    double radians = 0.0;
+    if (!result.document.course.roadPlan) return radians;
+    for (const WorkoutGameRoadPiece &piece
+            : result.document.course.roadPlan->pieces) {
+        radians += std::abs(piece.turnRadians);
+    }
+    return radians;
 }
 
 template<typename T>
@@ -184,6 +196,44 @@ class TestWorkoutGameCourseConversionDialog : public QObject
     }
 
 private slots:
+    void representativePresetsPreserveWorkoutAndIncreaseTrailCharacter()
+    {
+        WorkoutGameCourseSourceRequest request = sampleRequest();
+        std::array<WorkoutGameCourseSourceResult, 3> results;
+        for (std::size_t index = 0; index < results.size(); ++index) {
+            request.preset = static_cast<WorkoutGameCoursePreset>(index);
+            results[index] = WorkoutGameCourseSourceAdapter::convert(request);
+            QCOMPARE(results[index].status, WorkoutGameCourseSourceStatus::Ready);
+            QVERIFY(results[index].document.sourceIntervals.size() >= 10u);
+            QCOMPARE(results[index].document.course.sections.size(),
+                     results[index].document.sourceIntervals.size());
+            for (std::size_t sectionIndex = 0;
+                    sectionIndex < results[index].document.sourceIntervals.size();
+                    ++sectionIndex) {
+                const WorkoutGameInterval &source =
+                        results[index].document.sourceIntervals[sectionIndex];
+                const WorkoutGameDistanceCourseSection &generated =
+                        results[index].document.course.sections[sectionIndex];
+                QCOMPARE(generated.targetStartWatts, source.startWatts);
+                QCOMPARE(generated.targetEndWatts, source.endWatts);
+                QCOMPARE(generated.nominalDurationMs, source.durationMs);
+                QCOMPARE(generated.minimumDurationMs, source.durationMs);
+                QCOMPARE(generated.maximumDurationMs, source.durationMs);
+            }
+        }
+
+        QVERIFY(results[0].summary.elevationGainMeters
+                < results[1].summary.elevationGainMeters);
+        QVERIFY(results[1].summary.elevationGainMeters
+                < results[2].summary.elevationGainMeters);
+        QVERIFY(results[0].summary.technicalTerrainExposurePercent
+                < results[1].summary.technicalTerrainExposurePercent);
+        QVERIFY(results[1].summary.technicalTerrainExposurePercent
+                < results[2].summary.technicalTerrainExposurePercent);
+        QVERIFY(totalAbsoluteTurn(results[0]) < totalAbsoluteTurn(results[1]));
+        QVERIFY(totalAbsoluteTurn(results[1]) < totalAbsoluteTurn(results[2]));
+    }
+
     void balancedPreviewShowsCompleteSummary()
     {
         QTemporaryDir directory;
@@ -295,10 +345,12 @@ private slots:
 
         QCOMPARE(dialog.selectedPreset(), WorkoutGameCoursePreset::RideFirst);
         QVERIFY(requiredChild<QLabel>(dialog, "presetDescriptionLabel")
-                        ->text().contains("technical game trail",
+                        ->text().contains("ride first",
                                          Qt::CaseInsensitive));
         QVERIFY(requiredChild<QLabel>(dialog, "presetMetricsLabel")
-                        ->text().contains("2.60x", Qt::CaseInsensitive));
+                        ->text().contains("1.30x", Qt::CaseInsensitive));
+        QVERIFY(requiredChild<QLabel>(dialog, "presetMetricsLabel")
+                        ->text().contains("total turn", Qt::CaseInsensitive));
         QCOMPARE(requiredChild<QLabel>(dialog, "runtimeExposureValue")->text(),
                  QStringLiteral("100% of prescribed interval time"));
         QCOMPARE(rideFirst.status, WorkoutGameCourseSourceStatus::Ready);
@@ -314,16 +366,7 @@ private slots:
                 >= balanced.summary.technicalTerrainExposurePercent);
         QVERIFY(rideFirst.summary.technicalFeatureDensityPerTenSections
                 >= balanced.summary.technicalFeatureDensityPerTenSections);
-        const auto accumulatedTurn = [](const WorkoutGameCourseSourceResult &result) {
-            double radians = 0.0;
-            if (!result.document.course.roadPlan) return radians;
-            for (const WorkoutGameRoadPiece &piece
-                    : result.document.course.roadPlan->pieces) {
-                radians += std::abs(piece.turnRadians);
-            }
-            return radians;
-        };
-        QVERIFY(accumulatedTurn(rideFirst) > accumulatedTurn(balanced));
+        QVERIFY(totalAbsoluteTurn(rideFirst) > totalAbsoluteTurn(balanced));
         QCOMPARE(rideFirst.document.course.sections.size(),
                  balanced.document.course.sections.size());
         for (std::size_t index = 0;
@@ -373,9 +416,9 @@ private slots:
             const char *character;
         };
         const ExpectedPreset expected[] = {
-            {"workoutFirstPresetButton", "calm training trail"},
-            {"balancedPresetButton", "varied training trail"},
-            {"rideFirstPresetButton", "technical game trail"}
+            {"workoutFirstPresetButton", "workout first"},
+            {"balancedPresetButton", "balanced"},
+            {"rideFirstPresetButton", "ride first"}
         };
         QStringList descriptions;
         for (const ExpectedPreset &preset : expected) {
@@ -389,14 +432,14 @@ private slots:
                      qPrintable(description));
             QVERIFY2(description.contains("prescribed", Qt::CaseInsensitive),
                      qPrintable(description));
-            QVERIFY(!description.contains("0.82x"));
-            QVERIFY(!description.contains("1.30x"));
-            QVERIFY(!description.contains("8-10/10"));
+            QVERIFY(description.contains("interval times", Qt::CaseInsensitive));
             const QString metrics = requiredChild<QLabel>(
                     dialog, "presetMetricsLabel")->text();
             QVERIFY(metrics.contains("grade", Qt::CaseInsensitive));
             QVERIFY(metrics.contains("curvature", Qt::CaseInsensitive));
             QVERIFY(metrics.contains("technical", Qt::CaseInsensitive));
+            QVERIFY(metrics.contains("ascent", Qt::CaseInsensitive));
+            QVERIFY(metrics.contains("total turn", Qt::CaseInsensitive));
         }
         QCOMPARE(descriptions.size(), 3);
         QVERIFY(descriptions[0] != descriptions[1]);
