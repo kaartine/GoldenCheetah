@@ -968,6 +968,7 @@ private slots:
         QCOMPARE(snapshot.frameCount, std::uint32_t(4));
         QCOMPARE(snapshot.droppedFrameCount, std::uint32_t(0));
         QCOMPARE(snapshot.startToFirstSwapMs, 16.0);
+        QCOMPARE(snapshot.startToFirstVisualChangeMs, 32.0);
         QCOMPARE(snapshot.p99FrameIntervalMs, 16.0);
         QCOMPARE(snapshot.maximumFrameIntervalMs, 16.0);
         QCOMPARE(snapshot.maximumConsecutiveLateFrames, std::uint32_t(0));
@@ -1008,6 +1009,22 @@ private slots:
                  "the renderer sampled a clock epoch before the runner frames");
         QVERIFY(viewModel->distanceMeters() <= 10.4);
         window.setSessionRunning(false);
+    }
+
+    void coldStartVisualStallBeginsAfterTheFirstVisualChange()
+    {
+        WorkoutGameColdStartFrameCapture capture;
+        constexpr std::int64_t StartNs = 1500000000ll;
+        capture.start(StartNs, 7);
+
+        capture.recordFrame(StartNs + 30000000ll, 7);
+        capture.recordFrame(StartNs + 46000000ll, 8);
+
+        const WorkoutGameColdStartFrameSnapshot snapshot =
+                capture.snapshot(StartNs + 60000000ll);
+        QCOMPARE(snapshot.startToFirstSwapMs, 30.0);
+        QCOMPARE(snapshot.startToFirstVisualChangeMs, 46.0);
+        QCOMPARE(snapshot.longestUnchangedVisualIntervalMs, 14.0);
     }
 
     void coldStartCaptureIncludesStartAndConsecutiveLateFrames()
@@ -1703,9 +1720,7 @@ private slots:
                 && window.diagnosticsSnapshot().input
                     .p95FrameIntervalMs > 0.0
                 && window.diagnosticsSnapshot().input
-                    .p99FrameIntervalMs > 0.0
-                && window.diagnosticsSnapshot().input.coldStart
-                    .uniqueVisualFramesPerSecond > 0.0,
+                    .p99FrameIntervalMs > 0.0,
                 5000);
         const WorkoutGameDiagnosticsSnapshot first =
                 window.diagnosticsSnapshot();
@@ -1722,6 +1737,8 @@ private slots:
         QVERIFY(trace.contains(QStringLiteral("p50_frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("p95_frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("p99_frame_ms=")));
+        QVERIFY(trace.contains(QStringLiteral(
+                "cold_start_first_visual_ms=")));
         QVERIFY(trace.contains(QStringLiteral("frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("timing_warm=")));
         QVERIFY(trace.contains(QStringLiteral("geometry_queue=")));
@@ -1804,6 +1821,90 @@ private slots:
         window.setSessionRunning(false);
         QVERIFY(!frameAnimation->property("running").toBool());
         QTRY_VERIFY_WITH_TIMEOUT(!window.diagnosticsSnapshot().ready, 1000);
+    }
+
+    void movingVisualStateTracksDeliveredSourceFrames()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const ScopedEnvironmentVariable restoreDiagnostics(
+                "GC_WORKOUT_GAME_DIAGNOSTICS");
+        qputenv("GC_WORKOUT_GAME_DIAGNOSTICS", "1");
+        const WorkoutGameCourse course = sampleCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.setCourse(course, FtpWatts);
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.rendererPrewarmed(), 5000);
+
+        QElapsedTimer clock;
+        const qint64 presentationEpochMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        QTimer inputTimer;
+        inputTimer.setTimerType(Qt::PreciseTimer);
+        inputTimer.setInterval(20);
+        qint64 previousInputMs = -1;
+        qint64 maximumInputGapMs = 0;
+        int inputFrames = 0;
+        QObject::connect(&inputTimer, &QTimer::timeout, &window, [&]() {
+            const qint64 elapsedMs = clock.elapsed();
+            if (previousInputMs >= 0) {
+                maximumInputGapMs = std::max(
+                        maximumInputGapMs, elapsedMs - previousInputMs);
+            }
+            previousInputMs = elapsedMs;
+            ++inputFrames;
+            WorkoutGameVisualSnapshot frame = frameAt(
+                    road, std::min(18.0, double(elapsedMs) * 0.009));
+            frame.simulation.workoutTimeMs = elapsedMs;
+            frame.presentationTimeMs = presentationEpochMs + elapsedMs;
+            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        });
+
+        WorkoutGameVisualSnapshot initial = frameAt(road, 0.0);
+        initial.simulation.workoutTimeMs = 0;
+        initial.presentationTimeMs = presentationEpochMs;
+        window.setFrame(initial, 220.0, 220.0, 88, 150, 7);
+        clock.start();
+        inputTimer.start();
+        window.setSessionRunning(true);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                window.diagnosticsSnapshot().input.coldStart.frameCount > 60,
+                3000);
+        inputTimer.stop();
+
+        const WorkoutGameColdStartFrameSnapshot capture =
+                window.diagnosticsSnapshot().input.coldStart;
+        QVERIFY(capture.swapFramesPerSecond > 30.0);
+        QVERIFY2(capture.uniqueVisualFramesPerSecond > 20.0,
+                 qPrintable(QStringLiteral(
+                         "only %1 unique visual frames/s at %2 swaps/s")
+                         .arg(capture.uniqueVisualFramesPerSecond)
+                         .arg(capture.swapFramesPerSecond)));
+        const double permittedVisualStallMs = std::max(
+                50.0, double(maximumInputGapMs) + 25.0);
+        QVERIFY2(capture.longestUnchangedVisualIntervalMs
+                    <= permittedVisualStallMs,
+                 qPrintable(QStringLiteral(
+                         "visual state stalled for %1 ms; %2 unique/s, "
+                         "%3 swaps/s, %4 source frames, max source gap %5 ms, "
+                         "permitted %6 ms")
+                         .arg(capture.longestUnchangedVisualIntervalMs)
+                         .arg(capture.uniqueVisualFramesPerSecond)
+                         .arg(capture.swapFramesPerSecond)
+                         .arg(inputFrames)
+                         .arg(maximumInputGapMs)
+                         .arg(permittedVisualStallMs)));
+        window.setSessionRunning(false);
     }
 
     void targetGpuProtectsPresentationAndTrainingServiceBudgets()

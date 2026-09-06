@@ -410,7 +410,8 @@ private slots:
                 capture.snapshot(StartNs + 32000000ll);
         QCOMPARE(snapshot.frameCount, std::uint32_t(2));
         QCOMPARE(snapshot.uniqueVisualFramesPerSecond, 31.25);
-        QCOMPARE(snapshot.longestUnchangedVisualIntervalMs, 32.0);
+        QCOMPARE(snapshot.startToFirstVisualChangeMs, 32.0);
+        QCOMPARE(snapshot.longestUnchangedVisualIntervalMs, 0.0);
     }
 
     void diagnosticsExcludeExplicitRendererWarmupFromFrameStalls()

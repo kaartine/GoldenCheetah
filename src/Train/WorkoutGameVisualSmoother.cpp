@@ -105,7 +105,7 @@ void WorkoutGameVisualSmoother::setTarget(
         previousPresentationTimeMs = targetPresentationTimeMs;
         targetPresentationTimeMs = presentationTimeMs;
         sourceAdvancing = target.simulation.workoutTimeMs
-                >= previous.simulation.workoutTimeMs;
+                > previous.simulation.workoutTimeMs;
         fixedStepHistory.push_back(snapshot);
         while (fixedStepHistory.size() > 8) {
             fixedStepHistory.pop_front();
@@ -200,7 +200,51 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
         if (upperIndex == 0) {
             result = fixedStepHistory.front();
         } else if (upperIndex >= fixedStepHistory.size()) {
-            result = fixedStepHistory.back();
+            const WorkoutGameVisualSnapshot &latest =
+                    fixedStepHistory.back();
+            const std::int64_t predictionMs = std::clamp<std::int64_t>(
+                    renderTimeMs - latest.presentationTimeMs,
+                    0, FixedStepMaximumPredictionMs);
+            const double speedMetersPerSecond = std::max(
+                    latest.world.speedMetersPerSecond,
+                    latest.simulation.speedKph / 3.6);
+            const bool movingForward = sourceAdvancing
+                    && latest.simulation.ready
+                    && !latest.simulation.finished
+                    && latest.world.ready
+                    && speedMetersPerSecond > 0.0;
+            if (predictionMs <= 0 || !movingForward
+                    || fixedStepHistory.size() < 2) {
+                result = latest;
+            } else {
+                const WorkoutGameVisualSnapshot &from =
+                        fixedStepHistory[fixedStepHistory.size() - 2];
+                const std::int64_t intervalMs = latest.presentationTimeMs
+                        - from.presentationTimeMs;
+                const double amount = intervalMs > 0
+                        ? 1.0 + double(predictionMs) / double(intervalMs)
+                        : 1.0;
+                result = interpolate(from, latest, amount);
+                result.simulation.courseProgress = std::clamp(
+                        result.simulation.courseProgress, 0.0, 1.0);
+                result.simulation.sectionProgress = std::clamp(
+                        result.simulation.sectionProgress, 0.0, 1.0);
+                result.simulation.adherence = std::clamp(
+                        result.simulation.adherence, 0.0, 1.0);
+                result.simulation.challengeReadiness = std::clamp(
+                        result.simulation.challengeReadiness, 0.0, 1.0);
+                result.world.speedMetersPerSecond = std::max(
+                        0.0, result.world.speedMetersPerSecond);
+                result.feature.readiness = std::clamp(
+                        result.feature.readiness, 0.0, 1.0);
+                for (WorkoutGameCompetitorSnapshot &competitor :
+                     result.competition.competitors) {
+                    competitor.courseProgress = std::clamp(
+                            competitor.courseProgress, 0.0, 1.0);
+                }
+            }
+            result.presentationTimeMs = latest.presentationTimeMs
+                    + predictionMs;
         } else {
             const WorkoutGameVisualSnapshot &from =
                     fixedStepHistory[upperIndex - 1];

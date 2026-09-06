@@ -24,6 +24,7 @@ struct WorkoutGameColdStartFrameSnapshot
     double swapFramesPerSecond = 0.0;
     double uniqueVisualFramesPerSecond = 0.0;
     double startToFirstSwapMs = 0.0;
+    double startToFirstVisualChangeMs = 0.0;
     double p99FrameIntervalMs = 0.0;
     double maximumFrameIntervalMs = 0.0;
     std::uint32_t maximumConsecutiveLateFrames = 0;

@@ -166,6 +166,15 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
         // state has actually reached the render thread.
         visualRevision.synchronize();
     }, Qt::DirectConnection);
+    connect(this, &QQuickWindow::afterAnimating, this, [this]() {
+        if (!sessionRunning || !hasFrame) return;
+        const auto workStart = std::chrono::steady_clock::now();
+        presentFrame();
+        const double workMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - workStart).count();
+        pendingPresentationWorkMs = std::max(
+                pendingPresentationWorkMs, workMs);
+    });
     connect(this, &QQuickWindow::frameSwapped, this, [this]() {
         const std::int64_t presentationTimeNs =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -326,6 +335,7 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
         frameNumber = 0;
         lastTracePublishMs = -1;
         lastFpsPublishMs = -1;
+        pendingPresentationWorkMs = 0.0;
         coldStartCompletePublished = false;
     }
     if (running) {
@@ -372,12 +382,9 @@ void WorkoutGame3DWindow::handlePresentedFrame(
         lastFpsPublishMs = presentationTimeMs;
         viewModel->setFps(frameRateCounter.framesPerSecond());
     }
-    QElapsedTimer presentationWork;
-    presentationWork.start();
-    presentFrame();
-    updateDiagnostics(
-            presentationTimeNs,
-            double(presentationWork.nsecsElapsed()) / 1000000.0);
+    const double presentationWorkMs = pendingPresentationWorkMs;
+    pendingPresentationWorkMs = 0.0;
+    updateDiagnostics(presentationTimeNs, presentationWorkMs);
 }
 
 void WorkoutGame3DWindow::updateDiagnostics(
@@ -528,6 +535,8 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
                 << input.coldStart.uniqueVisualFramesPerSecond
            << " cold_start_first_swap_ms="
                 << input.coldStart.startToFirstSwapMs
+           << " cold_start_first_visual_ms="
+                << input.coldStart.startToFirstVisualChangeMs
            << " cold_p99_frame_ms="
                 << input.coldStart.p99FrameIntervalMs
            << " cold_max_frame_ms="

@@ -641,6 +641,9 @@ def analyze_cold_start(
         "cold_start_first_swap_ms": latest_value(
             "cold_start_first_swap_ms"
         ),
+        "cold_start_first_visual_ms": latest_value(
+            "cold_start_first_visual_ms"
+        ),
         "cold_p99_frame_ms": latest_value("cold_p99_frame_ms"),
         "cold_max_frame_ms": maximum("cold_max_frame_ms"),
         "cold_consecutive_late": int(maximum("cold_consecutive_late")),
@@ -670,6 +673,8 @@ def validate_cold_start(summary: dict[str, float | int]) -> list[str]:
         failures.append("cold-start contains consecutive late frames")
     if summary["cold_start_first_swap_ms"] > 50.0:
         failures.append("cold-start first swap took more than 50 ms")
+    if summary["cold_start_first_visual_ms"] > 100.0:
+        failures.append("cold-start first visual change took more than 100 ms")
     if summary["cold_visual_stall_ms"] > 50.0:
         failures.append("cold-start visual revision stalled for more than 50 ms")
     if summary["cold_swap_fps"] <= 0.0:

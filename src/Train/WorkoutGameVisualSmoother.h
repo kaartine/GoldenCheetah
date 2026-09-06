@@ -44,6 +44,9 @@ public:
     // Absorb one GUI-drain/display phase mismatch while retaining two complete
     // fixed-step snapshots for interpolation.
     static constexpr std::int64_t FixedStepPresentationDelayMs = 40;
+    // Presentation-only prediction bridges brief GUI drain jitter. It never
+    // advances the runner, trainer control, or recorded workout state.
+    static constexpr std::int64_t FixedStepMaximumPredictionMs = 60;
 
     void reset();
     void setTarget(

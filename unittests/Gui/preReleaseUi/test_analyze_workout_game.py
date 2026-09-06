@@ -807,6 +807,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             "cold_swap_fps": 60.1,
             "cold_visual_fps": 59.8,
             "cold_start_first_swap_ms": 16.4,
+            "cold_start_first_visual_ms": 56.7,
             "cold_p99_frame_ms": 18.2,
             "cold_max_frame_ms": 24.8,
             "cold_consecutive_late": 0,
@@ -834,6 +835,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             "cold_swap_fps": 35.0,
             "cold_visual_fps": 8.0,
             "cold_start_first_swap_ms": 75.0,
+            "cold_start_first_visual_ms": 150.0,
             "cold_p99_frame_ms": 28.0,
             "cold_max_frame_ms": 70.0,
             "cold_consecutive_late": 2,
@@ -847,7 +849,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
         for expected in (
             "dropped", "p99", "maximum", "consecutive", "first swap",
-            "visual", "queue", "backward", "skipped",
+            "first visual", "visual", "queue", "backward", "skipped",
         ):
             self.assertTrue(
                 any(expected in failure for failure in failures), expected

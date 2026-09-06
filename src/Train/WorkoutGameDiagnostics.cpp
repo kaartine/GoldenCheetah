@@ -111,6 +111,8 @@ WorkoutGameColdStartFrameCapture::snapshot(
     std::int64_t previousTime = start;
     std::int64_t unchangedSince = start;
     std::uint64_t revision = initialRevision.load(std::memory_order_relaxed);
+    bool hasPresentedBaseline = false;
+    bool hasVisualChange = false;
     std::uint32_t visualChanges = 0;
     std::uint32_t consecutiveLate = 0;
 
@@ -133,10 +135,20 @@ WorkoutGameColdStartFrameCapture::snapshot(
         }
         const std::uint64_t sampleRevision =
                 samples[index].visualRevision.load(std::memory_order_relaxed);
-        if (sampleRevision != revision) {
-            result.longestUnchangedVisualIntervalMs = std::max(
-                    result.longestUnchangedVisualIntervalMs,
-                    milliseconds(timestamp - unchangedSince));
+        if (!hasPresentedBaseline) {
+            unchangedSince = timestamp;
+            revision = sampleRevision;
+            hasPresentedBaseline = true;
+        } else if (sampleRevision != revision) {
+            if (hasVisualChange) {
+                result.longestUnchangedVisualIntervalMs = std::max(
+                        result.longestUnchangedVisualIntervalMs,
+                        milliseconds(timestamp - unchangedSince));
+            } else {
+                result.startToFirstVisualChangeMs =
+                        milliseconds(timestamp - start);
+                hasVisualChange = true;
+            }
             unchangedSince = timestamp;
             revision = sampleRevision;
             ++visualChanges;
@@ -145,9 +157,11 @@ WorkoutGameColdStartFrameCapture::snapshot(
         ++result.frameCount;
     }
 
-    result.longestUnchangedVisualIntervalMs = std::max(
-            result.longestUnchangedVisualIntervalMs,
-            milliseconds(end - unchangedSince));
+    if (hasVisualChange) {
+        result.longestUnchangedVisualIntervalMs = std::max(
+                result.longestUnchangedVisualIntervalMs,
+                milliseconds(end - unchangedSince));
+    }
     if (result.frameCount > 0) {
         result.startToFirstSwapMs = milliseconds(intervals[0]);
     }

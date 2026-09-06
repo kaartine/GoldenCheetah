@@ -107,6 +107,7 @@ private:
     std::uint64_t frameNumber = 0;
     std::int64_t lastTracePublishMs = -1;
     std::int64_t lastFpsPublishMs = -1;
+    double pendingPresentationWorkMs = 0.0;
     bool coldStartCompletePublished = false;
     bool hasFrame = false;
     bool hasPresentedVisualState = false;
