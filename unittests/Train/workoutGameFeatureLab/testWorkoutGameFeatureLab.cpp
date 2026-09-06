@@ -11,6 +11,7 @@
 #include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameGapJumpGeometry.h"
 #include "Train/WorkoutGameRoadCourse.h"
+#include "Train/WorkoutGameRoadQuality.h"
 #include "Train/WorkoutGameSkinnyGeometry.h"
 
 #include <QTest>
@@ -184,13 +185,17 @@ private slots:
             QVERIFY(!piece.challenge.enabled);
             const auto profile = WorkoutGameBermGeometry::profile(
                     piece.difficulty);
+            constexpr double Pi = 3.14159265358979323846;
+            const double maximumTurnRadians =
+                    WorkoutGameRoadQuality::MaximumTurnDegrees * Pi / 180.0;
             QCOMPARE(std::abs(piece.turnRadians),
-                     profile.turnMagnitudeRadians);
+                     std::min(profile.turnMagnitudeRadians,
+                              maximumTurnRadians));
             QVERIFY(piece.reliefScale >= 1.35);
             if (index > 0) {
                 QVERIFY(piece.turnRadians * berms[index - 1]->turnRadians < 0.0);
                 QVERIFY(std::abs(piece.turnRadians)
-                        > std::abs(berms[index - 1]->turnRadians));
+                        >= std::abs(berms[index - 1]->turnRadians));
             }
         }
 
