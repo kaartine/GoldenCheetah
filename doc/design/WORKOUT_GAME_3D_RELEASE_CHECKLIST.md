@@ -1164,7 +1164,7 @@ newest 100 runs succeeded. This long-running baseline failure is not evidence
 of a regression in an individual Workout Game change, but it remains visible
 CI debt rather than being treated as a passing gate.
 
-- [ ] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
+- [x] `REL-01` Run unit, integration, visual, UI, recording and Bluetooth tests.
 - [x] `REL-01A` Preserve every source target, interval time, key effort,
   prescribed recovery and calculated load in all three Create MTB Course
   modes.
@@ -1260,6 +1260,19 @@ ASan/UBSan, with 34 expected opt-in renderer skips. This split-run evidence
 covers every project at that revision; the current single reconciled run is
 still required before `REL-01` closes. Real trainer A/B acceptance remains
 separately open under `REL-04`.
+
+**Final `REL-01` evidence (`393a506`, 2026-09-06):** one clean controlled
+Ubuntu Jammy/Qt 6.8.3 X11 run reconciled all 174 eligible projects from the
+protected required-test inventory and exited successfully. It executed 5,927
+QtTest cases across 170 suites with no failures, followed by all Python,
+packaging-policy, credential, Bluetooth/ANT and USBXpress safety projects.
+The run included the current Quick 3D camera, geometry, terrain, simulation,
+feature, HUD, course-conversion, recording and durable-save suites. Renderer
+captures and target-GPU/real-trainer tests remained explicitly skipped unless
+their documented opt-in environment and hardware were present; their physical
+acceptance stays open under `VS-04`, `PHY-03`, `FTR-12C` and `REL-04`. The
+immutable full-run log has SHA-256
+`999241647f1a188a4aaa0262404bdc6290307f9cb9ba05ee16ec0057385e9e7b`.
 
 **Current `REL-01` package evidence (`c1373ea`, 2026-09-05):** the exact
 reproducible AppImage
