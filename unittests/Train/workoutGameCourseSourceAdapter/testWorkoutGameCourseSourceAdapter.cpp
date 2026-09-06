@@ -377,7 +377,9 @@ private slots:
         QCOMPARE(result.status, WorkoutGameCourseSourceStatus::Ready);
         QCOMPARE(result.document.title, request.title);
         QCOMPARE(result.document.preset, WorkoutGameCoursePreset::RideFirst);
-        QCOMPARE(result.document.generationParameters.gradeScale, 1.18);
+        QCOMPARE(result.document.generationParameters.gradeScale,
+                 WorkoutGameCourseConverter::parametersForPreset(
+                         request.preset).gradeScale);
     }
 
     void invalidInputsFailClosed_data()

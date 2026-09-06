@@ -138,6 +138,7 @@ all qt Train/workoutGameCourseSourceAdapter
 all qt Train/workoutGameDistanceCourse
 all qt Train/workoutGameDistancePlayback
 all qt Train/workoutGameEngine
+all qt Train/workoutGame3DCameraContinuity
 all qt Train/workoutGame3DChunkBuilder
 all qt Train/workoutGame3DFeatureAsset
 all qt Train/workoutGame3DGeometry

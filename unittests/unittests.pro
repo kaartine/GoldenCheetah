@@ -144,6 +144,7 @@ exists(unittests.pri) {
 			   Train/workoutGameDistanceCourse \
 			   Train/workoutGameDistancePlayback \
 			   Train/workoutGameEngine \
+			   Train/workoutGame3DCameraContinuity \
 			   Train/workoutGame3DChunkBuilder \
 			   Train/workoutGame3DFeatureAsset \
 			   Train/workoutGame3DGeometry \
