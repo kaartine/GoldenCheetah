@@ -122,6 +122,21 @@ class TestTrainRuntime : public QObject
     Q_OBJECT
 
 private slots:
+    void activeTrainingAcceptsOnlyTheAlreadyConfiguredWorkout()
+    {
+        QVERIFY(TrainSidebarRuntime::workoutSelectionAllowed(
+                false, QStringLiteral("current.erg"),
+                QStringLiteral("next.erg")));
+        QVERIFY(TrainSidebarRuntime::workoutSelectionAllowed(
+                true, QStringLiteral("current.erg"),
+                QStringLiteral("current.erg")));
+        QVERIFY(!TrainSidebarRuntime::workoutSelectionAllowed(
+                true, QStringLiteral("current.erg"),
+                QStringLiteral("next.erg")));
+        QVERIFY(!TrainSidebarRuntime::workoutSelectionAllowed(
+                true, QString(), QStringLiteral("next.erg")));
+    }
+
     void contextPositionNeverCrossesABoundaryEarlyButPublishesExactFinish()
     {
         QCOMPARE(TrainSidebarRuntime::contextWorkoutPosition(99.75, false),

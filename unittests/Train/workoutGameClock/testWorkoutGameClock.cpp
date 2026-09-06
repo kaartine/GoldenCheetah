@@ -71,6 +71,35 @@ private slots:
         QVERIFY(clock.positionAt(1600) >= clock.positionAt(1520));
     }
 
+    void quantizedLaggingSourceCannotResetOrStallRunningTime()
+    {
+        WorkoutGameClock clock(20, 4);
+        clock.reset(0, 0, true, 1.0);
+        const WorkoutGameClockAdvance initial = clock.advance(1200);
+        QVERIFY(!initial.ticks.empty());
+        const std::int64_t beforeLaggingAnchor =
+                initial.ticks.back().workoutTimeMs;
+
+        // Distance playback may still report zero until its first whole
+        // distance sample even though the rider is already moving.
+        clock.setAnchor(0, 1200, true, 1.0);
+        QVERIFY(clock.positionAt(1200) >= beforeLaggingAnchor);
+        const WorkoutGameClockAdvance afterLaggingAnchor =
+                clock.advance(1400);
+        QVERIFY(!afterLaggingAnchor.ticks.empty());
+        QVERIFY(afterLaggingAnchor.ticks.back().workoutTimeMs
+                > beforeLaggingAnchor);
+
+        const std::int64_t beforeSlowCorrection =
+                afterLaggingAnchor.ticks.back().workoutTimeMs;
+        clock.setAnchor(900, 2000, true, 0.2);
+        const WorkoutGameClockAdvance afterSlowCorrection =
+                clock.advance(2200);
+        QVERIFY(!afterSlowCorrection.ticks.empty());
+        QVERIFY(afterSlowCorrection.ticks.back().workoutTimeMs
+                > beforeSlowCorrection);
+    }
+
     void distanceDrivenRateFollowsObservedAnchorsWithoutPositionJump()
     {
         WorkoutGameClock clock(20, 4);

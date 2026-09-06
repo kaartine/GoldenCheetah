@@ -13,6 +13,25 @@ void WorkoutGameSessionState::workoutSelected()
 {
     sessionActive = false;
     stoppedFrameHeld = false;
+    deferredWorkoutSelection = false;
+    pendingPositionDiscontinuity = false;
+}
+
+void WorkoutGameSessionState::workoutSelectionDeferred()
+{
+    deferredWorkoutSelection = true;
+}
+
+void WorkoutGameSessionState::positionDiscontinuityRequested()
+{
+    pendingPositionDiscontinuity = true;
+}
+
+bool WorkoutGameSessionState::consumePositionDiscontinuity()
+{
+    const bool pending = pendingPositionDiscontinuity;
+    pendingPositionDiscontinuity = false;
+    return pending;
 }
 
 void WorkoutGameSessionState::started()
@@ -25,6 +44,16 @@ void WorkoutGameSessionState::stopped()
 {
     sessionActive = false;
     stoppedFrameHeld = true;
+}
+
+bool WorkoutGameSessionState::acceptsWorkoutSelection() const
+{
+    return !sessionActive;
+}
+
+bool WorkoutGameSessionState::hasDeferredWorkoutSelection() const
+{
+    return deferredWorkoutSelection;
 }
 
 bool WorkoutGameSessionState::acceptsPositionUpdate(

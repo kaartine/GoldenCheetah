@@ -20,6 +20,14 @@
 namespace TrainSidebarRuntime
 {
 
+inline bool workoutSelectionAllowed(
+        bool trainingRunning,
+        const QString &configuredWorkout,
+        const QString &requestedWorkout)
+{
+    return !trainingRunning || configuredWorkout == requestedWorkout;
+}
+
 inline long contextWorkoutPosition(double positionMeters, bool finished)
 {
     return long(finished

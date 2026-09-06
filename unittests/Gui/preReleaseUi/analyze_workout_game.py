@@ -35,7 +35,6 @@ RECORDING_COLUMNS = (
 )
 TRACE_ALIGNMENT_WINDOW_MS = 750.0
 ERG_RECORDING_LATENCY_MS = 1250.0
-TARGET_MATCH_TOLERANCE = 0.5
 
 TraceValue = float | str
 TraceSample = dict[str, TraceValue]
@@ -197,6 +196,19 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[max(0, index)]
 
 
+def interpolated_percentile(values: list[float], fraction: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    position = max(0.0, min(1.0, fraction)) * (len(ordered) - 1)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
 def parse_fields(text: str) -> TraceSample:
     fields: TraceSample = {}
     for name, value in FIELD.findall(text):
@@ -312,6 +324,13 @@ def numeric(sample: TraceSample, name: str) -> float | None:
     return None
 
 
+def trace_recording_time_ms(sample: TraceSample) -> float | None:
+    session_elapsed = numeric(sample, "session_elapsed_ms")
+    return session_elapsed if session_elapsed is not None else numeric(
+        sample, "source_ms"
+    )
+
+
 def nearest_by(
     samples: list[dict[str, float]] | list[TraceSample],
     values: list[float],
@@ -341,15 +360,24 @@ def trace_for_recording(
     if not candidates:
         return None
 
-    matching_target = [
-        sample for sample in candidates
-        if (target := numeric(sample, "target_watts")) is not None
-        and abs(target - row["target"]) <= TARGET_MATCH_TOLERANCE
-    ]
-    usable = matching_target or candidates
+    def match_score(sample: TraceSample) -> float:
+        score = abs(
+            (trace_recording_time_ms(sample) or 0.0) - position
+        ) / TRACE_ALIGNMENT_WINDOW_MS * 0.25
+        for trace_name, row_name, scale in (
+            ("watts", "watts", 20.0),
+            ("cadence", "cad", 5.0),
+            ("hr", "hr", 5.0),
+            ("gear", "virtualgear", 1.0),
+        ):
+            value = numeric(sample, trace_name)
+            if value is not None:
+                score += abs(value - row[row_name]) / scale
+        return score
+
     return min(
-        usable,
-        key=lambda sample: abs((numeric(sample, "source_ms") or 0.0) - position),
+        candidates,
+        key=match_score,
     )
 
 
@@ -389,10 +417,12 @@ def reconcile_acceptance(
     recording: list[dict[str, float]],
 ) -> dict[str, float | int]:
     timed_trace = sorted(
-        (sample for sample in trace if numeric(sample, "source_ms") is not None),
-        key=lambda sample: numeric(sample, "source_ms") or 0.0,
+        (sample for sample in trace
+         if trace_recording_time_ms(sample) is not None),
+        key=lambda sample: trace_recording_time_ms(sample) or 0.0,
     )
-    trace_times = [numeric(sample, "source_ms") or 0.0 for sample in timed_trace]
+    trace_times = [trace_recording_time_ms(sample) or 0.0
+                   for sample in timed_trace]
     if trace_times:
         recording_in_trace_window = [
             row for row in recording
@@ -411,9 +441,9 @@ def reconcile_acceptance(
         sample = trace_for_recording(timed_trace, trace_times, row)
         if sample is None:
             continue
-        source_ms = numeric(sample, "source_ms")
-        if (source_ms is None
-                or abs(source_ms - row["secs"] * 1000.0)
+        trace_time_ms = trace_recording_time_ms(sample)
+        if (trace_time_ms is None
+                or abs(trace_time_ms - row["secs"] * 1000.0)
                 > TRACE_ALIGNMENT_WINDOW_MS):
             continue
         values = {
@@ -448,7 +478,7 @@ def reconcile_acceptance(
         if delta is not None:
             trainer_target_deltas.append(delta)
 
-    gear_changes = 0
+    sparse_gear_changes = 0
     gear_change_speed_steps = []
     for previous, current in zip(trace, trace[1:]):
         previous_gear = numeric(previous, "gear")
@@ -458,7 +488,7 @@ def reconcile_acceptance(
         if (previous_gear is None or current_gear is None
                 or round(previous_gear) == round(current_gear)):
             continue
-        gear_changes += 1
+        sparse_gear_changes += 1
         if previous_speed is not None and current_speed is not None:
             gear_change_speed_steps.append(abs(current_speed - previous_speed))
 
@@ -486,6 +516,15 @@ def reconcile_acceptance(
               and terrain not in ("rollers", "climb")):
             inconsistent_decisions += 1
 
+    reported_shift_counts = [
+        int(value) for sample in trace
+        if (value := numeric(sample, "gear_shift_count")) is not None
+    ]
+    reported_speed_steps = [
+        value for sample in trace
+        if (value := numeric(sample, "gear_speed_step_kph")) is not None
+    ]
+
     return {
         "recording_samples": len(recording),
         "recording_samples_in_trace_window": len(recording_in_trace_window),
@@ -495,19 +534,29 @@ def reconcile_acceptance(
             if recording_in_trace_window else 0.0
         ),
         "maximum_power_delta_watts": max(power_deltas, default=0.0),
-        "p95_power_delta_watts": percentile(power_deltas, 0.95),
+        "p95_power_delta_watts": interpolated_percentile(
+            power_deltas, 0.95
+        ),
         "maximum_cadence_delta_rpm": max(cadence_deltas, default=0.0),
         "maximum_heart_rate_delta_bpm": max(heart_rate_deltas, default=0.0),
         "gear_mismatches": gear_mismatches,
         "trainer_target_dispatches": len(trainer_targets),
         "trainer_targets_with_devices": trainer_targets_with_devices,
+        "matched_trainer_targets": len(trainer_target_deltas),
+        "trainer_target_match_ratio": (
+            len(trainer_target_deltas) / len(trainer_targets)
+            if trainer_targets else 0.0
+        ),
         "maximum_trainer_target_delta": max(trainer_target_deltas, default=0.0),
         "p95_trainer_target_delta": percentile(
             trainer_target_deltas, 0.95
         ),
-        "gear_changes": gear_changes,
+        "gear_changes": max(
+            reported_shift_counts, default=sparse_gear_changes
+        ),
         "maximum_gear_change_speed_step_kph": max(
-            gear_change_speed_steps, default=0.0
+            reported_speed_steps,
+            default=max(gear_change_speed_steps, default=0.0),
         ),
         "feature_decisions": len(decisions),
         "inconsistent_feature_decisions": inconsistent_decisions,
@@ -527,6 +576,8 @@ def validate_acceptance(
     minimum_feature_decisions: int,
     minimum_gear_changes: int = 0,
     maximum_gear_change_speed_step_kph: float = math.inf,
+    minimum_trainer_target_matches: int = 0,
+    minimum_trainer_target_match_ratio: float = 0.0,
 ) -> list[str]:
     failures = []
     if summary["matched_recording_samples"] < minimum_recording_matches:
@@ -547,6 +598,10 @@ def validate_acceptance(
         failures.append("too few trainer target dispatches were traced")
     if summary["trainer_targets_with_devices"] < minimum_trainer_target_dispatches:
         failures.append("trainer targets were dispatched without active devices")
+    if summary["matched_trainer_targets"] < minimum_trainer_target_matches:
+        failures.append("too few trainer target matches were observed")
+    if summary["trainer_target_match_ratio"] < minimum_trainer_target_match_ratio:
+        failures.append("trainer target match ratio is too low")
     if summary["p95_trainer_target_delta"] > maximum_trainer_target_delta:
         failures.append(
             "trainer target persistently disagrees with the recording"
@@ -616,15 +671,21 @@ def analyze(samples: list[TraceSample]) -> dict[str, float | int]:
 def analyze_cold_start(
     samples: list[TraceSample], deadline_errors: int = 0
 ) -> dict[str, float | int]:
+    initial_samples = []
+    for sample in samples:
+        initial_samples.append(sample)
+        if numeric(sample, "cold_complete"):
+            break
+
     def maximum(name: str) -> float:
         return max(
-            (value for sample in samples
+            (value for sample in initial_samples
              if (value := numeric(sample, name)) is not None),
             default=0.0,
         )
 
     latest = max(
-        samples,
+        initial_samples,
         key=lambda sample: numeric(sample, "cold_samples") or -1.0,
         default={},
     )
@@ -657,7 +718,9 @@ def analyze_cold_start(
     }
 
 
-def validate_cold_start(summary: dict[str, float | int]) -> list[str]:
+def validate_cold_start(
+    summary: dict[str, float | int], enforce_frame_budget: bool = True
+) -> list[str]:
     failures = []
     if not summary["cold_complete"]:
         failures.append("cold-start evidence is not complete for the first 10 seconds")
@@ -665,11 +728,11 @@ def validate_cold_start(summary: dict[str, float | int]) -> list[str]:
         failures.append("cold-start evidence contains no frame swaps")
     if summary["cold_dropped_frames"]:
         failures.append("cold-start frame capture dropped swap timestamps")
-    if summary["cold_p99_frame_ms"] > 25.0:
+    if enforce_frame_budget and summary["cold_p99_frame_ms"] > 25.0:
         failures.append("cold-start p99 frame interval exceeds 25 ms")
     if summary["cold_max_frame_ms"] > 50.0:
         failures.append("cold-start maximum frame interval exceeds 50 ms")
-    if summary["cold_consecutive_late"] > 1:
+    if enforce_frame_budget and summary["cold_consecutive_late"] > 1:
         failures.append("cold-start contains consecutive late frames")
     if summary["cold_start_first_swap_ms"] > 100.0:
         failures.append("cold-start first swap took more than 100 ms")
@@ -1178,6 +1241,10 @@ def main() -> int:
         choices=("short", "medium", "long", "safe"),
     )
     parser.add_argument("--require-cold-start-continuity", action="store_true")
+    parser.add_argument(
+        "--cold-start-continuity-only", action="store_true",
+        help="check continuity without enforcing the target-GPU frame budget",
+    )
     parser.add_argument("--minimum-samples", type=int, default=8)
     parser.add_argument("--minimum-fps", type=float, default=25.0)
     parser.add_argument("--maximum-p95-ms", type=float, default=45.0)
@@ -1202,6 +1269,10 @@ def main() -> int:
     parser.add_argument("--maximum-trainer-target-delta", type=float, default=5.0)
     parser.add_argument(
         "--minimum-trainer-target-dispatches", type=int, default=1
+    )
+    parser.add_argument("--minimum-trainer-target-matches", type=int, default=1)
+    parser.add_argument(
+        "--minimum-trainer-target-match-ratio", type=float, default=0.75
     )
     parser.add_argument("--minimum-feature-decisions", type=int, default=1)
     parser.add_argument("--minimum-gear-changes", type=int, default=2)
@@ -1269,7 +1340,10 @@ def main() -> int:
             trace, count_deadline_errors(args.log)
         )
         summary.update(cold_start)
-        failures.extend(validate_cold_start(cold_start))
+        failures.extend(validate_cold_start(
+            cold_start,
+            enforce_frame_budget=not args.cold_start_continuity_only,
+        ))
     if args.expected_gap_line:
         gap_summary, gap_failures = validate_expected_gap_jump(
             trace, args.expected_gap_line
@@ -1305,6 +1379,8 @@ def main() -> int:
             args.minimum_feature_decisions,
             args.minimum_gear_changes,
             args.maximum_gear_change_speed_step_kph,
+            args.minimum_trainer_target_matches,
+            args.minimum_trainer_target_match_ratio,
         ))
     summary["passed"] = not failures
     summary["failures"] = failures

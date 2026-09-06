@@ -47,6 +47,7 @@
 #include <QMutexLocker>
 #include <QSoundEffect>
 #include <QFile>
+#include <QSignalBlocker>
 
 #include <cmath>
 #include <cstdint>
@@ -1087,6 +1088,24 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
     QString workoutTitle = workoutModel->data(workoutModel->index(target.row(), TdbWorkoutModelIdx::displayname), Qt::DisplayRole).toString();
     QString workoutType = workoutModel->data(workoutModel->index(target.row(), TdbWorkoutModelIdx::type), Qt::DisplayRole).toString();
 
+    if (!TrainSidebarRuntime::workoutSelectionAllowed(
+            context->isRunning(), workoutfile, filename)) {
+        QSignalBlocker blockSelection(workoutTree->selectionModel());
+        workoutTree->clearSelection();
+        for (int row = 0; row < workoutModel->rowCount(); ++row) {
+            const QModelIndex source = workoutModel->index(
+                    row, TdbWorkoutModelIdx::filepath);
+            if (workoutModel->data(source, Qt::DisplayRole).toString()
+                    != workoutfile) {
+                continue;
+            }
+            workoutTree->setCurrentIndex(sortModel->mapFromSource(
+                    workoutModel->index(row, 0)));
+            break;
+        }
+        return;
+    }
+
     // wipe away the current selected workout once we've told everyone
     // since they might be editing it and want to save changes first (!!)
     ErgFile *prior = const_cast<ErgFile*>(ergFileQueryAdapter.getErgFile());
@@ -1333,6 +1352,7 @@ void
 TrainSidebar::seekWorkoutDistance(double distanceKilometers)
 {
     rawWorkoutDistance = std::max(0.0, distanceKilometers);
+    context->notifyWorkoutPositionDiscontinuity();
     if (!workoutGameCourseRuntime.enabled()) {
         displayWorkoutDistance = rawWorkoutDistance;
         return;
@@ -3600,6 +3620,7 @@ void TrainSidebar::FFwd()
         // In ergo mode seek is of time.
         load_msecs += 10000; // jump forward 10 seconds
         context->notifySeek(load_msecs);
+        context->notifyWorkoutPositionDiscontinuity();
     }
     else {
         // Otherwise Seek is of Distance.
@@ -3633,6 +3654,7 @@ void TrainSidebar::Rewind()
         load_msecs -=10000; // jump back 10 seconds
         if (load_msecs < 0) load_msecs = 0;
         context->notifySeek(load_msecs);
+        context->notifyWorkoutPositionDiscontinuity();
     }
     else {
         // Otherwise Seek is of distance.
@@ -3671,6 +3693,7 @@ void TrainSidebar::FFwdLap()
         lapmarker = ergFileQueryAdapter.nextLap(load_msecs);
         if (lapmarker >= 0.) load_msecs = lapmarker; // jump forward to lapmarker
         context->notifySeek(load_msecs);
+        context->notifyWorkoutPositionDiscontinuity();
     } else {
         static const double s_BeforeOffset = 10.1;
         const double lapPositionMeters =
@@ -3710,6 +3733,7 @@ void TrainSidebar::RewindLap()
         lapmarker = ergFileQueryAdapter.prevLap(target);
         if (lapmarker >= 0.) load_msecs = lapmarker; // jump to lapmarker
         context->notifySeek(load_msecs);
+        context->notifyWorkoutPositionDiscontinuity();
     }
     else {
         // Search for lap prior to 50 meters ago.

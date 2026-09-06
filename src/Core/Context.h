@@ -228,6 +228,8 @@ class Context : public QObject
         void notifyPause() { emit pause(); }
         void notifyStop() { GlobalContext::context()->notifyStop(); emit stop(); }
         void notifySeek(long x) { emit seek(x); }
+        void notifyWorkoutPositionDiscontinuity()
+            { emit workoutPositionDiscontinuity(); }
         void notifyIntensityChanged(int intensity) { emit intensityChanged(intensity); };
         void notifyWorkoutGameGeneratorTarget(double watts)
             { emit workoutGameGeneratorTargetChanged(watts); }
@@ -368,6 +370,7 @@ class Context : public QObject
         void selectVideoSync(QString); // ask traintool to select this
         void setNow(long);
         void seek(long);
+        void workoutPositionDiscontinuity();
         void newLap();
         void start();
         void unpause();

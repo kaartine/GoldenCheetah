@@ -799,6 +799,31 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         self.assertEqual(summary["reported_p95_frame_ms"], 18)
         self.assertEqual(summary["reported_max_frame_ms"], 100)
 
+    def test_acceptance_uses_immediate_reported_gear_shift_step(self):
+        trace = [
+            {
+                "session_elapsed_ms": 1000,
+                "gear": 6,
+                "speed_kph": 8.0,
+                "gear_shift_count": 0,
+                "gear_speed_step_kph": 0.0,
+            },
+            {
+                "session_elapsed_ms": 1250,
+                "gear": 7,
+                "speed_kph": 10.4,
+                "gear_shift_count": 1,
+                "gear_speed_step_kph": 0.18,
+            },
+        ]
+
+        summary = ANALYZER.reconcile_acceptance(trace, [], [])
+
+        self.assertEqual(summary["gear_changes"], 1)
+        self.assertEqual(
+            summary["maximum_gear_change_speed_step_kph"], 0.18
+        )
+
     def test_accepts_complete_cold_start_frame_continuity(self):
         samples = [{
             "cold_complete": 1,
@@ -849,6 +874,30 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             for failure in ANALYZER.validate_cold_start(summary)
         ))
 
+    def test_cold_start_ignores_later_resume_capture(self):
+        initial = {
+            "cold_complete": 1,
+            "cold_samples": 601,
+            "cold_swap_fps": 60.0,
+            "cold_visual_fps": 60.0,
+            "cold_max_frame_ms": 24.0,
+            "cold_visual_stall_ms": 20.0,
+        }
+        resumed = {
+            "cold_complete": 0,
+            "cold_samples": 4,
+            "cold_swap_fps": 30.0,
+            "cold_visual_fps": 20.0,
+            "cold_max_frame_ms": 80.0,
+            "cold_visual_stall_ms": 75.0,
+        }
+
+        summary = ANALYZER.analyze_cold_start([initial, resumed])
+
+        self.assertEqual(summary["cold_samples"], 601)
+        self.assertEqual(summary["cold_max_frame_ms"], 24.0)
+        self.assertEqual(summary["cold_visual_stall_ms"], 20.0)
+
     def test_rejects_missing_or_stalled_cold_start_evidence(self):
         missing = ANALYZER.validate_cold_start(
             ANALYZER.analyze_cold_start([])
@@ -881,6 +930,37 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertTrue(
                 any(expected in failure for failure in failures), expected
             )
+
+    def test_continuity_only_cold_start_keeps_non_timing_safety_gates(self):
+        summary = {
+            "cold_complete": 1,
+            "cold_samples": 500,
+            "cold_dropped_frames": 0,
+            "cold_swap_fps": 50.0,
+            "cold_visual_fps": 49.0,
+            "cold_start_first_swap_ms": 40.0,
+            "cold_start_first_visual_ms": 70.0,
+            "cold_p99_frame_ms": 30.0,
+            "cold_max_frame_ms": 40.0,
+            "cold_consecutive_late": 4,
+            "cold_visual_stall_ms": 35.0,
+            "cold_max_geometry_queue": 0,
+            "cold_backward_frames": 0,
+            "cold_skipped_ticks": 0,
+            "cold_deadline_errors": 0,
+        }
+
+        self.assertTrue(ANALYZER.validate_cold_start(summary))
+        self.assertEqual(
+            ANALYZER.validate_cold_start(
+                summary, enforce_frame_budget=False
+            ),
+            [],
+        )
+        summary["cold_skipped_ticks"] = 1
+        self.assertTrue(ANALYZER.validate_cold_start(
+            summary, enforce_frame_budget=False
+        ))
 
     def test_rejects_regression_and_pacing_failure(self):
         samples = [
@@ -1397,6 +1477,18 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
 
         self.assertIn("--require-cold-start-continuity", runner)
 
+    def test_trainer_acceptance_cannot_disable_trace_or_quick3d_evidence(self):
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "Trainer acceptance requires Quick 3D trace evidence", runner
+        )
+
+    def test_release_matrix_reconciles_trainer_and_recording_data(self):
+        matrix = MATRIX_RUNNER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("GC_UI_VALIDATE_TRAINER_ACCEPTANCE=1", matrix)
+
     def test_malformed_numeric_trace_field_does_not_break_analysis(self):
         samples = [{
             "frame_ms": "unavailable",
@@ -1497,6 +1589,8 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         self.assertEqual(summary["matched_recording_samples"], 3)
         self.assertEqual(summary["recording_samples_in_trace_window"], 3)
         self.assertEqual(summary["trainer_target_dispatches"], 3)
+        self.assertEqual(summary["matched_trainer_targets"], 3)
+        self.assertEqual(summary["trainer_target_match_ratio"], 1.0)
         self.assertEqual(summary["feature_decisions"], 1)
         self.assertEqual(
             ANALYZER.validate_acceptance(
@@ -1513,6 +1607,138 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             ),
             [],
         )
+
+    def test_recording_alignment_uses_session_elapsed_time(self):
+        trace = [{
+            "source_ms": 5000.0,
+            "session_elapsed_ms": 1000.0,
+            "watts": 230.0,
+            "cadence": 88.0,
+            "hr": 145.0,
+            "gear": 7.0,
+        }]
+        recording = [{
+            "secs": 1.0,
+            "cad": 88.0,
+            "hr": 145.0,
+            "km": 0.01,
+            "watts": 230.0,
+            "slope": 2.0,
+            "target": 220.0,
+            "virtualgear": 7.0,
+        }]
+
+        summary = ANALYZER.reconcile_acceptance(trace, [], recording)
+
+        self.assertEqual(summary["matched_recording_samples"], 1)
+        self.assertEqual(summary["maximum_power_delta_watts"], 0.0)
+
+    def test_recording_alignment_handles_asynchronous_generator_ramp(self):
+        trace = [
+            {
+                "session_elapsed_ms": 7029.0,
+                "target_watts": 347.0,
+                "watts": 351.0,
+                "cadence": 96.0,
+                "hr": 144.0,
+                "gear": 6.0,
+            },
+            {
+                "session_elapsed_ms": 7295.0,
+                "target_watts": 347.0,
+                "watts": 384.0,
+                "cadence": 96.0,
+                "hr": 145.0,
+                "gear": 6.0,
+            },
+        ]
+        recording = [{
+            "secs": 7.0,
+            "cad": 97.0,
+            "hr": 144.0,
+            "km": 0.02,
+            "watts": 380.0,
+            "slope": 1.4,
+            "target": 347.0,
+            "virtualgear": 6.0,
+        }]
+
+        summary = ANALYZER.reconcile_acceptance(trace, [], recording)
+
+        self.assertEqual(summary["matched_recording_samples"], 1)
+        self.assertEqual(summary["maximum_power_delta_watts"], 4.0)
+        self.assertEqual(summary["maximum_cadence_delta_rpm"], 1.0)
+
+    def test_recording_alignment_keeps_lagging_power_at_target_edge(self):
+        trace = [
+            {
+                "session_elapsed_ms": 10821.0,
+                "target_watts": 347.0,
+                "watts": 373.0,
+                "cadence": 97.0,
+                "hr": 154.0,
+                "gear": 6.0,
+            },
+            {
+                "session_elapsed_ms": 11075.0,
+                "target_watts": 158.0,
+                "watts": 327.0,
+                "cadence": 92.0,
+                "hr": 156.0,
+                "gear": 6.0,
+            },
+        ]
+        recording = [{
+            "secs": 11.0,
+            "cad": 96.0,
+            "hr": 155.0,
+            "km": 0.04,
+            "watts": 375.0,
+            "slope": 1.28,
+            "target": 158.0,
+            "virtualgear": 6.0,
+        }]
+
+        summary = ANALYZER.reconcile_acceptance(trace, [], recording)
+
+        self.assertEqual(summary["maximum_power_delta_watts"], 2.0)
+
+    def test_acceptance_rejects_unmatched_trainer_targets(self):
+        recording = [{
+            "secs": 1.0,
+            "cad": 80.0,
+            "hr": 140.0,
+            "km": 0.01,
+            "watts": 200.0,
+            "slope": 2.0,
+            "target": 220.0,
+            "virtualgear": 6.0,
+        }]
+        targets = [{
+            "mode": "erg",
+            "value": 220.0,
+            "workout_pos": 100000.0,
+            "devices": 1.0,
+        }]
+
+        summary = ANALYZER.reconcile_acceptance([], targets, recording)
+        failures = ANALYZER.validate_acceptance(
+            summary,
+            minimum_recording_matches=0,
+            minimum_recording_match_ratio=0.0,
+            maximum_power_delta_watts=1.0,
+            maximum_cadence_delta_rpm=1.0,
+            maximum_heart_rate_delta_bpm=1.0,
+            maximum_gear_mismatches=0,
+            maximum_trainer_target_delta=1.0,
+            minimum_trainer_target_dispatches=1,
+            minimum_feature_decisions=0,
+            minimum_trainer_target_matches=1,
+            minimum_trainer_target_match_ratio=1.0,
+        )
+
+        self.assertEqual(summary["matched_trainer_targets"], 0)
+        self.assertTrue(any("target matches" in failure for failure in failures))
 
     def test_acceptance_measures_progressive_speed_across_gear_changes(self):
         trace = [
@@ -1673,10 +1899,18 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
 
         self.assertEqual(summary["maximum_power_delta_watts"], 150.0)
-        self.assertEqual(summary["p95_power_delta_watts"], 0.0)
+        self.assertAlmostEqual(summary["p95_power_delta_watts"], 7.5)
         self.assertEqual(summary["maximum_trainer_target_delta"], 150.0)
         self.assertEqual(summary["p95_trainer_target_delta"], 0.0)
         self.assertEqual(failures, [])
+
+    def test_power_p95_is_not_the_maximum_for_a_short_async_trace(self):
+        deltas = [0.0] * 13 + [40.0]
+
+        self.assertAlmostEqual(
+            ANALYZER.interpolated_percentile(deltas, 0.95), 14.0
+        )
+        self.assertEqual(ANALYZER.percentile(deltas, 0.95), 40.0)
 
     def test_acceptance_aligns_recording_samples_across_erg_transitions(self):
         trace = [

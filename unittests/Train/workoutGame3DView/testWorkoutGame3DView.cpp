@@ -744,6 +744,47 @@ class TestWorkoutGame3DView : public QObject
     Q_OBJECT
 
 private slots:
+    void activeSessionClockExcludesPausedTimeAndDoesNotResetOnResume()
+    {
+        WorkoutGameActiveSessionClock clock;
+        QCOMPARE(clock.elapsed(900), std::int64_t(0));
+
+        clock.begin(1000);
+        QCOMPARE(clock.elapsed(1250), std::int64_t(250));
+        clock.pause(1300);
+        QCOMPARE(clock.elapsed(5000), std::int64_t(300));
+
+        clock.resume(5000);
+        QCOMPARE(clock.elapsed(5200), std::int64_t(500));
+        clock.pause(5250);
+        clock.pause(6000);
+        QCOMPARE(clock.elapsed(7000), std::int64_t(550));
+
+        clock.begin(9000);
+        QCOMPARE(clock.elapsed(9050), std::int64_t(50));
+    }
+
+    void gearShiftDiagnosticsMeasureTheImmediateSimulationStep()
+    {
+        WorkoutGameGearShiftDiagnostics diagnostics;
+        diagnostics.observe(6, 14.0);
+        diagnostics.observe(6, 15.8);
+        QCOMPARE(diagnostics.shiftCount(), 0);
+
+        diagnostics.observe(7, 15.95);
+        QCOMPARE(diagnostics.shiftCount(), 1);
+        QVERIFY(std::abs(diagnostics.maximumSpeedStepKph() - 0.15) < 1e-9);
+
+        diagnostics.observe(7, 18.0);
+        diagnostics.observe(6, 17.8);
+        QCOMPARE(diagnostics.shiftCount(), 2);
+        QVERIFY(std::abs(diagnostics.maximumSpeedStepKph() - 0.20) < 1e-9);
+
+        diagnostics.reset();
+        QCOMPARE(diagnostics.shiftCount(), 0);
+        QCOMPARE(diagnostics.maximumSpeedStepKph(), 0.0);
+    }
+
     void riderEffortPoseRequiresPowerAndGrade()
     {
         const auto seated = WorkoutGameRiderAnimation::target({
@@ -1752,6 +1793,7 @@ private slots:
                 >= first.input.presentationWorkMs);
         const QString trace = window.diagnosticsTraceLine();
         QVERIFY(trace.startsWith(QStringLiteral("workout-game-3d-trace")));
+        QVERIFY(trace.contains(QStringLiteral("session_elapsed_ms=")));
         QVERIFY(trace.contains(QStringLiteral("p50_frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("p95_frame_ms=")));
         QVERIFY(trace.contains(QStringLiteral("p99_frame_ms=")));
@@ -4957,6 +4999,33 @@ private slots:
         QVERIFY(cadenceBar->width() >= 0.0);
         QVERIFY(cadenceBar->width()
                 <= cadenceBar->parentItem()->width() + 1e-9);
+    }
+
+    void featureHudPrewarmsBeforeItsFirstApproachFrame()
+    {
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(sampleCourse(), FtpWatts);
+        QVERIFY(!viewModel.featureHudVisible());
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+
+        auto *hud = window.rootObject()->findChild<QQuickItem *>(
+                QStringLiteral("featureHud"));
+        QVERIFY(hud);
+        QVERIFY(!hud->isVisible());
+
+        window.rootObject()->setProperty("rendererPrewarming", true);
+        QTRY_VERIFY(hud->isVisible());
+        QVERIFY(hud->opacity() > 0.0);
+        QVERIFY(hud->opacity() <= 0.01);
+
+        window.rootObject()->setProperty("rendererPrewarming", false);
+        QTRY_VERIFY(!hud->isVisible());
     }
 
     void trainingHudPublishesProfileCursorGradeAndTelemetry()

@@ -14,15 +14,22 @@ class WorkoutGameSessionState
 {
 public:
     void workoutSelected();
+    void workoutSelectionDeferred();
+    void positionDiscontinuityRequested();
     void started();
     void stopped();
 
+    bool acceptsWorkoutSelection() const;
+    bool hasDeferredWorkoutSelection() const;
+    bool consumePositionDiscontinuity();
     bool acceptsPositionUpdate(bool trainingRunning) const;
     bool holdsStoppedFrame() const;
 
 private:
     bool sessionActive = false;
     bool stoppedFrameHeld = false;
+    bool deferredWorkoutSelection = false;
+    bool pendingPositionDiscontinuity = false;
 };
 
 #endif

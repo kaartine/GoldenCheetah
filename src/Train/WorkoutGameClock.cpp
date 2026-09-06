@@ -17,6 +17,7 @@ namespace {
 
 constexpr double MinimumRate = 0.0;
 constexpr double MaximumRate = 4.0;
+constexpr double MinimumRunningRate = 0.05;
 constexpr double CorrectionHorizonMs = 2000.0;
 constexpr std::int64_t DiscontinuityThresholdMs = 1000;
 
@@ -101,9 +102,9 @@ void WorkoutGameClock::setAnchor(
                 > DiscontinuityThresholdMs
             && workoutTimeMs < lastSourceWorkoutTimeMs
                 - DiscontinuityThresholdMs;
-    const bool largeCorrection = std::abs(workoutTimeMs - predicted)
-            > DiscontinuityThresholdMs;
-    if (sourceReversed || largeCorrection) {
+    const bool largeForwardCorrection = workoutTimeMs
+            > predicted + DiscontinuityThresholdMs;
+    if (sourceReversed || largeForwardCorrection) {
         reset(workoutTimeMs, monotonicTimeMs, requestedRunning, rateHint);
         return;
     }
@@ -113,7 +114,14 @@ void WorkoutGameClock::setAnchor(
     anchorWorkoutTimeMs = std::max(
             predicted, lastPublishedWorkoutTimeMs);
     anchorMonotonicTimeMs = monotonicTimeMs;
-    timelineRate = validRate(validRate(rateHint) + correctionRate);
+    const double hintedRate = validRate(rateHint);
+    double correctedRate = hintedRate + correctionRate;
+    if (requestedRunning && hintedRate > 0.0) {
+        correctedRate = std::max(
+                correctedRate,
+                std::max(MinimumRunningRate, hintedRate * 0.5));
+    }
+    timelineRate = validRate(correctedRate);
     lastSourceWorkoutTimeMs = std::max(
             lastSourceWorkoutTimeMs, workoutTimeMs);
     running = requestedRunning;

@@ -140,7 +140,7 @@ Item {
                 transmitEnabled: false
             }
             antialiasingMode: SceneEnvironment.MSAA
-            antialiasingQuality: SceneEnvironment.High
+            antialiasingQuality: SceneEnvironment.Medium
             temporalAAEnabled: false
         }
 
@@ -586,7 +586,8 @@ Item {
     Rectangle {
         id: featureHud
         objectName: "featureHud"
-        visible: workoutGame3D.featureHudVisible
+        visible: workoutGame3D.featureHudVisible || root.rendererPrewarming
+        opacity: workoutGame3D.featureHudVisible ? 1.0 : 0.01
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 28

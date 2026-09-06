@@ -206,6 +206,25 @@ void WorkoutGameRunner::setAnchor(
     inputChanged.notify_one();
 }
 
+void WorkoutGameRunner::synchronizeAnchor(
+        std::int64_t workoutTimeMs,
+        double rateHint)
+{
+    if (!configured) return;
+    {
+        std::lock_guard<std::mutex> lock(inputMutex);
+        inputState.publicationEpoch = publicationEpoch.fetch_add(
+                1, std::memory_order_acq_rel) + 1;
+        inputState.anchorWorkoutTimeMs = std::max<std::int64_t>(
+                0, workoutTimeMs);
+        inputState.anchorMonotonicTimeMs = monotonicMilliseconds();
+        inputState.rateHint = rateHint;
+        ++inputState.anchorRevision;
+        ++inputState.revision;
+    }
+    inputChanged.notify_one();
+}
+
 void WorkoutGameRunner::setTelemetry(const WorkoutGameEngineInput &input)
 {
     if (!configured) return;

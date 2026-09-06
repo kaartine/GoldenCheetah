@@ -19,6 +19,37 @@
 
 #include <atomic>
 
+class WorkoutGameActiveSessionClock
+{
+public:
+    void begin(std::int64_t monotonicTimeMs);
+    void pause(std::int64_t monotonicTimeMs);
+    void resume(std::int64_t monotonicTimeMs);
+    std::int64_t elapsed(std::int64_t monotonicTimeMs) const;
+
+private:
+    std::int64_t accumulatedMs = 0;
+    std::int64_t activeSinceMs = 0;
+    bool initialized = false;
+    bool active = false;
+};
+
+class WorkoutGameGearShiftDiagnostics
+{
+public:
+    void reset();
+    void observe(int gear, double speedKph);
+    int shiftCount() const { return shifts; }
+    double maximumSpeedStepKph() const { return maximumSpeedStep; }
+
+private:
+    int previousGear = 0;
+    int shifts = 0;
+    double previousSpeedKph = 0.0;
+    double maximumSpeedStep = 0.0;
+    bool hasPrevious = false;
+};
+
 class WorkoutGame3DWindow : public QQuickView
 {
     Q_OBJECT
@@ -45,6 +76,9 @@ public:
             int cadenceRpm,
             int heartRate,
             int virtualGear);
+    void beginTrainingSessionTiming();
+    void pauseTrainingSessionTiming();
+    void resumeTrainingSessionTiming();
     void setSessionRunning(bool running);
     void setGeneratorState(const QString &state);
     bool rendererAvailable() const { return status() != QQuickView::Error; }
@@ -105,6 +139,8 @@ private:
     std::atomic_bool prewarmCompleted{false};
     std::atomic<std::uint64_t> prewarmStartSequence{0};
     std::uint64_t frameNumber = 0;
+    WorkoutGameActiveSessionClock activeSessionClock;
+    WorkoutGameGearShiftDiagnostics gearShiftDiagnostics;
     std::int64_t lastTracePublishMs = -1;
     std::int64_t lastFpsPublishMs = -1;
     double pendingPresentationWorkMs = 0.0;

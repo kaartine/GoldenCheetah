@@ -179,6 +179,11 @@ case "$REQUIRE_QUICK3D_EVIDENCE" in
         exit 2
         ;;
 esac
+if [ "${GC_UI_VALIDATE_TRAINER_ACCEPTANCE:-0}" = 1 ] && \
+    [ "$REQUIRE_QUICK3D_EVIDENCE" != 1 ]; then
+    echo "Trainer acceptance requires Quick 3D trace evidence" >&2
+    exit 2
+fi
 if [ "$REQUIRE_QUICK3D_EVIDENCE" = 1 ]; then
     export GC_WORKOUT_GAME_3D=1
     export GC_WORKOUT_GAME_TRACE=1
@@ -224,6 +229,17 @@ if [ -f "$TEST_ROOT/library/goldencheetah.log" ]; then
         "$ARTIFACT_DIR/goldencheetah.log"
 fi
 
+if [ "$STATUS" -eq 0 ] && [ "${GC_UI_VALIDATE_MTB_COURSE:-0}" = 1 ]; then
+    MTB_RUNTIME_EVIDENCE=$ARTIFACT_DIR/mtb-course-runtime-evidence.txt
+    if grep -E 'Workout Game session course: distance-course' \
+            "$ARTIFACT_DIR/application.log" >"$MTB_RUNTIME_EVIDENCE"; then
+        :
+    else
+        echo "Generated MTB distance course was not active at game start" >&2
+        STATUS=1
+    fi
+fi
+
 if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
     TRACE_LOG=$ARTIFACT_DIR/application.log
     if [ "$REQUIRE_QUICK3D_EVIDENCE" = 0 ] && \
@@ -245,6 +261,9 @@ if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
                 "$TEST_ROOT/renderer-canvas-name.txt"
             --appimage "$IMAGE"
         )
+        if [ "${GC_UI_USE_HARDWARE_GL:-0}" != 1 ]; then
+            ANALYZER_ARGS+=(--cold-start-continuity-only)
+        fi
     fi
     if [ "${GC_WORKOUT_GAME_FEATURE_LAB:-0}" = 1 ]; then
         GAP_SCENARIO=${GC_WORKOUT_GAME_FEATURE_LAB_GAP_SCENARIO:-}

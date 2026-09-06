@@ -142,6 +142,61 @@ const char *gapLineName(WorkoutGameGapJumpLine line)
 
 }
 
+void WorkoutGameActiveSessionClock::begin(std::int64_t monotonicTimeMs)
+{
+    accumulatedMs = 0;
+    activeSinceMs = monotonicTimeMs;
+    initialized = true;
+    active = true;
+}
+
+void WorkoutGameActiveSessionClock::pause(std::int64_t monotonicTimeMs)
+{
+    if (!initialized || !active) return;
+    accumulatedMs += std::max<std::int64_t>(
+            0, monotonicTimeMs - activeSinceMs);
+    active = false;
+}
+
+void WorkoutGameActiveSessionClock::resume(std::int64_t monotonicTimeMs)
+{
+    if (!initialized || active) return;
+    activeSinceMs = monotonicTimeMs;
+    active = true;
+}
+
+std::int64_t WorkoutGameActiveSessionClock::elapsed(
+        std::int64_t monotonicTimeMs) const
+{
+    if (!initialized) return 0;
+    return accumulatedMs + (active
+            ? std::max<std::int64_t>(0, monotonicTimeMs - activeSinceMs)
+            : 0);
+}
+
+void WorkoutGameGearShiftDiagnostics::reset()
+{
+    previousGear = 0;
+    shifts = 0;
+    previousSpeedKph = 0.0;
+    maximumSpeedStep = 0.0;
+    hasPrevious = false;
+}
+
+void WorkoutGameGearShiftDiagnostics::observe(int gear, double speedKph)
+{
+    if (!std::isfinite(speedKph)) return;
+    if (hasPrevious && gear != previousGear) {
+        ++shifts;
+        maximumSpeedStep = std::max(
+                maximumSpeedStep,
+                std::abs(speedKph - previousSpeedKph));
+    }
+    previousGear = gear;
+    previousSpeedKph = speedKph;
+    hasPrevious = true;
+}
+
 WorkoutGame3DWindow::WorkoutGame3DWindow(
         bool rendererEnabled,
         QWindow *parent) :
@@ -261,6 +316,7 @@ void WorkoutGame3DWindow::setCourse(
     lastFpsPublishMs = -1;
     coldStartCompletePublished = false;
     hasFrame = false;
+    gearShiftDiagnostics.reset();
     viewModel->setCourse(course, ftpWatts);
     requestRendererPrewarm();
 }
@@ -273,6 +329,8 @@ void WorkoutGame3DWindow::setFrame(
         int newHeartRate,
         int newVirtualGear)
 {
+    gearShiftDiagnostics.observe(
+            newVirtualGear, frame.simulation.speedKph);
     sourceFrame = frame;
     watts = newWatts;
     targetWatts = newTargetWatts;
@@ -305,6 +363,22 @@ void WorkoutGame3DWindow::setTelemetry(
     virtualGear = newVirtualGear;
     viewModel->setTelemetry(
             watts, targetWatts, cadenceRpm, heartRate, virtualGear);
+}
+
+void WorkoutGame3DWindow::beginTrainingSessionTiming()
+{
+    activeSessionClock.begin(monotonicMilliseconds());
+    gearShiftDiagnostics.reset();
+}
+
+void WorkoutGame3DWindow::pauseTrainingSessionTiming()
+{
+    activeSessionClock.pause(monotonicMilliseconds());
+}
+
+void WorkoutGame3DWindow::resumeTrainingSessionTiming()
+{
+    activeSessionClock.resume(monotonicMilliseconds());
 }
 
 void WorkoutGame3DWindow::setSessionRunning(bool running)
@@ -510,6 +584,8 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
     stream << "workout-game-3d-trace"
            << " frame=" << input.frameNumber
            << " mono_ms=" << input.monotonicTimeMs
+           << " session_elapsed_ms="
+                << activeSessionClock.elapsed(input.monotonicTimeMs)
            << " source_ms=" << input.sourceWorkoutTimeMs
            << " render_ms=" << input.renderedWorkoutTimeMs
            << " source_road_m=" << input.sourceRoadDistanceMeters
@@ -607,6 +683,9 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " hr=" << heartRate
            << " gear=" << virtualGear
            << " speed_kph=" << presentedFrame.simulation.speedKph
+           << " gear_shift_count=" << gearShiftDiagnostics.shiftCount()
+           << " gear_speed_step_kph="
+                << gearShiftDiagnostics.maximumSpeedStepKph()
            << " camera_pos="
                 << viewModel->cameraX() << ','
                 << viewModel->cameraY() << ','

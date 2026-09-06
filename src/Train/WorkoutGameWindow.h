@@ -21,6 +21,7 @@
 #include "WorkoutGameSessionState.h"
 
 #include <optional>
+#include <QString>
 
 class Context;
 class ErgFile;
@@ -49,6 +50,7 @@ private slots:
     void ergFileSelected(ErgFile *workout);
     void telemetryUpdate(const RealtimeData &telemetry);
     void setNow(long workoutTimeMs);
+    void workoutPositionDiscontinuity();
     void start();
     void pause();
     void unpause();
@@ -62,13 +64,16 @@ private:
     double currentFtp(ErgFile *workout) const;
     WorkoutGameGhostReplay loadGhost(const WorkoutGameCourse &course) const;
     void storeGhost();
-    void updateAtWorkoutPosition(std::int64_t workoutPosition);
+    void updateAtWorkoutPosition(
+            std::int64_t workoutPosition,
+            bool discontinuity = false);
     void updateRunnerTelemetry();
     void drainRunnerFrame();
     void displayFrame(const WorkoutGameEngineFrame &frame);
     double anchorRate(
             std::int64_t workoutTimeMs,
             std::int64_t monotonicTimeMs);
+    QString workoutIdentity(ErgFile *workout) const;
 
     Context *context;
     QStackedWidget *renderStack;
@@ -87,6 +92,7 @@ private:
     WorkoutGameAudioFeedback audioFeedback;
     WorkoutGameRunner runner;
     QTimer *frameDrainTimer;
+    QString configuredWorkoutIdentity;
     WorkoutGameEngineFrame lastFrame;
     RealtimeData latestTelemetry;
     bool hasTelemetry = false;

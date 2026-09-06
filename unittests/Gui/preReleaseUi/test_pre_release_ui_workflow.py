@@ -3,6 +3,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -20,9 +21,129 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(UI)
 
 MATRIX_PATH = Path(__file__).with_name("run-pre-release-ui-matrix.sh")
+RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui.sh")
 
 
 class PreReleaseUiWorkflowTests(unittest.TestCase):
+    def test_course_sidecar_acceptance_requires_exact_prescription_and_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sidecar = Path(directory) / "ui-test-mtb.gcmtb.json"
+            document = {
+                "title": "ui-test MTB",
+                "source": {
+                    "intervals": [
+                        {
+                            "startMs": 0,
+                            "durationMs": 6000,
+                            "startWatts": 100.0,
+                            "endWatts": 100.0,
+                        },
+                        {
+                            "startMs": 6000,
+                            "durationMs": 4800,
+                            "startWatts": 220.0,
+                            "endWatts": 220.0,
+                        },
+                    ]
+                },
+                "conversion": {
+                    "preset": "ride-first",
+                    "parameters": {
+                        "gradeScale": 1.18,
+                        "technicality": 0.95,
+                    },
+                },
+                "course": {
+                    "sections": [
+                        {
+                            "sourceStartMs": 0,
+                            "nominalDurationMs": 6000,
+                            "targetStartWatts": 100.0,
+                            "targetEndWatts": 100.0,
+                            "gradePercent": 1.0,
+                            "terrain": "smooth-trail",
+                        },
+                        {
+                            "sourceStartMs": 6000,
+                            "nominalDurationMs": 4800,
+                            "targetStartWatts": 220.0,
+                            "targetEndWatts": 220.0,
+                            "gradePercent": 2.0,
+                            "terrain": "rock-garden",
+                        },
+                    ]
+                },
+                "roadPlan": {
+                    "pieces": [
+                        {"turnRadians": 0.1},
+                        {"turnRadians": -0.2},
+                    ]
+                },
+            }
+            sidecar.write_text(json.dumps(document), encoding="utf-8")
+
+            accepted = UI.validate_mtb_course_sidecar(
+                sidecar, "ride-first", "ui-test MTB"
+            )
+
+            self.assertEqual(accepted["title"], "ui-test MTB")
+            self.assertEqual(accepted["interval_count"], 2)
+            self.assertEqual(accepted["duration_ms"], 10800)
+
+            document["course"]["sections"][1]["targetStartWatts"] = 219.0
+            sidecar.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(UI.UiFailure, "prescription"):
+                UI.validate_mtb_course_sidecar(
+                    sidecar, "ride-first", "ui-test MTB"
+                )
+
+    def test_right_click_named_item_uses_context_mouse_button(self):
+        item = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[item])
+        driver.role = mock.Mock(return_value="table cell")
+        driver.context_click = mock.Mock()
+
+        with mock.patch.object(UI.time, "sleep"):
+            driver.right_click_named_item("ui-test")
+
+        driver.context_click.assert_called_once_with(item)
+
+    def test_exact_selection_clicks_only_the_named_workout_row(self):
+        row = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.click_named_item = mock.Mock(return_value=row)
+
+        selected = driver.select_named_item_exact("ui-test-mtb")
+
+        self.assertIs(selected, row)
+        driver.click_named_item.assert_called_once_with("ui-test-mtb")
+
+    def test_runner_requires_generated_distance_course_at_game_start(self):
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("GC_UI_VALIDATE_MTB_COURSE", runner)
+        self.assertIn("Workout Game session course: distance-course", runner)
+        self.assertIn("mtb-course-runtime-evidence.txt", runner)
+        self.assertIn("--cold-start-continuity-only", runner)
+        self.assertIn("GC_UI_USE_HARDWARE_GL", runner)
+
+    def test_popup_item_activation_uses_position_independent_keyboard_steps(self):
+        driver = object.__new__(UI.UiDriver)
+        driver.send_named_key = mock.Mock()
+
+        driver.activate_popup_item(5)
+
+        self.assertEqual(
+            driver.send_named_key.call_args_list,
+            [mock.call("Home")] + [mock.call("Down")] * 5
+            + [mock.call("Return")],
+        )
+        self.assertEqual(
+            UI.MtbCourseUiWorkflow.CONTEXT_ACTION_STEPS,
+            {"Create MTB Course": 5, "Edit MTB Course": 5},
+        )
+
     def test_matrix_runs_painter_scenegraph_and_production_quick3d(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -34,12 +155,13 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             shutil.copy2(MATRIX_PATH, matrix)
             runner.write_text(
                 "#!/bin/sh\n"
-                "printf '%s|%s|%s|%s|%s|%s\\n' "
+                "printf '%s|%s|%s|%s|%s|%s|%s\\n' "
                 '"$GC_WORKOUT_GAME_FORCE_PAINTER" '
                 '"$GC_WORKOUT_GAME_3D" '
                 '"$GC_WORKOUT_GAME_TRACE" '
                 '"$GC_WORKOUT_GAME_DIAGNOSTICS" '
-                '"$GC_UI_REQUIRE_QUICK3D_EVIDENCE" "$2" >>"$CALLS"\n',
+                '"$GC_UI_REQUIRE_QUICK3D_EVIDENCE" '
+                '"$GC_UI_VALIDATE_MTB_COURSE" "$2" >>"$CALLS"\n',
                 encoding="ascii",
             )
             for executable in (matrix, runner):
@@ -59,9 +181,9 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             self.assertEqual(
                 calls.read_text(encoding="ascii").splitlines(),
                 [
-                    f"1|0|0|0|0|{artifacts / 'painter'}",
-                    f"0|0|1|1|0|{artifacts / 'scenegraph'}",
-                    f"0|1|1|1|1|{artifacts / 'quick3d'}",
+                    f"1|0|0|0|0|0|{artifacts / 'painter'}",
+                    f"0|0|1|1|0|0|{artifacts / 'scenegraph'}",
+                    f"0|1|1|1|1|1|{artifacts / 'quick3d'}",
                 ],
             )
 
@@ -94,9 +216,118 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             ],
         )
 
+    def test_mtb_course_lifecycle_persists_all_three_modes_in_order(self):
+        workflow = object.__new__(UI.MtbCourseUiWorkflow)
+        calls = mock.Mock()
+        workflow.create = calls.create
+        workflow.edit = calls.edit
+        prescription = [{"durationMs": 6000, "startWatts": 100.0}]
+        calm = {
+            "title": "ui-test MTB",
+            "preset": "workout-first",
+            "source_intervals": prescription,
+            "route_fingerprint": "calm",
+            "grade_scale": 0.82,
+            "technicality": 0.15,
+            "technical_section_count": 3,
+            "total_absolute_turn_radians": 1.0,
+        }
+        varied = {
+            "title": "ui-test MTB",
+            "preset": "balanced",
+            "source_intervals": prescription,
+            "route_fingerprint": "varied",
+            "grade_scale": 1.0,
+            "technicality": 0.55,
+            "technical_section_count": 6,
+            "total_absolute_turn_radians": 2.0,
+        }
+        technical = {
+            "title": "ui-test MTB",
+            "preset": "ride-first",
+            "source_intervals": prescription,
+            "route_fingerprint": "technical",
+            "grade_scale": 1.18,
+            "technicality": 0.95,
+            "technical_section_count": 9,
+            "total_absolute_turn_radians": 3.0,
+        }
+        workflow.create.return_value = calm
+        workflow.edit.side_effect = [varied, technical]
+
+        with tempfile.TemporaryDirectory() as directory:
+            workflow.artifacts = Path(directory)
+            result = workflow.run()
+
+        self.assertEqual(result, technical)
+        self.assertEqual(
+            calls.mock_calls,
+            [
+                mock.call.create("workout-first"),
+                mock.call.edit("balanced"),
+                mock.call.edit("ride-first"),
+            ],
+        )
+
+    def test_mtb_course_lifecycle_rejects_identical_routes(self):
+        workflow = object.__new__(UI.MtbCourseUiWorkflow)
+        result = {
+            "source_intervals": [{"durationMs": 6000}],
+            "route_fingerprint": "same-route",
+            "grade_scale": 1.0,
+            "technicality": 0.5,
+            "technical_section_count": 5,
+            "total_absolute_turn_radians": 2.0,
+        }
+        workflow.create = mock.Mock(return_value=result)
+        workflow.edit = mock.Mock(return_value=result)
+
+        with tempfile.TemporaryDirectory() as directory:
+            workflow.artifacts = Path(directory)
+            with self.assertRaisesRegex(UI.UiFailure, "identical routes"):
+                workflow.run()
+
+    def test_mtb_course_lifecycle_rejects_equal_technical_exposure(self):
+        workflow = object.__new__(UI.MtbCourseUiWorkflow)
+        prescription = [{"durationMs": 6000}]
+        results = [
+            {
+                "source_intervals": prescription,
+                "route_fingerprint": f"route-{index}",
+                "grade_scale": 0.7 + index * 0.3,
+                "technicality": 0.1 + index * 0.4,
+                "technical_section_count": 5,
+                "total_absolute_turn_radians": 1.0 + index,
+            }
+            for index in range(3)
+        ]
+        workflow.create = mock.Mock(return_value=results[0])
+        workflow.edit = mock.Mock(side_effect=results[1:])
+
+        with tempfile.TemporaryDirectory() as directory:
+            workflow.artifacts = Path(directory)
+            with self.assertRaisesRegex(UI.UiFailure, "technical terrain ordering"):
+                workflow.run()
+
+    def test_mtb_course_preset_selection_requires_checked_state(self):
+        control = object()
+        driver = mock.Mock()
+        driver.find.return_value = control
+        driver.checked.return_value = True
+        workflow = object.__new__(UI.MtbCourseUiWorkflow)
+        workflow.driver = driver
+
+        workflow._select_preset("ride-first")
+
+        driver.find.assert_called_once_with(
+            "Ride first", showing=True, timeout=8.0
+        )
+        driver.click.assert_called_once_with(control)
+        driver.checked.assert_called_with(control)
+
     def test_prepared_workout_selection_retries_while_library_refreshes(self):
         driver = mock.Mock()
-        driver.click_named_item.side_effect = [
+        driver.select_named_item_exact.side_effect = [
             UI.UiFailure("not ready"),
             UI.UiFailure("not ready"),
             UI.UiFailure("not ready"),
@@ -108,10 +339,28 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         with mock.patch.object(UI.time, "sleep"):
             workflow.select_prepared_workout(timeout=1.0)
 
-        self.assertEqual(driver.click_named_item.call_count, 4)
+        self.assertEqual(driver.select_named_item_exact.call_count, 4)
         self.assertEqual(
-            driver.click_named_item.call_args,
-            mock.call("Pre-release UI test"),
+            driver.select_named_item_exact.call_args.args[0],
+            "Pre-release UI test",
+        )
+
+    def test_explicit_generated_workout_never_falls_back_to_source(self):
+        driver = mock.Mock()
+        driver.select_named_item_exact.side_effect = UI.UiFailure("not ready")
+        workflow = object.__new__(UI.WorkoutGameUiWorkflow)
+        workflow.driver = driver
+        workflow.workout_names = ("ui-test-mtb",)
+
+        with mock.patch.object(UI.time, "sleep"), self.assertRaisesRegex(
+            UI.UiFailure, "ui-test-mtb"
+        ):
+            workflow.select_prepared_workout(timeout=0.01)
+
+        self.assertTrue(driver.select_named_item_exact.called)
+        self.assertEqual(
+            {call.args[0] for call in driver.select_named_item_exact.call_args_list},
+            {"ui-test-mtb"},
         )
 
     def test_focus_main_window_does_not_require_an_atspi_component(self):

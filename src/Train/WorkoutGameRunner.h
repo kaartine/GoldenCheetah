@@ -42,6 +42,7 @@ public:
     void start(std::int64_t workoutTimeMs, double rateHint);
     void resume(std::int64_t workoutTimeMs, double rateHint);
     void setAnchor(std::int64_t workoutTimeMs, double rateHint);
+    void synchronizeAnchor(std::int64_t workoutTimeMs, double rateHint);
     void setTelemetry(const WorkoutGameEngineInput &input);
     void pause(std::int64_t workoutTimeMs);
     void stop(std::int64_t workoutTimeMs);

@@ -485,6 +485,59 @@ private slots:
         QVERIFY(frame.visual.simulation.workoutTimeMs >= 5000);
     }
 
+    void liveAnchorSynchronizationDoesNotStarveFramePublication()
+    {
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                WorkoutGameFeatureLab::course(200.0), 200.0, true));
+        runner.start(0, 1.0);
+
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        const std::int64_t firstTimeMs =
+                frame.visual.simulation.workoutTimeMs;
+        int framesDuringSynchronization = 0;
+        std::int64_t lastTimeMs = firstTimeMs;
+
+        QElapsedTimer duration;
+        duration.start();
+        while (duration.elapsed() < 300) {
+            // The trainer publishes a quantized position while the game clock
+            // must continue interpolating between those source updates.
+            runner.synchronizeAnchor(100, 1.0);
+            if (runner.takeLatest(frame)) {
+                QVERIFY(frame.visual.simulation.workoutTimeMs >= lastTimeMs);
+                lastTimeMs = frame.visual.simulation.workoutTimeMs;
+                ++framesDuringSynchronization;
+            }
+            QTest::qWait(1);
+        }
+
+        QVERIFY(framesDuringSynchronization >= 5);
+        QVERIFY(lastTimeMs > firstTimeMs);
+    }
+
+    void liveAnchorSynchronizationRetiresAnInFlightPublication()
+    {
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                WorkoutGameFeatureLab::course(200.0), 200.0, true));
+        runner.start(0, 1.0);
+
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        runner.synchronizeAnchor(5000, 1.0);
+
+        QVERIFY(waitForFrameAtOrAfter(runner, 5000, frame));
+        const std::int64_t synchronizedTime =
+                frame.visual.simulation.workoutTimeMs;
+        QTest::qWait(80);
+        while (runner.takeLatest(frame)) {
+            QVERIFY(frame.visual.simulation.workoutTimeMs
+                    >= synchronizedTime);
+        }
+    }
+
     void stopReturnsNewestUnconsumedFrameBeforeRetirement()
     {
         WorkoutGameRunner runner;

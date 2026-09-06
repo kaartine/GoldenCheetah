@@ -21,11 +21,13 @@
 #include "WorkoutGameRendererPolicy.h"
 #include "WorkoutGameSceneGraphWindow.h"
 #include "WorkoutGameWorkoutAdapter.h"
+#include "WorkoutGameWorkoutIdentity.h"
 #include "Settings.h"
 #include "VirtualDrivetrain.h"
 #include "Zones.h"
 
 #include <QDate>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QHideEvent>
 #include <QDebug>
@@ -166,6 +168,8 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     connect(context, &Context::telemetryUpdate,
             this, &WorkoutGameWindow::telemetryUpdate);
     connect(context, &Context::setNow, this, &WorkoutGameWindow::setNow);
+    connect(context, &Context::workoutPositionDiscontinuity,
+            this, &WorkoutGameWindow::workoutPositionDiscontinuity);
     connect(context, &Context::start, this, &WorkoutGameWindow::start);
     connect(context, &Context::pause, this, &WorkoutGameWindow::pause);
     connect(context, &Context::unpause, this, &WorkoutGameWindow::unpause);
@@ -287,10 +291,30 @@ double WorkoutGameWindow::currentFtp(ErgFile *workout) const
     return 0.0;
 }
 
+QString WorkoutGameWindow::workoutIdentity(ErgFile *workout) const
+{
+    if (!workout) return QString();
+    return workoutGameWorkoutIdentity(workout->filename());
+}
+
 void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
 {
+    if (context && workout != context->currentErgFile()) return;
+    const QString identity = workoutIdentity(workout);
+    if (!sessionState.acceptsWorkoutSelection()) {
+        if (identity != configuredWorkoutIdentity) {
+            sessionState.workoutSelectionDeferred();
+        }
+        return;
+    }
+    if (sessionState.holdsStoppedFrame()
+            && !sessionState.hasDeferredWorkoutSelection()
+            && identity == configuredWorkoutIdentity) {
+        return;
+    }
     audioFeedback.reset();
     sessionState.workoutSelected();
+    configuredWorkoutIdentity = identity;
     currentCourse = WorkoutGameCourse();
     distanceRuntime.reset();
     distanceSnapshot = WorkoutGameDistancePlaybackSnapshot();
@@ -373,11 +397,24 @@ void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
 void WorkoutGameWindow::setNow(long workoutPosition)
 {
     if (!sessionState.acceptsPositionUpdate(context->isRunning())) return;
-    updateAtWorkoutPosition(workoutPosition);
+    updateAtWorkoutPosition(
+            workoutPosition,
+            sessionState.consumePositionDiscontinuity());
+}
+
+void WorkoutGameWindow::workoutPositionDiscontinuity()
+{
+    sessionState.positionDiscontinuityRequested();
 }
 
 void WorkoutGameWindow::start()
 {
+    if (sessionState.hasDeferredWorkoutSelection()) {
+        ergFileSelected(context ? context->currentErgFile() : nullptr);
+    }
+    qInfo().noquote() << "Workout Game session course:"
+                      << (distanceRuntime.enabled()
+                          ? "distance-course" : "time-workout");
     audioFeedback.reset();
     sessionState.started();
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
@@ -385,6 +422,7 @@ void WorkoutGameWindow::start()
     lastFrame = WorkoutGameEngineFrame();
     paused = false;
     sessionActive = true;
+    threeDWindow->beginTrainingSessionTiming();
     sceneGraphWindow->setSessionRunning(
             isVisible() && renderStack->currentWidget() == sceneGraphContainer);
     threeDWindow->setSessionRunning(
@@ -403,6 +441,7 @@ void WorkoutGameWindow::pause()
 {
     drainRunnerFrame();
     paused = true;
+    threeDWindow->pauseTrainingSessionTiming();
     threeDWindow->setSessionRunning(false);
     sceneGraphWindow->setSessionRunning(false);
     updateAtWorkoutPosition(context->getNow());
@@ -412,6 +451,7 @@ void WorkoutGameWindow::pause()
 void WorkoutGameWindow::unpause()
 {
     paused = false;
+    threeDWindow->resumeTrainingSessionTiming();
     sceneGraphWindow->setSessionRunning(
             sessionActive && isVisible()
             && renderStack->currentWidget() == sceneGraphContainer);
@@ -430,6 +470,7 @@ void WorkoutGameWindow::unpause()
 void WorkoutGameWindow::stop()
 {
     sessionState.stopped();
+    threeDWindow->pauseTrainingSessionTiming();
     threeDWindow->setSessionRunning(false);
     sceneGraphWindow->setSessionRunning(false);
     sessionActive = false;
@@ -481,7 +522,8 @@ void WorkoutGameWindow::useOpenGLFallback()
 }
 
 void WorkoutGameWindow::updateAtWorkoutPosition(
-        std::int64_t workoutPosition)
+        std::int64_t workoutPosition,
+        bool discontinuity)
 {
     if (distanceRuntime.enabled()) {
         distanceSnapshot = distanceRuntime.atWorkoutPosition(workoutPosition);
@@ -492,7 +534,28 @@ void WorkoutGameWindow::updateAtWorkoutPosition(
     }
     const std::int64_t nowMs = WorkoutGameRunner::monotonicMilliseconds();
     currentAnchorRate = anchorRate(currentWorkoutTimeMs, nowMs);
-    runner.setAnchor(currentWorkoutTimeMs, currentAnchorRate);
+    static const bool traceWorkoutGame =
+            qEnvironmentVariableIntValue("GC_WORKOUT_GAME_TRACE") != 0;
+    if (traceWorkoutGame && sessionActive) {
+        qInfo().noquote()
+                << "workout-game-anchor"
+                << "source_ms=" << currentWorkoutTimeMs
+                << "rate=" << currentAnchorRate
+                << "speed_kph=" << (hasTelemetry
+                    ? finiteClampedNonNegative(
+                        latestTelemetry.getSpeed(), MaximumSpeedKph) : 0.0)
+                << "cadence=" << (hasTelemetry
+                    ? finiteClampedNonNegative(
+                        latestTelemetry.getCadence(), MaximumCadenceRpm) : 0.0)
+                << "watts=" << (hasTelemetry
+                    ? finiteClampedNonNegative(
+                        latestTelemetry.getWatts(), MaximumPowerWatts) : 0.0);
+    }
+    if (discontinuity) {
+        runner.setAnchor(currentWorkoutTimeMs, currentAnchorRate);
+    } else {
+        runner.synchronizeAnchor(currentWorkoutTimeMs, currentAnchorRate);
+    }
     if (featureLabEnabled) {
         context->notifyWorkoutGameGeneratorTarget(
                 WorkoutGameFeatureLab::targetWattsAt(

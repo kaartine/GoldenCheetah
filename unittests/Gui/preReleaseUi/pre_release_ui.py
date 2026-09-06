@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -101,6 +104,13 @@ def validate_trainer_acceptance_from_environment() -> bool:
     value = os.environ.get("GC_UI_VALIDATE_TRAINER_ACCEPTANCE", "0")
     if value not in ("0", "1"):
         raise ValueError("GC_UI_VALIDATE_TRAINER_ACCEPTANCE must be 0 or 1")
+    return value == "1"
+
+
+def validate_mtb_course_from_environment() -> bool:
+    value = os.environ.get("GC_UI_VALIDATE_MTB_COURSE", "0")
+    if value not in ("0", "1"):
+        raise ValueError("GC_UI_VALIDATE_MTB_COURSE must be 0 or 1")
     return value == "1"
 
 
@@ -227,6 +237,25 @@ MINUTES WATTS
 0.18 220
 0.18 100
 1.00 100
+1.00 135
+1.20 135
+1.20 100
+1.40 100
+1.40 160
+1.60 160
+1.60 105
+1.80 105
+1.80 170
+2.00 170
+2.00 100
+2.20 100
+2.20 150
+2.40 150
+2.40 110
+2.60 110
+2.60 165
+3.00 165
+3.00 100
 30.00 100
 [END COURSE DATA]
 """,
@@ -237,14 +266,123 @@ class UiFailure(RuntimeError):
     pass
 
 
+def validate_mtb_course_sidecar(
+        path: Path, expected_preset: str, expected_title: str) -> dict:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        title = document["title"]
+        source = document["source"]["intervals"]
+        conversion = document["conversion"]
+        preset = conversion["preset"]
+        parameters = conversion["parameters"]
+        course = document["course"]
+        sections = course["sections"]
+        road_plan = document["roadPlan"]
+        road_pieces = road_plan["pieces"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise UiFailure(f"Invalid MTB course metadata: {path}") from error
+    if (
+        not isinstance(title, str)
+        or title != expected_title
+        or preset != expected_preset
+        or not isinstance(parameters, dict)
+        or not isinstance(course, dict)
+        or not isinstance(road_plan, dict)
+        or not isinstance(road_pieces, list)
+        or not road_pieces
+        or not isinstance(source, list)
+        or not isinstance(sections, list)
+        or not source
+        or len(source) != len(sections)
+    ):
+        raise UiFailure(
+            "MTB course metadata or preset does not match: "
+            f"expected={expected_preset!r}, actual={preset!r}, "
+            f"source={len(source) if isinstance(source, list) else 'invalid'}, "
+            f"sections={len(sections) if isinstance(sections, list) else 'invalid'}"
+        )
+
+    source_fields = ("startMs", "durationMs", "startWatts", "endWatts")
+    section_fields = (
+        "sourceStartMs",
+        "nominalDurationMs",
+        "targetStartWatts",
+        "targetEndWatts",
+    )
+    duration_ms = 0
+    expected_start_ms = 0
+    for index, (interval, section) in enumerate(zip(source, sections)):
+        try:
+            source_values = tuple(interval[field] for field in source_fields)
+            section_values = tuple(section[field] for field in section_fields)
+        except (KeyError, TypeError) as error:
+            raise UiFailure(
+                f"MTB course prescription fields are missing at interval {index}"
+            ) from error
+        times = source_values[:2]
+        watts = source_values[2:]
+        if (source_values != section_values
+                or any(isinstance(value, bool) or not isinstance(value, int)
+                       for value in times)
+                or source_values[0] != expected_start_ms
+                or source_values[1] <= 0
+                or any(isinstance(value, bool)
+                       or not isinstance(value, (int, float))
+                       or not math.isfinite(value)
+                       or value < 0.0 for value in watts)):
+            raise UiFailure(
+                f"MTB course prescription changed at interval {index}"
+            )
+        duration_ms += source_values[1]
+        expected_start_ms += source_values[1]
+
+    route_payload = {"course": course, "roadPlan": road_plan}
+    try:
+        route_bytes = json.dumps(
+            route_payload,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        grades = [float(section["gradePercent"]) for section in sections]
+        terrains = [section["terrain"] for section in sections]
+        turns = [float(piece["turnRadians"]) for piece in road_pieces]
+        grade_scale = float(parameters["gradeScale"])
+        technicality = float(parameters["technicality"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise UiFailure(f"Invalid MTB route metadata: {path}") from error
+    numeric_route_values = grades + turns + [grade_scale, technicality]
+    if (any(not math.isfinite(value) for value in numeric_route_values)
+            or any(not isinstance(terrain, str) or not terrain
+                   for terrain in terrains)):
+        raise UiFailure(f"Invalid MTB route values: {path}")
+
+    return {
+        "title": title,
+        "preset": preset,
+        "interval_count": len(source),
+        "duration_ms": duration_ms,
+        "source_intervals": source,
+        "route_fingerprint": hashlib.sha256(route_bytes).hexdigest(),
+        "grade_scale": grade_scale,
+        "technicality": technicality,
+        "technical_section_count": sum(
+            terrain != "smooth-trail" for terrain in terrains
+        ),
+        "maximum_absolute_grade_percent": max(map(abs, grades)),
+        "total_absolute_turn_radians": sum(map(abs, turns)),
+    }
+
+
 class UiDriver:
     def __init__(self, root: Path, artifacts: Path, app_pgid: int):
         import pyatspi
-        from Xlib import X, display
+        from Xlib import X, XK, display
         from Xlib.ext import xtest
 
         self.pyatspi = pyatspi
         self.X = X
+        self.XK = XK
         self.display = display.Display()
         self.xtest = xtest
         self.root_path = root
@@ -424,7 +562,7 @@ class UiDriver:
                 f"Cannot activate {self.role(node)} {self.name(node)!r}"
             ) from error
 
-    def click(self, node):
+    def _mouse_click(self, node, button):
         try:
             bounds = node.queryComponent().getExtents(
                 self.pyatspi.DESKTOP_COORDS
@@ -434,13 +572,19 @@ class UiDriver:
             x = bounds.x + bounds.width // 2
             y = bounds.y + bounds.height // 2
             self.xtest.fake_input(self.display, self.X.MotionNotify, x=x, y=y)
-            self.xtest.fake_input(self.display, self.X.ButtonPress, 1)
-            self.xtest.fake_input(self.display, self.X.ButtonRelease, 1)
+            self.xtest.fake_input(self.display, self.X.ButtonPress, button)
+            self.xtest.fake_input(self.display, self.X.ButtonRelease, button)
             self.display.sync()
         except Exception as error:
             raise UiFailure(
                 f"Cannot click {self.role(node)} {self.name(node)!r}"
             ) from error
+
+    def click(self, node):
+        self._mouse_click(node, 1)
+
+    def context_click(self, node):
+        self._mouse_click(node, 3)
 
     def activate_named(self, name, role=None, showing=None, timeout=30.0):
         deadline = time.monotonic() + timeout
@@ -533,8 +677,19 @@ class UiDriver:
             if self.role(node) in ("list item", "table cell"):
                 self.click(node)
                 time.sleep(0.5)
-                return
+                return node
         raise UiFailure(f"Cannot click selectable item {name!r}")
+
+    def select_named_item_exact(self, name):
+        return self.click_named_item(name)
+
+    def right_click_named_item(self, name):
+        for node in reversed(self.find_all(name=name, showing=True)):
+            if self.role(node) in ("list item", "table cell"):
+                self.context_click(node)
+                time.sleep(0.5)
+                return
+        raise UiFailure(f"Cannot context-click selectable item {name!r}")
 
     def combo_with_items(
             self, expected, timeout=15.0, require_interactable=False):
@@ -612,6 +767,23 @@ class UiDriver:
         self.xtest.fake_input(self.display, self.X.KeyPress, keycode)
         self.xtest.fake_input(self.display, self.X.KeyRelease, keycode)
         self.display.sync()
+
+    def send_named_key(self, name: str):
+        keysym = self.XK.string_to_keysym(name)
+        keycode = self.display.keysym_to_keycode(keysym)
+        if not keysym or not keycode:
+            raise UiFailure(f"X11 key is unavailable: {name}")
+        self.xtest.fake_input(self.display, self.X.KeyPress, keycode)
+        self.xtest.fake_input(self.display, self.X.KeyRelease, keycode)
+        self.display.sync()
+
+    def activate_popup_item(self, zero_based_index: int):
+        if zero_based_index < 0:
+            raise UiFailure("Popup menu index must not be negative")
+        self.send_named_key("Home")
+        for unused in range(zero_based_index):
+            self.send_named_key("Down")
+        self.send_named_key("Return")
 
     def screenshot(self, name: str, node=None):
         screen = self.display.screen()
@@ -796,6 +968,167 @@ class UiDriver:
         )
 
 
+class MtbCourseUiWorkflow:
+    PRESET_CONTROL_NAMES = {
+        "workout-first": "Workout first",
+        "balanced": "Balanced",
+        "ride-first": "Ride first",
+    }
+    CONTEXT_ACTION_STEPS = {
+        "Create MTB Course": 5,
+        "Edit MTB Course": 5,
+    }
+
+    def __init__(
+        self,
+        driver: UiDriver,
+        root: Path,
+        artifacts: Path,
+        capture_screenshots: bool,
+        enter_train,
+    ):
+        self.driver = driver
+        self.artifacts = artifacts
+        self.capture_screenshots = capture_screenshots
+        self.enter_train = enter_train
+        self.workouts = root / "library" / ATHLETE / "workouts"
+        self.course_path = self.workouts / "ui-test-mtb.crs"
+        self.sidecar_path = self.workouts / "ui-test-mtb.gcmtb.json"
+        self.title = "ui-test MTB"
+        self.workout_name = "ui-test-mtb"
+
+    def run(self) -> dict:
+        results = [
+            self.create("workout-first"),
+            self.edit("balanced"),
+            self.edit("ride-first"),
+        ]
+        prescriptions = [result["source_intervals"] for result in results]
+        if prescriptions[0] != prescriptions[1] or prescriptions[1] != prescriptions[2]:
+            raise UiFailure("Create MTB Course changed the source prescription")
+        fingerprints = [result["route_fingerprint"] for result in results]
+        if len(set(fingerprints)) != len(fingerprints):
+            raise UiFailure("Create MTB Course presets produced identical routes")
+        for metric in ("grade_scale", "technicality", "total_absolute_turn_radians"):
+            values = [result[metric] for result in results]
+            if not values[0] < values[1] < values[2]:
+                raise UiFailure(
+                    f"Create MTB Course preset ordering is invalid for {metric}: "
+                    f"{values!r}"
+                )
+        technical_counts = [
+            result["technical_section_count"] for result in results
+        ]
+        if not technical_counts[0] < technical_counts[1] < technical_counts[2]:
+            raise UiFailure(
+                "Create MTB Course technical terrain ordering is invalid: "
+                f"{technical_counts!r}"
+            )
+        write_text(
+            self.artifacts / "mtb-course-ui-summary.json",
+            json.dumps(
+                [
+                    {
+                        key: value
+                        for key, value in result.items()
+                        if key != "source_intervals"
+                    }
+                    for result in results
+                ],
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        return results[-1]
+
+    def _context_action(self, workout_name: str, action_name: str) -> None:
+        self.enter_train()
+        self.driver.right_click_named_item(workout_name)
+        try:
+            action_steps = self.CONTEXT_ACTION_STEPS[action_name]
+        except KeyError as error:
+            raise UiFailure(f"Unsupported workout context action: {action_name}") from error
+        self.driver.activate_popup_item(action_steps)
+        try:
+            self.driver.find(action_name, "dialog", showing=True, timeout=8.0)
+        except UiFailure:
+            cancel = self.driver.find_all(
+                name="Cancel", role="push button", showing=True
+            )
+            if cancel:
+                self.driver.activate(cancel[-1])
+            raise
+
+    def _select_preset(self, preset: str) -> None:
+        try:
+            control_name = self.PRESET_CONTROL_NAMES[preset]
+        except KeyError as error:
+            raise UiFailure(f"Unsupported MTB course preset: {preset}") from error
+        control = self.driver.find(control_name, showing=True, timeout=8.0)
+        self.driver.click(control)
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            if self.driver.checked(control):
+                return
+            time.sleep(0.1)
+        raise UiFailure(f"MTB course preset did not become selected: {preset}")
+
+    def _preserve_and_validate(self, preset: str) -> dict:
+        shutil.copy2(
+            self.sidecar_path,
+            self.artifacts / f"mtb-course-{preset}.gcmtb.json",
+        )
+        result = validate_mtb_course_sidecar(
+            self.sidecar_path, preset, self.title
+        )
+        result["workout_name"] = self.workout_name
+        return result
+
+    def create(self, preset: str) -> dict:
+        self._context_action("ui-test", "Create MTB Course")
+        self._select_preset(preset)
+        if self.capture_screenshots:
+            self.driver.screenshot(f"03-mtb-course-create-{preset}")
+        self.driver.activate(
+            self.driver.find(
+                "Create Course", "push button", showing=True, timeout=8.0
+            )
+        )
+        self.driver.wait_file(self.course_path, timeout=20.0)
+        self.driver.wait_file(self.sidecar_path, timeout=20.0)
+        self.driver.find(
+            self.workout_name, "table cell", showing=True, timeout=30.0
+        )
+        return self._preserve_and_validate(preset)
+
+    def edit(self, preset: str) -> dict:
+        self._context_action(self.workout_name, "Edit MTB Course")
+        before = self.sidecar_path.read_bytes()
+        self._select_preset(preset)
+        if self.capture_screenshots:
+            self.driver.screenshot(f"03-mtb-course-edit-{preset}")
+        self.driver.activate(
+            self.driver.find(
+                "Save Course", "push button", showing=True, timeout=8.0
+            )
+        )
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            try:
+                if self.sidecar_path.read_bytes() != before:
+                    break
+            except OSError:
+                pass
+            time.sleep(0.1)
+        else:
+            raise UiFailure(f"MTB course metadata did not change to {preset}")
+        self.driver.find(
+            self.workout_name, "table cell", showing=True, timeout=30.0
+        )
+        return self._preserve_and_validate(preset)
+
+
 class WorkoutGameUiWorkflow:
     def __init__(
         self,
@@ -804,6 +1137,7 @@ class WorkoutGameUiWorkflow:
         artifacts: Path,
         capture_screenshots: bool,
         enter_train,
+        workout_names=(),
     ):
         self.driver = driver
         self.root = root
@@ -819,6 +1153,7 @@ class WorkoutGameUiWorkflow:
         self.first_frame = None
         self.initial_gear = 0.0
         self.stop_training_button = None
+        self.workout_names = tuple(workout_names)
         run_seconds = game_run_seconds_from_environment()
         self.run_delays = (
             run_seconds / 4.0,
@@ -836,17 +1171,22 @@ class WorkoutGameUiWorkflow:
 
     def select_prepared_workout(self, timeout=20.0) -> None:
         deadline = time.monotonic() + timeout
+        requested = getattr(self, "workout_names", ())
+        workout_names = requested or (
+            "Pre-release UI test", "ui-test.erg", "ui-test"
+        )
         while time.monotonic() < deadline:
-            for workout_name in (
-                "Pre-release UI test", "ui-test.erg", "ui-test"
-            ):
+            for workout_name in workout_names:
                 try:
-                    self.driver.click_named_item(workout_name)
+                    self.driver.select_named_item_exact(workout_name)
                     return
                 except UiFailure:
                     pass
             time.sleep(0.2)
-        raise UiFailure("Prepared ui-test.erg workout was not selectable")
+        raise UiFailure(
+            "Requested workout was not selectable: "
+            + ", ".join(repr(name) for name in workout_names)
+        )
 
     def open_game(self) -> None:
         self.enter_train()
@@ -1093,6 +1433,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
         driver = UiDriver(root, artifacts, app_pgid)
         suite = Suite(driver, artifacts)
         capture_screenshots = ui_screenshots_enabled_from_environment()
+        generated_course = {}
 
         def enter_train():
             driver.activate_named("Train", "menu item")
@@ -1227,13 +1568,27 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             finally:
                 stop_without_saving()
 
+        def mtb_course_lifecycle():
+            workflow = MtbCourseUiWorkflow(
+                driver,
+                root,
+                artifacts,
+                capture_screenshots,
+                enter_train,
+            )
+            generated_course.update(workflow.run())
+
         def game_training_lifecycle():
+            workout_names = ()
+            if generated_course.get("workout_name"):
+                workout_names = (generated_course["workout_name"],)
             workflow = WorkoutGameUiWorkflow(
                 driver,
                 root,
                 artifacts,
                 capture_screenshots,
                 enter_train,
+                workout_names,
             )
             completed = False
             try:
@@ -1299,6 +1654,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
         suite.run("prepared_workout_library_import", import_prepared_workout)
         suite.run("train_control_accessibility", train_controls)
         suite.run("data_generator_and_virtual_gears", generator_and_gears)
+        if validate_mtb_course_from_environment():
+            suite.run("create_edit_mtb_course_lifecycle", mtb_course_lifecycle)
         suite.run("workout_game_training_lifecycle", game_training_lifecycle)
         if not skip_save_as_from_environment():
             suite.run("new_workout_save_as", save_workout)
