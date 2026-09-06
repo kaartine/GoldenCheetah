@@ -1666,6 +1666,65 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             [],
         )
 
+    def test_reconciles_asynchronous_gear_transition_independently(self):
+        trace = [
+            {
+                "session_elapsed_ms": 2750.0,
+                "watts": 200.0,
+                "cadence": 80.0,
+                "hr": 140.0,
+                "gear": 6.0,
+            },
+            {
+                "session_elapsed_ms": 3200.0,
+                "watts": 230.0,
+                "cadence": 86.0,
+                "hr": 143.0,
+                "gear": 7.0,
+            },
+        ]
+        recording = [{
+            "secs": 3.0,
+            "cad": 80.0,
+            "hr": 140.0,
+            "km": 0.01,
+            "watts": 200.0,
+            "slope": 0.0,
+            "target": 200.0,
+            "virtualgear": 7.0,
+        }]
+
+        summary = ANALYZER.reconcile_acceptance(trace, [], recording)
+
+        self.assertEqual(summary["matched_recording_samples"], 1)
+        self.assertEqual(summary["gear_mismatches"], 0)
+
+    def test_reconciliation_rejects_persistent_gear_mismatch(self):
+        trace = [
+            {
+                "session_elapsed_ms": elapsed,
+                "watts": 200.0,
+                "cadence": 80.0,
+                "hr": 140.0,
+                "gear": 6.0,
+            }
+            for elapsed in (2500.0, 3000.0, 3500.0)
+        ]
+        recording = [{
+            "secs": 3.0,
+            "cad": 80.0,
+            "hr": 140.0,
+            "km": 0.01,
+            "watts": 200.0,
+            "slope": 0.0,
+            "target": 200.0,
+            "virtualgear": 7.0,
+        }]
+
+        summary = ANALYZER.reconcile_acceptance(trace, [], recording)
+
+        self.assertEqual(summary["gear_mismatches"], 1)
+
     def test_recording_alignment_uses_session_elapsed_time(self):
         trace = [{
             "source_ms": 5000.0,

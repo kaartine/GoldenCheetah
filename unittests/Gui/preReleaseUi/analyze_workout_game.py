@@ -429,6 +429,22 @@ def trace_for_recording(
     )
 
 
+def trace_has_recorded_gear(
+    samples: list[TraceSample],
+    times: list[float],
+    row: dict[str, float],
+) -> bool:
+    position = row["secs"] * 1000.0
+    first = bisect.bisect_left(times, position - TRACE_ALIGNMENT_WINDOW_MS)
+    last = bisect.bisect_right(times, position + TRACE_ALIGNMENT_WINDOW_MS)
+    expected = round(row["virtualgear"])
+    return any(
+        (gear := numeric(sample, "gear")) is not None
+        and round(gear) == expected
+        for sample in samples[first:last]
+    )
+
+
 def trainer_target_delta(
     target: TraceSample,
     recording: list[dict[str, float]],
@@ -506,7 +522,9 @@ def reconcile_acceptance(
         power_deltas.append(abs(values["watts"] - row["watts"]))
         cadence_deltas.append(abs(values["cadence"] - row["cad"]))
         heart_rate_deltas.append(abs(values["hr"] - row["hr"]))
-        gear_mismatches += int(round(values["gear"]) != round(row["virtualgear"]))
+        gear_mismatches += int(
+            not trace_has_recorded_gear(timed_trace, trace_times, row)
+        )
 
     recording_times = [row["secs"] * 1000.0 for row in recording]
     recording_distances = [row["km"] * 1000.0 for row in recording]
