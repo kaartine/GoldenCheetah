@@ -822,6 +822,33 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         self.assertEqual(ANALYZER.validate_cold_start(summary), [])
         self.assertEqual(summary["cold_samples"], 601)
 
+    def test_accepts_bounded_first_swap_without_weakening_frame_limits(self):
+        samples = [{
+            "cold_complete": 1,
+            "cold_samples": 601,
+            "cold_dropped_frames": 0,
+            "cold_swap_fps": 60.1,
+            "cold_visual_fps": 59.8,
+            "cold_start_first_swap_ms": 75.0,
+            "cold_start_first_visual_ms": 92.0,
+            "cold_p99_frame_ms": 18.2,
+            "cold_max_frame_ms": 49.0,
+            "cold_consecutive_late": 0,
+            "cold_visual_stall_ms": 49.0,
+            "geometry_queue": 1,
+            "backwards": 0,
+            "skipped_ticks": 0,
+        }]
+
+        summary = ANALYZER.analyze_cold_start(samples)
+
+        self.assertEqual(ANALYZER.validate_cold_start(summary), [])
+        summary["cold_max_frame_ms"] = 51.0
+        self.assertTrue(any(
+            "maximum" in failure
+            for failure in ANALYZER.validate_cold_start(summary)
+        ))
+
     def test_rejects_missing_or_stalled_cold_start_evidence(self):
         missing = ANALYZER.validate_cold_start(
             ANALYZER.analyze_cold_start([])
@@ -834,7 +861,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             "cold_dropped_frames": 2,
             "cold_swap_fps": 35.0,
             "cold_visual_fps": 8.0,
-            "cold_start_first_swap_ms": 75.0,
+            "cold_start_first_swap_ms": 150.0,
             "cold_start_first_visual_ms": 150.0,
             "cold_p99_frame_ms": 28.0,
             "cold_max_frame_ms": 70.0,

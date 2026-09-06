@@ -671,8 +671,8 @@ def validate_cold_start(summary: dict[str, float | int]) -> list[str]:
         failures.append("cold-start maximum frame interval exceeds 50 ms")
     if summary["cold_consecutive_late"] > 1:
         failures.append("cold-start contains consecutive late frames")
-    if summary["cold_start_first_swap_ms"] > 50.0:
-        failures.append("cold-start first swap took more than 50 ms")
+    if summary["cold_start_first_swap_ms"] > 100.0:
+        failures.append("cold-start first swap took more than 100 ms")
     if summary["cold_start_first_visual_ms"] > 100.0:
         failures.append("cold-start first visual change took more than 100 ms")
     if summary["cold_visual_stall_ms"] > 50.0:

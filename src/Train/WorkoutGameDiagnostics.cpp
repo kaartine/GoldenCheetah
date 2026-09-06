@@ -109,6 +109,7 @@ WorkoutGameColdStartFrameCapture::snapshot(
     std::array<std::int64_t, Capacity> intervals{};
     std::size_t intervalCount = 0;
     std::int64_t previousTime = start;
+    bool hasPreviousSwap = false;
     std::int64_t unchangedSince = start;
     std::uint64_t revision = initialRevision.load(std::memory_order_relaxed);
     bool hasPresentedBaseline = false;
@@ -122,16 +123,21 @@ WorkoutGameColdStartFrameCapture::snapshot(
         if (timestamp < start || timestamp > end || timestamp < previousTime) {
             continue;
         }
-        const std::int64_t interval = timestamp - previousTime;
-        intervals[intervalCount++] = interval;
-        result.maximumFrameIntervalMs = std::max(
-                result.maximumFrameIntervalMs, milliseconds(interval));
-        if (interval > LateFrameThresholdNs) {
-            ++consecutiveLate;
-            result.maximumConsecutiveLateFrames = std::max(
-                    result.maximumConsecutiveLateFrames, consecutiveLate);
+        if (hasPreviousSwap) {
+            const std::int64_t interval = timestamp - previousTime;
+            intervals[intervalCount++] = interval;
+            result.maximumFrameIntervalMs = std::max(
+                    result.maximumFrameIntervalMs, milliseconds(interval));
+            if (interval > LateFrameThresholdNs) {
+                ++consecutiveLate;
+                result.maximumConsecutiveLateFrames = std::max(
+                        result.maximumConsecutiveLateFrames, consecutiveLate);
+            } else {
+                consecutiveLate = 0;
+            }
         } else {
-            consecutiveLate = 0;
+            result.startToFirstSwapMs = milliseconds(timestamp - start);
+            hasPreviousSwap = true;
         }
         const std::uint64_t sampleRevision =
                 samples[index].visualRevision.load(std::memory_order_relaxed);
@@ -161,9 +167,6 @@ WorkoutGameColdStartFrameCapture::snapshot(
         result.longestUnchangedVisualIntervalMs = std::max(
                 result.longestUnchangedVisualIntervalMs,
                 milliseconds(end - unchangedSince));
-    }
-    if (result.frameCount > 0) {
-        result.startToFirstSwapMs = milliseconds(intervals[0]);
     }
     if (intervalCount > 0) {
         std::sort(intervals.begin(), intervals.begin() + intervalCount);

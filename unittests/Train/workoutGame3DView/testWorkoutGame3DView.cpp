@@ -1034,14 +1034,32 @@ private slots:
         capture.start(StartNs, 1);
         capture.recordFrame(StartNs + 30000000ll, 2);
         capture.recordFrame(StartNs + 61000000ll, 3);
-        capture.recordFrame(StartNs + 77000000ll, 4);
+        capture.recordFrame(StartNs + 92000000ll, 4);
+        capture.recordFrame(StartNs + 108000000ll, 5);
 
         const WorkoutGameColdStartFrameSnapshot snapshot =
-                capture.snapshot(StartNs + 77000000ll);
+                capture.snapshot(StartNs + 108000000ll);
         QCOMPARE(snapshot.startToFirstSwapMs, 30.0);
         QCOMPARE(snapshot.p99FrameIntervalMs, 31.0);
         QCOMPARE(snapshot.maximumFrameIntervalMs, 31.0);
         QCOMPARE(snapshot.maximumConsecutiveLateFrames, std::uint32_t(2));
+    }
+
+    void coldStartCaptureSeparatesFirstSwapFromFrameIntervals()
+    {
+        WorkoutGameColdStartFrameCapture capture;
+        constexpr std::int64_t StartNs = 2500000000ll;
+        capture.start(StartNs, 1);
+        capture.recordFrame(StartNs + 62000000ll, 1);
+        capture.recordFrame(StartNs + 78000000ll, 2);
+        capture.recordFrame(StartNs + 95000000ll, 3);
+
+        const WorkoutGameColdStartFrameSnapshot snapshot =
+                capture.snapshot(StartNs + 95000000ll);
+        QCOMPARE(snapshot.startToFirstSwapMs, 62.0);
+        QCOMPARE(snapshot.p99FrameIntervalMs, 17.0);
+        QCOMPARE(snapshot.maximumFrameIntervalMs, 17.0);
+        QCOMPARE(snapshot.maximumConsecutiveLateFrames, std::uint32_t(0));
     }
 
     void coldStartCaptureReportsFixedCapacityOverflow()
