@@ -410,6 +410,9 @@ private slots:
         QVERIFY(guarantee.contains("all presets", Qt::CaseInsensitive));
         QVERIFY(guarantee.contains("target", Qt::CaseInsensitive));
         QVERIFY(guarantee.contains("timing", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("ERG", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("terrain variation", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("course slope", Qt::CaseInsensitive));
 
         struct ExpectedPreset {
             const char *button;

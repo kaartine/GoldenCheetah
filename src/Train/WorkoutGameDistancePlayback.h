@@ -23,6 +23,7 @@ struct WorkoutGameDistancePlaybackSnapshot
     std::size_t sectionIndex = 0;
     std::int64_t nominalTimeMs = 0;
     std::int64_t sectionElapsedMs = 0;
+    std::int64_t sectionDurationMs = 0;
     double distanceMeters = 0.0;
     double timelineDistanceMeters = 0.0;
     double sectionProgress = 0.0;

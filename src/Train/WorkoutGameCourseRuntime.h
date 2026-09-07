@@ -11,6 +11,7 @@
 #define _GC_WorkoutGameCourseRuntime_h
 
 #include "WorkoutGameDistancePlayback.h"
+#include "WorkoutGameCoursePrescription.h"
 
 #include <QString>
 
@@ -32,7 +33,12 @@ public:
 
     bool enabled() const;
     double ftpWatts() const;
+    WorkoutGameCoursePreset coursePreset() const;
     double workoutTimelinePositionMeters() const;
+    std::int64_t workoutTimelinePositionMs() const;
+    std::int64_t generatedProgressSectionDurationMs() const;
+    double generatedProgressSectionProgress() const;
+    WorkoutGameTerrainKind generatedProgressTerrain() const;
     const WorkoutGameCourse &visualCourse() const;
     WorkoutGameDistancePlaybackSnapshot atWorkoutPosition(
             double positionMeters) const;
@@ -50,6 +56,8 @@ public:
 private:
     bool configured = false;
     double configuredFtpWatts = 0.0;
+    WorkoutGameCoursePreset configuredPreset =
+            WorkoutGameCoursePreset::Balanced;
     WorkoutGameCourse configuredVisualCourse;
     WorkoutGameDistancePlayback playback;
     WorkoutGameDistancePlaybackSnapshot latestProgress;

@@ -42,6 +42,7 @@ WorkoutGameCourseRuntimeStatus WorkoutGameCourseRuntime::configure(
         return WorkoutGameCourseRuntimeStatus::InvalidMetadata;
     }
     configuredFtpWatts = document.ftpWatts;
+    configuredPreset = document.preset;
     latestProgress = playback.atDistance(0.0);
     configured = true;
     return WorkoutGameCourseRuntimeStatus::Ready;
@@ -51,6 +52,7 @@ void WorkoutGameCourseRuntime::reset()
 {
     configured = false;
     configuredFtpWatts = 0.0;
+    configuredPreset = WorkoutGameCoursePreset::Balanced;
     configuredVisualCourse = WorkoutGameCourse();
     playback = WorkoutGameDistancePlayback();
     latestProgress = WorkoutGameDistancePlaybackSnapshot();
@@ -73,10 +75,40 @@ double WorkoutGameCourseRuntime::ftpWatts() const
     return configuredFtpWatts;
 }
 
+WorkoutGameCoursePreset WorkoutGameCourseRuntime::coursePreset() const
+{
+    return configuredPreset;
+}
+
 double WorkoutGameCourseRuntime::workoutTimelinePositionMeters() const
 {
     return configured && latestProgress.ready
             ? latestProgress.timelineDistanceMeters : 0.0;
+}
+
+std::int64_t WorkoutGameCourseRuntime::workoutTimelinePositionMs() const
+{
+    return configured && latestProgress.ready
+            ? latestProgress.nominalTimeMs : 0;
+}
+
+std::int64_t WorkoutGameCourseRuntime::generatedProgressSectionDurationMs() const
+{
+    return configured && latestProgress.ready
+            ? latestProgress.sectionDurationMs : 0;
+}
+
+double WorkoutGameCourseRuntime::generatedProgressSectionProgress() const
+{
+    return configured && latestProgress.ready
+            && std::isfinite(latestProgress.sectionProgress)
+            ? latestProgress.sectionProgress : 0.0;
+}
+
+WorkoutGameTerrainKind WorkoutGameCourseRuntime::generatedProgressTerrain() const
+{
+    return configured && latestProgress.ready
+            ? latestProgress.terrain : WorkoutGameTerrainKind::SmoothTrail;
 }
 
 const WorkoutGameCourse &WorkoutGameCourseRuntime::visualCourse() const

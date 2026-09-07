@@ -134,6 +134,7 @@ all qt Train/workoutGameCourseConversion
 all qt Train/workoutGameCourseConversionDialog
 all qt Train/workoutGameCourseDocument
 all qt Train/workoutGameCourseRuntime
+all qt Train/workoutGameTrainerTargetPlanner
 all qt Train/workoutGameCourseSourceAdapter
 all qt Train/workoutGameDistanceCourse
 all qt Train/workoutGameDistancePlayback

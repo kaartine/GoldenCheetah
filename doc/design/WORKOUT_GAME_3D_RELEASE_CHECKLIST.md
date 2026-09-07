@@ -1497,4 +1497,15 @@ ViewModel cases with zero sanitizer findings, and both focused builds compile
 without warnings. Stable AppImage publication and its isolated packaged UI
 matrix remain the next B4 gate; this evidence does not replace `REL-04`.
 
+**Trainer-control refresh (2026-09-07):** generated courses now separate road
+physics from the command sent to the physical trainer. Workout First follows
+the original ERG prescription exactly. Balanced follows the same prescription
+with a bounded, zero-mean technical-feature signal, while Ride First retains
+slope control. The planner, course runtime, distance playback, conversion UI,
+trainer coordinator, Workout Ride, FTMS readiness and Bluetooth lifecycle
+suites pass 200 focused cases in total. Planner and runtime ASan/UBSan repeats
+also pass. A complete application link succeeds in the Jammy/Qt 6.8.3 release
+container. Packaged AppImage checks and a physical KICKR ride remain open; this
+evidence does not replace `REL-04`.
+
 The build is not a release candidate while any P0 task remains open.

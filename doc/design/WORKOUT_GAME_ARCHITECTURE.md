@@ -1112,11 +1112,21 @@ power feels like a slow/high-torque or fast/low-torque effort.
 
 ### Trainer Integration
 
-`TrainSidebar` remains the only component allowed to send trainer commands. The
-course model publishes the current grade and requested road-feel parameters;
-existing Train control code validates and applies them using slope or resistance
-control. Unsupported trainers keep a passive speed simulation and display a
-clear capability state.
+`TrainSidebar` remains the only component allowed to send trainer commands.
+Generated MTB courses keep distance-based progression and road physics separate
+from physical trainer control. `Workout first` sends the original prescribed
+power as ERG commands. `Balanced` also uses ERG and adds short, deterministic
+technical-feature efforts bounded to 8 percent and 20 W. Each effort uses a
+smooth compensating offset whose mean over the source section is zero, keeping
+the prescribed average workload. Course grade affects game speed and road
+physics, not Balanced trainer power. `Ride first` sends course grade through
+slope control. A trainer without target-power support falls back to slope
+control; power and slope commands are never sent concurrently.
+
+`WorkoutGameTrainerTargetPlanner` owns this policy as pure, unit-tested logic.
+The UI, recording target, anonymous target trace and physical device command all
+consume the same planned target. The data generator is therefore not a special
+substitute for exercising the physical-trainer command path.
 
 A trainer-difficulty setting may scale the gradient felt at the pedals without
 changing the full gradient used by road-speed physics. This lets a steep virtual

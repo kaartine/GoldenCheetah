@@ -30,6 +30,7 @@
 #include "TrainingCommandRouter.h"
 #include "TrainingDeviceSelection.h"
 #include "WorkoutGameCourseConversionDialog.h"
+#include "WorkoutGameTrainerTargetPlanner.h"
 #include "RideImportWizard.h"
 #include "HelpWhatsThis.h"
 #include "RideFile.h"
@@ -1225,16 +1226,11 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
         setStatusFlags(RT_MODE_ERGO);
         clearStatusFlags(RT_MODE_SPIN);
 
-        // update every active device
-        foreach(int dev, activeDevices) Devices[dev].controller->setMode(RT_MODE_ERGO);
-
     } else { // SLOPE MODE
         setStatusFlags(RT_MODE_SPIN);
         clearStatusFlags(RT_MODE_ERGO);
-
-        // update every active device
-        foreach(int dev, activeDevices) Devices[dev].controller->setMode(RT_MODE_SPIN);
     }
+    setActiveDevicesToWorkoutMode();
 
     if ((mode != ErgFileFormat::erg && mode != ErgFileFormat::mrc)
             || !context->currentErgFile()) {
@@ -1344,7 +1340,13 @@ TrainSidebar::updateWorkoutDistanceProgress()
                     || displayPower > 5.0);
     if (progress.ready) {
         displayWorkoutDistance = progress.distanceMeters / 1000.0;
-        displayWorkoutTargetWatts = progress.targetWatts;
+        displayWorkoutTargetWatts =
+                WorkoutGameTrainerTargetPlanner::workoutPowerWatts(
+                    workoutGameCourseRuntime.coursePreset(),
+                    progress.targetWatts,
+                    progress.terrain,
+                    progress.sectionProgress,
+                    progress.sectionDurationMs);
     }
 }
 
@@ -1365,7 +1367,13 @@ TrainSidebar::seekWorkoutDistance(double distanceKilometers)
     if (progress.ready) {
         rawWorkoutDistance = progress.distanceMeters / 1000.0;
         displayWorkoutDistance = rawWorkoutDistance;
-        displayWorkoutTargetWatts = progress.targetWatts;
+        displayWorkoutTargetWatts =
+                WorkoutGameTrainerTargetPlanner::workoutPowerWatts(
+                    workoutGameCourseRuntime.coursePreset(),
+                    progress.targetWatts,
+                    progress.terrain,
+                    progress.sectionProgress,
+                    progress.sectionDurationMs);
     }
 }
 
@@ -1753,12 +1761,11 @@ void TrainSidebar::Start()       // when start button is pressed
         if (mode == ErgFileFormat::erg || mode == ErgFileFormat::mrc) {
             setStatusFlags(RT_MODE_ERGO);
             clearStatusFlags(RT_MODE_SPIN);
-            foreach(int dev, activeDevices) Devices[dev].controller->setMode(RT_MODE_ERGO);
         } else { // SLOPE MODE
             setStatusFlags(RT_MODE_SPIN);
             clearStatusFlags(RT_MODE_ERGO);
-            foreach(int dev, activeDevices) Devices[dev].controller->setMode(RT_MODE_SPIN);
         }
+        setActiveDevicesToWorkoutMode();
 
         setStatusFlags(RT_RUNNING);
 
@@ -1855,6 +1862,7 @@ void TrainSidebar::Pause()        // pause capture to recalibrate
         lap_time.start();
         clearStatusFlags(RT_PAUSED);
         foreach(int dev, activeDevices) Devices[dev].controller->restart();
+        setActiveDevicesToWorkoutMode();
         gui_timer->start(REFRESHRATE);
         if (status & RT_RECORDING) disk_timer->start(SAMPLERATE);
         load_period.restart();
@@ -3006,6 +3014,23 @@ TrainerControlCapabilities TrainSidebar::activeTrainerCapabilities()
     return foundTrainer ? common : TrainerControlCapabilities();
 }
 
+bool TrainSidebar::workoutGameUsesTargetPower()
+{
+    return workoutGameCourseRuntime.enabled()
+            && WorkoutGameTrainerTargetPlanner::usesTargetPower(
+                workoutGameCourseRuntime.coursePreset(),
+                activeTrainerCapabilities().targetPower);
+}
+
+void TrainSidebar::setActiveDevicesToWorkoutMode()
+{
+    const int deviceMode = ((status & RT_MODE_ERGO)
+            || workoutGameUsesTargetPower()) ? RT_MODE_ERGO : RT_MODE_SPIN;
+    foreach (int dev, activeDevices) {
+        Devices[dev].controller->setMode(deviceMode);
+    }
+}
+
 WorkoutRideModeAvailability TrainSidebar::workoutRideModeAvailability()
 {
     const bool ergWorkout = context->currentErgFile()
@@ -3050,10 +3075,15 @@ void TrainSidebar::trainerControlCapabilitiesChanged()
     }
     emit workoutRideModeChanged();
 
-    if (workoutRideModeEnabled
+    if (workoutGameCourseRuntime.enabled() && !calibrating) {
+        setActiveDevicesToWorkoutMode();
+    }
+
+    if ((workoutRideModeEnabled || workoutGameCourseRuntime.enabled())
             && (status & RT_RUNNING)
             && !(status & RT_PAUSED)
-            && workoutRideModeAvailability().supported) {
+            && (!workoutRideModeEnabled
+                || workoutRideModeAvailability().supported)) {
         applyWorkoutTarget(false);
     }
 }
@@ -3096,6 +3126,7 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
     TrainerTarget target;
     bool dispatchTarget = true;
     double generatedCourseTargetWatts = -1.0;
+    const double workoutPositionMeters = displayWorkoutDistance * 1000.0;
 
     if (status&RT_MODE_ERGO) {
         if (context->currentErgFile()) {
@@ -3152,7 +3183,6 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
         target = TrainerTarget::erg(load, load_msecs);
     } else {
         resetWorkoutRideCommandDispatch();
-        const double workoutPositionMeters = displayWorkoutDistance * 1000.0;
         const bool generatedCourseFinished = workoutCourseFinished();
         if (generatedCourseFinished) {
             target = TrainerTarget::slope(
@@ -3181,17 +3211,43 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             }
 
             displayWorkoutLap = curLap;
-            target = TrainerTarget::slope(
-                    slope,
-                    bicycle.WindResistance(displayAltitude),
-                    workoutPositionMeters);
+            if (workoutGameCourseRuntime.enabled()) {
+                WorkoutGameTrainerTargetInput input;
+                input.preset = workoutGameCourseRuntime.coursePreset();
+                input.targetPowerSupported =
+                        activeTrainerCapabilities().targetPower;
+                input.prescribedWatts =
+                        workoutGameCourseRuntime.generatedProgressTargetWatts(1.0);
+                input.gradePercent = slope;
+                input.terrain =
+                        workoutGameCourseRuntime.generatedProgressTerrain();
+                input.sectionProgress = workoutGameCourseRuntime
+                        .generatedProgressSectionProgress();
+                input.sectionDurationMs = workoutGameCourseRuntime
+                        .generatedProgressSectionDurationMs();
+                input.windResistance =
+                        bicycle.WindResistance(displayAltitude);
+                input.workoutPosition =
+                        workoutGameCourseRuntime.workoutTimelinePositionMs();
+                target = WorkoutGameTrainerTargetPlanner::plan(input);
+                if (target.mode == TrainerTargetMode::Erg) {
+                    load = std::lround(target.value);
+                    displayWorkoutTargetWatts = target.value;
+                }
+            } else {
+                target = TrainerTarget::slope(
+                        slope,
+                        bicycle.WindResistance(displayAltitude),
+                        workoutPositionMeters);
+            }
         } else {
             target = TrainerTarget::slope(
                     slope,
                     bicycle.WindResistance(displayAltitude),
                     workoutPositionMeters);
         }
-        if (!generatedCourseFinished) {
+        if (!generatedCourseFinished
+                && target.mode == TrainerTargetMode::Slope) {
             generatedCourseTargetWatts =
                     workoutGameCourseRuntime.generatedProgressTargetWatts(
                         virtualDrivetrain.relativeRatio());
@@ -3208,8 +3264,10 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
         const TrainerTargetResult result = trainerTargetCoordinator.apply(
                 target, targetDevices);
         if (result == TrainerTargetResult::WorkoutFinished) {
+            const double contextPosition = status & RT_MODE_ERGO
+                    ? target.workoutPosition : workoutPositionMeters;
             context->notifySetNow(TrainSidebarRuntime::contextWorkoutPosition(
-                    target.workoutPosition, workoutCourseFinished()));
+                    contextPosition, workoutCourseFinished()));
             Stop(DEVICE_OK);
             return false;
         }
@@ -3236,8 +3294,10 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
         }
     }
 
+    const double contextPosition = status & RT_MODE_ERGO
+            ? target.workoutPosition : workoutPositionMeters;
     context->notifySetNow(TrainSidebarRuntime::contextWorkoutPosition(
-            target.workoutPosition, workoutCourseFinished()));
+            contextPosition, workoutCourseFinished()));
     return true;
 }
 
@@ -3267,7 +3327,7 @@ void TrainSidebar::toggleCalibration()
         context->notifyUnPause(); // get video started again, amongst other things
 
         // back to ergo/slope mode and restore load/gradient
-        if (status&RT_MODE_ERGO) {
+        if ((status & RT_MODE_ERGO) || workoutGameUsesTargetPower()) {
 
             foreach(int dev, activeDevices) {
                 if (calibrationDeviceIndex == dev) {
@@ -3309,7 +3369,7 @@ void TrainSidebar::toggleCalibration()
                 calibrationType = Devices[dev].controller->getCalibrationType();
 
                 // trainer (tacx vortex smart) doesn't appear to reduce resistance automatically when entering calibration mode
-                if (status&RT_MODE_ERGO)
+                if ((status & RT_MODE_ERGO) || workoutGameUsesTargetPower())
                     Devices[dev].controller->setLoad(0);
                 else
                     Devices[dev].controller->setGradient(0);

@@ -140,6 +140,7 @@ exists(unittests.pri) {
 			   Train/workoutGameCourseConversionDialog \
 			   Train/workoutGameCourseDocument \
 			   Train/workoutGameCourseRuntime \
+			   Train/workoutGameTrainerTargetPlanner \
 			   Train/workoutGameCourseSourceAdapter \
 			   Train/workoutGameDistanceCourse \
 			   Train/workoutGameDistancePlayback \

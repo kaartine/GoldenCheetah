@@ -382,6 +382,8 @@ class TrainSidebar : public GcWindow
         void resetWorkoutRideCommandDispatch();
         void scheduleWorkoutRideCommandRetry(int delayMs);
         TrainerControlCapabilities activeTrainerCapabilities();
+        bool workoutGameUsesTargetPower();
+        void setActiveDevicesToWorkoutMode();
         bool writeRecordingData(const QByteArray &data);
         void stopForRecordingFailure(TrainingRecordingIo::Failure failure);
         TrainingTelemetryTimeline::SampleTime auxiliaryTimestamp(

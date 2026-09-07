@@ -58,6 +58,7 @@ WorkoutGameDistancePlaybackSnapshot WorkoutGameDistancePlayback::atDistance(
     if (result.finished) section = configuredCourse.sections.end() - 1;
     result.sectionIndex = std::size_t(
             std::distance(configuredCourse.sections.begin(), section));
+    result.sectionDurationMs = section->nominalDurationMs;
     result.sectionProgress = section->lengthMeters > 0.0
             ? std::clamp(
                 (result.distanceMeters - section->startDistanceMeters)

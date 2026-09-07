@@ -99,6 +99,13 @@ private slots:
         QCOMPARE(runtime.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
         QVERIFY(runtime.enabled());
         QCOMPARE(runtime.ftpWatts(), 190.0);
+        QCOMPARE(runtime.coursePreset(), WorkoutGameCoursePreset::Balanced);
+        QCOMPARE(runtime.workoutTimelinePositionMs(), std::int64_t(0));
+        QCOMPARE(runtime.generatedProgressSectionDurationMs(),
+                 std::int64_t(10000));
+        QCOMPARE(runtime.generatedProgressSectionProgress(), 0.0);
+        QCOMPARE(runtime.generatedProgressTerrain(),
+                 WorkoutGameTerrainKind::Climb);
         QCOMPARE(runtime.visualCourse().status, WorkoutGameCourseStatus::Ready);
         QCOMPARE(runtime.visualCourse().durationMs, std::int64_t(30000));
         QVERIFY(runtime.visualCourse().roadPlan);
@@ -122,6 +129,12 @@ private slots:
         QCOMPARE(slow.distanceMeters, 20.0);
         QCOMPARE(slow.timelineDistanceMeters, 50.0);
         QCOMPARE(runtime.workoutTimelinePositionMeters(), 50.0);
+        QCOMPARE(runtime.workoutTimelinePositionMs(), std::int64_t(5000));
+        QCOMPARE(runtime.generatedProgressSectionDurationMs(),
+                 std::int64_t(10000));
+        QCOMPARE(runtime.generatedProgressSectionProgress(), 0.2);
+        QCOMPARE(runtime.generatedProgressTerrain(),
+                 WorkoutGameTerrainKind::Climb);
     }
 
     void runtimeMaterializesThePersistedPlanInsteadOfRegeneratingFromSeed()
@@ -198,6 +211,12 @@ private slots:
 
         QVERIFY(!runtime.enabled());
         QCOMPARE(runtime.ftpWatts(), 0.0);
+        QCOMPARE(runtime.coursePreset(), WorkoutGameCoursePreset::Balanced);
+        QCOMPARE(runtime.workoutTimelinePositionMs(), std::int64_t(0));
+        QCOMPARE(runtime.generatedProgressSectionDurationMs(), std::int64_t(0));
+        QCOMPARE(runtime.generatedProgressSectionProgress(), 0.0);
+        QCOMPARE(runtime.generatedProgressTerrain(),
+                 WorkoutGameTerrainKind::SmoothTrail);
         QVERIFY(!runtime.atWorkoutPosition(50).ready);
     }
 

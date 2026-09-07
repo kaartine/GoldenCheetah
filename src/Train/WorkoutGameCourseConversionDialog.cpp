@@ -112,18 +112,20 @@ QString presetDescriptionText(WorkoutGameCoursePreset preset)
     case WorkoutGameCoursePreset::WorkoutFirst:
         return QObject::tr(
             "Workout first assigns only roots or rollers to about 2 of 10 "
-            "eligible trail sections. Prescribed power targets and interval "
-            "times stay unchanged.");
+            "eligible trail sections. The trainer follows the original prescribed "
+            "power targets exactly and interval times stay unchanged.");
     case WorkoutGameCoursePreset::Balanced:
         return QObject::tr(
             "Balanced uses roots, rollers, rock gardens, logs, and skinnies on "
-            "about 6 of 10 eligible sections. Prescribed power targets and "
-            "interval times stay unchanged.");
+            "about 6 of 10 eligible sections. The trainer follows the prescribed "
+            "power profile with small, bounded technical efforts while interval "
+            "times stay unchanged.");
     case WorkoutGameCoursePreset::RideFirst:
         return QObject::tr(
             "Ride first uses technical terrain on about 9 of 10 eligible sections "
-            "and can add rock slabs, tabletops, and gap jumps. Prescribed power "
-            "targets and interval times stay unchanged.");
+            "and can add rock slabs, tabletops, and gap jumps. The trainer follows "
+            "course slope while prescribed targets remain visible as guidance and "
+            "interval times stay unchanged.");
     }
     return {};
 }
@@ -222,8 +224,9 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     layout->addWidget(heading);
 
     QLabel *prescriptionGuarantee = new QLabel(tr(
-            "All presets preserve prescribed power targets and interval timing "
-            "unchanged. Only elevation, curvature, and technical terrain change."), this);
+            "All presets preserve the workout structure and interval timing. "
+            "Workout first uses the original ERG targets, Balanced adds limited "
+            "terrain variation, and Ride first uses course slope."), this);
     prescriptionGuarantee->setObjectName(
             QStringLiteral("prescriptionGuaranteeLabel"));
     prescriptionGuarantee->setWordWrap(true);
