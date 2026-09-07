@@ -19,6 +19,7 @@
 #include "LibraryImportFileStager.h"
 #include "TrainDB.h"
 #include "WorkoutImportBatch.h"
+#include "WorkoutGameCourseDocument.h"
 
 #include <QFileInfo>
 #include <QScopedPointer>
@@ -100,7 +101,8 @@ Library::initialise(QDir gcRoot)
 
 namespace {
 
-constexpr qint64 MaximumMtbCourseMetadataBytes = 1024 * 1024;
+constexpr qint64 MaximumMtbCourseMetadataBytes =
+        WorkoutGameCourseDocumentCodec::MaximumDocumentBytes;
 
 QString mtbCourseMetadataPath(const QString &coursePath)
 {

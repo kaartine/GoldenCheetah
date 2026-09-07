@@ -66,7 +66,7 @@ class WorkoutGameCourseDocumentCodec
 {
 public:
     static constexpr int CurrentSchemaVersion = 4;
-    static constexpr qsizetype MaximumDocumentBytes = 1024 * 1024;
+    static constexpr qsizetype MaximumDocumentBytes = 8 * 1024 * 1024;
     static constexpr std::size_t MaximumSourceAnnotations = 4096;
 
     static bool valid(const WorkoutGameCourseDocument &document);

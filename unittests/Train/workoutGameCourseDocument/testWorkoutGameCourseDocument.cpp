@@ -800,8 +800,11 @@ private slots:
                     QJsonDocument(root).toJson(), decoded),
                  WorkoutGameCourseDocumentStatus::UnsupportedVersion);
 
+        const QByteArray oversized(
+                WorkoutGameCourseDocumentCodec::MaximumDocumentBytes + 1,
+                'x');
         QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
-                    QByteArray(2 * 1024 * 1024, 'x'), decoded),
+                    oversized, decoded),
                  WorkoutGameCourseDocumentStatus::ResourceLimit);
     }
 

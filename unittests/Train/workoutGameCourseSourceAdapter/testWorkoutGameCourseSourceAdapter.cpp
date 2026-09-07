@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameCourseSourceAdapter.h"
+#include "Train/WorkoutGameCourseCrsExporter.h"
 #include "Train/WorkoutGameDistancePlayback.h"
 #include "Train/WorkoutGameRoadCourse.h"
 #include "Train/WorkoutGameRoadPlan.h"
@@ -81,6 +82,34 @@ WorkoutGameCourseSourceRequest shortCourseRequest(bool uneven)
             {90000.0, 155.0}
         };
     }
+    return request;
+}
+
+WorkoutGameCourseSourceRequest ninetyMinuteEasyRequest()
+{
+    WorkoutGameCourseSourceRequest request;
+    request.sourceContents = QByteArrayLiteral("90 minute endurance fixture");
+    request.sourceFileName = QStringLiteral("90min_easy.erg2");
+    request.ftpWatts = 187.0;
+    request.preset = WorkoutGameCoursePreset::Balanced;
+
+    double timeMs = 0.0;
+    auto append = [&](double durationMs, double watts) {
+        if (request.points.empty()) {
+            request.points.push_back({timeMs, watts});
+        } else if (request.points.back().watts != watts) {
+            request.points.push_back({timeMs, watts});
+        }
+        timeMs += durationMs;
+        request.points.push_back({timeMs, watts});
+    };
+    append(5 * 60000.0, 112.0);
+    append(5 * 60000.0, 130.0);
+    for (int repetition = 0; repetition < 7; ++repetition) {
+        append(5 * 60000.0, 121.0);
+        append(5 * 60000.0, 140.0);
+    }
+    append(10 * 60000.0, 102.0);
     return request;
 }
 
@@ -435,6 +464,50 @@ private slots:
                  WorkoutGameCourseDocumentCodec::encode(second.document));
         QCOMPARE(first.document.course.roadPlan->pieces.size(),
                  second.document.course.roadPlan->pieces.size());
+    }
+
+    void ninetyMinuteEasyCourseCanBePersistedAndReopened()
+    {
+        const WorkoutGameCourseSourceResult converted =
+                WorkoutGameCourseSourceAdapter::convert(
+                    ninetyMinuteEasyRequest());
+        QCOMPARE(converted.status, WorkoutGameCourseSourceStatus::Ready);
+        QCOMPARE(converted.document.sourceIntervals.size(), std::size_t(17));
+        QCOMPARE(converted.document.course.nominalDurationMs,
+                 std::int64_t(90 * 60000));
+        QVERIFY(WorkoutGameCourseDocumentCodec::valid(converted.document));
+        QVERIFY(converted.document.course.roadPlan);
+        QCOMPARE(converted.document.course.roadPlan->generationVersion,
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
+        const QByteArray encoded = WorkoutGameCourseDocumentCodec::encode(
+                converted.document);
+        QVERIFY2(!encoded.isEmpty(),
+                 qPrintable(QStringLiteral("road pieces: %1")
+                    .arg(converted.document.course.roadPlan->pieces.size())));
+        QVERIFY(encoded.size() > 1024 * 1024);
+        QVERIFY(encoded.size()
+                <= WorkoutGameCourseDocumentCodec::MaximumDocumentBytes);
+        QVERIFY(!WorkoutGameCourseCrsExporter::encode(
+                    converted.document).isEmpty());
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString coursePath = directory.filePath(
+                QStringLiteral("90min_easy-mtb.crs"));
+        QString error;
+        const WorkoutGameCourseDocumentStatus saveStatus =
+                WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    coursePath, converted.document, error);
+        QVERIFY2(saveStatus == WorkoutGameCourseDocumentStatus::Ready,
+                 qPrintable(error));
+
+        WorkoutGameCourseDocument reopened;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    coursePath, reopened, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(reopened.sourceIntervals.size(), std::size_t(17));
+        QCOMPARE(reopened.course.nominalDurationMs,
+                 std::int64_t(90 * 60000));
     }
 
     void storedIntervalsCanBeRegeneratedWithAnotherPreset()
