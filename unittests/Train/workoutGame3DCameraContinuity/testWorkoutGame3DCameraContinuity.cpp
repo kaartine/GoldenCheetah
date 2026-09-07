@@ -227,6 +227,42 @@ private slots:
         QVERIFY2(std::abs(chase.riderPitchError) <= 12.0 * Pi / 180.0,
                  "side-to-chase update pushed rider out vertically");
     }
+
+    void steepClimbKeepsCameraAboveTheRiderGroundPlane()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 0x51ee9u;
+        course.durationMs = 120000;
+        WorkoutGameSection climb;
+        climb.feature = WorkoutGameFeature::Climb;
+        climb.terrain = WorkoutGameTerrainKind::Climb;
+        climb.durationMs = course.durationMs;
+        climb.targetWatts = 280.0;
+        climb.gradePercent = 30.0;
+        climb.lengthMeters = 80.0;
+        climb.difficulty = 1.0;
+        climb.challengeCount = 1;
+        course.sections.push_back(climb);
+
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel model;
+        model.setCourse(course, FtpWatts);
+
+        for (int index = 0; index <= 240; ++index) {
+            const double distance = 10.0 + 60.0 * double(index) / 240.0;
+            const std::int64_t timeMs = index * 50;
+            const WorkoutGameRoadSample rider =
+                    WorkoutGameRoadCourseBuilder::sample(road, distance);
+            model.setFrame(frameAt(road, distance, timeMs, 18.0),
+                           280.0, 280.0, 72, 155, 5);
+            QVERIFY2(model.cameraY() >= rider.visualGroundElevationMeters()
+                        + 1.50 - 1.0e-6,
+                     "camera entered the rising terrain behind the rider");
+        }
+    }
 };
 
 QTEST_MAIN(TestWorkoutGame3DCameraContinuity)

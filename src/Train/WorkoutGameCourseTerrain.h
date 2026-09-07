@@ -21,6 +21,7 @@ struct WorkoutGameCourseTerrainSelection
 {
     bool technical = false;
     std::size_t ordinal = 0;
+    bool showcase = false;
 };
 
 class WorkoutGameCourseTerrain
@@ -29,6 +30,7 @@ public:
     static constexpr std::uint32_t CurrentGenerationVersion = 1;
 
     static bool paletteEligible(WorkoutGameFeature feature);
+    static bool showcaseEligible(WorkoutGameFeature feature);
     static std::vector<WorkoutGameCourseTerrainSelection> selectTechnicalTerrain(
             const std::vector<double> &eligibleDistancesMeters,
             WorkoutGameCoursePreset preset,

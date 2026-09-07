@@ -19,6 +19,7 @@
 
 #include <array>
 #include <cmath>
+#include <set>
 
 namespace {
 
@@ -391,7 +392,7 @@ private slots:
         const QByteArray encoded =
                 WorkoutGameCourseDocumentCodec::encode(result.document);
         QVERIFY(encoded.contains("\"prescriptionMetadata\""));
-        QVERIFY(encoded.contains("\"algorithmVersion\":3"));
+        QVERIFY(encoded.contains("\"algorithmVersion\":4"));
     }
 
     void callerTitleAndPresetArePreserved()
@@ -479,6 +480,24 @@ private slots:
         QVERIFY(converted.document.course.roadPlan);
         QCOMPARE(converted.document.course.roadPlan->generationVersion,
                  WorkoutGameRoadPlan::CurrentGenerationVersion);
+        std::set<WorkoutGameTerrainKind> challengeKinds;
+        for (const WorkoutGameRoadPiece &piece
+                : converted.document.course.roadPlan->pieces) {
+            if (piece.challenge.enabled) challengeKinds.insert(piece.terrain);
+        }
+        const std::set<WorkoutGameTerrainKind> expectedChallengeKinds {
+            WorkoutGameTerrainKind::Roots,
+            WorkoutGameTerrainKind::Rollers,
+            WorkoutGameTerrainKind::RockGarden,
+            WorkoutGameTerrainKind::BunnyHop,
+            WorkoutGameTerrainKind::Drop,
+            WorkoutGameTerrainKind::Skinny,
+            WorkoutGameTerrainKind::LogOver,
+            WorkoutGameTerrainKind::Tabletop,
+            WorkoutGameTerrainKind::RockSlab,
+            WorkoutGameTerrainKind::GapJump
+        };
+        QCOMPARE(challengeKinds, expectedChallengeKinds);
         const QByteArray encoded = WorkoutGameCourseDocumentCodec::encode(
                 converted.document);
         QVERIFY2(!encoded.isEmpty(),
@@ -508,6 +527,15 @@ private slots:
         QCOMPARE(reopened.sourceIntervals.size(), std::size_t(17));
         QCOMPARE(reopened.course.nominalDurationMs,
                  std::int64_t(90 * 60000));
+        QVERIFY(reopened.course.roadPlan);
+        std::set<WorkoutGameTerrainKind> reopenedChallengeKinds;
+        for (const WorkoutGameRoadPiece &piece
+                : reopened.course.roadPlan->pieces) {
+            if (piece.challenge.enabled) {
+                reopenedChallengeKinds.insert(piece.terrain);
+            }
+        }
+        QCOMPARE(reopenedChallengeKinds, expectedChallengeKinds);
     }
 
     void storedIntervalsCanBeRegeneratedWithAnotherPreset()

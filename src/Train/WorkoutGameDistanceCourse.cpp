@@ -153,6 +153,8 @@ bool validCourseForEstimate(const WorkoutGameDistanceCourse &course)
                 || section.gradePercent > 30.0
                 || section.difficulty < 0.0
                 || section.difficulty > 1.0
+                || section.challengeCount < -1
+                || section.challengeCount > 1000000
                 || section.nominalDurationMs
                     > course.nominalDurationMs - expectedTime) {
             return false;
@@ -320,13 +322,27 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
         result.sections.push_back(section);
     }
 
+    const double generatedDistanceMeters = result.sections.empty() ? 0.0
+            : result.sections.back().startDistanceMeters
+                + result.sections.back().lengthMeters;
+    const bool showcaseCandidate = generatedDistanceMeters >= 5000.0
+            && std::count_if(
+                adaptedSections.begin(), adaptedSections.end(),
+                [](const WorkoutGameSection &section) {
+                    return WorkoutGameCourseTerrain::showcaseEligible(
+                            section.feature);
+                }) >= 10;
     std::vector<double> eligibleDistances;
     eligibleDistances.reserve(result.sections.size());
     for (std::size_t index = 0; index < result.sections.size(); ++index) {
         const bool sourceRecovery = averageWatts(intervals[index]) / ftpWatts
                 <= parameters.recoveryIntensity;
-        if (!sourceRecovery && WorkoutGameCourseTerrain::paletteEligible(
-                    adaptedSections[index].feature)) {
+        const bool eligible = showcaseCandidate
+                ? WorkoutGameCourseTerrain::showcaseEligible(
+                    adaptedSections[index].feature)
+                : !sourceRecovery && WorkoutGameCourseTerrain::paletteEligible(
+                    adaptedSections[index].feature);
+        if (eligible) {
             eligibleDistances.push_back(result.sections[index].lengthMeters);
         }
     }
@@ -342,8 +358,10 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
     for (std::size_t index = 0; index < result.sections.size(); ++index) {
         const bool sourceRecovery = averageWatts(intervals[index]) / ftpWatts
                 <= parameters.recoveryIntensity;
-        const bool paletteEligible = !sourceRecovery
-                && WorkoutGameCourseTerrain::paletteEligible(
+        const bool paletteEligible = showcaseCandidate
+                ? WorkoutGameCourseTerrain::showcaseEligible(
+                    adaptedSections[index].feature)
+                : !sourceRecovery && WorkoutGameCourseTerrain::paletteEligible(
                     adaptedSections[index].feature);
         const WorkoutGameCourseTerrainSelection selection = paletteEligible
                 ? selections[paletteIndex++]
@@ -353,6 +371,8 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
                 source.seed, sourceRecovery);
         result.sections[index].feature = adaptedSections[index].feature;
         result.sections[index].terrain = adaptedSections[index].terrain;
+        result.sections[index].challengeCount =
+                adaptedSections[index].challengeCount;
     }
 
     result.totalDistanceMeters = result.sections.back().startDistanceMeters

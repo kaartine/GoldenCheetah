@@ -656,7 +656,7 @@ std::vector<WorkoutGameInterval> generatedIntervals(
 
 QJsonObject sectionToJson(const WorkoutGameDistanceCourseSection &section)
 {
-    return {
+    QJsonObject result {
         {QStringLiteral("feature"), featureName(section.feature)},
         {QStringLiteral("terrain"), terrainName(section.terrain)},
         {QStringLiteral("sourceStartMs"), double(section.sourceStartMs)},
@@ -674,6 +674,10 @@ QJsonObject sectionToJson(const WorkoutGameDistanceCourseSection &section)
         {QStringLiteral("visualVariant"), double(section.visualVariant)},
         {QStringLiteral("adjustableConnector"), section.adjustableConnector}
     };
+    if (section.challengeCount >= 0) {
+        result.insert(QStringLiteral("challengeCount"), section.challengeCount);
+    }
+    return result;
 }
 
 bool parseSection(
@@ -683,6 +687,15 @@ bool parseSection(
     const QJsonValue feature = object.value(QStringLiteral("feature"));
     const QJsonValue terrain = object.value(QStringLiteral("terrain"));
     const QJsonValue adjustable = object.value(QStringLiteral("adjustableConnector"));
+    std::int64_t challengeCount = -1;
+    const QJsonValue challengeCountValue = object.value(
+            QStringLiteral("challengeCount"));
+    if (!challengeCountValue.isUndefined()
+            && (!integerNumber(object, "challengeCount", challengeCount)
+                || challengeCount < 0 || challengeCount > 1000000)) {
+        return false;
+    }
+    section.challengeCount = int(challengeCount);
     return feature.isString()
             && terrain.isString()
             && adjustable.isBool()
@@ -1389,7 +1402,8 @@ bool WorkoutGameCourseDocumentCodec::valid(
                             : document.course.roadPlan->pieces) {
                         if (piece.sourceSectionIndex
                                     >= document.sourceIntervals.size()
-                                || (WorkoutGameCoursePrescription::isRecovery(
+                                || (document.conversionAlgorithmVersion < 4
+                                    && WorkoutGameCoursePrescription::isRecovery(
                                         document.sourceIntervals[
                                             piece.sourceSectionIndex],
                                         document.ftpWatts)

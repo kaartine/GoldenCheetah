@@ -38,6 +38,7 @@ struct WorkoutGameCourseConversionSummary
     int recoveryCount = 0;
     int preservedRecoveryCount = 0;
     bool technicalTerrainExposureApplicable = false;
+    bool completeFeatureShowcase = false;
     double technicalTerrainExposurePercent = 0.0;
     double technicalFeatureDensityPerTenSections = 0.0;
     std::vector<WorkoutGameCoursePrescriptionAudit::DurationChange>

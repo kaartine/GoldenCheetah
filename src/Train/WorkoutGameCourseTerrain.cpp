@@ -56,6 +56,23 @@ WorkoutGameTerrainKind rideFirstTerrain(std::size_t index)
     return Palette[index % std::size(Palette)];
 }
 
+WorkoutGameTerrainKind showcaseTerrain(std::size_t index)
+{
+    static constexpr WorkoutGameTerrainKind Palette[] = {
+        WorkoutGameTerrainKind::Roots,
+        WorkoutGameTerrainKind::Rollers,
+        WorkoutGameTerrainKind::RockGarden,
+        WorkoutGameTerrainKind::BunnyHop,
+        WorkoutGameTerrainKind::Drop,
+        WorkoutGameTerrainKind::Skinny,
+        WorkoutGameTerrainKind::LogOver,
+        WorkoutGameTerrainKind::Tabletop,
+        WorkoutGameTerrainKind::RockSlab,
+        WorkoutGameTerrainKind::GapJump
+    };
+    return Palette[index % std::size(Palette)];
+}
+
 double technicalShare(WorkoutGameCoursePreset preset)
 {
     switch (preset) {
@@ -147,6 +164,11 @@ bool WorkoutGameCourseTerrain::paletteEligible(WorkoutGameFeature feature)
             || feature == WorkoutGameFeature::FlowTrail;
 }
 
+bool WorkoutGameCourseTerrain::showcaseEligible(WorkoutGameFeature feature)
+{
+    return feature != WorkoutGameFeature::Climb;
+}
+
 std::vector<WorkoutGameCourseTerrainSelection>
 WorkoutGameCourseTerrain::selectTechnicalTerrain(
         const std::vector<double> &eligibleDistancesMeters,
@@ -164,7 +186,18 @@ WorkoutGameCourseTerrain::selectTechnicalTerrain(
     }
     if (!std::isfinite(totalDistance) || totalDistance <= 0.0) return {};
 
-    const std::array<std::size_t, 3> counts = nestedTechnicalCounts(count);
+    std::array<std::size_t, 3> counts = nestedTechnicalCounts(count);
+    constexpr std::size_t ShowcaseFeatureCount = 10u;
+    constexpr double ShowcaseMinimumDistanceMeters = 5000.0;
+    const bool showcase = count >= ShowcaseFeatureCount
+            && totalDistance >= ShowcaseMinimumDistanceMeters;
+    if (showcase) {
+        counts[0] = std::max(counts[0], ShowcaseFeatureCount);
+        counts[1] = std::max(counts[1], std::min(
+                count, counts[0] + (count > counts[0] ? 1u : 0u)));
+        counts[2] = std::max(counts[2], std::min(
+                count, counts[1] + (count > counts[1] ? 1u : 0u)));
+    }
     const std::array<double, 3> targets {0.20, 0.60, 0.90};
     std::set<TerrainCandidate, TerrainCandidateLess> candidates;
     for (std::size_t index = 0; index < count; ++index) {
@@ -219,7 +252,7 @@ WorkoutGameCourseTerrain::selectTechnicalTerrain(
     std::size_t ordinal = 0u;
     for (std::size_t index = 0; index < count; ++index) {
         if (requested[index]) {
-            result[index] = {true, ordinal++};
+            result[index] = {true, ordinal++, showcase};
         }
     }
     return result;
@@ -232,16 +265,18 @@ void WorkoutGameCourseTerrain::apply(
         std::uint32_t seed,
         bool sourceRecovery)
 {
-    if (sourceRecovery
-            || section.feature == WorkoutGameFeature::RecoveryDescent
-            || section.feature == WorkoutGameFeature::CooldownDescent) {
+    if (!selection.showcase
+            && (sourceRecovery
+                || section.feature == WorkoutGameFeature::RecoveryDescent
+                || section.feature == WorkoutGameFeature::CooldownDescent)) {
         section.terrain = WorkoutGameTerrainKind::SmoothTrail;
         section.challengeCount = 0;
         return;
     }
     if (section.feature == WorkoutGameFeature::Climb) return;
 
-    if (section.feature == WorkoutGameFeature::SprintJump) {
+    if (section.feature == WorkoutGameFeature::SprintJump
+            && !selection.showcase) {
         if (preset == WorkoutGameCoursePreset::WorkoutFirst) {
             section.terrain = WorkoutGameTerrainKind::Rollers;
         } else if (preset == WorkoutGameCoursePreset::RideFirst) {
@@ -254,14 +289,16 @@ void WorkoutGameCourseTerrain::apply(
         applyChallengeCount(section, false);
         return;
     }
-    if (!paletteEligible(section.feature)) return;
+    if (!paletteEligible(section.feature) && !selection.showcase) return;
 
     if (!selection.technical) {
         section.terrain = WorkoutGameTerrainKind::SmoothTrail;
         section.challengeCount = 0;
         return;
     }
-    switch (preset) {
+    if (selection.showcase) {
+        section.terrain = showcaseTerrain(selection.ordinal);
+    } else switch (preset) {
     case WorkoutGameCoursePreset::WorkoutFirst:
         section.terrain = workoutFirstTerrain(selection.ordinal);
         break;
@@ -272,5 +309,11 @@ void WorkoutGameCourseTerrain::apply(
         section.terrain = rideFirstTerrain(selection.ordinal);
         break;
     }
-    applyChallengeCount(section, false);
+    if (selection.showcase) {
+        section.challengeCount = section.terrain
+                == WorkoutGameTerrainKind::SmoothTrail
+            ? 0 : std::max(1, section.challengeCount);
+    } else {
+        applyChallengeCount(section, false);
+    }
 }

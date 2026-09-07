@@ -8,6 +8,7 @@ Node {
     required property real distanceMeters
     required property real pedalAngle
     required property real airHeight
+    required property real tailwhip
     required property bool rendererPrewarming
     required property real pump
     required property real standingBlend
@@ -51,6 +52,16 @@ Node {
     readonly property real frameHeave: -0.5 * (rearTravel + frontTravel)
     readonly property real framePitch: Math.atan2(
         rearTravel - frontTravel, wheelbase) * 180 / Math.PI
+
+    function tailwhipPoint(point, amount) {
+        const radians = tailwhip * amount * Math.PI / 180
+        const z = point.z - frontAxleZ
+        return Qt.vector3d(
+            point.x * Math.cos(radians) + z * Math.sin(radians),
+            point.y,
+            frontAxleZ - point.x * Math.sin(radians)
+                + z * Math.cos(radians))
+    }
 
     Behavior on actionHeight { NumberAnimation { duration: 120 } }
     Behavior on actionPitch { NumberAnimation { duration: 120 } }
@@ -264,8 +275,10 @@ Node {
 
         Node {
             objectName: "rearWheelPivot"
-            position: Qt.vector3d(0, root.wheelRadius, root.rearAxleZ)
-            eulerRotation.x: root.wheelAngle
+            position: root.tailwhipPoint(
+                Qt.vector3d(0, root.wheelRadius, root.rearAxleZ), 1)
+            eulerRotation: Qt.vector3d(
+                root.wheelAngle, root.tailwhip, 0)
             Model {
                 source: "assets/meshes/geo_RearWheel_LOD0_mesh.mesh"
                 position: Qt.vector3d(
@@ -291,8 +304,10 @@ Node {
 
         Node {
             objectName: "rearSwingarmPivot"
-            position: Qt.vector3d(0, root.wheelRadius, root.rearAxleZ)
-            eulerRotation.x: -root.rearTravel * 34
+            position: root.tailwhipPoint(
+                Qt.vector3d(0, root.wheelRadius, root.rearAxleZ), 1)
+            eulerRotation: Qt.vector3d(
+                -root.rearTravel * 34, root.tailwhip, 0)
             Model {
                 source: "assets/meshes/geo_Swingarm_LOD0_mesh.mesh"
                 position: Qt.vector3d(
@@ -306,7 +321,8 @@ Node {
         Node {
             objectName: "frontForkPivot"
             position: Qt.vector3d(0, root.wheelRadius, root.frontAxleZ)
-            eulerRotation.x: root.frontTravel * 18
+            eulerRotation: Qt.vector3d(
+                root.frontTravel * 18, root.tailwhip * 0.82, 0)
             Model {
                 source: "assets/meshes/geo_Fork_LOD0_mesh.mesh"
                 position: Qt.vector3d(
@@ -320,9 +336,10 @@ Node {
         Node {
             id: sprungBike
             objectName: "sprungBikeNode"
-            y: root.frameHeave
+            position: root.tailwhipPoint(
+                Qt.vector3d(0, root.frameHeave, 0), 1)
             eulerRotation: Qt.vector3d(
-                root.framePitch, 0, root.effortRoll * 0.22)
+                root.framePitch, root.tailwhip, root.effortRoll * 0.22)
 
             Model {
                 source: "assets/meshes/geo_MainFrame_LOD0_mesh.mesh"
@@ -377,7 +394,7 @@ Node {
                 eulerRotation: Qt.vector3d(
                     13 + 8 * root.standingBlend + root.actionPitch
                         - (root.walking ? 5 : 0),
-                    0,
+                    -root.tailwhip * 0.68,
                     root.effortRoll)
                 Model {
                     source: "assets/meshes/geo_Torso_LOD0_mesh.mesh"

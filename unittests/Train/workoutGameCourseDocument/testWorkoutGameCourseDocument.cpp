@@ -169,7 +169,7 @@ private slots:
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QCOMPARE(decoded.conversionAlgorithmVersion,
                  WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
-        QVERIFY(encoded.contains("\"algorithmVersion\":3"));
+        QVERIFY(encoded.contains("\"algorithmVersion\":4"));
         QCOMPARE(decoded.title, source.title);
         QCOMPARE(decoded.sourceFileName, source.sourceFileName);
         QCOMPARE(decoded.sourceSha256, source.sourceSha256);

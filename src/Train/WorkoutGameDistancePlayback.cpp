@@ -280,11 +280,13 @@ WorkoutGameCourse WorkoutGameDistancePlayback::visualCourse(
         const bool recovery = source.feature
                     == WorkoutGameFeature::RecoveryDescent
                 || source.feature == WorkoutGameFeature::CooldownDescent;
-        section.challengeCount = !recovery
+        const bool inferredChallenge = !recovery
                 && (source.feature != WorkoutGameFeature::Trail
                     || WorkoutGameFeatureCatalog::definition(
-                        source.terrain).technical)
-                ? 1 : 0;
+                        source.terrain).technical);
+        section.challengeCount = source.challengeCount >= 0
+                ? source.challengeCount
+                : inferredChallenge ? 1 : 0;
         section.visualVariant = source.visualVariant;
         section.gravityAssisted = source.feature
                 == WorkoutGameFeature::RecoveryDescent

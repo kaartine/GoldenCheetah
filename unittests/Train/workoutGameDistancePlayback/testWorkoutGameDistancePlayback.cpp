@@ -426,6 +426,20 @@ private slots:
         QCOMPARE(visual.sections[0].challengeCount, 1);
         QCOMPARE(visual.sections[1].challengeCount, 0);
     }
+
+    void explicitChallengeCountOverridesLegacyRecoveryInference()
+    {
+        WorkoutGameDistanceCourse course = sampleCourse();
+        course.sections[0].challengeCount = 0;
+        course.sections[1].challengeCount = 1;
+
+        const WorkoutGameCourse visual =
+                WorkoutGameDistancePlayback::visualCourse(course);
+
+        QCOMPARE(visual.sections[0].challengeCount, 0);
+        QCOMPARE(visual.sections[1].challengeCount, 1);
+        QCOMPARE(visual.sections[1].terrain, WorkoutGameTerrainKind::Drop);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGameDistancePlayback)

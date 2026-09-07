@@ -100,6 +100,7 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(double riderRoll READ riderRoll NOTIFY sceneChanged)
     Q_PROPERTY(double riderPump READ riderPump NOTIFY sceneChanged)
     Q_PROPERTY(double riderAirHeight READ riderAirHeight NOTIFY sceneChanged)
+    Q_PROPERTY(double riderTailwhip READ riderTailwhip NOTIFY sceneChanged)
     Q_PROPERTY(double landingImpact READ landingImpact NOTIFY sceneChanged)
     Q_PROPERTY(qulonglong landingEffectId READ landingEffectId
                NOTIFY sceneChanged)
@@ -266,6 +267,7 @@ public:
     double riderRoll() const { return riderRollDegrees; }
     double riderPump() const { return riderPumpMeters; }
     double riderAirHeight() const { return currentRiderAirHeightMeters; }
+    double riderTailwhip() const { return currentRiderTailwhipDegrees; }
     double landingImpact() const { return currentLandingImpact; }
     qulonglong landingEffectId() const
     {
@@ -468,6 +470,7 @@ private:
     bool riderBankRollActive = false;
     double riderPumpMeters = 0.0;
     double currentRiderAirHeightMeters = 0.0;
+    double currentRiderTailwhipDegrees = 0.0;
     double currentLandingImpact = 0.0;
     double previousLandingImpact = 0.0;
     double currentLandingEffectStrength = 0.0;
@@ -512,14 +515,14 @@ private:
     QString currentCameraComposition = QStringLiteral("medium-centre");
     WorkoutGame3DCameraPresentation cameraPresentationController;
     WorkoutGame3DCameraPresentationSnapshot cameraPresentationSnapshot;
-    double cameraBackDistanceMeters = 8.2;
+    double cameraBackDistanceMeters = 7.6;
     double cameraSideDistanceMeters = 0.0;
-    double cameraHeightDistanceMeters = 3.2;
+    double cameraHeightDistanceMeters = 3.4;
     double cameraLookAheadDistanceMeters = 12.0;
     double cameraTargetHeightDistanceMeters = 0.85;
     double cameraPositionX = 0.0;
-    double cameraPositionY = 3.2;
-    double cameraPositionZ = -8.2;
+    double cameraPositionY = 3.4;
+    double cameraPositionZ = -7.6;
     double cameraTargetPositionX = 0.0;
     double cameraTargetPositionY = 0.85;
     double cameraTargetPositionZ = 12.0;

@@ -10,6 +10,8 @@
 #ifndef _GC_WorkoutGameRiderAnimation_h
 #define _GC_WorkoutGameRiderAnimation_h
 
+#include "WorkoutGameWorld.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -27,6 +29,16 @@ struct WorkoutGameRiderAnimationTarget
 {
     double standingBlend = 0.0;
     double pedalEffortBlend = 0.0;
+};
+
+struct WorkoutGameTailwhipInput
+{
+    bool airborne = false;
+    bool jumpMotion = false;
+    WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
+    double flightProgress = 0.0;
+    double speedKph = 0.0;
+    std::uint64_t actionId = 0;
 };
 
 class WorkoutGameRiderAnimation
@@ -65,6 +77,36 @@ public:
                 climb * hardPedaling * (0.68 + 0.32 * lowCadence),
                 0.0, 1.0);
         return result;
+    }
+
+    static double tailwhipDegrees(const WorkoutGameTailwhipInput &input)
+    {
+        if (!input.airborne || !input.jumpMotion
+                || !std::isfinite(input.flightProgress)
+                || !std::isfinite(input.speedKph)
+                || input.flightProgress <= 0.0
+                || input.flightProgress >= 1.0) {
+            return 0.0;
+        }
+        double featureScale = 0.0;
+        switch (input.terrain) {
+        case WorkoutGameTerrainKind::BunnyHop: featureScale = 0.55; break;
+        case WorkoutGameTerrainKind::LogOver: featureScale = 0.68; break;
+        case WorkoutGameTerrainKind::Tabletop:
+        case WorkoutGameTerrainKind::GapJump:
+            featureScale = 1.0;
+            break;
+        default: return 0.0;
+        }
+        const double speedBlend = smootherStep(
+                (input.speedKph - 12.0) / 28.0);
+        const double peakDegrees = featureScale
+                * (14.0 + 42.0 * speedBlend);
+        const double envelope = std::pow(
+                std::sin(3.14159265358979323846
+                         * input.flightProgress), 1.15);
+        const double direction = (input.actionId & 1u) == 0u ? -1.0 : 1.0;
+        return direction * peakDegrees * envelope;
     }
 
 private:

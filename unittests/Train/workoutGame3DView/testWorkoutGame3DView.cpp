@@ -811,6 +811,134 @@ private slots:
         }).standingBlend, 0.0);
     }
 
+    void tailwhipIsAirborneSpeedScaledAndReturnsToNeutral()
+    {
+        using Input = WorkoutGameTailwhipInput;
+        QCOMPARE(WorkoutGameRiderAnimation::tailwhipDegrees(Input {
+            false, true,
+            WorkoutGameTerrainKind::GapJump, 0.5, 42.0, 1u
+        }), 0.0);
+        QCOMPARE(WorkoutGameRiderAnimation::tailwhipDegrees(Input {
+            true, true,
+            WorkoutGameTerrainKind::GapJump, 0.0, 42.0, 1u
+        }), 0.0);
+        QCOMPARE(WorkoutGameRiderAnimation::tailwhipDegrees(Input {
+            true, true,
+            WorkoutGameTerrainKind::GapJump, 1.0, 42.0, 1u
+        }), 0.0);
+
+        const double slow = std::abs(
+                WorkoutGameRiderAnimation::tailwhipDegrees(Input {
+                    true, true,
+                    WorkoutGameTerrainKind::GapJump, 0.5, 18.0, 1u
+                }));
+        const double fast = std::abs(
+                WorkoutGameRiderAnimation::tailwhipDegrees(Input {
+                    true, true,
+                    WorkoutGameTerrainKind::GapJump, 0.5, 42.0, 1u
+                }));
+        QVERIFY(slow >= 12.0);
+        QVERIFY(fast > slow + 15.0);
+        QVERIFY(fast <= 58.0);
+        QCOMPARE(
+                WorkoutGameRiderAnimation::tailwhipDegrees(Input {
+                    true, false,
+                    WorkoutGameTerrainKind::Drop, 0.5, 42.0, 1u
+                }), 0.0);
+        QVERIFY(WorkoutGameRiderAnimation::tailwhipDegrees(Input {
+                    true, true,
+                    WorkoutGameTerrainKind::Tabletop, 0.5, 42.0, 2u
+                }) < 0.0);
+    }
+
+    void tailwhipDrivesTheRenderedBikeAndReturnsOnLanding()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::GapJump);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        const auto piece = std::find_if(
+                road.pieces.cbegin(), road.pieces.cend(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.cend());
+        const double takeoff = piece->challenge.obstacleDistanceMeters;
+        const double landing = takeoff + 8.0;
+        const double midpoint = (takeoff + landing) * 0.5;
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        WorkoutGameVisualSnapshot frame = frameAt(road, midpoint);
+        frame.world.rider.airborne = true;
+        frame.world.rider.clearanceMeters = 1.2;
+        frame.feature.ready = true;
+        frame.feature.terrain = WorkoutGameTerrainKind::GapJump;
+        frame.feature.motion = WorkoutGameFeatureMotion::Jump;
+        frame.feature.phase = WorkoutGameFeaturePhase::Action;
+        frame.feature.outcome = WorkoutGameFeatureOutcome::Completed;
+        frame.feature.route = WorkoutGameRoute::MainLine;
+        frame.feature.actionStartDistanceMeters = takeoff;
+        frame.feature.actionEndDistanceMeters = landing;
+        frame.feature.visualDistanceMeters = midpoint;
+        frame.feature.verticalOffsetMeters = 1.2;
+        frame.feature.actionId = 3u;
+        viewModel.setFrame(frame, 280.0, 240.0, 92, 154, 8);
+        QVERIFY(std::abs(viewModel.riderTailwhip()) > 25.0);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        const QString reviewDirectory = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_TAILWHIP_REVIEW_DIR");
+        if (!reviewDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(reviewDirectory));
+            window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        }
+        QCoreApplication::processEvents();
+        QObject *sprungBike = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("sprungBikeNode"));
+        QVERIFY(sprungBike);
+        const QVector3D airborneRotation =
+                sprungBike->property("eulerRotation").value<QVector3D>();
+        QVERIFY(std::abs(airborneRotation.y()) > 25.0f);
+        QImage airborneImage;
+        if (!reviewDirectory.isEmpty()) {
+            window.update();
+            QTest::qWait(180);
+            airborneImage = window.grabWindow();
+            QVERIFY(!airborneImage.isNull());
+            QVERIFY(airborneImage.save(QDir(reviewDirectory).filePath(
+                    QStringLiteral("tailwhip-airborne.png"))));
+        }
+
+        frame.world.rider.airborne = false;
+        frame.world.rider.clearanceMeters = 0.0;
+        frame.feature.phase = WorkoutGameFeaturePhase::Recovery;
+        frame.feature.visualDistanceMeters = landing;
+        frame.world.rider.distanceMeters = landing;
+        viewModel.setFrame(frame, 220.0, 220.0, 84, 154, 8);
+        QCoreApplication::processEvents();
+        QCOMPARE(viewModel.riderTailwhip(), 0.0);
+        const QVector3D landedRotation =
+                sprungBike->property("eulerRotation").value<QVector3D>();
+        QCOMPARE(landedRotation.y(), 0.0f);
+        if (!reviewDirectory.isEmpty()) {
+            window.update();
+            QTest::qWait(180);
+            const QImage landedImage = window.grabWindow();
+            QVERIFY(!landedImage.isNull());
+            QVERIFY(landedImage.save(QDir(reviewDirectory).filePath(
+                    QStringLiteral("tailwhip-landed.png"))));
+            QVERIFY(changedPixels(airborneImage, landedImage) > 100);
+        }
+    }
+
     void rendererRequestsNonBlockingPresentation()
     {
         WorkoutGame3DWindow window(false);
@@ -2122,8 +2250,8 @@ private slots:
         QCOMPARE(viewModel.cameraComposition(),
                  QStringLiteral("medium-centre"));
         QCOMPARE(viewModel.cameraSideMeters(), 0.0);
-        QCOMPARE(viewModel.cameraBackMeters(), 8.2);
-        QCOMPARE(viewModel.cameraHeightMeters(), 3.2);
+        QCOMPARE(viewModel.cameraBackMeters(), 7.6);
+        QCOMPARE(viewModel.cameraHeightMeters(), 3.4);
         QCOMPARE(viewModel.cameraLookAheadMeters(), 12.0);
         QCOMPARE(viewModel.cameraTargetHeightMeters(), 0.85);
     }

@@ -584,13 +584,16 @@ private slots:
         QCOMPARE(workoutFirst.summary.fastEstimate.elapsedTimeMs,
                  workoutFirst.summary.nominalDurationMs);
         QVERIFY(workoutFirst.summary.technicalTerrainExposurePercent
-                < balanced.summary.technicalTerrainExposurePercent);
+                <= balanced.summary.technicalTerrainExposurePercent);
         QVERIFY(balanced.summary.technicalTerrainExposurePercent
-                < rideFirst.summary.technicalTerrainExposurePercent);
+                <= rideFirst.summary.technicalTerrainExposurePercent);
         QVERIFY(workoutFirst.summary.technicalFeatureDensityPerTenSections
-                < balanced.summary.technicalFeatureDensityPerTenSections);
+                <= balanced.summary.technicalFeatureDensityPerTenSections);
         QVERIFY(balanced.summary.technicalFeatureDensityPerTenSections
-                < rideFirst.summary.technicalFeatureDensityPerTenSections);
+                <= rideFirst.summary.technicalFeatureDensityPerTenSections);
+        QVERIFY(workoutFirst.summary.completeFeatureShowcase);
+        QVERIFY(balanced.summary.completeFeatureShowcase);
+        QVERIFY(rideFirst.summary.completeFeatureShowcase);
         bool hasNewRideFeature = false;
         for (const WorkoutGameDistanceCourseSection &section
                 : rideFirst.course.sections) {
@@ -609,10 +612,6 @@ private slots:
                     || section.terrain == WorkoutGameTerrainKind::Rollers
                     || section.terrain == WorkoutGameTerrainKind::RockGarden
                     || section.terrain == WorkoutGameTerrainKind::LogOver;
-            QVERIFY(section.terrain != WorkoutGameTerrainKind::GapJump);
-            if (section.feature == WorkoutGameFeature::SprintJump) {
-                QCOMPARE(section.terrain, WorkoutGameTerrainKind::Rollers);
-            }
         }
         QVERIFY(workoutFirstHasTechnicalPlay);
         const std::set<WorkoutGameTerrainKind> expectedWorkoutFirstTerrain {
@@ -674,17 +673,21 @@ private slots:
             // preserve every interval in every mode.
             QCOMPARE(result.summary.totalDurationDeviationPercent, 0.0);
             QCOMPARE(result.summary.recoveryDurationDeviationPercent, 0.0);
-            QVERIFY(result.summary.technicalTerrainExposurePercent + 1.0e-9
-                    >= contract.targetMinimumTechnicalTerrainExposurePercent);
-            QVERIFY(result.summary.technicalTerrainExposurePercent
-                    <= contract.targetMaximumTechnicalTerrainExposurePercent
-                        + 1.0e-9);
-            QVERIFY(result.summary.technicalFeatureDensityPerTenSections
-                    + 1.0e-9
-                    >= contract.minimumTechnicalFeatureDensityPerTenSections);
-            QVERIFY(result.summary.technicalFeatureDensityPerTenSections
-                    <= contract.maximumTechnicalFeatureDensityPerTenSections
-                        + 1.0e-9);
+            if (!result.summary.completeFeatureShowcase) {
+                QVERIFY(result.summary.technicalTerrainExposurePercent + 1.0e-9
+                        >= contract.targetMinimumTechnicalTerrainExposurePercent);
+                QVERIFY(result.summary.technicalTerrainExposurePercent
+                        <= contract.targetMaximumTechnicalTerrainExposurePercent
+                            + 1.0e-9);
+            }
+            if (!result.summary.completeFeatureShowcase) {
+                QVERIFY(result.summary.technicalFeatureDensityPerTenSections
+                        + 1.0e-9
+                        >= contract.minimumTechnicalFeatureDensityPerTenSections);
+                QVERIFY(result.summary.technicalFeatureDensityPerTenSections
+                        <= contract.maximumTechnicalFeatureDensityPerTenSections
+                            + 1.0e-9);
+            }
 
             for (std::size_t index = 0;
                     index < request.intervals.size(); ++index) {
@@ -710,8 +713,10 @@ private slots:
                     QVERIFY(double(output.minimumDurationMs)
                             >= double(source.durationMs)
                                 * contract.minimumRecoveryExposure - 1.0);
-                    QVERIFY(output.terrain
-                            != WorkoutGameTerrainKind::GapJump);
+                    if (!result.summary.completeFeatureShowcase) {
+                        QVERIFY(output.terrain
+                                != WorkoutGameTerrainKind::GapJump);
+                    }
                     if (result.course.roadPlan) {
                         for (const WorkoutGameRoadPiece &piece
                                 : result.course.roadPlan->pieces) {
@@ -733,8 +738,10 @@ private slots:
                         fiveMinuteRecovery, request.ftpWatts));
             QCOMPARE(generatedRecovery.nominalDurationMs,
                      fiveMinuteRecovery.durationMs);
-            QVERIFY(generatedRecovery.terrain
-                    != WorkoutGameTerrainKind::GapJump);
+            if (!result.summary.completeFeatureShowcase) {
+                QVERIFY(generatedRecovery.terrain
+                        != WorkoutGameTerrainKind::GapJump);
+            }
         }
     }
 
@@ -800,6 +807,50 @@ private slots:
                  balanced.summary.distanceMeters);
     }
 
+    void longEnduranceCourseExposesEveryTechnicalFeature()
+    {
+        WorkoutGameCourseConversionRequest request;
+        request.ftpWatts = 187.0;
+        request.seed = 0x90e45u;
+        appendInterval(request.intervals, 5 * 60000, 112.0);
+        appendInterval(request.intervals, 5 * 60000, 130.0);
+        for (int repetition = 0; repetition < 7; ++repetition) {
+            appendInterval(request.intervals, 5 * 60000, 121.0);
+            appendInterval(request.intervals, 5 * 60000, 140.0);
+        }
+        appendInterval(request.intervals, 10 * 60000, 102.0);
+
+        const std::set<WorkoutGameTerrainKind> expected {
+            WorkoutGameTerrainKind::Roots,
+            WorkoutGameTerrainKind::Rollers,
+            WorkoutGameTerrainKind::RockGarden,
+            WorkoutGameTerrainKind::BunnyHop,
+            WorkoutGameTerrainKind::Drop,
+            WorkoutGameTerrainKind::Skinny,
+            WorkoutGameTerrainKind::LogOver,
+            WorkoutGameTerrainKind::Tabletop,
+            WorkoutGameTerrainKind::RockSlab,
+            WorkoutGameTerrainKind::GapJump
+        };
+        for (WorkoutGameCoursePreset preset : {
+                 WorkoutGameCoursePreset::WorkoutFirst,
+                 WorkoutGameCoursePreset::Balanced,
+                 WorkoutGameCoursePreset::RideFirst}) {
+            request.preset = preset;
+            const WorkoutGameCourseConversionResult result =
+                    WorkoutGameCourseConverter::convert(request);
+            QCOMPARE(result.status, WorkoutGameCourseConversionStatus::Ready);
+            std::set<WorkoutGameTerrainKind> actual;
+            for (const WorkoutGameDistanceCourseSection &section
+                    : result.course.sections) {
+                if (expected.count(section.terrain) != 0) {
+                    actual.insert(section.terrain);
+                }
+            }
+            QCOMPARE(actual, expected);
+        }
+    }
+
     void sameRequestProducesIdenticalResult()
     {
         WorkoutGameCourseConversionRequest request;
@@ -825,55 +876,28 @@ private slots:
         }
     }
 
-    void gapJumpIsLimitedToRideFirstPreset()
+    void longShowcaseMakesGapJumpAvailableInEveryPreset()
     {
         WorkoutGameCourseConversionRequest request;
         request.intervals = sampleWorkout();
         request.ftpWatts = 190.0;
-
-        bool found = false;
-        for (std::uint32_t seed = 1u; seed <= 256u && !found; ++seed) {
-            request.seed = seed;
-            request.preset = WorkoutGameCoursePreset::RideFirst;
-            const WorkoutGameCourseConversionResult rideFirst =
+        request.seed = 42u;
+        for (WorkoutGameCoursePreset preset : {
+                 WorkoutGameCoursePreset::WorkoutFirst,
+                 WorkoutGameCoursePreset::Balanced,
+                 WorkoutGameCoursePreset::RideFirst}) {
+            request.preset = preset;
+            const WorkoutGameCourseConversionResult result =
                     WorkoutGameCourseConverter::convert(request);
-            const bool hasGap = std::any_of(
-                    rideFirst.course.sections.begin(),
-                    rideFirst.course.sections.end(),
+            QCOMPARE(result.status, WorkoutGameCourseConversionStatus::Ready);
+            QVERIFY(std::any_of(
+                    result.course.sections.begin(),
+                    result.course.sections.end(),
                     [](const WorkoutGameDistanceCourseSection &section) {
                         return section.terrain
                                 == WorkoutGameTerrainKind::GapJump;
-                    });
-            if (!hasGap) continue;
-
-            request.preset = WorkoutGameCoursePreset::WorkoutFirst;
-            const WorkoutGameCourseConversionResult workoutFirst =
-                    WorkoutGameCourseConverter::convert(request);
-            request.preset = WorkoutGameCoursePreset::Balanced;
-            const WorkoutGameCourseConversionResult balanced =
-                    WorkoutGameCourseConverter::convert(request);
-            for (const WorkoutGameDistanceCourseSection &section
-                    : workoutFirst.course.sections) {
-                QVERIFY(section.terrain != WorkoutGameTerrainKind::GapJump);
-            }
-            for (const WorkoutGameDistanceCourseSection &section
-                    : balanced.course.sections) {
-                QVERIFY(section.terrain != WorkoutGameTerrainKind::GapJump);
-            }
-
-            request.preset = WorkoutGameCoursePreset::RideFirst;
-            const WorkoutGameCourseConversionResult repeated =
-                    WorkoutGameCourseConverter::convert(request);
-            QCOMPARE(repeated.course.sections.size(),
-                     rideFirst.course.sections.size());
-            for (std::size_t index = 0;
-                    index < rideFirst.course.sections.size(); ++index) {
-                QCOMPARE(repeated.course.sections[index].terrain,
-                         rideFirst.course.sections[index].terrain);
-            }
-            found = true;
+                    }));
         }
-        QVERIFY(found);
     }
 };
 

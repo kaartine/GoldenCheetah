@@ -41,7 +41,6 @@ bool validTitle(const QString &title)
 
 bool attachRoadPlan(
         WorkoutGameDistanceCourse &course,
-        const std::vector<WorkoutGameInterval> &sourceIntervals,
         double ftpWatts,
         WorkoutGameCoursePreset preset)
 {
@@ -57,14 +56,6 @@ bool attachRoadPlan(
             != WorkoutGameRoadPlanValidationStatus::Ready
             || !WorkoutGameRoadQuality::audit(plan).accepted()) {
         return false;
-    }
-    for (const WorkoutGameRoadPiece &piece : plan.pieces) {
-        if (piece.sourceSectionIndex >= sourceIntervals.size()) return false;
-        if (WorkoutGameCoursePrescription::isRecovery(
-                    sourceIntervals[piece.sourceSectionIndex], ftpWatts)
-                && piece.challenge.enabled) {
-            return false;
-        }
     }
     course.roadPlan = std::make_shared<const WorkoutGameRoadPlan>(plan);
     return true;
@@ -116,8 +107,7 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
         return result;
     }
     if (!attachRoadPlan(
-                conversion.course, workout.intervals, request.ftpWatts,
-                request.preset)) {
+                conversion.course, request.ftpWatts, request.preset)) {
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }
@@ -173,8 +163,7 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
         return result;
     }
     if (!attachRoadPlan(
-                conversion.course, source.sourceIntervals, source.ftpWatts,
-                preset)) {
+                conversion.course, source.ftpWatts, preset)) {
         result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
         return result;
     }

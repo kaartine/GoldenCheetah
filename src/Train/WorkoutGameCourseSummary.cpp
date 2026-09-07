@@ -13,6 +13,7 @@
 #include "WorkoutGameFeatureCatalog.h"
 
 #include <cmath>
+#include <set>
 
 bool WorkoutGameCourseSummary::build(
         const WorkoutGameDistanceCourse &course,
@@ -31,12 +32,37 @@ bool WorkoutGameCourseSummary::build(
 
     double eligibleDistance = 0.0;
     double technicalDistance = 0.0;
+    double routeDistance = 0.0;
+    double technicalRouteDistance = 0.0;
     int eligibleSections = 0;
     int technicalEligibleSections = 0;
+    int technicalRouteSections = 0;
+    std::set<WorkoutGameTerrainKind> featureKinds;
     for (std::size_t index = 0; index < course.sections.size(); ++index) {
         const WorkoutGameDistanceCourseSection &section = course.sections[index];
         const bool technical =
                 WorkoutGameFeatureCatalog::definition(section.terrain).technical;
+        routeDistance += section.lengthMeters;
+        if (technical || section.terrain == WorkoutGameTerrainKind::Drop) {
+            ++technicalRouteSections;
+            technicalRouteDistance += section.lengthMeters;
+        }
+        if (section.challengeCount != 0) switch (section.terrain) {
+        case WorkoutGameTerrainKind::Roots:
+        case WorkoutGameTerrainKind::Rollers:
+        case WorkoutGameTerrainKind::RockGarden:
+        case WorkoutGameTerrainKind::BunnyHop:
+        case WorkoutGameTerrainKind::Drop:
+        case WorkoutGameTerrainKind::Skinny:
+        case WorkoutGameTerrainKind::LogOver:
+        case WorkoutGameTerrainKind::Tabletop:
+        case WorkoutGameTerrainKind::RockSlab:
+        case WorkoutGameTerrainKind::GapJump:
+            featureKinds.insert(section.terrain);
+            break;
+        default:
+            break;
+        }
         if (technical) ++summary.technicalFeatureCount;
         const bool eligible = !WorkoutGameCoursePrescription::isRecovery(
                     sourceIntervals[index], ftpWatts)
@@ -101,7 +127,20 @@ bool WorkoutGameCourseSummary::build(
         return false;
     }
 
-    if (eligibleSections >= 10 && summary.technicalTerrainExposureApplicable) {
+    constexpr std::size_t CompleteFeaturePaletteSize = 10u;
+    const bool completeFeatureShowcase =
+            featureKinds.size() == CompleteFeaturePaletteSize;
+    summary.completeFeatureShowcase = completeFeatureShowcase;
+    if (completeFeatureShowcase && routeDistance > 0.0) {
+        summary.technicalTerrainExposureApplicable = true;
+        summary.technicalTerrainExposurePercent =
+                100.0 * technicalRouteDistance / routeDistance;
+        summary.technicalFeatureDensityPerTenSections =
+                10.0 * double(technicalRouteSections)
+                    / double(course.sections.size());
+    }
+    if (eligibleSections >= 10 && summary.technicalTerrainExposureApplicable
+            && !completeFeatureShowcase) {
         const WorkoutGameCourseModeContract contract =
                 WorkoutGameCoursePrescription::contractFor(preset);
         constexpr double Epsilon = 1.0e-9;

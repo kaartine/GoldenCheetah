@@ -425,6 +425,7 @@ void WorkoutGame3DViewModel::setCourse(
     currentGradePercent = 0.0;
     riderPumpMeters = 0.0;
     currentRiderAirHeightMeters = 0.0;
+    currentRiderTailwhipDegrees = 0.0;
     currentLandingImpact = 0.0;
     previousLandingImpact = 0.0;
     currentLandingEffectStrength = 0.0;
@@ -653,6 +654,25 @@ void WorkoutGame3DViewModel::setFrame(
     if (activeBank.ready) riderBankRollActive = true;
     riderPoseInitialized = true;
     currentRiderAirHeightMeters = authoritativeAir;
+    const double flightProgress = frame.feature.actionEndDistanceMeters
+                > frame.feature.actionStartDistanceMeters
+            ? std::clamp(
+                (frame.feature.visualDistanceMeters
+                    - frame.feature.actionStartDistanceMeters)
+                    / (frame.feature.actionEndDistanceMeters
+                        - frame.feature.actionStartDistanceMeters),
+                0.0, 1.0)
+            : 0.0;
+    currentRiderTailwhipDegrees =
+            WorkoutGameRiderAnimation::tailwhipDegrees({
+                authoritativeAir > 0.015,
+                completedAirFeature
+                    && frame.feature.motion == WorkoutGameFeatureMotion::Jump,
+                frame.feature.terrain,
+                flightProgress,
+                std::max(0.0, finiteOrZero(frame.simulation.speedKph)),
+                frame.feature.actionId
+            });
     currentLandingImpact = std::clamp(
             finiteOrZero(frame.world.landingImpact), 0.0, 1.0);
     constexpr double LandingEffectThreshold = 0.08;
@@ -1204,8 +1224,28 @@ void WorkoutGame3DViewModel::updateCameraPose(
             - cameraRightZ * cameraSideDistanceMeters;
     cameraPositionY = cameraSample.visualGroundElevationMeters()
             + cameraHeightDistanceMeters;
-    minimumCameraPositionY = cameraSample.visualGroundElevationMeters()
-            + 2.65;
+    double corridorGroundY = cameraSample.visualGroundElevationMeters();
+    const double corridorEndDistance = std::min(
+            std::max(roadCourse.totalLengthMeters,
+                     roadCourse.visualLengthMeters),
+            distanceMeters + 2.0);
+    constexpr int CorridorSamples = 8;
+    for (int index = 1; index <= CorridorSamples; ++index) {
+        const double progress = double(index) / CorridorSamples;
+        const WorkoutGameRoadSample corridorSample =
+                WorkoutGameRoadCourseBuilder::sampleVisual(
+                    roadCourse,
+                    cameraDistance
+                        + (corridorEndDistance - cameraDistance) * progress);
+        if (corridorSample.ready) {
+            corridorGroundY = std::max(
+                    corridorGroundY,
+                    corridorSample.visualGroundElevationMeters());
+        }
+    }
+    minimumCameraPositionY = std::max(
+            cameraSample.visualGroundElevationMeters() + 2.80,
+            corridorGroundY + 1.65);
 
     const double targetForwardX = std::sin(
             targetSample.center.headingRadians);

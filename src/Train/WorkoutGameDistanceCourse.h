@@ -44,6 +44,8 @@ struct WorkoutGameDistanceCourseSection
     double targetEndWatts = 0.0;
     double gradePercent = 0.0;
     double difficulty = 0.0;
+    // -1 preserves legacy inference for documents written before algorithm 4.
+    int challengeCount = -1;
     std::uint32_t visualVariant = 0;
     bool adjustableConnector = false;
 };
