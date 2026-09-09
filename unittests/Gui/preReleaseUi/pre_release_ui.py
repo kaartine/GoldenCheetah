@@ -1327,11 +1327,19 @@ class WorkoutGameUiWorkflow:
         return recording
 
     def run_smoke_and_discard(self, preset: str) -> None:
-        self.open_game(workout_ride_expected=preset != "ride-first")
+        workout_ride_expected = preset != "ride-first"
+        self.open_game(workout_ride_expected=workout_ride_expected)
         recording = self.start(f"04-mtb-course-{preset}-first")
         initial_size = recording.stat().st_size
         time.sleep(1.2)
         self.driver.wait_file_growth(recording, initial_size)
+        if workout_ride_expected:
+            initial_gear = self.driver.current_value(self.gear)
+            self.driver.send_key("w")
+            self.driver.wait_value(self.gear, initial_gear + 1)
+            time.sleep(0.5)
+            self.driver.send_key("s")
+            self.driver.wait_value(self.gear, initial_gear)
         if self.capture_screenshots:
             second = self.driver.screenshot(
                 f"04-mtb-course-{preset}-running", self.canvas

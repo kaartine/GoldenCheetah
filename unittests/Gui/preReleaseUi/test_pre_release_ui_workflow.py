@@ -485,8 +485,10 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             cancel = object()
             driver = mock.Mock()
             driver.find.return_value = cancel
+            driver.current_value.return_value = 6.0
             workflow = object.__new__(UI.WorkoutGameUiWorkflow)
             workflow.driver = driver
+            workflow.gear = object()
             workflow.capture_screenshots = False
             workflow.open_game = mock.Mock()
             workflow.start = mock.Mock(return_value=recording)
@@ -497,6 +499,10 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
             workflow.open_game.assert_called_once_with(
                 workout_ride_expected=True
+            )
+            self.assertEqual(
+                driver.send_key.call_args_list,
+                [mock.call("w"), mock.call("s")],
             )
             workflow.start.assert_called_once_with("04-mtb-course-balanced-first")
             driver.wait_file_growth.assert_called_once_with(
@@ -516,6 +522,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             driver = mock.Mock()
             workflow = object.__new__(UI.WorkoutGameUiWorkflow)
             workflow.driver = driver
+            workflow.gear = object()
             workflow.capture_screenshots = False
             workflow.open_game = mock.Mock()
             workflow.start = mock.Mock(return_value=recording)
@@ -527,6 +534,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             workflow.open_game.assert_called_once_with(
                 workout_ride_expected=False
             )
+            driver.send_key.assert_not_called()
 
     def test_prepare_uses_only_the_requested_isolated_library(self):
         with tempfile.TemporaryDirectory() as directory:
