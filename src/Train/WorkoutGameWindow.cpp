@@ -81,9 +81,17 @@ QString ghostSeedText(std::uint32_t seed)
 
 bool threeDRendererRequested()
 {
-    return qEnvironmentVariableIntValue("GC_WORKOUT_GAME_3D") != 0
-            && qEnvironmentVariableIntValue(
-                    "GC_WORKOUT_GAME_FORCE_PAINTER") == 0;
+    const bool forcePainter = qEnvironmentVariableIntValue(
+            "GC_WORKOUT_GAME_FORCE_PAINTER") != 0;
+    bool overridePresent = false;
+    const int overrideValue = qEnvironmentVariableIntValue(
+            "GC_WORKOUT_GAME_3D", &overridePresent);
+    return WorkoutGameRendererPolicy::useQuick3D(
+            forcePainter,
+            QGuiApplication::platformName().toStdString(),
+            gl_major,
+            overridePresent,
+            overrideValue != 0);
 }
 
 }

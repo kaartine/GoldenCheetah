@@ -12,8 +12,30 @@
 #include "WorkoutGameCourseTerrain.h"
 #include "WorkoutGameFeatureCatalog.h"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
+
+namespace {
+
+std::size_t sourceIntervalAt(
+        const std::vector<WorkoutGameInterval> &sourceIntervals,
+        std::int64_t sourceStartMs)
+{
+    const auto upper = std::upper_bound(
+            sourceIntervals.begin(), sourceIntervals.end(), sourceStartMs,
+            [](std::int64_t value, const WorkoutGameInterval &interval) {
+                return value < interval.startMs;
+            });
+    if (upper == sourceIntervals.begin()) return sourceIntervals.size();
+    const auto candidate = std::prev(upper);
+    if (sourceStartMs >= candidate->startMs + candidate->durationMs) {
+        return sourceIntervals.size();
+    }
+    return std::size_t(std::distance(sourceIntervals.begin(), candidate));
+}
+
+}
 
 bool WorkoutGameCourseSummary::build(
         const WorkoutGameDistanceCourse &course,
@@ -26,7 +48,8 @@ bool WorkoutGameCourseSummary::build(
 {
     summary = WorkoutGameCourseConversionSummary();
     if (prescription.status != WorkoutGameCoursePrescriptionStatus::Ready
-            || course.sections.size() != sourceIntervals.size()) {
+            || course.sections.empty()
+            || sourceIntervals.empty()) {
         return false;
     }
 
@@ -38,8 +61,14 @@ bool WorkoutGameCourseSummary::build(
     int technicalEligibleSections = 0;
     int technicalRouteSections = 0;
     std::set<WorkoutGameTerrainKind> featureKinds;
+    std::set<std::size_t> countedClimbs;
+    std::set<std::size_t> countedJumps;
+    std::set<std::size_t> countedDescents;
     for (std::size_t index = 0; index < course.sections.size(); ++index) {
         const WorkoutGameDistanceCourseSection &section = course.sections[index];
+        const std::size_t sourceIndex = sourceIntervalAt(
+                sourceIntervals, section.sourceStartMs);
+        if (sourceIndex >= sourceIntervals.size()) return false;
         const bool technical =
                 WorkoutGameFeatureCatalog::definition(section.terrain).technical;
         routeDistance += section.lengthMeters;
@@ -65,7 +94,7 @@ bool WorkoutGameCourseSummary::build(
         }
         if (technical) ++summary.technicalFeatureCount;
         const bool eligible = !WorkoutGameCoursePrescription::isRecovery(
-                    sourceIntervals[index], ftpWatts)
+                    sourceIntervals[sourceIndex], ftpWatts)
                 && WorkoutGameCourseTerrain::paletteEligible(section.feature);
         if (eligible) {
             ++eligibleSections;
@@ -76,15 +105,22 @@ bool WorkoutGameCourseSummary::build(
             }
         }
         switch (section.feature) {
-        case WorkoutGameFeature::Climb: ++summary.climbCount; break;
-        case WorkoutGameFeature::SprintJump: ++summary.jumpCount; break;
+        case WorkoutGameFeature::Climb:
+            countedClimbs.insert(sourceIndex);
+            break;
+        case WorkoutGameFeature::SprintJump:
+            countedJumps.insert(sourceIndex);
+            break;
         case WorkoutGameFeature::RecoveryDescent:
         case WorkoutGameFeature::CooldownDescent:
-            ++summary.descentCount;
+            countedDescents.insert(sourceIndex);
             break;
         default: break;
         }
     }
+    summary.climbCount = int(countedClimbs.size());
+    summary.jumpCount = int(countedJumps.size());
+    summary.descentCount = int(countedDescents.size());
 
     summary.technicalTerrainExposureApplicable =
             eligibleSections >= 2 && eligibleDistance > 0.0;

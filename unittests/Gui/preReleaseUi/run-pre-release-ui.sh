@@ -185,7 +185,6 @@ if [ "${GC_UI_VALIDATE_TRAINER_ACCEPTANCE:-0}" = 1 ] && \
     exit 2
 fi
 if [ "$REQUIRE_QUICK3D_EVIDENCE" = 1 ]; then
-    export GC_WORKOUT_GAME_3D=1
     export GC_WORKOUT_GAME_TRACE=1
 fi
 

@@ -45,7 +45,7 @@ struct WorkoutGameCourseSourceText
 struct WorkoutGameCourseDocument
 {
     static constexpr int LegacyConversionAlgorithmVersion = 1;
-    static constexpr int CurrentConversionAlgorithmVersion = 4;
+    static constexpr int CurrentConversionAlgorithmVersion = 5;
 
     int schemaVersion = 4;
     int conversionAlgorithmVersion = CurrentConversionAlgorithmVersion;

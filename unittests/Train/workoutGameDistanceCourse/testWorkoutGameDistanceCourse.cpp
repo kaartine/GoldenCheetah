@@ -93,7 +93,7 @@ private slots:
         QCOMPARE(course.status, WorkoutGameDistanceCourseStatus::Ready);
         QCOMPARE(course.seed, std::uint32_t(123));
         QCOMPARE(course.nominalDurationMs, std::int64_t(60 * 60000));
-        QCOMPARE(course.sections.size(), std::size_t(18));
+        QVERIFY(course.sections.size() > std::size_t(18));
         QVERIFY(course.totalDistanceMeters > 10000.0);
         QVERIFY(course.totalDistanceMeters < 30000.0);
         QVERIFY(course.elevationGainMeters > 100.0);
@@ -111,9 +111,46 @@ private slots:
             recoveries += section.feature
                     == WorkoutGameFeature::RecoveryDescent ? 1 : 0;
         }
-        QCOMPARE(climbs, 5);
+        QVERIFY(climbs >= 5);
         QCOMPARE(jumps, 5);
-        QCOMPARE(recoveries, 6);
+        QVERIFY(recoveries >= 6);
+    }
+
+    void longSteadyWorkoutDistributesFeaturesAcrossTheWholeCourse()
+    {
+        std::vector<WorkoutGameInterval> intervals;
+        for (int index = 0; index < 18; ++index) {
+            appendInterval(intervals, 5 * 60000,
+                           index % 2 == 0 ? 120.0 : 140.0,
+                           index % 2 == 0 ? 120.0 : 140.0);
+        }
+        const WorkoutGameDistanceCourse course =
+                WorkoutGameDistanceCourseBuilder::build(
+                    intervals, 187.0,
+                    WorkoutGameDistanceCourseGenerationParameters(), 2026u);
+
+        QCOMPARE(course.status, WorkoutGameDistanceCourseStatus::Ready);
+        QVERIFY(course.sections.size() >= std::size_t(90));
+        double previousFeatureDistance = 0.0;
+        double maximumFeatureGap = 0.0;
+        int featureCount = 0;
+        std::set<WorkoutGameTerrainKind> featureKinds;
+        for (const WorkoutGameDistanceCourseSection &section : course.sections) {
+            if (section.challengeCount <= 0) continue;
+            maximumFeatureGap = std::max(
+                    maximumFeatureGap,
+                    section.startDistanceMeters - previousFeatureDistance);
+            previousFeatureDistance = section.startDistanceMeters;
+            featureKinds.insert(section.terrain);
+            ++featureCount;
+        }
+        maximumFeatureGap = std::max(
+                maximumFeatureGap,
+                course.totalDistanceMeters - previousFeatureDistance);
+        QVERIFY(featureCount >= 40);
+        QVERIFY(featureKinds.size() >= std::size_t(8));
+        QVERIFY(course.sections.front().challengeCount > 0);
+        QVERIFY(maximumFeatureGap < 1500.0);
     }
 
     void recoveryJustAboveSixtyPercentFtpBecomesDescent()
@@ -393,14 +430,26 @@ private slots:
                     {60000, 60000, 225.0, 225.0},
                     {120000, 10 * 60000, 100.0, 100.0},
                     {720000, 5 * 60000, 110.0, 80.0}
-                }, 190.0);
+        }, 190.0);
         QCOMPARE(course.status, WorkoutGameDistanceCourseStatus::Ready);
-        QCOMPARE(course.sections[2].feature,
+        const auto recovery = std::find_if(
+                course.sections.begin(), course.sections.end(),
+                [](const WorkoutGameDistanceCourseSection &section) {
+                    return section.sourceStartMs == 120000;
+                });
+        const auto cooldown = std::find_if(
+                course.sections.begin(), course.sections.end(),
+                [](const WorkoutGameDistanceCourseSection &section) {
+                    return section.sourceStartMs == 720000;
+                });
+        QVERIFY(recovery != course.sections.end());
+        QVERIFY(cooldown != course.sections.end());
+        QCOMPARE(recovery->feature,
                  WorkoutGameFeature::RecoveryDescent);
-        QVERIFY(course.sections[2].gradePercent > -2.0);
-        QCOMPARE(course.sections[3].feature,
+        QVERIFY(recovery->gradePercent > -2.0);
+        QCOMPARE(cooldown->feature,
                  WorkoutGameFeature::CooldownDescent);
-        QVERIFY(course.sections[3].gradePercent > -2.0);
+        QVERIFY(cooldown->gradePercent > -2.0);
         QVERIFY(course.elevationLossMeters < course.totalDistanceMeters * 0.025);
     }
 

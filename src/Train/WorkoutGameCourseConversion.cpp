@@ -26,21 +26,41 @@ bool validPreset(WorkoutGameCoursePreset preset)
 }
 
 std::vector<WorkoutGameInterval> generatedIntervals(
-        const WorkoutGameDistanceCourse &course)
+        const WorkoutGameDistanceCourse &course,
+        const std::vector<WorkoutGameInterval> &sourceIntervals)
 {
     std::vector<WorkoutGameInterval> intervals;
-    intervals.reserve(course.sections.size());
-    std::int64_t startMs = 0;
-    for (const WorkoutGameDistanceCourseSection &section : course.sections) {
-        intervals.push_back({
-            startMs,
-            section.nominalDurationMs,
-            section.targetStartWatts,
-            section.targetEndWatts
-        });
-        startMs += section.nominalDurationMs;
+    intervals.reserve(sourceIntervals.size());
+    std::size_t sectionIndex = 0;
+    for (const WorkoutGameInterval &source : sourceIntervals) {
+        const std::int64_t sourceEnd = source.startMs + source.durationMs;
+        WorkoutGameInterval generated;
+        generated.startMs = source.startMs;
+        bool haveSection = false;
+        while (sectionIndex < course.sections.size()
+                && course.sections[sectionIndex].sourceStartMs < sourceEnd) {
+            const WorkoutGameDistanceCourseSection &section =
+                    course.sections[sectionIndex++];
+            if (!haveSection) {
+                generated.startWatts = section.targetStartWatts;
+                haveSection = true;
+            }
+            generated.durationMs += section.nominalDurationMs;
+            generated.endWatts = section.targetEndWatts;
+        }
+        if (!haveSection) return {};
+        intervals.push_back(generated);
     }
+    if (sectionIndex != course.sections.size()) return {};
     return intervals;
+}
+
+bool sectionBelongsTo(
+        const WorkoutGameDistanceCourseSection &section,
+        const WorkoutGameInterval &source)
+{
+    return section.sourceStartMs >= source.startMs
+            && section.sourceStartMs < source.startMs + source.durationMs;
 }
 
 }
@@ -112,17 +132,28 @@ WorkoutGameCourseConversionResult WorkoutGameCourseConverter::convert(
                     request.prescriptionMetadata, index);
         if (request.preset == WorkoutGameCoursePreset::WorkoutFirst
                 || role == WorkoutGameCourseIntervalRole::Prescribed) {
-            result.course.sections[index].minimumDurationMs =
-                    result.course.sections[index].nominalDurationMs;
-            result.course.sections[index].maximumDurationMs =
-                    result.course.sections[index].nominalDurationMs;
+            for (WorkoutGameDistanceCourseSection &section :
+                    result.course.sections) {
+                if (!sectionBelongsTo(section, request.intervals[index])) {
+                    continue;
+                }
+                section.minimumDurationMs = section.nominalDurationMs;
+                section.maximumDurationMs = section.nominalDurationMs;
+            }
         }
     }
 
+    const std::vector<WorkoutGameInterval> generated = generatedIntervals(
+            result.course, request.intervals);
+    if (generated.size() != request.intervals.size()) {
+        result.course = WorkoutGameDistanceCourse();
+        result.status = WorkoutGameCourseConversionStatus::GenerationFailed;
+        return result;
+    }
     const WorkoutGameCoursePrescriptionAudit prescription =
             WorkoutGameCoursePrescription::audit(
                 request.intervals,
-                generatedIntervals(result.course),
+                generated,
                 request.ftpWatts,
                 request.preset,
                 request.prescriptionMetadata);
@@ -136,9 +167,19 @@ WorkoutGameCourseConversionResult WorkoutGameCourseConverter::convert(
     for (std::size_t index = 0; index < request.intervals.size(); ++index) {
         if (WorkoutGameCoursePrescription::isRecovery(
                     request.intervals[index], request.ftpWatts)
-                && double(result.course.sections[index].minimumDurationMs) + 1.0
-                    < double(request.intervals[index].durationMs)
+                ) {
+            std::int64_t minimumExposureMs = 0;
+            for (const WorkoutGameDistanceCourseSection &section :
+                    result.course.sections) {
+                if (sectionBelongsTo(section, request.intervals[index])) {
+                    minimumExposureMs += section.minimumDurationMs;
+                }
+            }
+            if (double(minimumExposureMs) + 1.0
+                    >= double(request.intervals[index].durationMs)
                         * contract.minimumRecoveryExposure) {
+                continue;
+            }
             result.course = WorkoutGameDistanceCourse();
             result.status = WorkoutGameCourseConversionStatus::GenerationFailed;
             return result;

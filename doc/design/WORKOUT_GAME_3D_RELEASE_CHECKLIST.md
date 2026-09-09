@@ -1508,4 +1508,23 @@ also pass. A complete application link succeeds in the Jammy/Qt 6.8.3 release
 container. Packaged AppImage checks and a physical KICKR ride remain open; this
 evidence does not replace `REL-04`.
 
+**Live-ride feedback hardening (2026-09-09):** Qt Quick 3D is now the default
+on supported desktop OpenGL platforms; the explicit painter and Scene Graph
+fallbacks remain available. Generated MTB course progress uses cadence and the
+12-speed virtual drivetrain, stops after bounded coast-down when pedalling
+ends, and no longer changes the prescribed ERG target. Long mixed-intensity
+courses are split into at most 60-second visual sections and distribute their
+preset-specific technical selections across the complete route. Conversion
+algorithm 5 records that new layout while algorithm-4 documents remain
+readable. Document validation aggregates the visual sections back to their
+source workout intervals, fixing the long-course persistence failure.
+
+The source-level gate passes 124 focused renderer-policy, runtime, distance,
+conversion, document, source-adapter and camera-continuity cases, plus 95
+offscreen 3D ViewModel cases, 24 distance-playback cases, 10 gap-integration
+cases, 24 Train runtime cases and 142 Python UI-harness regressions. A complete
+release-mode application link succeeds in the constrained Qt 6.8.3 container.
+The packaged hardware-rendered UI run and physical trainer confirmation remain
+release gates; this evidence does not replace `REL-04`.
+
 The build is not a release candidate while any P0 task remains open.

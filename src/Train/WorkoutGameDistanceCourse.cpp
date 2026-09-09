@@ -18,6 +18,8 @@ namespace {
 
 constexpr double MinimumSectionLengthMeters = 0.01;
 constexpr std::int64_t MaximumEstimateDurationMs = 48 * 60 * 60 * 1000;
+constexpr std::int64_t MaximumVisualSectionDurationMs = 60 * 1000;
+constexpr double FeatureRichCourseMinimumDistanceMeters = 5000.0;
 
 double averageWatts(const WorkoutGameInterval &interval)
 {
@@ -96,6 +98,123 @@ std::int64_t scaledDuration(
 {
     const double scaled = double(durationMs) * scale;
     return std::max<std::int64_t>(1, std::llround(scaled));
+}
+
+std::int64_t proportionalBoundary(
+        std::int64_t durationMs,
+        int part,
+        int partCount)
+{
+    return durationMs * part / partCount;
+}
+
+bool subdivideLongSections(
+        std::vector<WorkoutGameDistanceCourseSection> &sections,
+        std::vector<WorkoutGameSection> &adaptedSections,
+        std::vector<bool> &sourceRecoveries,
+        std::size_t maximumSections)
+{
+    std::size_t required = 0;
+    for (const WorkoutGameDistanceCourseSection &section : sections) {
+        required += std::size_t(std::max<std::int64_t>(
+                1, (section.nominalDurationMs
+                    + MaximumVisualSectionDurationMs - 1)
+                        / MaximumVisualSectionDurationMs));
+        if (required > maximumSections) return false;
+    }
+
+    std::vector<WorkoutGameDistanceCourseSection> subdivided;
+    std::vector<WorkoutGameSection> subdividedAdapted;
+    std::vector<bool> subdividedRecoveries;
+    subdivided.reserve(required);
+    subdividedAdapted.reserve(required);
+    subdividedRecoveries.reserve(required);
+    for (std::size_t index = 0; index < sections.size(); ++index) {
+        const WorkoutGameDistanceCourseSection &source = sections[index];
+        const WorkoutGameSection &adapted = adaptedSections[index];
+        const int partCount = int(std::max<std::int64_t>(
+                1, (source.nominalDurationMs
+                    + MaximumVisualSectionDurationMs - 1)
+                        / MaximumVisualSectionDurationMs));
+        for (int part = 0; part < partCount; ++part) {
+            const std::int64_t startOffset = proportionalBoundary(
+                    source.nominalDurationMs, part, partCount);
+            const std::int64_t endOffset = proportionalBoundary(
+                    source.nominalDurationMs, part + 1, partCount);
+            const double startProgress = double(startOffset)
+                    / double(source.nominalDurationMs);
+            const double endProgress = double(endOffset)
+                    / double(source.nominalDurationMs);
+
+            WorkoutGameDistanceCourseSection section = source;
+            section.sourceStartMs = source.sourceStartMs + startOffset;
+            section.nominalDurationMs = endOffset - startOffset;
+            const std::int64_t minimumStart = proportionalBoundary(
+                    source.minimumDurationMs, part, partCount);
+            const std::int64_t minimumEnd = proportionalBoundary(
+                    source.minimumDurationMs, part + 1, partCount);
+            const std::int64_t maximumStart = proportionalBoundary(
+                    source.maximumDurationMs, part, partCount);
+            const std::int64_t maximumEnd = proportionalBoundary(
+                    source.maximumDurationMs, part + 1, partCount);
+            section.minimumDurationMs = std::max<std::int64_t>(
+                    1, minimumEnd - minimumStart);
+            section.maximumDurationMs = std::max(
+                    section.nominalDurationMs, maximumEnd - maximumStart);
+            section.startDistanceMeters = source.startDistanceMeters
+                    + source.lengthMeters * startProgress;
+            section.lengthMeters = source.lengthMeters
+                    * (endProgress - startProgress);
+            section.startElevationMeters = source.startElevationMeters
+                    + (source.endElevationMeters
+                       - source.startElevationMeters) * startProgress;
+            section.endElevationMeters = source.startElevationMeters
+                    + (source.endElevationMeters
+                       - source.startElevationMeters) * endProgress;
+            section.targetStartWatts = targetAt(source, startProgress);
+            section.targetEndWatts = targetAt(source, endProgress);
+            section.visualVariant = source.visualVariant
+                    ^ std::uint32_t((part + 1) * 0x9e3779b9u);
+
+            WorkoutGameSection visual = adapted;
+            visual.startMs = section.sourceStartMs;
+            visual.durationMs = section.nominalDurationMs;
+            visual.targetWatts = (section.targetStartWatts
+                    + section.targetEndWatts) * 0.5;
+            visual.lengthMeters = section.lengthMeters;
+            visual.visualVariant = section.visualVariant;
+            subdivided.push_back(section);
+            subdividedAdapted.push_back(visual);
+            subdividedRecoveries.push_back(sourceRecoveries[index]);
+        }
+    }
+    sections = std::move(subdivided);
+    adaptedSections = std::move(subdividedAdapted);
+    sourceRecoveries = std::move(subdividedRecoveries);
+    return true;
+}
+
+void distributeShowcaseSelections(
+        std::vector<WorkoutGameCourseTerrainSelection> &selections)
+{
+    const std::size_t selectedCount = std::size_t(std::count_if(
+            selections.begin(), selections.end(),
+            [](const WorkoutGameCourseTerrainSelection &selection) {
+                return selection.technical;
+            }));
+    if (selectedCount == 0u) return;
+
+    std::vector<WorkoutGameCourseTerrainSelection> distributed(
+            selections.size());
+    for (std::size_t ordinal = 0; ordinal < selectedCount; ++ordinal) {
+        const std::size_t index = selectedCount == 1u
+                ? 0u
+                : std::size_t(std::llround(
+                    double(ordinal) * double(selections.size() - 1u)
+                        / double(selectedCount - 1u)));
+        distributed[index] = {true, ordinal, true};
+    }
+    selections = std::move(distributed);
 }
 
 WorkoutGameDistanceCourseStatus mapStatus(WorkoutGameCourseStatus status)
@@ -248,11 +367,16 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
     result.sections.reserve(source.sections.size());
     std::vector<WorkoutGameSection> adaptedSections;
     adaptedSections.reserve(source.sections.size());
+    std::vector<bool> sourceRecoveries;
+    sourceRecoveries.reserve(source.sections.size());
     for (std::size_t index = 0; index < source.sections.size(); ++index) {
         const WorkoutGameInterval &interval = intervals[index];
         adaptedSections.push_back(adaptSection(
             source.sections[index], interval, ftpWatts, parameters,
             index == 0, index + 1 == source.sections.size()));
+        sourceRecoveries.push_back(
+                averageWatts(interval) / ftpWatts
+                    <= parameters.recoveryIntensity);
     }
     const WorkoutGameCoursePreset terrainPreset = parameters.technicality <= 0.25
             ? WorkoutGameCoursePreset::WorkoutFirst
@@ -325,7 +449,18 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
     const double generatedDistanceMeters = result.sections.empty() ? 0.0
             : result.sections.back().startDistanceMeters
                 + result.sections.back().lengthMeters;
+    if (generatedDistanceMeters >= FeatureRichCourseMinimumDistanceMeters
+            && !subdivideLongSections(
+                result.sections, adaptedSections, sourceRecoveries,
+                parameters.maximumSections)) {
+        result.status = WorkoutGameDistanceCourseStatus::ResourceLimit;
+        result.sections.clear();
+        return result;
+    }
     const bool showcaseCandidate = generatedDistanceMeters >= 5000.0
+            && std::any_of(
+                sourceRecoveries.begin(), sourceRecoveries.end(),
+                [](bool recovery) { return !recovery; })
             && std::count_if(
                 adaptedSections.begin(), adaptedSections.end(),
                 [](const WorkoutGameSection &section) {
@@ -335,8 +470,7 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
     std::vector<double> eligibleDistances;
     eligibleDistances.reserve(result.sections.size());
     for (std::size_t index = 0; index < result.sections.size(); ++index) {
-        const bool sourceRecovery = averageWatts(intervals[index]) / ftpWatts
-                <= parameters.recoveryIntensity;
+        const bool sourceRecovery = sourceRecoveries[index];
         const bool eligible = showcaseCandidate
                 ? WorkoutGameCourseTerrain::showcaseEligible(
                     adaptedSections[index].feature)
@@ -346,7 +480,7 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
             eligibleDistances.push_back(result.sections[index].lengthMeters);
         }
     }
-    const std::vector<WorkoutGameCourseTerrainSelection> selections =
+    std::vector<WorkoutGameCourseTerrainSelection> selections =
             WorkoutGameCourseTerrain::selectTechnicalTerrain(
                 eligibleDistances, terrainPreset, source.seed);
     if (selections.size() != eligibleDistances.size()) {
@@ -354,10 +488,10 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
         result.sections.clear();
         return result;
     }
+    if (showcaseCandidate) distributeShowcaseSelections(selections);
     std::size_t paletteIndex = 0u;
     for (std::size_t index = 0; index < result.sections.size(); ++index) {
-        const bool sourceRecovery = averageWatts(intervals[index]) / ftpWatts
-                <= parameters.recoveryIntensity;
+        const bool sourceRecovery = sourceRecoveries[index];
         const bool paletteEligible = showcaseCandidate
                 ? WorkoutGameCourseTerrain::showcaseEligible(
                     adaptedSections[index].feature)

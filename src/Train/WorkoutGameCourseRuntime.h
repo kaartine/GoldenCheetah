@@ -52,6 +52,12 @@ public:
     double generatedTargetWattsAt(
             double positionMeters, double relativeGearRatio) const;
     double generatedProgressTargetWatts(double relativeGearRatio) const;
+    double updateProgressSpeedKph(
+            double cadenceRpm,
+            double powerWatts,
+            int virtualGear,
+            std::int64_t elapsedTimeMs);
+    double progressSpeedKph() const { return currentProgressSpeedKph; }
 
 private:
     bool configured = false;
@@ -61,6 +67,7 @@ private:
     WorkoutGameCourse configuredVisualCourse;
     WorkoutGameDistancePlayback playback;
     WorkoutGameDistancePlaybackSnapshot latestProgress;
+    double currentProgressSpeedKph = 0.0;
 };
 
 #endif

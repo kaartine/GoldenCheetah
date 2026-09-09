@@ -294,6 +294,63 @@ private slots:
         QCOMPARE(runtime.atWorkoutProgress(0, 30000).distanceMeters, 0.0);
     }
 
+    void virtualGearControlsCourseProgressSpeedWithoutAJump()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("runtime.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, sampleDocument(), error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseRuntime low;
+        WorkoutGameCourseRuntime high;
+        QCOMPARE(low.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
+        QCOMPARE(high.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
+
+        double lowSpeed = 0.0;
+        double highSpeed = 0.0;
+        for (int sample = 0; sample < 50; ++sample) {
+            lowSpeed = low.updateProgressSpeedKph(80.0, 180.0, 2, 200);
+            highSpeed = high.updateProgressSpeedKph(80.0, 180.0, 10, 200);
+        }
+        QVERIFY(highSpeed > lowSpeed + 8.0);
+
+        const double beforeShift = highSpeed;
+        const double afterShift = high.updateProgressSpeedKph(
+                80.0, 180.0, 2, 200);
+        QVERIFY(afterShift < beforeShift);
+        QVERIFY(afterShift > lowSpeed);
+    }
+
+    void courseProgressStopsExactlyWhenPedallingEnds()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("runtime.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, sampleDocument(), error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseRuntime runtime;
+        QCOMPARE(runtime.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
+        for (int sample = 0; sample < 40; ++sample) {
+            runtime.updateProgressSpeedKph(85.0, 190.0, 8, 200);
+        }
+        QVERIFY(runtime.progressSpeedKph() > 10.0);
+
+        for (int sample = 0; sample < 25; ++sample) {
+            runtime.updateProgressSpeedKph(0.0, 0.0, 8, 200);
+        }
+        QCOMPARE(runtime.progressSpeedKph(), 0.0);
+        QCOMPARE(runtime.updateProgressSpeedKph(0.0, 0.0, 12, 200), 0.0);
+
+        runtime.restartProgress();
+        QCOMPARE(runtime.progressSpeedKph(), 0.0);
+    }
+
     void rejectsUnavailableOrInvalidGeneratorTargets()
     {
         WorkoutGameCourseRuntime runtime;

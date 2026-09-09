@@ -2571,6 +2571,16 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
                 distanceTick = displaySpeed / (5 * 3600); // assumes 200ms refreshrate
             }
 
+            if (workoutGameCourseRuntime.enabled()) {
+                displaySpeed = workoutGameCourseRuntime.updateProgressSpeedKph(
+                        displayCadence,
+                        displayPower,
+                        virtualDrivetrain.gear(),
+                        200);
+                rtData.setSpeed(displaySpeed);
+                distanceTick = displaySpeed / (5 * 3600);
+            }
+
             // only update time & distance if actively running (not just connected, and not running but paused)
             if ((status&RT_RUNNING) && ((status&RT_PAUSED) == 0)) {
 

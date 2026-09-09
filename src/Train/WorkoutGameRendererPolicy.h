@@ -37,6 +37,12 @@ struct WorkoutGameRendererDecision
 class WorkoutGameRendererPolicy
 {
 public:
+    static bool useQuick3D(
+            bool forcePainter,
+            const std::string &platformName,
+            double openGLMajorVersion,
+            bool overridePresent,
+            bool overrideEnabled);
     static WorkoutGameRendererDecision decide(
             bool forcePainter,
             const std::string &platformName,

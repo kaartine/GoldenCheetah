@@ -24,6 +24,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -637,21 +638,51 @@ bool validIntervals(
 }
 
 std::vector<WorkoutGameInterval> generatedIntervals(
-        const WorkoutGameDistanceCourse &course)
+        const WorkoutGameDistanceCourse &course,
+        const std::vector<WorkoutGameInterval> &sourceIntervals)
 {
     std::vector<WorkoutGameInterval> result;
-    result.reserve(course.sections.size());
-    std::int64_t startMs = 0;
-    for (const WorkoutGameDistanceCourseSection &section : course.sections) {
-        result.push_back({
-            startMs,
-            section.nominalDurationMs,
-            section.targetStartWatts,
-            section.targetEndWatts
-        });
-        startMs += section.nominalDurationMs;
+    result.reserve(sourceIntervals.size());
+    std::size_t sectionIndex = 0;
+    for (const WorkoutGameInterval &source : sourceIntervals) {
+        const std::int64_t sourceEndMs = source.startMs + source.durationMs;
+        WorkoutGameInterval generated;
+        generated.startMs = source.startMs;
+        bool haveSection = false;
+        while (sectionIndex < course.sections.size()
+                && course.sections[sectionIndex].sourceStartMs < sourceEndMs) {
+            const WorkoutGameDistanceCourseSection &section =
+                    course.sections[sectionIndex++];
+            if (section.sourceStartMs < source.startMs) return {};
+            if (!haveSection) {
+                generated.startWatts = section.targetStartWatts;
+                haveSection = true;
+            }
+            generated.durationMs += section.nominalDurationMs;
+            generated.endWatts = section.targetEndWatts;
+        }
+        if (!haveSection) return {};
+        result.push_back(generated);
     }
+    if (sectionIndex != course.sections.size()) return {};
     return result;
+}
+
+std::size_t sourceIntervalAt(
+        const std::vector<WorkoutGameInterval> &sourceIntervals,
+        std::int64_t sourceStartMs)
+{
+    const auto upper = std::upper_bound(
+            sourceIntervals.begin(), sourceIntervals.end(), sourceStartMs,
+            [](std::int64_t value, const WorkoutGameInterval &interval) {
+                return value < interval.startMs;
+            });
+    if (upper == sourceIntervals.begin()) return sourceIntervals.size();
+    const auto candidate = std::prev(upper);
+    if (sourceStartMs >= candidate->startMs + candidate->durationMs) {
+        return sourceIntervals.size();
+    }
+    return std::size_t(std::distance(sourceIntervals.begin(), candidate));
 }
 
 QJsonObject sectionToJson(const WorkoutGameDistanceCourseSection &section)
@@ -1274,7 +1305,7 @@ bool documentForPersistence(
             WorkoutGameDistancePlayback::visualCourse(destination.course);
     const WorkoutGameCoursePreset roadPreset =
             destination.conversionAlgorithmVersion
-                    >= WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion
+                    >= 4
                 ? destination.preset
                 : WorkoutGameCoursePreset::WorkoutFirst;
     const WorkoutGameRoadPlan plan =
@@ -1368,7 +1399,8 @@ bool WorkoutGameCourseDocumentCodec::valid(
             const WorkoutGameCoursePrescriptionAudit audit =
                     WorkoutGameCoursePrescription::audit(
                         document.sourceIntervals,
-                        generatedIntervals(document.course),
+                        generatedIntervals(
+                            document.course, document.sourceIntervals),
                         document.ftpWatts,
                         document.preset,
                         document.prescriptionMetadata);
@@ -1378,8 +1410,21 @@ bool WorkoutGameCourseDocumentCodec::valid(
                 const WorkoutGameCourseModeContract contract =
                         WorkoutGameCoursePrescription::contractFor(
                             document.preset);
+                std::vector<std::int64_t> minimumExposureMs(
+                        document.sourceIntervals.size(), 0);
+                for (const WorkoutGameDistanceCourseSection &section :
+                        document.course.sections) {
+                    const std::size_t sourceIndex = sourceIntervalAt(
+                            document.sourceIntervals, section.sourceStartMs);
+                    if (sourceIndex >= minimumExposureMs.size()) {
+                        sourceIntervalsValid = false;
+                        break;
+                    }
+                    minimumExposureMs[sourceIndex] += section.minimumDurationMs;
+                }
                 for (std::size_t index = 0;
-                        index < document.sourceIntervals.size(); ++index) {
+                        sourceIntervalsValid
+                            && index < document.sourceIntervals.size(); ++index) {
                     const bool prescribedRecovery =
                             WorkoutGameCoursePrescription::isRecovery(
                                 document.sourceIntervals[index],
@@ -1388,8 +1433,7 @@ bool WorkoutGameCourseDocumentCodec::valid(
                                 document.prescriptionMetadata, index)
                                 == WorkoutGameCourseIntervalRole::Prescribed;
                     if (prescribedRecovery
-                            && double(document.course.sections[index]
-                                        .minimumDurationMs) + 1.0
+                            && double(minimumExposureMs[index]) + 1.0
                                 < double(document.sourceIntervals[index]
                                             .durationMs)
                                     * contract.minimumRecoveryExposure) {
@@ -1401,11 +1445,18 @@ bool WorkoutGameCourseDocumentCodec::valid(
                     for (const WorkoutGameRoadPiece &piece
                             : document.course.roadPlan->pieces) {
                         if (piece.sourceSectionIndex
-                                    >= document.sourceIntervals.size()
-                                || (document.conversionAlgorithmVersion < 4
-                                    && WorkoutGameCoursePrescription::isRecovery(
-                                        document.sourceIntervals[
-                                            piece.sourceSectionIndex],
+                                >= document.course.sections.size()) {
+                            sourceIntervalsValid = false;
+                            break;
+                        }
+                        if (document.conversionAlgorithmVersion >= 4) continue;
+                        const std::size_t sourceIndex = sourceIntervalAt(
+                                document.sourceIntervals,
+                                document.course.sections[
+                                    piece.sourceSectionIndex].sourceStartMs);
+                        if (sourceIndex >= document.sourceIntervals.size()
+                                || (WorkoutGameCoursePrescription::isRecovery(
+                                        document.sourceIntervals[sourceIndex],
                                         document.ftpWatts)
                                     && piece.challenge.enabled)) {
                             sourceIntervalsValid = false;

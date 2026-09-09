@@ -169,7 +169,7 @@ private slots:
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QCOMPARE(decoded.conversionAlgorithmVersion,
                  WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
-        QVERIFY(encoded.contains("\"algorithmVersion\":4"));
+        QVERIFY(encoded.contains("\"algorithmVersion\":5"));
         QCOMPARE(decoded.title, source.title);
         QCOMPARE(decoded.sourceFileName, source.sourceFileName);
         QCOMPARE(decoded.sourceSha256, source.sourceSha256);
@@ -385,6 +385,23 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
                     QJsonDocument(annotatedRoot).toJson(), decoded),
                  WorkoutGameCourseDocumentStatus::InvalidDocument);
+    }
+
+    void algorithmFourCurrentSchemaRemainsReadable()
+    {
+        QJsonObject root = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
+                .object();
+        QJsonObject conversion =
+                root.value(QStringLiteral("conversion")).toObject();
+        conversion.insert(QStringLiteral("algorithmVersion"), 4);
+        root.insert(QStringLiteral("conversion"), conversion);
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(root).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.conversionAlgorithmVersion, 4);
     }
 
     void currentSchemaRejectsUnannotatedSourceAndGeneratedDurationDifference()

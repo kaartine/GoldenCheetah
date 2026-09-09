@@ -35,6 +35,21 @@ void appendInterval(
     intervals.push_back({startMs, durationMs, watts, watts});
 }
 
+std::vector<std::size_t> generatedSectionIndexes(
+        const WorkoutGameDistanceCourse &course,
+        const WorkoutGameInterval &source)
+{
+    std::vector<std::size_t> result;
+    const std::int64_t endMs = source.startMs + source.durationMs;
+    for (std::size_t index = 0; index < course.sections.size(); ++index) {
+        const std::int64_t startMs = course.sections[index].sourceStartMs;
+        if (startMs >= source.startMs && startMs < endMs) {
+            result.push_back(index);
+        }
+    }
+    return result;
+}
+
 std::vector<WorkoutGameInterval> sampleWorkout()
 {
     std::vector<WorkoutGameInterval> intervals;
@@ -176,8 +191,8 @@ private slots:
                 QVERIFY2(results[mode].status
                                 == WorkoutGameCourseConversionStatus::Ready,
                          context.constData());
-                QCOMPARE(results[mode].course.sections.size(),
-                         workout.intervals.size());
+                QVERIFY(results[mode].course.sections.size()
+                        >= workout.intervals.size());
                 QCOMPARE(results[mode].generationParameters.gradeScale,
                          expectedGradeScale[mode]);
                 QCOMPARE(results[mode].generationParameters.technicality,
@@ -185,13 +200,29 @@ private slots:
                 for (std::size_t index = 0;
                         index < workout.intervals.size(); ++index) {
                     const WorkoutGameInterval &source = workout.intervals[index];
-                    const WorkoutGameDistanceCourseSection &generated =
-                            results[mode].course.sections[index];
-                    QCOMPARE(generated.targetStartWatts, source.startWatts);
-                    QCOMPARE(generated.targetEndWatts, source.endWatts);
-                    QCOMPARE(generated.nominalDurationMs, source.durationMs);
-                    QCOMPARE(generated.minimumDurationMs, source.durationMs);
-                    QCOMPARE(generated.maximumDurationMs, source.durationMs);
+                    const std::vector<std::size_t> sectionIndexes =
+                            generatedSectionIndexes(
+                                results[mode].course, source);
+                    QVERIFY(!sectionIndexes.empty());
+                    QCOMPARE(results[mode].course.sections[
+                                sectionIndexes.front()].targetStartWatts,
+                             source.startWatts);
+                    QCOMPARE(results[mode].course.sections[
+                                sectionIndexes.back()].targetEndWatts,
+                             source.endWatts);
+                    std::int64_t nominalMs = 0;
+                    std::int64_t minimumMs = 0;
+                    std::int64_t maximumMs = 0;
+                    for (std::size_t sectionIndex : sectionIndexes) {
+                        const WorkoutGameDistanceCourseSection &generated =
+                                results[mode].course.sections[sectionIndex];
+                        nominalMs += generated.nominalDurationMs;
+                        minimumMs += generated.minimumDurationMs;
+                        maximumMs += generated.maximumDurationMs;
+                    }
+                    QCOMPARE(nominalMs, source.durationMs);
+                    QCOMPARE(minimumMs, source.durationMs);
+                    QCOMPARE(maximumMs, source.durationMs);
                 }
                 QCOMPARE(results[mode].summary.loadDeviationPercent, 0.0);
                 QVERIFY2(
@@ -242,17 +273,20 @@ private slots:
             QCOMPARE(result.summary.technicalFeatureCount, 0);
             QVERIFY(!result.summary.technicalTerrainExposureApplicable);
             QCOMPARE(result.summary.technicalFeatureDensityPerTenSections, 0.0);
-            for (std::size_t index = 0;
-                    index < result.course.sections.size(); ++index) {
-                const WorkoutGameDistanceCourseSection &section =
-                        result.course.sections[index];
+            for (const WorkoutGameDistanceCourseSection &section :
+                    result.course.sections) {
                 QCOMPARE(section.terrain, WorkoutGameTerrainKind::SmoothTrail);
-                QCOMPARE(section.targetStartWatts,
-                         workout.intervals[index].startWatts);
-                QCOMPARE(section.targetEndWatts,
-                         workout.intervals[index].endWatts);
-                QCOMPARE(section.nominalDurationMs,
-                         workout.intervals[index].durationMs);
+            }
+            for (const WorkoutGameInterval &source : workout.intervals) {
+                const std::vector<std::size_t> sectionIndexes =
+                        generatedSectionIndexes(result.course, source);
+                QVERIFY(!sectionIndexes.empty());
+                QCOMPARE(result.course.sections[
+                            sectionIndexes.front()].targetStartWatts,
+                         source.startWatts);
+                QCOMPARE(result.course.sections[
+                            sectionIndexes.back()].targetEndWatts,
+                         source.endWatts);
             }
         }
     }
@@ -424,9 +458,16 @@ private slots:
                 WorkoutGameCourseConverter::convert(request);
 
         QCOMPARE(result.status, WorkoutGameCourseConversionStatus::Ready);
-        QVERIFY(double(result.course.sections.front().minimumDurationMs) + 1.0
+        std::int64_t warmupMinimumMs = 0;
+        std::int64_t warmupNominalMs = 0;
+        for (std::size_t index : generatedSectionIndexes(
+                result.course, request.intervals.front())) {
+            warmupMinimumMs += result.course.sections[index].minimumDurationMs;
+            warmupNominalMs += result.course.sections[index].nominalDurationMs;
+        }
+        QVERIFY(double(warmupMinimumMs) + 1.0
                 >= double(request.intervals.front().durationMs) * 0.95);
-        QCOMPARE(result.course.sections.front().nominalDurationMs,
+        QCOMPARE(warmupNominalMs,
                  request.intervals.front().durationMs);
     }
 
@@ -692,35 +733,56 @@ private slots:
             for (std::size_t index = 0;
                     index < request.intervals.size(); ++index) {
                 const WorkoutGameInterval &source = request.intervals[index];
-                const WorkoutGameDistanceCourseSection &output =
-                        result.course.sections[index];
-                QCOMPARE(output.targetStartWatts, source.startWatts);
-                QCOMPARE(output.targetEndWatts, source.endWatts);
-                QCOMPARE(output.nominalDurationMs, source.durationMs);
-                QCOMPARE(output.minimumDurationMs, source.durationMs);
-                QCOMPARE(output.maximumDurationMs, source.durationMs);
-                QVERIFY(std::abs(output.gradePercent) <= 12.0 + 1.0e-9);
+                const std::vector<std::size_t> sectionIndexes =
+                        generatedSectionIndexes(result.course, source);
+                QVERIFY(!sectionIndexes.empty());
+                QCOMPARE(result.course.sections[
+                            sectionIndexes.front()].targetStartWatts,
+                         source.startWatts);
+                QCOMPARE(result.course.sections[
+                            sectionIndexes.back()].targetEndWatts,
+                         source.endWatts);
+                std::int64_t nominalMs = 0;
+                std::int64_t minimumMs = 0;
+                std::int64_t maximumMs = 0;
+                for (std::size_t sectionIndex : sectionIndexes) {
+                    const WorkoutGameDistanceCourseSection &output =
+                            result.course.sections[sectionIndex];
+                    nominalMs += output.nominalDurationMs;
+                    minimumMs += output.minimumDurationMs;
+                    maximumMs += output.maximumDurationMs;
+                    QVERIFY(std::abs(output.gradePercent) <= 12.0 + 1.0e-9);
+                }
+                QCOMPARE(nominalMs, source.durationMs);
+                QCOMPARE(minimumMs, source.durationMs);
+                QCOMPARE(maximumMs, source.durationMs);
                 if (WorkoutGameCoursePrescription::isKeyEffort(
                             source, request.ftpWatts)) {
-                    QCOMPARE(output.nominalDurationMs, source.durationMs);
-                    QCOMPARE(output.minimumDurationMs, source.durationMs);
+                    QCOMPARE(nominalMs, source.durationMs);
+                    QCOMPARE(minimumMs, source.durationMs);
                 }
                 if (WorkoutGameCoursePrescription::isRecovery(
                             source, request.ftpWatts)) {
-                    QVERIFY(double(output.nominalDurationMs)
+                    QVERIFY(double(nominalMs)
                             >= double(source.durationMs)
                                 * contract.minimumRecoveryRetention - 1.0);
-                    QVERIFY(double(output.minimumDurationMs)
+                    QVERIFY(double(minimumMs)
                             >= double(source.durationMs)
                                 * contract.minimumRecoveryExposure - 1.0);
                     if (!result.summary.completeFeatureShowcase) {
-                        QVERIFY(output.terrain
-                                != WorkoutGameTerrainKind::GapJump);
+                        for (std::size_t sectionIndex : sectionIndexes) {
+                            QVERIFY(result.course.sections[sectionIndex].terrain
+                                    != WorkoutGameTerrainKind::GapJump);
+                        }
                     }
                     if (result.course.roadPlan) {
                         for (const WorkoutGameRoadPiece &piece
                                 : result.course.roadPlan->pieces) {
-                            if (piece.sourceSectionIndex == index) {
+                            if (std::find(
+                                        sectionIndexes.begin(),
+                                        sectionIndexes.end(),
+                                        piece.sourceSectionIndex)
+                                    != sectionIndexes.end()) {
                                 QVERIFY(!piece.challenge.enabled);
                             }
                         }
@@ -730,18 +792,26 @@ private slots:
 
             const WorkoutGameInterval &fiveMinuteRecovery =
                     request.intervals[FiveMinuteRecoveryIndex];
-            const WorkoutGameDistanceCourseSection &generatedRecovery =
-                    result.course.sections[FiveMinuteRecoveryIndex];
+            const std::vector<std::size_t> recoverySectionIndexes =
+                    generatedSectionIndexes(
+                        result.course, fiveMinuteRecovery);
+            QVERIFY(!recoverySectionIndexes.empty());
             QCOMPARE(fiveMinuteRecovery.durationMs,
                      std::int64_t(5 * 60000));
             QVERIFY(WorkoutGameCoursePrescription::isRecovery(
                         fiveMinuteRecovery, request.ftpWatts));
-            QCOMPARE(generatedRecovery.nominalDurationMs,
-                     fiveMinuteRecovery.durationMs);
-            if (!result.summary.completeFeatureShowcase) {
-                QVERIFY(generatedRecovery.terrain
-                        != WorkoutGameTerrainKind::GapJump);
+            std::int64_t generatedRecoveryDurationMs = 0;
+            for (std::size_t sectionIndex : recoverySectionIndexes) {
+                const WorkoutGameDistanceCourseSection &generatedRecovery =
+                        result.course.sections[sectionIndex];
+                generatedRecoveryDurationMs +=
+                        generatedRecovery.nominalDurationMs;
+                if (!result.summary.completeFeatureShowcase) {
+                    QVERIFY(generatedRecovery.terrain
+                            != WorkoutGameTerrainKind::GapJump);
+                }
             }
+            QCOMPARE(generatedRecoveryDurationMs, fiveMinuteRecovery.durationMs);
         }
     }
 
@@ -769,14 +839,24 @@ private slots:
             std::int64_t minimumRuntimeDurationMs = 0;
             for (std::size_t index = 0;
                     index < request.intervals.size(); ++index) {
-                QCOMPARE(result.course.sections[index].targetStartWatts,
+                const std::vector<std::size_t> sectionIndexes =
+                        generatedSectionIndexes(
+                            result.course, request.intervals[index]);
+                QVERIFY(!sectionIndexes.empty());
+                QCOMPARE(result.course.sections[
+                            sectionIndexes.front()].targetStartWatts,
                          request.intervals[index].startWatts);
-                QCOMPARE(result.course.sections[index].targetEndWatts,
+                QCOMPARE(result.course.sections[
+                            sectionIndexes.back()].targetEndWatts,
                          request.intervals[index].endWatts);
-                QCOMPARE(result.course.sections[index].nominalDurationMs,
-                         request.intervals[index].durationMs);
-                minimumRuntimeDurationMs +=
-                        result.course.sections[index].minimumDurationMs;
+                std::int64_t nominalMs = 0;
+                for (std::size_t sectionIndex : sectionIndexes) {
+                    nominalMs += result.course.sections[
+                            sectionIndex].nominalDurationMs;
+                    minimumRuntimeDurationMs += result.course.sections[
+                            sectionIndex].minimumDurationMs;
+                }
+                QCOMPARE(nominalMs, request.intervals[index].durationMs);
             }
             QVERIFY(result.summary.fastEstimate.elapsedTimeMs
                     >= minimumRuntimeDurationMs);

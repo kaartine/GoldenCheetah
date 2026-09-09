@@ -465,8 +465,8 @@ void WorkoutGame3DViewModel::setCourse(
             riderPositionY = initial.visualGroundElevationMeters();
             riderPositionZ = initial.center.zMeters;
             cameraGroundY = riderPositionY;
-            riderHeadingDegrees =
-                    initial.center.headingRadians * 180.0 / Pi;
+            riderHeadingDegrees = std::remainder(
+                    initial.center.headingRadians * 180.0 / Pi, 360.0);
             updateCameraPose(0.0, 0.0, 0);
         }
         rebuildTrees(0.0);
@@ -592,10 +592,10 @@ void WorkoutGame3DViewModel::setFrame(
     cameraGroundY = visualGround;
     riderPositionY = visualGround + authoritativeAir;
     riderPositionZ = sample.center.zMeters + lateral * rightZ;
-    riderHeadingDegrees = selectedRouteHeadingRadians(
+    riderHeadingDegrees = std::remainder(selectedRouteHeadingRadians(
             roadCourse, frame.feature.route,
             distanceMeters, requestedLateral,
-            sample.center.headingRadians) * 180.0 / Pi;
+            sample.center.headingRadians) * 180.0 / Pi, 360.0);
     const bool featureCritical = frame.feature.ready
             && frame.feature.phase != WorkoutGameFeaturePhase::None
             && frame.feature.phase != WorkoutGameFeaturePhase::Recovery;
@@ -1065,6 +1065,8 @@ void WorkoutGame3DViewModel::updateCameraPose(
                         MaximumDesiredRiderHorizontalOffsetRadians,
                         desiredRiderYawError));
         }
+        cameraPositionY = std::max(
+                cameraPositionY, minimumCameraPositionY);
         if (!cameraPoseInitialized || now < lastCameraPoseTimeMs) {
             cameraPoseInitialized = true;
             cameraYawRadians = desiredYaw;
@@ -1160,8 +1162,6 @@ void WorkoutGame3DViewModel::updateCameraPose(
                 + std::sin(cameraYawRadians) * targetDistance;
         cameraTargetPositionZ = cameraPositionZ
                 + std::cos(cameraYawRadians) * targetDistance;
-        cameraPositionY = std::max(
-                cameraPositionY, minimumCameraPositionY);
         double desiredPitch = std::atan2(
                 cameraTargetPositionY - cameraPositionY, targetDistance);
         const double riderHorizontalDistance = std::hypot(
@@ -1261,6 +1261,24 @@ void WorkoutGame3DViewModel::updateCameraPose(
             + targetForwardZ * missingAhead;
     cameraTargetPositionY = targetSample.visualGroundElevationMeters()
             + cameraTargetHeightDistanceMeters;
+    constexpr int SightLineSamples = 12;
+    constexpr double SightLineClearanceMeters = 0.45;
+    for (int index = 1; index < SightLineSamples; ++index) {
+        const double progress = double(index) / SightLineSamples;
+        const WorkoutGameRoadSample sightSample =
+                WorkoutGameRoadCourseBuilder::sampleVisual(
+                    roadCourse,
+                    cameraDistance
+                        + (targetDistance - cameraDistance) * progress);
+        if (!sightSample.ready) continue;
+        const double requiredCameraY =
+                (sightSample.visualGroundElevationMeters()
+                    + SightLineClearanceMeters
+                    - progress * cameraTargetPositionY)
+                / (1.0 - progress);
+        minimumCameraPositionY = std::max(
+                minimumCameraPositionY, requiredCameraY);
+    }
 
     const WorkoutGameRoadSample riderSample =
             WorkoutGameRoadCourseBuilder::sample(roadCourse, distanceMeters);

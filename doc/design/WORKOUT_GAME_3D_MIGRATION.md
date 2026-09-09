@@ -7,11 +7,10 @@ drawing to Qt Quick 3D. Trainer control, activity recording, workout timing,
 feature decisions, road generation and deterministic physics do not move into
 the renderer.
 
-The legacy renderer remains available only for an A/B validation period. Set
-`GC_WORKOUT_GAME_3D=1` to select the new renderer with the same workout,
-telemetry and simulation snapshots. A Qt Quick 3D load failure falls back to
-the scene graph renderer during this period. The old renderers and code used
-only by them are retired after the acceptance gates below pass.
+Qt Quick 3D is the production default on supported desktop OpenGL platforms.
+Set `GC_WORKOUT_GAME_3D=0` for an explicit legacy A/B run; a Qt Quick 3D load
+failure also falls back to the scene graph renderer. The old renderers and code
+used only by them are retired after the acceptance gates below pass.
 
 ## Module Boundaries
 

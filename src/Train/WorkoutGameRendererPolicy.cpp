@@ -12,6 +12,32 @@
 #include <algorithm>
 #include <cctype>
 
+namespace {
+
+bool unsupportedWidgetPlatform(const std::string &platformName)
+{
+    std::string normalized = platformName;
+    std::transform(
+            normalized.begin(), normalized.end(), normalized.begin(),
+            [](unsigned char character) { return std::tolower(character); });
+    return normalized == "offscreen" || normalized == "minimal";
+}
+
+}
+
+bool WorkoutGameRendererPolicy::useQuick3D(
+        bool forcePainter,
+        const std::string &platformName,
+        double openGLMajorVersion,
+        bool overridePresent,
+        bool overrideEnabled)
+{
+    return !forcePainter
+            && (!overridePresent || overrideEnabled)
+            && !unsupportedWidgetPlatform(platformName)
+            && openGLMajorVersion >= 2.0;
+}
+
 WorkoutGameRendererDecision WorkoutGameRendererPolicy::decide(
         bool forcePainter,
         const std::string &platformName,
@@ -22,8 +48,8 @@ WorkoutGameRendererDecision WorkoutGameRendererPolicy::decide(
             normalizedPlatform.begin(), normalizedPlatform.end(),
             normalizedPlatform.begin(),
             [](unsigned char character) { return std::tolower(character); });
-    const bool widgetOpenGLUnsupported = normalizedPlatform == "offscreen"
-            || normalizedPlatform == "minimal";
+    const bool widgetOpenGLUnsupported = unsupportedWidgetPlatform(
+            normalizedPlatform);
     if (forcePainter) {
         return {WorkoutGameRendererBackend::Painter,
                 WorkoutGameRendererSelectionReason::ForcedPainter};

@@ -58,8 +58,8 @@ Python process keeps using its normal system libraries.
 
 The matrix runs three times against separate temporary athletes. The first run
 forces the QPainter fallback, the second exercises the packaged Scene Graph
-path with trace validation, and the third selects the production Qt Quick 3D
-renderer and requires renderer and cold-start trace evidence. The Quick 3D leg
+path with trace validation, and the third verifies that the production default
+selects Qt Quick 3D and requires renderer and cold-start trace evidence. The Quick 3D leg
 defers synchronous pixel readback until after the measured ten-second
 cold-start window, then requires nonblank canvas images. Motion remains
 trace-authoritative because synchronous X11 readback can block long enough for

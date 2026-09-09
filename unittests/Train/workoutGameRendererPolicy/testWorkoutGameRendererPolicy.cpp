@@ -16,6 +16,26 @@ class TestWorkoutGameRendererPolicy : public QObject
     Q_OBJECT
 
 private slots:
+    void normalDesktopUsesQuick3DByDefault()
+    {
+        QVERIFY(WorkoutGameRendererPolicy::useQuick3D(
+                false, "xcb", 4.6, false, false));
+        QVERIFY(WorkoutGameRendererPolicy::useQuick3D(
+                false, "xcb", 4.6, true, true));
+    }
+
+    void quick3DCanBeDisabledAndNeverOverridesSafetyFallbacks()
+    {
+        QVERIFY(!WorkoutGameRendererPolicy::useQuick3D(
+                false, "xcb", 4.6, true, false));
+        QVERIFY(!WorkoutGameRendererPolicy::useQuick3D(
+                true, "xcb", 4.6, false, false));
+        QVERIFY(!WorkoutGameRendererPolicy::useQuick3D(
+                false, "offscreen", 4.6, false, false));
+        QVERIFY(!WorkoutGameRendererPolicy::useQuick3D(
+                false, "xcb", 1.5, false, false));
+    }
+
     void normalDesktopUsesSceneGraph()
     {
         const WorkoutGameRendererDecision decision =

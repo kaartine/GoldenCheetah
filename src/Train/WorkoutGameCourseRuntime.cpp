@@ -10,11 +10,29 @@
 #include "WorkoutGameCourseRuntime.h"
 
 #include "WorkoutGameCourseDocument.h"
+#include "VirtualDrivetrain.h"
 
 #include <QFileInfo>
 
 #include <algorithm>
 #include <cmath>
+
+namespace {
+
+constexpr double CourseWheelCircumferenceMeters = 2.12;
+constexpr double ProgressAccelerationKphPerSecond = 7.2;
+constexpr double ProgressDecelerationKphPerSecond = 10.8;
+constexpr double StoppingDecelerationKphPerSecond = 14.4;
+constexpr double StoppedCadenceRpm = 3.0;
+constexpr double StoppedPowerWatts = 5.0;
+constexpr double StopSnapSpeedKph = 0.5;
+
+double finiteNonNegative(double value)
+{
+    return std::isfinite(value) ? std::max(0.0, value) : 0.0;
+}
+
+}
 
 WorkoutGameCourseRuntimeStatus WorkoutGameCourseRuntime::configure(
         const QString &coursePath)
@@ -56,11 +74,13 @@ void WorkoutGameCourseRuntime::reset()
     configuredVisualCourse = WorkoutGameCourse();
     playback = WorkoutGameDistancePlayback();
     latestProgress = WorkoutGameDistancePlaybackSnapshot();
+    currentProgressSpeedKph = 0.0;
 }
 
 void WorkoutGameCourseRuntime::restartProgress()
 {
     playback.resetProgress();
+    currentProgressSpeedKph = 0.0;
     latestProgress = configured ? playback.atDistance(0.0)
                                 : WorkoutGameDistancePlaybackSnapshot();
 }
@@ -172,4 +192,39 @@ double WorkoutGameCourseRuntime::generatedProgressTargetWatts(
     }
     return std::clamp(
             latestProgress.targetWatts * relativeGearRatio, 0.0, 2500.0);
+}
+
+double WorkoutGameCourseRuntime::updateProgressSpeedKph(
+        double cadenceRpm,
+        double powerWatts,
+        int virtualGear,
+        std::int64_t elapsedTimeMs)
+{
+    if (!configured) {
+        currentProgressSpeedKph = 0.0;
+        return 0.0;
+    }
+
+    const double cadence = finiteNonNegative(cadenceRpm);
+    const double power = finiteNonNegative(powerWatts);
+    const bool pedalling = cadence > StoppedCadenceRpm
+            && power > StoppedPowerWatts;
+    const double desiredSpeedKph = pedalling
+            ? VirtualDrivetrain(virtualGear).speedKph(
+                cadence, CourseWheelCircumferenceMeters)
+            : 0.0;
+    const double seconds = double(std::clamp<std::int64_t>(
+            elapsedTimeMs, 0, 1000)) / 1000.0;
+    const double rate = desiredSpeedKph > currentProgressSpeedKph
+            ? ProgressAccelerationKphPerSecond
+            : pedalling ? ProgressDecelerationKphPerSecond
+                        : StoppingDecelerationKphPerSecond;
+    const double maximumStep = rate * seconds;
+    currentProgressSpeedKph += std::clamp(
+            desiredSpeedKph - currentProgressSpeedKph,
+            -maximumStep, maximumStep);
+    if (!pedalling && currentProgressSpeedKph < StopSnapSpeedKph) {
+        currentProgressSpeedKph = 0.0;
+    }
+    return currentProgressSpeedKph;
 }
