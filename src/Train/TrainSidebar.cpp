@@ -674,6 +674,16 @@ TrainSidebar::editMtbCourse()
     WorkoutGameCourseConversionDialog dialog(document, coursePath, this);
     if (dialog.exec() != QDialog::Accepted) return;
 
+    ErgFile *staleWorkout =
+            const_cast<ErgFile *>(ergFileQueryAdapter.getErgFile());
+    if (staleWorkout && staleWorkout->filename() == coursePath) {
+        context->notifyErgFileSelected(NULL);
+        ergFileQueryAdapter.setErgFile(NULL);
+        workoutGameCourseRuntime.reset();
+        workoutfile.clear();
+        delete staleWorkout;
+    }
+
     if (!Library::refreshWorkouts(context)) {
         QMessageBox::warning(
                 this, tr("Edit MTB Course"),
@@ -681,6 +691,9 @@ TrainSidebar::editMtbCourse()
     }
     refresh();
     selectWorkout(coursePath);
+    if (!ergFileQueryAdapter.getErgFile()) {
+        workoutTreeWidgetSelectionChanged();
+    }
 }
 
 void
