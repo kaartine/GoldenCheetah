@@ -88,11 +88,13 @@ PlannedTrainerTarget WorkoutRideTargetPlanner::plan(
 WorkoutRideModeAvailability WorkoutRideTargetPlanner::availability(
         bool connected,
         bool running,
-        bool ergWorkout,
+        bool powerControlledWorkout,
         const TrainerControlCapabilities &capabilities)
 {
     WorkoutRideModeAvailability result;
-    result.supported = connected && ergWorkout && capabilities.targetPower;
+    result.supported = connected
+            && powerControlledWorkout
+            && capabilities.targetPower;
     result.editable = result.supported && !running;
     return result;
 }

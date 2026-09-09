@@ -9,6 +9,7 @@
 
 #include "Train/VirtualDrivetrain.h"
 #include "Train/BluetoothTrainerCapabilities.h"
+#include "Train/TrainingDataGenerator.h"
 #include "Train/WorkoutRideTargetPlanner.h"
 
 #include <QTest>
@@ -124,6 +125,55 @@ private slots:
                 input, TrainerControlCapabilities::targetPowerOnly());
 
         QVERIFY(std::abs(result.targetWatts - 240.0) < 1e-9);
+    }
+
+    void dataGeneratorPowerRisesAfterHarderShiftAtHeldCadence()
+    {
+        VirtualDrivetrain drivetrain;
+        TrainingDataGenerator generator;
+        generator.setMode(TrainingDataGeneratorMode::OnTarget);
+
+        WorkoutRideTargetInput input;
+        input.enabled = true;
+        input.workoutWatts = 200.0;
+        input.cadenceRpm = 85.0;
+        input.relativeGearRatio = drivetrain.relativeRatio();
+        const PlannedTrainerTarget initial = WorkoutRideTargetPlanner::plan(
+                input, TrainerControlCapabilities::targetPowerOnly());
+        generator.setTargetWatts(initial.targetWatts);
+        const double initialWatts = generator.nextSample().watts;
+
+        QVERIFY(drivetrain.shiftUp());
+        input.relativeGearRatio = drivetrain.relativeRatio();
+        const PlannedTrainerTarget harder = WorkoutRideTargetPlanner::plan(
+                input, TrainerControlCapabilities::targetPowerOnly());
+        generator.setTargetWatts(harder.targetWatts);
+        const double harderGearWatts = generator.nextSample().watts;
+
+        QCOMPARE(initialWatts, 200.0);
+        QVERIFY(harder.targetWatts > initial.targetWatts);
+        QVERIFY(harderGearWatts > initialWatts);
+    }
+
+    void cadenceLossAfterHarderShiftReducesRequiredPower()
+    {
+        VirtualDrivetrain drivetrain;
+        QVERIFY(drivetrain.shiftUp());
+
+        WorkoutRideTargetInput heldCadence;
+        heldCadence.enabled = true;
+        heldCadence.workoutWatts = 200.0;
+        heldCadence.cadenceRpm = 85.0;
+        heldCadence.relativeGearRatio = drivetrain.relativeRatio();
+        WorkoutRideTargetInput fallingCadence = heldCadence;
+        fallingCadence.cadenceRpm = 60.0;
+
+        const PlannedTrainerTarget held = WorkoutRideTargetPlanner::plan(
+                heldCadence, TrainerControlCapabilities::targetPowerOnly());
+        const PlannedTrainerTarget falling = WorkoutRideTargetPlanner::plan(
+                fallingCadence, TrainerControlCapabilities::targetPowerOnly());
+
+        QVERIFY(falling.targetWatts < held.targetWatts);
     }
 
     void missingCadenceUsesReferenceCadence_data()
@@ -322,32 +372,34 @@ private slots:
         QVERIFY(!result.nativeVirtualGearing);
     }
 
-    void modeAvailabilityRequiresConnectedPowerTrainerAndErgWorkout_data()
+    void modeAvailabilityRequiresPowerControlledWorkout_data()
     {
         QTest::addColumn<bool>("connected");
         QTest::addColumn<bool>("running");
-        QTest::addColumn<bool>("ergWorkout");
+        QTest::addColumn<bool>("powerControlledWorkout");
         QTest::addColumn<bool>("targetPower");
         QTest::addColumn<bool>("supported");
         QTest::addColumn<bool>("editable");
 
-        QTest::newRow("ready")
+        QTest::newRow("erg-ready")
+                << true << false << true << true << true << true;
+        QTest::newRow("mtb-workout-first-ready")
                 << true << false << true << true << true << true;
         QTest::newRow("running-locks-selection")
                 << true << true << true << true << true << false;
         QTest::newRow("disconnected")
                 << false << false << true << true << false << false;
-        QTest::newRow("slope-workout")
+        QTest::newRow("ride-first-slope-course")
                 << true << false << false << true << false << false;
         QTest::newRow("telemetry-only")
                 << true << false << true << false << false << false;
     }
 
-    void modeAvailabilityRequiresConnectedPowerTrainerAndErgWorkout()
+    void modeAvailabilityRequiresPowerControlledWorkout()
     {
         QFETCH(bool, connected);
         QFETCH(bool, running);
-        QFETCH(bool, ergWorkout);
+        QFETCH(bool, powerControlledWorkout);
         QFETCH(bool, targetPower);
         QFETCH(bool, supported);
         QFETCH(bool, editable);
@@ -356,7 +408,8 @@ private slots:
         capabilities.targetPower = targetPower;
         const WorkoutRideModeAvailability result =
                 WorkoutRideTargetPlanner::availability(
-                        connected, running, ergWorkout, capabilities);
+                        connected, running, powerControlledWorkout,
+                        capabilities);
 
         QCOMPARE(result.supported, supported);
         QCOMPARE(result.editable, editable);

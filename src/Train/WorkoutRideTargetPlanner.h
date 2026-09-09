@@ -60,7 +60,7 @@ public:
     static WorkoutRideModeAvailability availability(
             bool connected,
             bool running,
-            bool ergWorkout,
+            bool powerControlledWorkout,
             const TrainerControlCapabilities &capabilities);
 };
 

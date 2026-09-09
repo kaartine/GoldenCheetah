@@ -1232,8 +1232,9 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
     }
     setActiveDevicesToWorkoutMode();
 
-    if ((mode != ErgFileFormat::erg && mode != ErgFileFormat::mrc)
-            || !context->currentErgFile()) {
+    const bool ergWorkout = context->currentErgFile()
+            && (mode == ErgFileFormat::erg || mode == ErgFileFormat::mrc);
+    if (!ergWorkout && !workoutGameUsesTargetPower()) {
         workoutRideModeEnabled = false;
         workoutRideFallbackNotified = false;
     }
@@ -3045,10 +3046,12 @@ WorkoutRideModeAvailability TrainSidebar::workoutRideModeAvailability()
 {
     const bool ergWorkout = context->currentErgFile()
             && (mode == ErgFileFormat::erg || mode == ErgFileFormat::mrc);
+    const bool powerControlledWorkout =
+            ergWorkout || workoutGameUsesTargetPower();
     return WorkoutRideTargetPlanner::availability(
             status & RT_CONNECTED,
             status & RT_RUNNING,
-            ergWorkout,
+            powerControlledWorkout,
             activeTrainerCapabilities());
 }
 
@@ -3058,7 +3061,7 @@ void TrainSidebar::setWorkoutRideEnabled(bool enabled)
 
     if (enabled && !workoutRideModeAvailability().editable) {
         context->notifySetNotification(
-                tr("Workout Ride requires a connected power-controlled trainer and ERG workout"),
+                tr("Workout Ride requires a connected power-controlled trainer and an ERG or power-controlled MTB workout"),
                 4);
         emit workoutRideModeChanged();
         return;
@@ -3130,6 +3133,58 @@ void TrainSidebar::loadUpdate()
     applyWorkoutTarget(false);
 }
 
+bool TrainSidebar::prepareWorkoutRidePowerTarget(
+        double baseWorkoutWatts,
+        double workoutPosition,
+        TrainerTarget &target,
+        bool &dispatchTarget)
+{
+    WorkoutRideTargetInput input;
+    input.enabled = workoutRideModeEnabled;
+    input.workoutWatts = baseWorkoutWatts;
+    input.cadenceRpm = displayCadence;
+    input.relativeGearRatio = virtualDrivetrain.relativeRatio();
+    const PlannedTrainerTarget planned = WorkoutRideTargetPlanner::plan(
+            input, activeTrainerCapabilities());
+
+    if (workoutRideModeEnabled
+            && planned.mode == PlannedTrainerTargetMode::StandardErg
+            && planned.targetWatts != -100.0) {
+        if (!workoutRideFallbackNotified) {
+            context->notifySetNotification(
+                    tr("Workout Ride control unavailable; using standard ERG target"),
+                    4);
+            workoutRideFallbackNotified = true;
+        }
+    } else {
+        workoutRideFallbackNotified = false;
+    }
+
+    bool workoutRideTargetPrepared = false;
+    if (planned.mode == PlannedTrainerTargetMode::WorkoutRidePower) {
+        const WorkoutRideCommandDecision decision =
+                workoutRideCommandFilter.update(
+                        planned.targetWatts,
+                        baseWorkoutWatts,
+                        workoutRideCommandClock.elapsed());
+        if (decision.hasEffectiveTarget) {
+            load = std::lround(decision.effectiveWatts);
+            dispatchTarget = decision.dispatch;
+            scheduleWorkoutRideCommandRetry(decision.retryAfterMs);
+            workoutRideTargetPrepared = true;
+        } else {
+            resetWorkoutRideCommandDispatch();
+            load = std::lround(baseWorkoutWatts);
+        }
+    } else {
+        resetWorkoutRideCommandDispatch();
+        load = std::lround(planned.targetWatts);
+    }
+
+    target = TrainerTarget::erg(load, workoutPosition);
+    return workoutRideTargetPrepared;
+}
+
 bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
 {
     int curLap = 0;
@@ -3150,49 +3205,10 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             displayWorkoutLap = curLap;
         }
 
-        const double baseWorkoutWatts = load;
-        WorkoutRideTargetInput input;
-        input.enabled = workoutRideModeEnabled;
-        input.workoutWatts = load;
-        input.cadenceRpm = displayCadence;
-        input.relativeGearRatio = virtualDrivetrain.relativeRatio();
-        const PlannedTrainerTarget planned = WorkoutRideTargetPlanner::plan(
-                input, activeTrainerCapabilities());
-
-        if (workoutRideModeEnabled
-                && planned.mode == PlannedTrainerTargetMode::StandardErg
-                && planned.targetWatts != -100.0) {
-            if (!workoutRideFallbackNotified) {
-                context->notifySetNotification(
-                        tr("Workout Ride control unavailable; using standard ERG target"),
-                        4);
-                workoutRideFallbackNotified = true;
-            }
-        } else {
-            workoutRideFallbackNotified = false;
-        }
-
-        if (planned.mode == PlannedTrainerTargetMode::WorkoutRidePower) {
-            const WorkoutRideCommandDecision decision =
-                    workoutRideCommandFilter.update(
-                            planned.targetWatts,
-                            baseWorkoutWatts,
-                            workoutRideCommandClock.elapsed());
-            if (decision.hasEffectiveTarget) {
-                load = std::lround(decision.effectiveWatts);
-                dispatchTarget = decision.dispatch;
-                scheduleWorkoutRideCommandRetry(decision.retryAfterMs);
-            } else {
-                resetWorkoutRideCommandDispatch();
-                load = std::lround(baseWorkoutWatts);
-            }
-        } else {
-            resetWorkoutRideCommandDispatch();
-            load = std::lround(planned.targetWatts);
-        }
-        target = TrainerTarget::erg(load, load_msecs);
+        prepareWorkoutRidePowerTarget(
+                load, load_msecs, target, dispatchTarget);
     } else {
-        resetWorkoutRideCommandDispatch();
+        bool preparedWorkoutRideTarget = false;
         const bool generatedCourseFinished = workoutCourseFinished();
         if (generatedCourseFinished) {
             target = TrainerTarget::slope(
@@ -3241,8 +3257,13 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
                         workoutGameCourseRuntime.workoutTimelinePositionMs();
                 target = WorkoutGameTrainerTargetPlanner::plan(input);
                 if (target.mode == TrainerTargetMode::Erg) {
-                    load = std::lround(target.value);
-                    displayWorkoutTargetWatts = target.value;
+                    const double baseWorkoutWatts = target.value;
+                    displayWorkoutTargetWatts = baseWorkoutWatts;
+                    preparedWorkoutRideTarget = prepareWorkoutRidePowerTarget(
+                            baseWorkoutWatts,
+                            target.workoutPosition,
+                            target,
+                            dispatchTarget);
                 }
             } else {
                 target = TrainerTarget::slope(
@@ -3262,6 +3283,7 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
                     workoutGameCourseRuntime.generatedProgressTargetWatts(
                         virtualDrivetrain.relativeRatio());
         }
+        if (!preparedWorkoutRideTarget) resetWorkoutRideCommandDispatch();
     }
 
     std::vector<TrainerTargetDevice *> targetDevices;

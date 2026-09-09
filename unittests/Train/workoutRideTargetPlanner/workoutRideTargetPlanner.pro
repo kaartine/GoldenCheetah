@@ -5,10 +5,12 @@ TARGET = testWorkoutRideTargetPlanner
 
 SOURCES = testWorkoutRideTargetPlanner.cpp \
           ../../../src/Train/BluetoothTrainerCapabilities.cpp \
+          ../../../src/Train/TrainingDataGenerator.cpp \
           ../../../src/Train/VirtualDrivetrain.cpp \
           ../../../src/Train/WorkoutRideTargetPlanner.cpp
 
 HEADERS = ../../../src/Train/BluetoothTrainerCapabilities.h \
+          ../../../src/Train/TrainingDataGenerator.h \
           ../../../src/Train/VirtualDrivetrain.h \
           ../../../src/Train/WorkoutRideTargetPlanner.h
 

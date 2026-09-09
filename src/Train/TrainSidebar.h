@@ -379,6 +379,11 @@ class TrainSidebar : public GcWindow
 
         void finishStop(RecordingStopAction recordingAction);
         bool applyWorkoutTarget(bool initializeSlope);
+        bool prepareWorkoutRidePowerTarget(
+                double baseWorkoutWatts,
+                double workoutPosition,
+                TrainerTarget &target,
+                bool &dispatchTarget);
         void resetWorkoutRideCommandDispatch();
         void scheduleWorkoutRideCommandRetry(int delayMs);
         TrainerControlCapabilities activeTrainerCapabilities();
