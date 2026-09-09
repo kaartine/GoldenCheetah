@@ -495,7 +495,9 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             with mock.patch.object(UI.time, "sleep"):
                 workflow.run_smoke_and_discard("balanced")
 
-            workflow.open_game.assert_called_once_with()
+            workflow.open_game.assert_called_once_with(
+                workout_ride_expected=True
+            )
             workflow.start.assert_called_once_with("04-mtb-course-balanced-first")
             driver.wait_file_growth.assert_called_once_with(
                 recording, recording.stat().st_size
@@ -506,6 +508,25 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             )
             driver.activate.assert_called_once_with(cancel)
             driver.wait_file_removed.assert_called_once_with(recording)
+
+    def test_ride_first_smoke_requires_workout_ride_to_be_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            recording = Path(directory) / "recording.csv"
+            recording.write_text("secs,watts\n0,190\n", encoding="ascii")
+            driver = mock.Mock()
+            workflow = object.__new__(UI.WorkoutGameUiWorkflow)
+            workflow.driver = driver
+            workflow.capture_screenshots = False
+            workflow.open_game = mock.Mock()
+            workflow.start = mock.Mock(return_value=recording)
+            workflow.activate_stop_training = mock.Mock()
+
+            with mock.patch.object(UI.time, "sleep"):
+                workflow.run_smoke_and_discard("ride-first")
+
+            workflow.open_game.assert_called_once_with(
+                workout_ride_expected=False
+            )
 
     def test_prepare_uses_only_the_requested_isolated_library(self):
         with tempfile.TemporaryDirectory() as directory:

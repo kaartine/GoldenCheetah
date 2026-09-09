@@ -1261,7 +1261,7 @@ class WorkoutGameUiWorkflow:
             + ", ".join(repr(name) for name in workout_names)
         )
 
-    def open_game(self) -> None:
+    def open_game(self, workout_ride_expected=None) -> None:
         self.enter_train()
         self.select_prepared_workout()
 
@@ -1283,6 +1283,20 @@ class WorkoutGameUiWorkflow:
                 time.sleep(0.1)
             if not self.driver.enabled(self.gear):
                 raise UiFailure("Data Generator did not connect for Workout Game")
+
+        if workout_ride_expected is not None:
+            ride_mode = self.driver.combo_with_items(
+                ["Standard ERG", "Workout Ride"]
+            )
+            if self.driver.enabled(ride_mode) != workout_ride_expected:
+                availability = "available" if workout_ride_expected else "unavailable"
+                raise UiFailure(
+                    f"Workout Ride should be {availability} for this MTB preset"
+                )
+            if workout_ride_expected:
+                self.driver.select_combo_item(
+                    ["Standard ERG", "Workout Ride"], "Workout Ride"
+                )
 
         self.driver.select_combo_item(
             ["Workout Game", "Workout Editor"], "Workout Game"
@@ -1313,7 +1327,7 @@ class WorkoutGameUiWorkflow:
         return recording
 
     def run_smoke_and_discard(self, preset: str) -> None:
-        self.open_game()
+        self.open_game(workout_ride_expected=preset != "ride-first")
         recording = self.start(f"04-mtb-course-{preset}-first")
         initial_size = recording.stat().st_size
         time.sleep(1.2)
