@@ -90,7 +90,32 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             self.assertEqual(accepted["interval_count"], 2)
             self.assertEqual(accepted["duration_ms"], 10800)
 
-            document["course"]["sections"][1]["targetStartWatts"] = 219.0
+            document["course"]["sections"][0:1] = [
+                {
+                    "sourceStartMs": 0,
+                    "nominalDurationMs": 3000,
+                    "targetStartWatts": 100.0,
+                    "targetEndWatts": 100.0,
+                    "gradePercent": 0.5,
+                    "terrain": "roots",
+                },
+                {
+                    "sourceStartMs": 3000,
+                    "nominalDurationMs": 3000,
+                    "targetStartWatts": 100.0,
+                    "targetEndWatts": 100.0,
+                    "gradePercent": 1.0,
+                    "terrain": "smooth-trail",
+                },
+            ]
+            sidecar.write_text(json.dumps(document), encoding="utf-8")
+            subdivided = UI.validate_mtb_course_sidecar(
+                sidecar, "ride-first", "ui-test MTB"
+            )
+            self.assertEqual(subdivided["interval_count"], 2)
+            self.assertEqual(subdivided["duration_ms"], 10800)
+
+            document["course"]["sections"][2]["targetStartWatts"] = 219.0
             sidecar.write_text(json.dumps(document), encoding="utf-8")
             with self.assertRaisesRegex(UI.UiFailure, "prescription"):
                 UI.validate_mtb_course_sidecar(

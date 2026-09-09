@@ -293,7 +293,7 @@ def validate_mtb_course_sidecar(
         or not isinstance(source, list)
         or not isinstance(sections, list)
         or not source
-        or len(source) != len(sections)
+        or len(sections) < len(source)
     ):
         raise UiFailure(
             "MTB course metadata or preset does not match: "
@@ -303,26 +303,19 @@ def validate_mtb_course_sidecar(
         )
 
     source_fields = ("startMs", "durationMs", "startWatts", "endWatts")
-    section_fields = (
-        "sourceStartMs",
-        "nominalDurationMs",
-        "targetStartWatts",
-        "targetEndWatts",
-    )
     duration_ms = 0
     expected_start_ms = 0
-    for index, (interval, section) in enumerate(zip(source, sections)):
+    section_index = 0
+    for index, interval in enumerate(source):
         try:
             source_values = tuple(interval[field] for field in source_fields)
-            section_values = tuple(section[field] for field in section_fields)
         except (KeyError, TypeError) as error:
             raise UiFailure(
                 f"MTB course prescription fields are missing at interval {index}"
             ) from error
         times = source_values[:2]
         watts = source_values[2:]
-        if (source_values != section_values
-                or any(isinstance(value, bool) or not isinstance(value, int)
+        if (any(isinstance(value, bool) or not isinstance(value, int)
                        for value in times)
                 or source_values[0] != expected_start_ms
                 or source_values[1] <= 0
@@ -333,8 +326,80 @@ def validate_mtb_course_sidecar(
             raise UiFailure(
                 f"MTB course prescription changed at interval {index}"
             )
+
+        source_start_ms, source_duration_ms = times
+        source_end_ms = source_start_ms + source_duration_ms
+        expected_section_start_ms = source_start_ms
+        interval_section_count = 0
+        while section_index < len(sections):
+            section = sections[section_index]
+            try:
+                section_start_ms = section["sourceStartMs"]
+                section_duration_ms = section["nominalDurationMs"]
+                section_start_watts = section["targetStartWatts"]
+                section_end_watts = section["targetEndWatts"]
+            except (KeyError, TypeError) as error:
+                raise UiFailure(
+                    "MTB course prescription fields are missing at section "
+                    f"{section_index}"
+                ) from error
+            if (isinstance(section_start_ms, bool)
+                    or not isinstance(section_start_ms, int)
+                    or isinstance(section_duration_ms, bool)
+                    or not isinstance(section_duration_ms, int)
+                    or section_duration_ms <= 0):
+                raise UiFailure(
+                    f"MTB course prescription changed at section {section_index}"
+                )
+            if section_start_ms >= source_end_ms:
+                break
+            section_end_ms = section_start_ms + section_duration_ms
+            numeric_watts = (section_start_watts, section_end_watts)
+            if (section_start_ms != expected_section_start_ms
+                    or section_end_ms > source_end_ms
+                    or any(isinstance(value, bool)
+                           or not isinstance(value, (int, float))
+                           or not math.isfinite(value)
+                           or value < 0.0 for value in numeric_watts)):
+                raise UiFailure(
+                    f"MTB course prescription changed at section {section_index}"
+                )
+
+            start_fraction = (
+                (section_start_ms - source_start_ms) / source_duration_ms
+            )
+            end_fraction = (
+                (section_end_ms - source_start_ms) / source_duration_ms
+            )
+            expected_start_watts = (
+                watts[0] + (watts[1] - watts[0]) * start_fraction
+            )
+            expected_end_watts = (
+                watts[0] + (watts[1] - watts[0]) * end_fraction
+            )
+            if (not math.isclose(section_start_watts, expected_start_watts,
+                                 rel_tol=1e-9, abs_tol=1e-6)
+                    or not math.isclose(section_end_watts, expected_end_watts,
+                                        rel_tol=1e-9, abs_tol=1e-6)):
+                raise UiFailure(
+                    f"MTB course prescription changed at section {section_index}"
+                )
+            expected_section_start_ms = section_end_ms
+            interval_section_count += 1
+            section_index += 1
+
+        if interval_section_count == 0 or expected_section_start_ms != source_end_ms:
+            raise UiFailure(
+                f"MTB course prescription changed at interval {index}"
+            )
         duration_ms += source_values[1]
         expected_start_ms += source_values[1]
+
+    if section_index != len(sections):
+        raise UiFailure(
+            f"MTB course prescription has {len(sections) - section_index} "
+            "unmatched sections"
+        )
 
     route_payload = {"course": course, "roadPlan": road_plan}
     try:
