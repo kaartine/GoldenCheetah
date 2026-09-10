@@ -267,6 +267,8 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     connect(context, SIGNAL(viewChanged(int)), this, SLOT(viewChanged(int)));
     connect(context, &Context::workoutGameGeneratorTargetChanged,
             this, &TrainSidebar::applyWorkoutGameGeneratorTarget);
+    connect(context, &Context::workoutGameViewVisibilityChanged,
+            this, &TrainSidebar::workoutGameViewVisibilityChanged);
 
     // workout filters
     connect(context, SIGNAL(workoutFiltersChanged(QList<ModelFilter*>&)), this, SLOT(workoutFiltersChanged(QList<ModelFilter*>&)));
@@ -1715,6 +1717,8 @@ void TrainSidebar::Start()       // when start button is pressed
 
     } else if (status&RT_CONNECTED) {
 
+        autoEnableWorkoutRideForVisibleGame();
+
         // Delayed start handling
         if (secs_to_start == 0) {
             secs_to_start = appsettings->value(this, TRAIN_STARTDELAY, 0).toUInt();
@@ -3044,6 +3048,33 @@ bool TrainSidebar::workoutGameUsesTargetPower()
             && WorkoutGameTrainerTargetPlanner::usesTargetPower(
                 workoutGameCourseRuntime.coursePreset(),
                 activeTrainerCapabilities().targetPower);
+}
+
+bool TrainSidebar::autoEnableWorkoutRideForVisibleGame()
+{
+    const WorkoutRideModeAvailability availability =
+            workoutRideModeAvailability();
+    if (!WorkoutRideTargetPlanner::shouldAutoEnableForWorkoutGame(
+                !visibleWorkoutGameViews.isEmpty(),
+                workoutRideModeEnabled,
+                availability)) {
+        return false;
+    }
+
+    setWorkoutRideEnabled(true);
+    return workoutRideModeEnabled;
+}
+
+void TrainSidebar::workoutGameViewVisibilityChanged(
+        QObject *view, bool visible)
+{
+    if (!view) return;
+    if (visible) {
+        visibleWorkoutGameViews.insert(view);
+        autoEnableWorkoutRideForVisibleGame();
+    } else {
+        visibleWorkoutGameViews.remove(view);
+    }
 }
 
 void TrainSidebar::setActiveDevicesToWorkoutMode()

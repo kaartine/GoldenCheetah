@@ -414,6 +414,43 @@ private slots:
         QCOMPARE(result.supported, supported);
         QCOMPARE(result.editable, editable);
     }
+
+    void workoutGameAutoSelectionRequiresVisibleGameAndEditableMode_data()
+    {
+        QTest::addColumn<bool>("gameVisible");
+        QTest::addColumn<bool>("alreadyEnabled");
+        QTest::addColumn<bool>("supported");
+        QTest::addColumn<bool>("editable");
+        QTest::addColumn<bool>("expected");
+
+        QTest::newRow("visible-ready-game")
+                << true << false << true << true << true;
+        QTest::newRow("ordinary-erg-view")
+                << false << false << true << true << false;
+        QTest::newRow("already-enabled")
+                << true << true << true << true << false;
+        QTest::newRow("running-session")
+                << true << false << true << false << false;
+        QTest::newRow("unsupported-trainer")
+                << true << false << false << false << false;
+    }
+
+    void workoutGameAutoSelectionRequiresVisibleGameAndEditableMode()
+    {
+        QFETCH(bool, gameVisible);
+        QFETCH(bool, alreadyEnabled);
+        QFETCH(bool, supported);
+        QFETCH(bool, editable);
+        QFETCH(bool, expected);
+
+        WorkoutRideModeAvailability availability;
+        availability.supported = supported;
+        availability.editable = editable;
+
+        QCOMPARE(WorkoutRideTargetPlanner::shouldAutoEnableForWorkoutGame(
+                         gameVisible, alreadyEnabled, availability),
+                 expected);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutRideTargetPlanner)

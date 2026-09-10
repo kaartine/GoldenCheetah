@@ -233,6 +233,8 @@ class Context : public QObject
         void notifyIntensityChanged(int intensity) { emit intensityChanged(intensity); };
         void notifyWorkoutGameGeneratorTarget(double watts)
             { emit workoutGameGeneratorTargetChanged(watts); }
+        void notifyWorkoutGameViewVisibilityChanged(QObject *view, bool visible)
+            { emit workoutGameViewVisibilityChanged(view, visible); }
 
         void notifySetNotification(const QString &msg, int timeout) { emit setNotification(msg, timeout); };
         void notifyClearNotification() { emit clearNotification(); };
@@ -378,6 +380,7 @@ class Context : public QObject
         void stop();
         void intensityChanged(int intensity);
         void workoutGameGeneratorTargetChanged(double watts);
+        void workoutGameViewVisibilityChanged(QObject *view, bool visible);
 
         void setNotification(const QString &msg, int timeout);
         void clearNotification();

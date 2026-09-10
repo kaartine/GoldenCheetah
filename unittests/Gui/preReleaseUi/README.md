@@ -16,8 +16,11 @@ when `GC_UI_RECORD_VIDEO=1` and `ffmpeg` are available, `session.mp4`.
 
 The Workout Game lifecycle is verified through its filesystem effects as well
 as its visible controls. One isolated Data Generator session starts in Game
-mode, shifts the virtual gear up and down, stops and continues the same raw
-recording, then stops and saves it. The workflow finishes by leaving and
+mode and verifies that selecting Workout Game automatically selects Workout
+Ride before training starts. The control mode remains locked after training
+starts even if the visible chart changes. The session shifts the virtual gear
+up and down, stops and continues the same raw recording, then stops and saves
+it. The workflow finishes by leaving and
 returning to Activities. It selects the saved activity row when the current
 Activities implementation exposes one through AT-SPI; otherwise it verifies
 the automatically selected activity. In both cases the Activities view's

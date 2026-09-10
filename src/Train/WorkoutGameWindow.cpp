@@ -195,9 +195,15 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     ergFileSelected(context->currentErgFile());
 }
 
+WorkoutGameWindow::~WorkoutGameWindow()
+{
+    context->notifyWorkoutGameViewVisibilityChanged(this, false);
+}
+
 void WorkoutGameWindow::showEvent(QShowEvent *event)
 {
     GcChartWindow::showEvent(event);
+    context->notifyWorkoutGameViewVisibilityChanged(this, true);
     if (sessionActive && !paused && presentationSuspended) {
         updateAtWorkoutPosition(context->getNow());
         runner.resume(currentWorkoutTimeMs, currentAnchorRate);
@@ -215,6 +221,7 @@ void WorkoutGameWindow::showEvent(QShowEvent *event)
 
 void WorkoutGameWindow::hideEvent(QHideEvent *event)
 {
+    context->notifyWorkoutGameViewVisibilityChanged(this, false);
     frameDrainTimer->stop();
     threeDWindow->setSessionRunning(false);
     sceneGraphWindow->setSessionRunning(false);

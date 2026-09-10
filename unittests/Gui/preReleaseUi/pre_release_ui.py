@@ -804,6 +804,14 @@ class UiDriver:
         self.screenshot("combo-selection-failed")
         raise UiFailure(f"Combo box did not select {name!r}")
 
+    def combo_selects(self, combo, name):
+        return self.name(combo) == name or any(
+            self.role(node) == "list item"
+            and self.name(node) == name
+            and self.selected(node)
+            for node in self.all_nodes(combo)
+        )
+
     def focus_main_window(self):
         windows = [self.display.screen().root]
         while windows:
@@ -1293,14 +1301,19 @@ class WorkoutGameUiWorkflow:
                 raise UiFailure(
                     f"Workout Ride should be {availability} for this MTB preset"
                 )
-            if workout_ride_expected:
-                self.driver.select_combo_item(
-                    ["Standard ERG", "Workout Ride"], "Workout Ride"
-                )
 
         self.driver.select_combo_item(
             ["Workout Game", "Workout Editor"], "Workout Game"
         )
+        if workout_ride_expected:
+            deadline = time.monotonic() + 5.0
+            while (not self.driver.combo_selects(ride_mode, "Workout Ride")
+                   and time.monotonic() < deadline):
+                time.sleep(0.1)
+            if not self.driver.combo_selects(ride_mode, "Workout Ride"):
+                raise UiFailure(
+                    "Workout Game did not automatically select Workout Ride"
+                )
         self.canvas = self.driver.find_named_any(
             WORKOUT_GAME_CANVAS_NAMES, showing=True
         )

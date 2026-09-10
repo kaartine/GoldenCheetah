@@ -41,6 +41,7 @@ class WorkoutGameWindow : public GcChartWindow
 
 public:
     explicit WorkoutGameWindow(Context *context);
+    ~WorkoutGameWindow() override;
 
 protected:
     void showEvent(QShowEvent *event) override;

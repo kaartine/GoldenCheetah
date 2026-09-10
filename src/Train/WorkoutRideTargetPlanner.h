@@ -62,6 +62,10 @@ public:
             bool running,
             bool powerControlledWorkout,
             const TrainerControlCapabilities &capabilities);
+    static bool shouldAutoEnableForWorkoutGame(
+            bool gameVisible,
+            bool alreadyEnabled,
+            const WorkoutRideModeAvailability &availability);
 };
 
 #endif

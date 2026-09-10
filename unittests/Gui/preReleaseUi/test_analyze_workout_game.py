@@ -457,6 +457,33 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
         driver.focus_main_window.assert_called_once_with()
 
+    def test_combo_selects_accepts_selected_item_when_name_is_accessible_label(self):
+        combo = object()
+        standard = object()
+        workout_ride = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.name = mock.Mock(
+            side_effect=lambda node: {
+                combo: "Training mode",
+                standard: "Standard ERG",
+                workout_ride: "Workout Ride",
+            }[node]
+        )
+        driver.all_nodes = mock.Mock(
+            return_value=[combo, standard, workout_ride]
+        )
+        driver.role = mock.Mock(
+            side_effect=lambda node: (
+                "combo box" if node is combo else "list item"
+            )
+        )
+        driver.selected = mock.Mock(
+            side_effect=lambda node: node is workout_ride
+        )
+
+        self.assertTrue(driver.combo_selects(combo, "Workout Ride"))
+        self.assertFalse(driver.combo_selects(combo, "Standard ERG"))
+
     def test_combo_selection_uses_its_own_item_instead_of_global_duplicate(self):
         combo = object()
         own_item = object()

@@ -58,6 +58,7 @@
 #include <QMutex>
 #include <QAction>
 #include <QPointer>
+#include <QSet>
 
 #include "cmath" // for round()
 #include "Units.h" // for MILES_PER_KM
@@ -186,6 +187,7 @@ class TrainSidebar : public GcWindow
         void removeInvalidWorkout();
 
         void viewChanged(int index);
+        void workoutGameViewVisibilityChanged(QObject *view, bool visible);
 
         int  getCalibrationIndex(void);
 
@@ -388,6 +390,7 @@ class TrainSidebar : public GcWindow
         void scheduleWorkoutRideCommandRetry(int delayMs);
         TrainerControlCapabilities activeTrainerCapabilities();
         bool workoutGameUsesTargetPower();
+        bool autoEnableWorkoutRideForVisibleGame();
         void setActiveDevicesToWorkoutMode();
         bool writeRecordingData(const QByteArray &data);
         void stopForRecordingFailure(TrainingRecordingIo::Failure failure);
@@ -407,6 +410,7 @@ class TrainSidebar : public GcWindow
         QTimer *workoutRideCommandTimer;
         bool workoutRideModeEnabled;
         bool workoutRideFallbackNotified;
+        QSet<QObject *> visibleWorkoutGameViews;
 
         Bicycle bicycle;
 

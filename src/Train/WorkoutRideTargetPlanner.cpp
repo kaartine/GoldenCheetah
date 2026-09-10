@@ -98,3 +98,14 @@ WorkoutRideModeAvailability WorkoutRideTargetPlanner::availability(
     result.editable = result.supported && !running;
     return result;
 }
+
+bool WorkoutRideTargetPlanner::shouldAutoEnableForWorkoutGame(
+        bool gameVisible,
+        bool alreadyEnabled,
+        const WorkoutRideModeAvailability &availability)
+{
+    return gameVisible
+            && !alreadyEnabled
+            && availability.supported
+            && availability.editable;
+}
