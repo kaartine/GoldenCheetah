@@ -72,6 +72,10 @@ RIDER_GLB_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/generated/WG_RiderBike.glb"
 )
+RIDER_BLEND_PATH = (
+    REPOSITORY
+    / "contrib/workout-game-assets/blender/sources/WG_RiderBike.blend"
+)
 RIDER_AUDIT_PATH = (
     REPOSITORY
     / "contrib/workout-game-assets/audits/RB-01/RB-01-audit.json"
@@ -580,8 +584,8 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertEqual(crank_extras["right_pedal_contact_m"], [0.13, 0.2175, 0.0])
         self.assertAlmostEqual(crank_extras["crank_length_m"], 0.16, places=5)
         self.assertGreaterEqual(crank_extras["pedal_platform_length_m"], 0.10)
-        self.assertGreaterEqual(manifest["technical"]["trianglesLod0"], 2500)
-        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 3600)
+        self.assertGreaterEqual(manifest["technical"]["trianglesLod0"], 4500)
+        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 9000)
         self.assertEqual(manifest["review"]["status"], "approved")
         self.assertEqual(manifest["review"]["trademarkStatus"], "clear")
         self.assertEqual(manifest["review"]["personReleaseStatus"], "not-applicable")
@@ -614,6 +618,42 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertIn('baseColor: "#2f68b2"', runtime_qml)
         self.assertIn('baseColor: "#d7dad8"', runtime_qml)
+
+    def test_rider_bike_has_editable_blender_source_and_pipeline(self) -> None:
+        manifest = assets.load_json_file(RIDER_MANIFEST_PATH)
+        manifest_files = {
+            entry["path"]: entry for entry in manifest["files"]
+        }
+        source_relative = (
+            "contrib/workout-game-assets/blender/sources/WG_RiderBike.blend"
+        )
+
+        self.assertTrue(RIDER_BLEND_PATH.is_file())
+        source_magic = RIDER_BLEND_PATH.read_bytes()[:7]
+        self.assertTrue(
+            source_magic == b"BLENDER"
+            or source_magic.startswith(b"\x28\xb5\x2f\xfd")
+        )
+        self.assertIn(source_relative, manifest_files)
+        self.assertEqual(manifest_files[source_relative]["purpose"], "source")
+        self.assertEqual(
+            manifest_files[source_relative]["sha256"], sha256(RIDER_BLEND_PATH)
+        )
+        self.assertEqual(manifest["source"]["originalFileName"], "WG_RiderBike.blend")
+        self.assertEqual(manifest["source"]["originalSha256"], sha256(RIDER_BLEND_PATH))
+        for relative in (
+            "contrib/workout-game-assets/install_rider_bike_asset.py",
+            "contrib/workout-game-assets/rebuild_rider_bike.sh",
+        ):
+            path = REPOSITORY / relative
+            self.assertTrue(path.is_file())
+            self.assertIn(relative, manifest_files)
+            self.assertEqual(manifest_files[relative]["purpose"], "source")
+            self.assertEqual(manifest_files[relative]["sha256"], sha256(path))
+        self.assertTrue(
+            (REPOSITORY / "contrib/workout-game-assets/rebuild_rider_bike.sh")
+            .stat().st_mode & 0o100
+        )
 
     def test_rider_bike_runtime_package_matches_authored_candidate(self) -> None:
         document, _ = assets.read_glb(RIDER_GLB_PATH)
@@ -664,6 +704,15 @@ class TestWorkoutGameAssets(unittest.TestCase):
             data = path.read_bytes()
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(struct.unpack(">II", data[16:24]), (960, 540))
+            offset = 8
+            chunk_types = []
+            while offset < len(data):
+                chunk_length, chunk_type = struct.unpack_from(">I4s", data, offset)
+                chunk_types.append(chunk_type)
+                offset += 12 + chunk_length
+            self.assertNotIn(b"tEXt", chunk_types)
+            self.assertEqual(chunk_types[-1], b"IEND")
+            self.assertEqual(offset, len(data))
             self.assertEqual(render["sha256"], sha256(path))
             self.assertEqual(len(render["cameraPositionMeters"]), 3)
             self.assertEqual(len(render["cameraTargetMeters"]), 3)

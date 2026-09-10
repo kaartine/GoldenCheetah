@@ -6,13 +6,13 @@
     "kind": "project-authored",
     "provider": "GoldenCheetah",
     "author": "GoldenCheetah contributors",
-    "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_rider_bike.py",
-    "retrievedAt": "2026-09-05",
-    "originalFileName": "generate_rider_bike.py",
-    "originalSha256": "120be205c43cb20e8b9a8e8e796551bcd67a129f5764e9db6bb1f63fd5675b84",
+    "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/sources/WG_RiderBike.blend",
+    "retrievedAt": "2026-09-10",
+    "originalFileName": "WG_RiderBike.blend",
+    "originalSha256": "bfb1b64e11959142f11e6dce4176c21133269ffcbcf32866952f7bbb7eebac6a",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
-    "promptOrScript": "contrib/workout-game-assets/blender/generate_rider_bike.py"
+    "promptOrScript": "contrib/workout-game-assets/blender/sources/WG_RiderBike.blend; contrib/workout-game-assets/blender/generate_rider_bike.py"
   },
   "license": {
     "spdxId": "GPL-2.0-or-later",
@@ -35,42 +35,47 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_rider_bike.py",
       "purpose": "source",
-      "sha256": "120be205c43cb20e8b9a8e8e796551bcd67a129f5764e9db6bb1f63fd5675b84"
+      "sha256": "a5cf29585e7edb6ba94f226552382c41712d173d4cd8137f42c48c471b000578"
+    },
+    {
+      "path": "contrib/workout-game-assets/blender/sources/WG_RiderBike.blend",
+      "purpose": "source",
+      "sha256": "bfb1b64e11959142f11e6dce4176c21133269ffcbcf32866952f7bbb7eebac6a"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_rider_bike_audit.py",
       "purpose": "source",
-      "sha256": "6e20312606d4a9a0df034ca500505ab93ce5064227dab5f9c4c67a2248f2ad22"
+      "sha256": "8917d741ac37b1513a071db364639a442cc31bd6b31e93a7d7a8b4f716341cc3"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_RiderBike.glb",
       "purpose": "intermediate",
-      "sha256": "49a9cc20828a4eadf356c25722ff63ea2aebead732e1e278c0b7bd70e4f1dea9"
+      "sha256": "3a6d79836495a3264250a1501f7eb8a017bc6a88cf6545c419dc6abd6efd63eb"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-audit.json",
       "purpose": "preview",
-      "sha256": "da63ec84b11480c877ea0e7ce28929296dfa5a443c02d920973c29815ea3a7a1"
+      "sha256": "7c539018421b5b7e8a2a19a64e076e830dec4eacc8b8b79ae197a6df2e84b192"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-front.png",
       "purpose": "preview",
-      "sha256": "8a7d8c09d7bb185cc6b662b3099568cd36cf56e1420f7dd354be18a8c0c573ab"
+      "sha256": "268a20b52661ca5e553d576cce357812c9622ff5fc54ded86195921084a8f958"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-rear.png",
       "purpose": "preview",
-      "sha256": "7ef9633c1d40d79324ff01f15845df4f3d3cff823aa57e26dd88fa6624fdf5d4"
+      "sha256": "2563a711ccb3326defd1a77976f146c61f41432c7cb292392cfab886deeb2330"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-side.png",
       "purpose": "preview",
-      "sha256": "34bfc99c2987d88f4bfd9c01f0c58cc494f6517279e7a38f2d7ef5c00c91a7b1"
+      "sha256": "04563bd99a06a1931606e75336dcc8234d27b7d72328480fc6d1928567bcf0a4"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-chase.png",
       "purpose": "preview",
-      "sha256": "561bb567543fbd889289f871da822bddef8422e670c808c63fb81a6c38ca1fde"
+      "sha256": "3aef48137c8dec8e9aadc27579233a9eb26baea42b3c982106a63b05cb065b77"
     },
     {
       "path": "src/Train/qml/WorkoutGameRiderBike.qml",
@@ -80,7 +85,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_BikeComponents_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "9cbd5ee7be44c9c8cc8fd19ffbfb71f85894a66d28c1953c438e066892e37cdc"
+      "sha256": "4e64d64270c7d7e8b8828b967086277a040386078c1040a3c7eaf6121f41c101"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh",
@@ -95,12 +100,12 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Fork_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "1747be0ab177ab7868babaf935959b1588587c5abd2ae649ed0e609c928fbbc5"
+      "sha256": "e1a6517e3540796875d5d634b5b5c3bd6dc6648fa311e38a02694fe68d28e8c8"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "7b0105f249d1fd0b1e724037d3fcc55420a1999ab9e5d60361c403d1b517b30e"
+      "sha256": "327a38d6f471e889b8fdc1ea04a8e94a900a578529aa637426a1cac44f21611e"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_HairBeard_LOD0_mesh.mesh",
@@ -110,12 +115,12 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Head_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "3a765427093f81df86edfdc8a0b61e7cf877515ab1df76bcacd088f0de313743"
+      "sha256": "e536dd526b943c5829b25b231253d137ff938970d02b49374ad41c2e5ab60195"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "6f67265eda2eb66c9758d6ce7d120ba0d07ac59d505ff974ddb2a13d7eab2fc0"
+      "sha256": "52fa11536c2ce78d3255abe6a4402195ba77ec76aad25b26b51db01b984013d2"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_HelmetAccent_LOD0_mesh.mesh",
@@ -130,22 +135,22 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Limb_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "16d6f3d2b35a7b33d41be788dc75cc2adcc37d89271c43a36c8bc15f6347f5db"
+      "sha256": "5445b2557960832f112656ad523d8560cacee5d6b7eb8d0b58d2f4d6c52e86fa"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "5c5e61b67251b1061c2f2ed4cb12f761f321fd34a3a32b8bc0fec27aeba5555d"
+      "sha256": "5e131fde301fea3a5202939cc23402a5b94f6b920811e6e52032c462f176cd68"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_RearShock_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "8a866687d47f2c1b4ab22f8632bed9b2afa96eb1ba585927b2566041978495d2"
+      "sha256": "054c029edc07cdd81d75213a5700a22ce933b5be35e5239db9c123df80049c1c"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "a520dc8aa242a9721ae280d39db6ea7026529ac49d4948e76f95bab56532cea0"
+      "sha256": "7f081632169c22584d3916e08482ea4cbafaf4110bf243c20a84a572d6707ecb"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Shadow_LOD0_mesh.mesh",
@@ -155,34 +160,43 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Swingarm_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "9bbabb385fc6c2b0cd57b736e4a0315568e18f18a99507d1585d0ba4d124bc01"
+      "sha256": "bc44741e1b4d3f7764513f6dc5aee07a0812563b38aae5a77f99a6f73d9559be"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Torso_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "831ff029230c0bf052f0876056b0c44ac59186b1ffe65a01ff8a010f77a87290"
+      "sha256": "5d6e96f8883fd61b7525327fe19a6b3943e84aee71a5488c6905bb56650b3dd8"
     },
     {
       "path": "src/Resources/images/workout-game-surface-rider.png",
       "purpose": "texture",
       "sha256": "6d7d4395be1ee3aa1b9c4f6c04fd362aede586b320280ee62abce72a9744d552"
+    },
+    {
+      "path": "contrib/workout-game-assets/install_rider_bike_asset.py",
+      "purpose": "source",
+      "sha256": "4d170bfe889dc416bdf85fd5e4194319cbe836c462c5aa4cfbff87dcadd9ec37"
+    },
+    {
+      "path": "contrib/workout-game-assets/rebuild_rider_bike.sh",
+      "purpose": "source",
+      "sha256": "633989db7ba9029b3b3d74087501731415f469be91296ec678fe93e5caf10f1b"
     }
   ],
   "processing": {
     "tool": "Blender and Qt Balsam",
     "toolVersion": "Blender 4.0.2; Qt Balsam 6.8.3",
     "steps": [
-      "Start Blender with --background --factory-startup.",
-      "Run generate_rider_bike.py with dimension, pivot, topology, rights-metadata and budget checks.",
-      "Generate one normalized UV map for every source mesh.",
+      "Open the committed editable Blender source in Blender 4.0.2.",
+      "Run generate_rider_bike.py in source mode with dimension, pivot, topology, rights-metadata and budget checks.",
       "Export glTF 2.0 GLB with opaque materials, extras and no cameras, lights, textures or animations.",
-      "Generate the GLB twice with Blender 4.0.2 and require byte-identical output.",
-      "Validate the GLB with repository policy and the Khronos glTF validator.",
+      "Export the source twice and require byte-identical GLB output.",
+      "Validate the GLB structure, metadata, transforms, bounds and budgets with the repository asset policy.",
       "Convert the candidate twice with Qt Balsam 6.8.3 and compare every generated output byte.",
-      "Bind all 17 converted meshes to the existing runtime pivots and snapshot-driven animation contract.",
+      "Require the exact 17-mesh runtime inventory used by the existing animation pivots.",
       "Package the converted meshes and shared rider surface texture in workout-game-assets.qrc.",
-      "Render front, rear, side and chase audit views with fixed pose, cameras, field of view and lighting.",
-      "Require repeated audit renders to decode to identical image pixels."
+      "Render front, rear, side and chase audit views twice with fixed pose, cameras, field of view and lighting.",
+      "Require repeated audit output to be byte-identical before installation."
     ]
   },
   "technical": {
@@ -190,8 +204,8 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 191052,
-    "trianglesLod0": 2764,
+    "glbBytes": 361580,
+    "trianglesLod0": 5240,
     "materials": 8,
     "textureBytes": 0,
     "nodes": [
@@ -202,8 +216,8 @@
       "GEO_FrontWheel_LOD0",
       "GEO_HairBeard_LOD0",
       "GEO_Head_LOD0",
-      "GEO_Helmet_LOD0",
       "GEO_HelmetAccent_LOD0",
+      "GEO_Helmet_LOD0",
       "GEO_JerseyAccent_LOD0",
       "GEO_Limb_LOD0",
       "GEO_MainFrame_LOD0",
@@ -224,12 +238,20 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [-0.41999998688697815, -0.14000000059604645, -0.8324999809265137],
-      "maximum": [0.41999998688697815, 1.1005884408950806, 1.2354999780654907]
+      "minimum": [
+        -0.44999998807907104,
+        -0.14000000059604645,
+        -0.8324999809265137
+      ],
+      "maximum": [
+        0.44999998807907104,
+        1.1100000143051147,
+        1.2354999780654907
+      ]
     },
     "budgets": {
-      "maxGlbBytes": 204800,
-      "maxTrianglesLod0": 3600,
+      "maxGlbBytes": 614400,
+      "maxTrianglesLod0": 9000,
       "maxMaterials": 8,
       "maxTextureBytes": 1024
     }
@@ -240,7 +262,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah asset engineering and runtime integration audit",
-    "reviewedAt": "2026-09-05",
-    "notes": "Approved original low-poly rider and generic enduro 29er runtime asset. The integrated meshes retain the established axle, crank, steering, pelvis, shadow and camera pivots plus the snapshot-driven wheel, pedal, suspension and rider-pose animation contract. The model adds a readable open-face helmet, coherent fictional rider proportions, a generic long-travel full-suspension chassis, one-by drivetrain, platform pedals, fork arch, rear linkage and large unbranded black tires. No named bicycle design, person likeness, branded tread, logo, source mesh or proprietary surface is reproduced. No endorsement is claimed or implied. Deterministic Blender generation, two byte-identical Balsam conversions, packaged-resource loading and runtime rendering are required for release."
+    "reviewedAt": "2026-09-10",
+    "notes": "Approved original stylized rider and generic enduro 29er runtime asset. The editable Blender source and generated runtime meshes preserve the established axle, crank, steering, pelvis, shadow and camera pivots plus the snapshot-driven wheel, pedal, suspension and rider-pose animation contract. The model uses an open twin-link rear triangle, tapered frame members, detailed cockpit, one-by drivetrain, platform pedals, suspension, open-face helmet and large unbranded black treaded tires. It contains no named bicycle design, person likeness, branded tread, logo, source mesh or proprietary surface. No endorsement is claimed or implied. Deterministic Blender export, Balsam conversion, packaged-resource loading and fixed-view visual audits are release requirements."
   }
 }

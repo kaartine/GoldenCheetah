@@ -107,8 +107,8 @@ UPPER_SWINGARM_PROFILE = (
     (0.700, -0.245),
     (0.405, -0.505),
 )
-MAX_GLB_BYTES = 200 * 1024
-MAX_TRIANGLES = 3600
+MAX_GLB_BYTES = 600 * 1024
+MAX_TRIANGLES = 9000
 PIVOT_LOCATIONS = {
     "PIVOT_REAR_AXLE": REAR_AXLE,
     "PIVOT_FRONT_AXLE": FRONT_AXLE,
@@ -229,6 +229,114 @@ def append_tube(vertices, faces, start, end, radius, sides=6, end_radius=None):
         faces.append((end_center, base + sides + side, base + sides + following))
 
 
+def append_path_member(vertices, faces, rings, sides=10):
+    """Create a tapered elliptical member along a canonical Y/Z path."""
+    if len(rings) < 2:
+        raise RuntimeError("A path member requires at least two rings")
+    base = len(vertices)
+    for index, (y_value, z_value, half_width, half_depth) in enumerate(rings):
+        before = rings[max(0, index - 1)]
+        after = rings[min(len(rings) - 1, index + 1)]
+        tangent_y = after[0] - before[0]
+        tangent_z = after[1] - before[1]
+        tangent_length = math.hypot(tangent_y, tangent_z)
+        if tangent_length <= EPSILON:
+            raise RuntimeError("A path member contains a duplicate ring")
+        normal_y = -tangent_z / tangent_length
+        normal_z = tangent_y / tangent_length
+        for side in range(sides):
+            angle = 2.0 * math.pi * side / sides
+            vertices.append((
+                half_width * math.cos(angle),
+                y_value + normal_y * half_depth * math.sin(angle),
+                z_value + normal_z * half_depth * math.sin(angle),
+            ))
+    for ring in range(len(rings) - 1):
+        lower = base + ring * sides
+        upper = lower + sides
+        for side in range(sides):
+            following = (side + 1) % sides
+            faces.extend((
+                (lower + side, upper + side, upper + following),
+                (lower + side, upper + following, lower + following),
+            ))
+    start_center = len(vertices)
+    vertices.append((0.0, rings[0][0], rings[0][1]))
+    end_center = len(vertices)
+    vertices.append((0.0, rings[-1][0], rings[-1][1]))
+    for side in range(sides):
+        following = (side + 1) % sides
+        faces.append((start_center, base + following, base + side))
+        end = base + (len(rings) - 1) * sides
+        faces.append((end_center, end + side, end + following))
+
+
+def append_elliptical_housing(
+        vertices, faces, center, half_width, radius_y, radius_z,
+        segments=16):
+    """Create a chamfered housing whose main axis runs across the bike."""
+    base = len(vertices)
+    bevel = min(0.018, half_width * 0.22)
+    layers = (
+        (-half_width, 0.86),
+        (-half_width + bevel, 1.0),
+        (half_width - bevel, 1.0),
+        (half_width, 0.86),
+    )
+    for x_value, scale in layers:
+        for segment in range(segments):
+            angle = 2.0 * math.pi * segment / segments
+            vertices.append((
+                center[0] + x_value,
+                center[1] + radius_y * scale * math.cos(angle),
+                center[2] + radius_z * scale * math.sin(angle),
+            ))
+    for layer in range(len(layers) - 1):
+        lower = base + layer * segments
+        upper = lower + segments
+        for segment in range(segments):
+            following = (segment + 1) % segments
+            faces.extend((
+                (lower + segment, upper + segment, upper + following),
+                (lower + segment, upper + following, lower + following),
+            ))
+    for layer, reverse in ((0, True), (len(layers) - 1, False)):
+        center_index = len(vertices)
+        vertices.append((center[0] + layers[layer][0], center[1], center[2]))
+        ring = base + layer * segments
+        for segment in range(segments):
+            following = (segment + 1) % segments
+            face = (center_index, ring + following, ring + segment)
+            faces.append(face if reverse else tuple(reversed(face)))
+
+
+def append_torus(
+        vertices, faces, center, major_radius, minor_radius,
+        major_segments=24, minor_segments=4):
+    base = len(vertices)
+    for major in range(major_segments):
+        major_angle = 2.0 * math.pi * major / major_segments
+        radial_y = math.cos(major_angle)
+        radial_z = math.sin(major_angle)
+        for minor in range(minor_segments):
+            minor_angle = 2.0 * math.pi * minor / minor_segments
+            radius = major_radius + minor_radius * math.cos(minor_angle)
+            vertices.append((
+                center[0] + minor_radius * math.sin(minor_angle),
+                center[1] + radius * radial_y,
+                center[2] + radius * radial_z,
+            ))
+    for major in range(major_segments):
+        next_major = (major + 1) % major_segments
+        for minor in range(minor_segments):
+            next_minor = (minor + 1) % minor_segments
+            a = base + major * minor_segments + minor
+            b = base + next_major * minor_segments + minor
+            c = base + next_major * minor_segments + next_minor
+            d = base + major * minor_segments + next_minor
+            faces.extend(((a, b, c), (a, c, d)))
+
+
 def append_side_prism(vertices, faces, profile_yz, half_width):
     """Extrude a convex side profile across X with triangulated caps."""
     if len(profile_yz) < 3:
@@ -295,7 +403,7 @@ def append_disc_ring(vertices, faces, center, x_value, inner_radius,
 
 
 def append_spokes(vertices, faces, center, x_value, count=6):
-    spoke_half_width = 0.006
+    spoke_half_width = 0.0035
     hub_radius = 0.045
     rim_radius = RIM_RADIUS_M
     for index in range(count):
@@ -401,8 +509,8 @@ def append_tread_block(
 def wheel_mesh(center, tread_role):
     vertices = []
     faces = []
-    major_segments = 24
-    minor_segments = 6
+    major_segments = 32
+    minor_segments = 8
     casing_center_radius = (
         WHEEL_RADIUS_M - TIRE_TREAD_HEIGHT_M - TIRE_CASING_RADIAL_M
     )
@@ -432,8 +540,8 @@ def wheel_mesh(center, tread_role):
             faces.extend(((a, b, c), (a, c, d)))
 
     tread_inner = WHEEL_RADIUS_M - TIRE_TREAD_HEIGHT_M - 0.002
-    for index in range(16):
-        angle = 2.0 * math.pi * index / 16
+    for index in range(20):
+        angle = 2.0 * math.pi * index / 20
         if tread_role == "front-grip":
             center_offset = 0.008 if index % 2 == 0 else -0.008
             blocks = (
@@ -454,9 +562,14 @@ def wheel_mesh(center, tread_role):
                 vertices, faces, center, angle, lateral_center, half_width,
                 half_length, tread_inner, WHEEL_RADIUS_M,
             )
-    append_axle_cylinder(vertices, faces, center, 0.075, 0.040, sides=4)
-    append_disc_ring(vertices, faces, center, 0.047, 0.052, 0.105)
-    append_spokes(vertices, faces, center, 0.047)
+    append_torus(
+        vertices, faces, center, RIM_RADIUS_M, 0.012,
+        major_segments=32, minor_segments=4,
+    )
+    append_axle_cylinder(vertices, faces, center, 0.075, 0.040, sides=8)
+    append_disc_ring(vertices, faces, center, 0.047, 0.050, 0.108, segments=12)
+    append_spokes(vertices, faces, center, 0.038, count=12)
+    append_spokes(vertices, faces, center, -0.038, count=12)
     return vertices, faces
 
 
@@ -471,23 +584,53 @@ def tube_mesh(rods):
 def main_frame_mesh():
     vertices = []
     faces = []
-    append_side_prism(
-        vertices, faces, DOWN_TUBE_PROFILE, DOWN_TUBE_HALF_WIDTH_M
+    append_path_member(
+        vertices,
+        faces,
+        (
+            (0.405, -0.030, 0.108, 0.105),
+            (0.475, 0.075, 0.110, 0.110),
+            (0.680, 0.315, 0.096, 0.090),
+            (0.860, 0.505, 0.074, 0.070),
+        ),
+        sides=10,
     )
-    append_side_prism(vertices, faces, SEAT_MAST_PROFILE, 0.064)
-    append_side_prism(vertices, faces, TOP_BRIDGE_PROFILE, 0.058)
+    append_path_member(
+        vertices,
+        faces,
+        (
+            (0.430, -0.070, 0.078, 0.070),
+            (0.640, -0.105, 0.070, 0.060),
+            (0.900, -0.125, 0.054, 0.050),
+        ),
+        sides=10,
+    )
+    append_path_member(
+        vertices,
+        faces,
+        (
+            (0.575, -0.115, 0.072, 0.060),
+            (0.700, 0.070, 0.069, 0.054),
+            (0.840, 0.290, 0.064, 0.050),
+            (0.985, 0.480, 0.058, 0.047),
+        ),
+        sides=10,
+    )
     for start, end, radius in (
         (HEAD_LOW, HEAD_HIGH, 0.046),
         ((0.0, 0.62, -0.09), ROCKER_PIVOT, 0.030),
     ):
-        append_tube(vertices, faces, start, end, radius, sides=4)
+        append_tube(vertices, faces, start, end, radius, sides=10)
     return vertices, faces
 
 
 def bike_components_mesh():
     vertices = []
     faces = []
-    append_side_prism(vertices, faces, MOTOR_PROFILE, MOTOR_HALF_WIDTH_M)
+    append_elliptical_housing(
+        vertices, faces, (0.0, 0.405, -0.005),
+        MOTOR_HALF_WIDTH_M, 0.125, 0.135,
+    )
     append_side_prism(
         vertices,
         faces,
@@ -497,20 +640,29 @@ def bike_components_mesh():
             (0.775, 0.525),
             (0.455, 0.070),
         ),
-        DOWN_TUBE_HALF_WIDTH_M + 0.004,
+        DOWN_TUBE_HALF_WIDTH_M + 0.034,
     )
-    append_tube(vertices, faces, HEAD_HIGH, STEER, 0.024, sides=6)
+    append_tube(vertices, faces, HEAD_HIGH, STEER, 0.024, sides=8)
     append_tube(
         vertices, faces,
         (-0.39, STEER[1], STEER[2]),
         (0.39, STEER[1], STEER[2]),
-        0.018, sides=6,
+        0.018, sides=8,
     )
+    for start, end, radius in (
+        ((-0.45, STEER[1], STEER[2]), (-0.34, STEER[1], STEER[2]), 0.025),
+        ((0.34, STEER[1], STEER[2]), (0.45, STEER[1], STEER[2]), 0.025),
+        ((-0.30, STEER[1] - 0.010, STEER[2] + 0.005),
+         (-0.23, STEER[1] - 0.070, STEER[2] + 0.075), 0.008),
+        ((0.30, STEER[1] - 0.010, STEER[2] + 0.005),
+         (0.23, STEER[1] - 0.070, STEER[2] + 0.075), 0.008),
+    ):
+        append_tube(vertices, faces, start, end, radius, sides=8)
     append_tube(
         vertices, faces,
         (0.0, 0.82, SEAT[2]),
         (0.0, 1.035, SEAT[2]),
-        0.018, sides=6,
+        0.018, sides=8,
     )
     append_side_prism(
         vertices,
@@ -529,7 +681,7 @@ def bike_components_mesh():
     for inner, outer in ((0.042, 0.078), (0.058, 0.092), (0.072, 0.108)):
         append_disc_ring(
             vertices, faces, REAR_AXLE, drivetrain_x, inner, outer,
-            segments=10,
+            segments=12,
         )
     append_disc_ring(
         vertices, faces, CRANK, drivetrain_x, 0.045, 0.087, segments=12
@@ -566,13 +718,24 @@ def bike_components_mesh():
 def swingarm_mesh():
     vertices = []
     faces = []
-    append_side_prism(vertices, faces, LOWER_SWINGARM_PROFILE, 0.052)
-    append_side_prism(vertices, faces, UPPER_SWINGARM_PROFILE, 0.050)
-    for start, end, radius in (
-        (LOWER_LINK_PIVOT, ROCKER_PIVOT, 0.030),
-        (SEATSTAY_PIVOT, ROCKER_PIVOT, 0.034),
-    ):
-        append_tube(vertices, faces, start, end, radius, sides=4)
+    for side in (-1.0, 1.0):
+        rear = (side * 0.068, REAR_AXLE[1], REAR_AXLE[2])
+        lower = (side * 0.078, LOWER_LINK_PIVOT[1], LOWER_LINK_PIVOT[2])
+        seatstay = (side * 0.070, SEATSTAY_PIVOT[1], SEATSTAY_PIVOT[2])
+        rocker = (side * 0.060, ROCKER_PIVOT[1], ROCKER_PIVOT[2])
+        for start, end, radius in (
+            (rear, lower, 0.038),
+            (rear, seatstay, 0.032),
+            (seatstay, rocker, 0.030),
+            (lower, rocker, 0.027),
+        ):
+            append_tube(vertices, faces, start, end, radius, sides=8)
+    append_axle_cylinder(
+        vertices, faces,
+        (0.0, REAR_AXLE[1] + 0.055, REAR_AXLE[2] + 0.080),
+        0.095, 0.022, sides=8,
+    )
+    append_axle_cylinder(vertices, faces, ROCKER_PIVOT, 0.082, 0.026, sides=8)
     return vertices, faces
 
 
@@ -583,14 +746,14 @@ def fork_mesh():
         axle = (x_value, FRONT_AXLE[1], FRONT_AXLE[2])
         split = (x_value, FORK_SPLIT[1], FORK_SPLIT[2])
         crown = (x_value, HEAD_LOW[1], HEAD_LOW[2])
-        append_tube(vertices, faces, axle, split, 0.038, sides=4,
+        append_tube(vertices, faces, axle, split, 0.038, sides=8,
                     end_radius=0.034)
-        append_tube(vertices, faces, split, crown, 0.025, sides=4)
+        append_tube(vertices, faces, split, crown, 0.025, sides=8)
     append_tube(
         vertices, faces,
         (-0.080, HEAD_LOW[1], HEAD_LOW[2]),
         (0.080, HEAD_LOW[1], HEAD_LOW[2]),
-        0.037, sides=4,
+        0.037, sides=8,
     )
     fork_arch_y = FRONT_AXLE[1] + 0.255
     fork_arch_z = FRONT_AXLE[2] - 0.025
@@ -598,9 +761,9 @@ def fork_mesh():
         vertices, faces,
         (-0.052, fork_arch_y, fork_arch_z),
         (0.052, fork_arch_y, fork_arch_z),
-        0.025, sides=4,
+        0.025, sides=8,
     )
-    append_tube(vertices, faces, HEAD_LOW, HEAD_HIGH, 0.034, sides=4)
+    append_tube(vertices, faces, HEAD_LOW, HEAD_HIGH, 0.034, sides=8)
     return vertices, faces
 
 
@@ -618,8 +781,14 @@ def rear_shock_mesh():
         0.045,
     )
     midpoint = vector_scale(vector_add(ROCKER_PIVOT, SHOCK_UPPER), 0.5)
-    append_tube(vertices, faces, ROCKER_PIVOT, midpoint, 0.024, sides=4)
-    append_tube(vertices, faces, midpoint, SHOCK_UPPER, 0.038, sides=6)
+    append_tube(vertices, faces, ROCKER_PIVOT, midpoint, 0.021, sides=8)
+    append_tube(vertices, faces, midpoint, SHOCK_UPPER, 0.036, sides=10)
+    reservoir_start = (0.0, midpoint[1] + 0.010, midpoint[2] - 0.030)
+    reservoir_end = (0.0, midpoint[1] + 0.105, midpoint[2] - 0.070)
+    append_tube(
+        vertices, faces, reservoir_start, reservoir_end, 0.030, sides=10,
+        end_radius=0.025,
+    )
     return vertices, faces
 
 
@@ -673,33 +842,52 @@ def pedal_mesh():
     return vertices, faces
 
 
+def append_vertical_loft(vertices, faces, rings, sides=10):
+    """Create an organic X/Z cross-section loft along local Y."""
+    base = len(vertices)
+    for y_value, center_z, radius_x, radius_z in rings:
+        for side in range(sides):
+            angle = 2.0 * math.pi * side / sides
+            vertices.append((
+                radius_x * math.cos(angle),
+                y_value,
+                center_z + radius_z * math.sin(angle),
+            ))
+    for ring in range(len(rings) - 1):
+        lower = base + ring * sides
+        upper = lower + sides
+        for side in range(sides):
+            following = (side + 1) % sides
+            faces.extend((
+                (lower + side, upper + side, upper + following),
+                (lower + side, upper + following, lower + following),
+            ))
+    for ring_index, reverse in ((0, True), (len(rings) - 1, False)):
+        y_value, center_z, _, _ = rings[ring_index]
+        center = len(vertices)
+        vertices.append((0.0, y_value, center_z))
+        ring = base + ring_index * sides
+        for side in range(sides):
+            following = (side + 1) % sides
+            face = (center, ring + following, ring + side)
+            faces.append(face if reverse else tuple(reversed(face)))
+
+
 def torso_mesh():
     vertices = []
-    rings = (
-        (0.00, 0.14, -0.08, 0.10),
-        (0.29, 0.21, -0.06, 0.18),
-        (0.41, 0.235, -0.015, 0.205),
-        (0.48, 0.12, 0.015, 0.185),
+    faces = []
+    append_vertical_loft(
+        vertices,
+        faces,
+        (
+            (0.00, 0.015, 0.135, 0.105),
+            (0.18, 0.035, 0.185, 0.130),
+            (0.34, 0.060, 0.230, 0.145),
+            (0.43, 0.075, 0.205, 0.135),
+            (0.49, 0.080, 0.120, 0.105),
+        ),
+        sides=10,
     )
-    for y_value, half_x, back_z, front_z in rings:
-        vertices.extend((
-            (-half_x, y_value, back_z),
-            (half_x, y_value, back_z),
-            (half_x, y_value, front_z),
-            (-half_x, y_value, front_z),
-        ))
-    faces = [(0, 2, 1), (0, 3, 2)]
-    for ring in range(len(rings) - 1):
-        lower = ring * 4
-        upper = lower + 4
-        for side in range(4):
-            following = (side + 1) % 4
-            faces.extend((
-                (lower + side, lower + following, upper + following),
-                (lower + side, upper + following, upper + side),
-            ))
-    top = (len(rings) - 1) * 4
-    faces.extend(((top, top + 1, top + 2), (top, top + 2, top + 3)))
     return vertices, faces
 
 
@@ -802,24 +990,40 @@ def visor_mesh(vertices, faces):
 
 
 def low_poly_sphere(center, radius, lower_fraction=-1.0):
+    segments = 12
+    ring_count = 4
     vertices = [(center[0], center[1] + radius, center[2])]
-    ring_y = center[1] + radius * 0.15
-    ring_radius = radius * 0.98
-    for index in range(8):
-        angle = 2.0 * math.pi * index / 8
-        vertices.append((
-            center[0] + ring_radius * math.cos(angle),
-            ring_y,
-            center[2] + ring_radius * math.sin(angle),
-        ))
+    for ring in range(1, ring_count):
+        polar = math.pi * ring / ring_count
+        ring_y = center[1] + radius * math.cos(polar)
+        ring_radius = radius * math.sin(polar)
+        for index in range(segments):
+            angle = 2.0 * math.pi * index / segments
+            vertices.append((
+                center[0] + ring_radius * math.cos(angle),
+                ring_y,
+                center[2] + ring_radius * math.sin(angle),
+            ))
     vertices.append((center[0], center[1] + radius * lower_fraction, center[2]))
     bottom = len(vertices) - 1
     faces = []
-    for index in range(8):
-        following = 1 + (index + 1) % 8
+    for index in range(segments):
+        following = 1 + (index + 1) % segments
         current = 1 + index
         faces.append((0, current, following))
-        faces.append((bottom, following, current))
+    for ring in range(ring_count - 2):
+        lower = 1 + ring * segments
+        upper = lower + segments
+        for index in range(segments):
+            following = (index + 1) % segments
+            faces.extend((
+                (lower + index, upper + index, upper + following),
+                (lower + index, upper + following, lower + following),
+            ))
+    last_ring = 1 + (ring_count - 2) * segments
+    for index in range(segments):
+        following = (index + 1) % segments
+        faces.append((bottom, last_ring + following, last_ring + index))
     return vertices, faces
 
 
@@ -831,8 +1035,8 @@ def helmet_mesh():
         (0.125, 0.105, 0.115),
     )
     for y_value, radius_x, radius_z in rings:
-        for index in range(8):
-            angle = 2.0 * math.pi * index / 8
+        for index in range(12):
+            angle = 2.0 * math.pi * index / 12
             vertices.append((
                 radius_x * math.cos(angle),
                 y_value,
@@ -842,17 +1046,17 @@ def helmet_mesh():
     top = len(vertices) - 1
     faces = []
     for ring in range(len(rings) - 1):
-        lower = ring * 8
-        upper = lower + 8
-        for index in range(8):
-            following = (index + 1) % 8
+        lower = ring * 12
+        upper = lower + 12
+        for index in range(12):
+            following = (index + 1) % 12
             faces.extend((
                 (lower + index, upper + index, upper + following),
                 (lower + index, upper + following, lower + following),
             ))
-    upper = (len(rings) - 1) * 8
-    for index in range(8):
-        following = (index + 1) % 8
+    upper = (len(rings) - 1) * 12
+    for index in range(12):
+        following = (index + 1) % 12
         faces.append((top, upper + following, upper + index))
     return vertices, faces
 
@@ -896,10 +1100,15 @@ def helmet_accent_mesh():
 def limb_mesh():
     vertices = []
     faces = []
-    append_tube(
-        vertices, faces,
-        (0.0, 0.0, 0.0), (0.0, 1.0, 0.0),
-        0.078, sides=6, end_radius=0.058,
+    append_path_member(
+        vertices,
+        faces,
+        (
+            (0.0, 0.0, 0.078, 0.072),
+            (0.46, 0.0, 0.073, 0.068),
+            (1.0, 0.0, 0.056, 0.052),
+        ),
+        sides=8,
     )
     return vertices, faces
 
@@ -933,6 +1142,7 @@ def build_scene():
     root["forward_axis"] = "+Z"
     root["physics_authority"] = "external"
     root["reference_model"] = "original generic modern enduro 29er"
+    root["authoring_source"] = "editable Blender 4.x scene"
     root["reference_geometry"] = (
         "project-authored silhouette constrained by the existing runtime "
         "pivot contract and generic modern enduro proportions"
@@ -1154,25 +1364,21 @@ def self_check(root) -> tuple[int, int]:
         raise RuntimeError("Helmet silhouette contract changed")
     critical_mesh_points = {
         "GEO_MainFrame_LOD0": (
-            (DOWN_TUBE_HALF_WIDTH_M,
-             DOWN_TUBE_PROFILE[2][0], DOWN_TUBE_PROFILE[2][1]),
-            (0.064, SEAT_MAST_PROFILE[1][0], SEAT_MAST_PROFILE[1][1]),
-            (0.058, TOP_BRIDGE_PROFILE[1][0], TOP_BRIDGE_PROFILE[1][1]),
+            (0.108, 0.405, -0.030),
+            (0.054, 0.900, -0.125),
+            (0.058, 0.985, 0.480),
             HEAD_HIGH,
         ),
         "GEO_BikeComponents_LOD0": (
-            (MOTOR_HALF_WIDTH_M, MOTOR_PROFILE[2][0], MOTOR_PROFILE[2][1]),
+            (MOTOR_HALF_WIDTH_M, 0.405, -0.005),
             (-0.39, STEER[1], STEER[2]),
             (0.39, STEER[1], STEER[2]),
         ),
         "GEO_Swingarm_LOD0": (
-            (0.052, LOWER_SWINGARM_PROFILE[0][0],
-             LOWER_SWINGARM_PROFILE[0][1]),
-            (0.050, UPPER_SWINGARM_PROFILE[0][0],
-             UPPER_SWINGARM_PROFILE[0][1]),
-            LOWER_LINK_PIVOT,
-            SEATSTAY_PIVOT,
-            ROCKER_PIVOT,
+            (0.068, REAR_AXLE[1], REAR_AXLE[2]),
+            (0.078, LOWER_LINK_PIVOT[1], LOWER_LINK_PIVOT[2]),
+            (0.070, SEATSTAY_PIVOT[1], SEATSTAY_PIVOT[2]),
+            (0.060, ROCKER_PIVOT[1], ROCKER_PIVOT[2]),
         ),
         "GEO_Fork_LOD0": (
             (0.052, FRONT_AXLE[1], FRONT_AXLE[2]),
@@ -1198,7 +1404,7 @@ def self_check(root) -> tuple[int, int]:
         "GEO_FrontWheel_LOD0": (
             (0.075, FRONT_AXLE[1], FRONT_AXLE[2]),
         ),
-        "GEO_Torso_LOD0": ((0.12, 0.48, 0.185),),
+        "GEO_Torso_LOD0": ((0.12, 0.49, 0.080),),
         "GEO_HairBeard_LOD0": ((0.105, -0.125, 0.025),),
         "GEO_Eyewear_LOD0": ((0.125, 0.015, 0.105),),
         "GEO_HelmetAccent_LOD0": ((0.151, -0.050, -0.168),),
@@ -1272,15 +1478,39 @@ def parse_arguments() -> argparse.Namespace:
     arguments = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     parser = argparse.ArgumentParser(description="Generate the rider-bike GLB")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--source-blend", default="")
+    parser.add_argument("--save-blend", default="")
     return parser.parse_args(arguments)
 
 
 def main() -> None:
-    output_path = Path(os.path.expanduser(parse_arguments().output)).resolve()
+    arguments = parse_arguments()
+    output_path = Path(os.path.expanduser(arguments.output)).resolve()
     if output_path.suffix.lower() != ".glb":
         raise RuntimeError("--output must end in .glb")
-    root = build_scene()
+    if arguments.source_blend and arguments.save_blend:
+        raise RuntimeError("--source-blend and --save-blend are mutually exclusive")
+    if arguments.source_blend:
+        source_path = Path(os.path.expanduser(arguments.source_blend)).resolve()
+        if source_path.suffix.lower() != ".blend" or not source_path.is_file():
+            raise RuntimeError("--source-blend must name an existing .blend file")
+        bpy.ops.wm.open_mainfile(filepath=str(source_path))
+        root = bpy.data.objects.get(ROOT_NAME)
+        if root is None:
+            raise RuntimeError(f"Source blend has no {ROOT_NAME} root")
+    else:
+        root = build_scene()
     vertices, triangles = self_check(root)
+    if arguments.save_blend:
+        blend_path = Path(os.path.expanduser(arguments.save_blend)).resolve()
+        if blend_path.suffix.lower() != ".blend":
+            raise RuntimeError("--save-blend must end in .blend")
+        blend_path.parent.mkdir(parents=True, exist_ok=True)
+        bpy.ops.wm.save_as_mainfile(
+            filepath=str(blend_path),
+            check_existing=False,
+            compress=True,
+        )
     export_glb(output_path)
     print("Generated", output_path,
           f"({vertices} vertices, {triangles} triangles)")

@@ -110,21 +110,37 @@ source/review package, not runtime placement or a release-checklist item.
 
 ## Rider-bike contract
 
+`sources/WG_RiderBike.blend` is the editable, authoritative rider-bike scene.
+The generator remains a deterministic way to recreate and structurally audit
+that scene. Build and validate the complete Blender to GLB to Qt Quick 3D
+pipeline with:
+
+```bash
+contrib/workout-game-assets/rebuild_rider_bike.sh
+```
+
+The default command leaves a reviewed candidate under
+`build/workout-game-assets/rider-bike-candidate`. Add `--install` to replace
+the committed GLB, fixed-view audit renders and all 17 runtime meshes, update
+their measured manifest metadata and run the repository asset validator. The
+script serializes asset builds with `flock`, confines each Docker process to
+two CPUs and 2 GiB RAM by default, and requires repeated GLB, audit and Balsam
+outputs to match before installation. Override the limits only when needed
+with `GC_ASSET_CPUS`, `GC_ASSET_MEMORY` and `GC_ASSET_MEMORY_SWAP`.
+
 - The bicycle has a `0.755 m` outside wheel diameter, `1.313 m` wheelbase,
   `0.455 m` chainstay and separately articulated main frame, swingarm, fork and
-  rear shock. These dimensions use Pole Voima K2's public geometry table as a
-  reference without copying branded surfaces, graphics or source assets.
+  rear shock. Its project-authored proportions represent a generic modern
+  long-travel enduro e-bike rather than a digital copy of a named bicycle.
 - The project-authored side silhouette uses a deep integrated 750 Wh-class
   battery/down tube, compact mid-drive housing, long twin-beam swingarm, upper
   linkage and rocker, long single-crown fork, hubs, brake rotors and sparse
-  low-poly spokes. These are generic visual cues rather than copied Pole
-  surfaces or CAD. The independently authored gold frame, black motor and
-  component group preserve the Voima K2's readable packaging at the normal
-  game-camera distance without reproducing logos or proprietary surfaces.
+  low-poly spokes. The independently authored gold frame, black motor and
+  component group use generic visual cues without reproducing logos,
+  proprietary surfaces or CAD.
 - The `29 x 2.5` black tires have a `0.0635 m` casing width and distinct
-  low-poly front-grip and rear-braking tread roles. They are based on the
-  publicly listed Maxxis Assegai and Minion DHR II fitment but contain no
-  copied tread mesh, sidewall text or trademark artwork.
+  low-poly front-grip and rear-braking tread roles. Their original block
+  patterns contain no copied tread mesh, sidewall text or trademark artwork.
 - The stylized fictional rider has a generic low-poly face, dark beard,
   wraparound eyewear, blue-white riding clothes and a clearly separate
   white-black open-face enduro helmet with a dark visor. The model is not
@@ -139,11 +155,11 @@ source/review package, not runtime placement or a release-checklist item.
   motion follow the authoritative pedal-cycle value.
 - The crank mesh includes both pedal platforms, so feet, crank arms and pedals
   share one authoritative phase without adding per-pedal draw calls.
-- The complete source asset has 2,836 triangles, eight opaque flat-color materials,
-  no texture payload and no external source. The runtime component adds only a
-  bounded translucent contact-shadow material.
+- The complete source asset has 5,240 triangles, eight opaque flat-color
+  materials, no texture payload and no external source. The runtime component
+  adds only a bounded translucent contact-shadow material.
 - Blender validates topology, applied transforms, dimensions, pivots and the
-  3,600-triangle budget before export. Asset-policy tests additionally reject
+  9,000-triangle budget before export. Asset-policy tests additionally reject
   built-in Quick 3D primitives in the final rider component.
 
 ## Drop contract

@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import struct
 import sys
 import traceback
 
@@ -32,6 +33,34 @@ VIEWS = (
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def normalize_png(path: Path) -> None:
+    """Remove Blender's run-time text metadata without touching image data."""
+    data = path.read_bytes()
+    signature = b"\x89PNG\r\n\x1a\n"
+    if not data.startswith(signature):
+        raise RuntimeError(f"Render is not a PNG: {path}")
+    normalized = bytearray(signature)
+    offset = len(signature)
+    saw_end = False
+    while offset < len(data):
+        if offset + 12 > len(data):
+            raise RuntimeError(f"Truncated PNG chunk in {path}")
+        length = struct.unpack_from(">I", data, offset)[0]
+        end = offset + 12 + length
+        if end > len(data):
+            raise RuntimeError(f"Invalid PNG chunk length in {path}")
+        chunk_type = data[offset + 4:offset + 8]
+        if chunk_type != b"tEXt":
+            normalized.extend(data[offset:end])
+        offset = end
+        if chunk_type == b"IEND":
+            saw_end = True
+            break
+    if not saw_end or offset != len(data):
+        raise RuntimeError(f"Invalid PNG end marker in {path}")
+    path.write_bytes(normalized)
 
 
 def point_at(obj, canonical_target) -> None:
@@ -215,6 +244,7 @@ def render(asset_path: Path, output_directory: Path) -> None:
         path = output_directory / f"RB-01-{view}.png"
         scene.render.filepath = str(path)
         bpy.ops.render.render(write_still=True)
+        normalize_png(path)
         renders.append({
             "view": view,
             "path": path.name,
