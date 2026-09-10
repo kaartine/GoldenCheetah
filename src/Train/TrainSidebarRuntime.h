@@ -99,6 +99,13 @@ inline double slopeTarget(double currentSlope,
     return initialize ? workoutSlope : currentSlope;
 }
 
+inline bool trainingCanStart(
+        bool powerControlledMtbCourse,
+        bool targetPowerSupported)
+{
+    return !powerControlledMtbCourse || targetPowerSupported;
+}
+
 inline double workoutLapPositionMeters(
         bool generatedCourse,
         double timelinePositionMeters,

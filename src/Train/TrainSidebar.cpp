@@ -1253,6 +1253,7 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
         workoutRideModeEnabled = false;
         workoutRideFallbackNotified = false;
     }
+    autoEnableWorkoutRideForCurrentWorkout();
     emit workoutRideModeChanged();
 
     maintainLapDistanceState();
@@ -1717,7 +1718,17 @@ void TrainSidebar::Start()       // when start button is pressed
 
     } else if (status&RT_CONNECTED) {
 
-        autoEnableWorkoutRideForVisibleGame();
+        const TrainerControlCapabilities capabilities =
+                activeTrainerCapabilities();
+        if (!TrainSidebarRuntime::trainingCanStart(
+                    workoutGameRequiresTargetPower(),
+                    capabilities.targetPower)) {
+            context->notifySetNotification(
+                    tr("Trainer control is not ready; wait for the trainer to connect"),
+                    4);
+            return;
+        }
+        autoEnableWorkoutRideForCurrentWorkout();
 
         // Delayed start handling
         if (secs_to_start == 0) {
@@ -2369,6 +2380,7 @@ void TrainSidebar::Connect()
                 Qt::UniqueConnection);
     }
     setStatusFlags(RT_CONNECTED);
+    autoEnableWorkoutRideForCurrentWorkout();
     emit workoutRideModeChanged();
     gui_timer->start(REFRESHRATE);
 
@@ -3042,20 +3054,28 @@ TrainerControlCapabilities TrainSidebar::activeTrainerCapabilities()
     return foundTrainer ? common : TrainerControlCapabilities();
 }
 
-bool TrainSidebar::workoutGameUsesTargetPower()
+bool TrainSidebar::workoutGameRequiresTargetPower()
 {
     return workoutGameCourseRuntime.enabled()
+            && workoutGameCourseRuntime.coursePreset()
+                    != WorkoutGameCoursePreset::RideFirst;
+}
+
+bool TrainSidebar::workoutGameUsesTargetPower()
+{
+    return workoutGameRequiresTargetPower()
             && WorkoutGameTrainerTargetPlanner::usesTargetPower(
                 workoutGameCourseRuntime.coursePreset(),
                 activeTrainerCapabilities().targetPower);
 }
 
-bool TrainSidebar::autoEnableWorkoutRideForVisibleGame()
+bool TrainSidebar::autoEnableWorkoutRideForCurrentWorkout()
 {
     const WorkoutRideModeAvailability availability =
             workoutRideModeAvailability();
     if (!WorkoutRideTargetPlanner::shouldAutoEnableForWorkoutGame(
                 !visibleWorkoutGameViews.isEmpty(),
+                workoutGameRequiresTargetPower(),
                 workoutRideModeEnabled,
                 availability)) {
         return false;
@@ -3071,7 +3091,7 @@ void TrainSidebar::workoutGameViewVisibilityChanged(
     if (!view) return;
     if (visible) {
         visibleWorkoutGameViews.insert(view);
-        autoEnableWorkoutRideForVisibleGame();
+        autoEnableWorkoutRideForCurrentWorkout();
     } else {
         visibleWorkoutGameViews.remove(view);
     }
@@ -3130,6 +3150,7 @@ void TrainSidebar::trainerControlCapabilitiesChanged()
         workoutRideModeEnabled = false;
         workoutRideFallbackNotified = false;
     }
+    autoEnableWorkoutRideForCurrentWorkout();
     emit workoutRideModeChanged();
 
     if (workoutGameCourseRuntime.enabled() && !calibrating) {

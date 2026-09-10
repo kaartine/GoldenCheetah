@@ -1301,6 +1301,16 @@ class WorkoutGameUiWorkflow:
                 raise UiFailure(
                     f"Workout Ride should be {availability} for this MTB preset"
                 )
+            if workout_ride_expected:
+                deadline = time.monotonic() + 5.0
+                while (not self.driver.combo_selects(ride_mode, "Workout Ride")
+                       and time.monotonic() < deadline):
+                    time.sleep(0.1)
+                if not self.driver.combo_selects(ride_mode, "Workout Ride"):
+                    raise UiFailure(
+                        "Power-controlled MTB course did not automatically "
+                        "select Workout Ride before opening Workout Game"
+                    )
 
         self.driver.select_combo_item(
             ["Workout Game", "Workout Editor"], "Workout Game"

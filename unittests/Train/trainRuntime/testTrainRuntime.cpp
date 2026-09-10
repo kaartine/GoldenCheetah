@@ -291,6 +291,16 @@ private slots:
         QCOMPARE(controller.targets, QList<int>() << 235);
     }
 
+    void powerControlledMtbCourseWaitsForTrainerControl()
+    {
+        QVERIFY(!TrainSidebarRuntime::trainingCanStart(
+                true, false));
+        QVERIFY(TrainSidebarRuntime::trainingCanStart(
+                true, true));
+        QVERIFY(TrainSidebarRuntime::trainingCanStart(
+                false, false));
+    }
+
     void initialSlopeUsesWorkoutGradient()
     {
         QCOMPARE(

@@ -64,6 +64,7 @@ public:
             const TrainerControlCapabilities &capabilities);
     static bool shouldAutoEnableForWorkoutGame(
             bool gameVisible,
+            bool powerControlledMtbCourse,
             bool alreadyEnabled,
             const WorkoutRideModeAvailability &availability);
 };

@@ -415,29 +415,33 @@ private slots:
         QCOMPARE(result.editable, editable);
     }
 
-    void workoutGameAutoSelectionRequiresVisibleGameAndEditableMode_data()
+    void workoutGameAutoSelectionFollowsViewOrPowerControlledCourse_data()
     {
         QTest::addColumn<bool>("gameVisible");
+        QTest::addColumn<bool>("powerControlledMtbCourse");
         QTest::addColumn<bool>("alreadyEnabled");
         QTest::addColumn<bool>("supported");
         QTest::addColumn<bool>("editable");
         QTest::addColumn<bool>("expected");
 
         QTest::newRow("visible-ready-game")
-                << true << false << true << true << true;
+                << true << false << false << true << true << true;
+        QTest::newRow("hidden-power-controlled-mtb-course")
+                << false << true << false << true << true << true;
         QTest::newRow("ordinary-erg-view")
-                << false << false << true << true << false;
+                << false << false << false << true << true << false;
         QTest::newRow("already-enabled")
-                << true << true << true << true << false;
+                << true << true << true << true << true << false;
         QTest::newRow("running-session")
-                << true << false << true << false << false;
+                << true << true << false << true << false << false;
         QTest::newRow("unsupported-trainer")
-                << true << false << false << false << false;
+                << true << true << false << false << false << false;
     }
 
-    void workoutGameAutoSelectionRequiresVisibleGameAndEditableMode()
+    void workoutGameAutoSelectionFollowsViewOrPowerControlledCourse()
     {
         QFETCH(bool, gameVisible);
+        QFETCH(bool, powerControlledMtbCourse);
         QFETCH(bool, alreadyEnabled);
         QFETCH(bool, supported);
         QFETCH(bool, editable);
@@ -448,7 +452,8 @@ private slots:
         availability.editable = editable;
 
         QCOMPARE(WorkoutRideTargetPlanner::shouldAutoEnableForWorkoutGame(
-                         gameVisible, alreadyEnabled, availability),
+                         gameVisible, powerControlledMtbCourse,
+                         alreadyEnabled, availability),
                  expected);
     }
 };

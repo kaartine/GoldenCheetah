@@ -389,8 +389,9 @@ class TrainSidebar : public GcWindow
         void resetWorkoutRideCommandDispatch();
         void scheduleWorkoutRideCommandRetry(int delayMs);
         TrainerControlCapabilities activeTrainerCapabilities();
+        bool workoutGameRequiresTargetPower();
         bool workoutGameUsesTargetPower();
-        bool autoEnableWorkoutRideForVisibleGame();
+        bool autoEnableWorkoutRideForCurrentWorkout();
         void setActiveDevicesToWorkoutMode();
         bool writeRecordingData(const QByteArray &data);
         void stopForRecordingFailure(TrainingRecordingIo::Failure failure);

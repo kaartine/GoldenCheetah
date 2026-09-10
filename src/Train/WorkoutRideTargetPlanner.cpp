@@ -101,10 +101,11 @@ WorkoutRideModeAvailability WorkoutRideTargetPlanner::availability(
 
 bool WorkoutRideTargetPlanner::shouldAutoEnableForWorkoutGame(
         bool gameVisible,
+        bool powerControlledMtbCourse,
         bool alreadyEnabled,
         const WorkoutRideModeAvailability &availability)
 {
-    return gameVisible
+    return (gameVisible || powerControlledMtbCourse)
             && !alreadyEnabled
             && availability.supported
             && availability.editable;
