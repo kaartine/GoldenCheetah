@@ -383,3 +383,23 @@ isolated cell with a fixed camera, field of view and world scale; the asset is
 rotated for alternate angles so framing remains directly comparable. The audit
 uses the packaged runtime meshes and leaves production placement and rendering
 unchanged.
+
+## Interactive asset gallery
+
+Open every manifest-backed GLB in a temporary Blender review scene with:
+
+```bash
+contrib/workout-game-assets/open_gallery.sh
+```
+
+Pass `--asset RB-01-rider-bike` to choose the initial model. The launcher uses
+an installed Blender when available and otherwise runs the pinned repository
+Docker image. It does not open or modify athlete data, source models or runtime
+assets.
+
+The **Workout Game** tab in Blender's 3D viewport sidebar contains the model
+selector, previous/next controls, fixed review views, framing and a wireframe
+toggle. Blender's normal viewport controls provide orbit, pan and zoom. The
+gallery imports the reviewed GLBs directly; production continues to use the
+validated Balsam `.mesh` output. When launched from a local SSH shell, the
+launcher can attach to the same user's active GNOME Xwayland display.
