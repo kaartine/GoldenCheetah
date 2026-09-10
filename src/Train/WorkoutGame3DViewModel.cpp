@@ -1044,10 +1044,13 @@ void WorkoutGame3DViewModel::updateCameraPose(
     const double previousTargetZ = cameraTargetPositionZ;
     double minimumCameraPositionY =
             -std::numeric_limits<double>::infinity();
+    double minimumCameraTerrainY =
+            -std::numeric_limits<double>::infinity();
     const auto constrainCameraTravel = [this, previousX, previousY, previousZ,
                                         previousTargetX, previousTargetY,
                                         previousTargetZ, now,
-                                        &minimumCameraPositionY]() {
+                                        &minimumCameraPositionY,
+                                        &minimumCameraTerrainY]() {
         const double desiredTargetX = cameraTargetPositionX;
         const double desiredTargetZ = cameraTargetPositionZ;
         double desiredYaw = std::atan2(
@@ -1112,6 +1115,8 @@ void WorkoutGame3DViewModel::updateCameraPose(
         cameraPositionY = previousY + std::clamp(
                 cameraPositionY - previousY,
                 -maximumVerticalStep, maximumVerticalStep);
+        cameraPositionY = std::max(
+                cameraPositionY, minimumCameraTerrainY);
 
         const double yawBeforeIntegration = cameraYawRadians;
         double remainingSeconds = elapsedSeconds;
@@ -1243,8 +1248,11 @@ void WorkoutGame3DViewModel::updateCameraPose(
                     corridorSample.visualGroundElevationMeters());
         }
     }
-    minimumCameraPositionY = std::max(
+    minimumCameraTerrainY = std::max(
             cameraSample.visualGroundElevationMeters() + 2.80,
+            cameraGroundY + 1.50);
+    minimumCameraPositionY = std::max(
+            minimumCameraTerrainY,
             corridorGroundY + 1.65);
 
     const double targetForwardX = std::sin(
