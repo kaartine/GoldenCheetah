@@ -871,6 +871,12 @@ class PlatformGateTests(unittest.TestCase):
         self.assertIn("-Werror=invalid-pch", project)
         self.assertIn("-Wfatal-errors", project)
 
+    def test_c_sources_do_not_generate_a_c_precompiled_header(self):
+        project = (REPOSITORY_ROOT / "src/src.pro").read_text(encoding="utf-8")
+
+        self.assertIn("QMAKE_CFLAGS_PRECOMPILE =", project)
+        self.assertIn("QMAKE_CFLAGS_USE_PRECOMPILE =", project)
+
     def test_devcontainer_uses_a_persistent_compiler_cache(self):
         dockerfile = (REPOSITORY_ROOT / ".devcontainer/Dockerfile").read_text(
             encoding="utf-8"
