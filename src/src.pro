@@ -970,20 +970,13 @@ macx {
     # immediately instead of letting GCC parse the GoldenCheetah executable as
     # a fallback header when an incompatible PCH is encountered.
     linux-g++ | linux-g++-64 {
+        # stable.h contains C++ and Qt headers.  qmake otherwise creates both
+        # GoldenCheetah.gch/c and GoldenCheetah.gch/c++; parallel C and C++
+        # builds can then make GCC inspect the incompatible C PCH first.
+        QMAKE_CFLAGS_PRECOMPILE =
+        QMAKE_CFLAGS_USE_PRECOMPILE =
         QMAKE_CXXFLAGS_USE_PRECOMPILE += -Winvalid-pch \
                                          -Werror=invalid-pch \
                                          -Wfatal-errors
-    }
-}
-
-###============================================================================
-### Disable Precompiled Header for C files
-### The PCH contains C++ specific headers (Qt, STL) which causes compilation errors
-### when the PCH is forced upon C files by gcc.
-###============================================================================
-
-for(src, SOURCES) {
-    contains(src, .*\.c$) {
-        eval($${src}.CONFIG -= precompile_header)
     }
 }
