@@ -1039,16 +1039,12 @@ void WorkoutGame3DViewModel::updateCameraPose(
     const double previousX = cameraPositionX;
     const double previousY = cameraPositionY;
     const double previousZ = cameraPositionZ;
-    const double previousTargetX = cameraTargetPositionX;
-    const double previousTargetY = cameraTargetPositionY;
-    const double previousTargetZ = cameraTargetPositionZ;
     double minimumCameraPositionY =
             -std::numeric_limits<double>::infinity();
     double minimumCameraTerrainY =
             -std::numeric_limits<double>::infinity();
     const auto constrainCameraTravel = [this, previousX, previousY, previousZ,
-                                        previousTargetX, previousTargetY,
-                                        previousTargetZ, now,
+                                        now,
                                         &minimumCameraPositionY,
                                         &minimumCameraTerrainY]() {
         const double desiredTargetX = cameraTargetPositionX;
@@ -1084,15 +1080,6 @@ void WorkoutGame3DViewModel::updateCameraPose(
             lastCameraPoseTimeMs = now;
             return;
         }
-        if (now == lastCameraPoseTimeMs) {
-            cameraPositionX = previousX;
-            cameraPositionY = previousY;
-            cameraPositionZ = previousZ;
-            cameraTargetPositionX = previousTargetX;
-            cameraTargetPositionY = previousTargetY;
-            cameraTargetPositionZ = previousTargetZ;
-            return;
-        }
         const double elapsedSeconds = std::clamp(
                 double(now - lastCameraPoseTimeMs) / 1000.0,
                 0.0, MaximumCameraCatchupSeconds);
@@ -1115,8 +1102,10 @@ void WorkoutGame3DViewModel::updateCameraPose(
         cameraPositionY = previousY + std::clamp(
                 cameraPositionY - previousY,
                 -maximumVerticalStep, maximumVerticalStep);
+        const double minimumSmoothedCameraY = now == lastCameraPoseTimeMs
+                ? minimumCameraPositionY : minimumCameraTerrainY;
         cameraPositionY = std::max(
-                cameraPositionY, minimumCameraTerrainY);
+                cameraPositionY, minimumSmoothedCameraY);
 
         const double yawBeforeIntegration = cameraYawRadians;
         double remainingSeconds = elapsedSeconds;
