@@ -924,6 +924,7 @@ GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
         "$RELEASE_LINK/previous.AppImage" \
         "$RELEASE_LINK/previous.AppImage.sbom.cdx.json"
 FIRST_RELEASE_TARGET=$(readlink "$RELEASE_LINK")
+FIRST_ARTIFACT_TARGET=$(readlink -f "$RELEASE_LINK/latest.AppImage")
 
 SECOND_APPIMAGE="$TEMP_DIR/manifest-second.AppImage"
 cp "$FAKE_APPIMAGE" "$SECOND_APPIMAGE"
@@ -961,6 +962,45 @@ cmp -s "$FAKE_SBOM" \
 cmp -s "$FAKE_SBOM" \
     "$RELEASE_LINK/previous.AppImage.sbom.cdx.json" ||
     fail "the previous release SBOM was not retained"
+SECOND_RELEASE_TARGET=$(readlink "$RELEASE_LINK")
+SECOND_ARTIFACT_TARGET=$(readlink -f "$RELEASE_LINK/latest.AppImage")
+
+THIRD_APPIMAGE="$TEMP_DIR/manifest-third.AppImage"
+cp "$SECOND_APPIMAGE" "$THIRD_APPIMAGE"
+printf '# third immutable image\n' >>"$THIRD_APPIMAGE"
+chmod +x "$THIRD_APPIMAGE"
+THIRD_MANIFEST="$THIRD_APPIMAGE.manifest"
+finalize_appimage_manifest \
+    "$THIRD_APPIMAGE" "$BASE_MANIFEST" "$THIRD_MANIFEST"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$THIRD_APPIMAGE" "$THIRD_MANIFEST" "$FAKE_SBOM" \
+        "$RELEASE_LINK" >/dev/null
+[ "$(readlink "$RELEASE_LINK")" != "$SECOND_RELEASE_TARGET" ] ||
+    fail "third release promotion did not rotate the generation pointer"
+cmp -s "$THIRD_APPIMAGE" "$RELEASE_LINK/latest.AppImage" ||
+    fail "the third promoted image is not latest"
+cmp -s "$SECOND_APPIMAGE" "$RELEASE_LINK/previous.AppImage" ||
+    fail "the second promoted image did not become previous"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest \
+        "$RELEASE_LINK/latest.AppImage" \
+        "$RELEASE_LINK/latest.AppImage.manifest"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest \
+        "$RELEASE_LINK/previous.AppImage" \
+        "$RELEASE_LINK/previous.AppImage.manifest"
+cmp -s "$FAKE_SBOM" \
+    "$RELEASE_LINK/latest.AppImage.sbom.cdx.json" ||
+    fail "the third release SBOM was not promoted"
+cmp -s "$FAKE_SBOM" \
+    "$RELEASE_LINK/previous.AppImage.sbom.cdx.json" ||
+    fail "the second release SBOM was not retained"
+[ ! -e "$FIRST_ARTIFACT_TARGET" ] ||
+    fail "release retention kept the artifact older than previous"
+[ -e "$SECOND_ARTIFACT_TARGET" ] ||
+    fail "release retention removed the previous artifact"
 [ "$(find "$TEMP_DIR/.GoldenCheetah-release.store/sets" \
     -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ] ||
     fail "release retention kept inactive generation sets"
@@ -1111,13 +1151,13 @@ cmp -s "$LEGACY_V1_APPIMAGE" \
     fail "failed legacy migration changed the active release"
 
 PUBLISHED_TARGET=$(readlink "$RELEASE_LINK")
-THIRD_APPIMAGE="$TEMP_DIR/manifest-third.AppImage"
-cp "$FAKE_APPIMAGE" "$THIRD_APPIMAGE"
-printf '# third immutable image\n' >>"$THIRD_APPIMAGE"
-chmod +x "$THIRD_APPIMAGE"
-THIRD_MANIFEST="$THIRD_APPIMAGE.manifest"
+FOURTH_APPIMAGE="$TEMP_DIR/manifest-fourth.AppImage"
+cp "$THIRD_APPIMAGE" "$FOURTH_APPIMAGE"
+printf '# fourth immutable image\n' >>"$FOURTH_APPIMAGE"
+chmod +x "$FOURTH_APPIMAGE"
+FOURTH_MANIFEST="$FOURTH_APPIMAGE.manifest"
 finalize_appimage_manifest \
-    "$THIRD_APPIMAGE" "$BASE_MANIFEST" "$THIRD_MANIFEST"
+    "$FOURTH_APPIMAGE" "$BASE_MANIFEST" "$FOURTH_MANIFEST"
 FAILING_SYNC_DIR="$TEMP_DIR/failing-sync"
 mkdir "$FAILING_SYNC_DIR"
 REAL_SYNC=$(command -v sync)
@@ -1135,16 +1175,16 @@ if PATH="$FAILING_SYNC_DIR:$PATH" \
    GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
    GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
     promote_appimage_release \
-        "$THIRD_APPIMAGE" "$THIRD_MANIFEST" "$FAKE_SBOM" \
+        "$FOURTH_APPIMAGE" "$FOURTH_MANIFEST" "$FAKE_SBOM" \
         "$RELEASE_LINK" \
         >/dev/null 2>&1; then
     fail "promotion reported success after a post-publication sync failure"
 fi
 [ "$(readlink "$RELEASE_LINK")" = "$PUBLISHED_TARGET" ] ||
     fail "late promotion failure did not restore the previous release"
-cmp -s "$SECOND_APPIMAGE" "$RELEASE_LINK/latest.AppImage" ||
+cmp -s "$THIRD_APPIMAGE" "$RELEASE_LINK/latest.AppImage" ||
     fail "late promotion failure changed latest"
-cmp -s "$FAKE_APPIMAGE" "$RELEASE_LINK/previous.AppImage" ||
+cmp -s "$SECOND_APPIMAGE" "$RELEASE_LINK/previous.AppImage" ||
     fail "late promotion failure changed previous"
 
 printf '# invalid after finalization\n' >>"$SECOND_APPIMAGE"

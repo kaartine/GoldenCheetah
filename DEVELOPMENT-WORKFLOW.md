@@ -88,8 +88,10 @@ acceptance.
 ## Integrity and provenance
 
 Git commit IDs identify files committed in a source snapshot. Do not duplicate
-those file hashes in a checked-in inventory. CI security policy compares
-candidate files directly with the trusted base-branch checkout.
+those file hashes in an asset inventory. CI trust-boundary inputs are the
+exception: their checked-in hashes are authorization records evaluated from the
+trusted base branch. Rotate them with the staged contract-only procedure in
+`doc/BUILD_ARTIFACT_AUTHENTICITY.md` before changing a protected input.
 
 Cryptographic hashes remain required at trust boundaries: downloaded
 dependencies, original external source archives, produced release artifacts,

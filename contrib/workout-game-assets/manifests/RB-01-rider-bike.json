@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/sources/WG_RiderBike.blend",
     "retrievedAt": "2026-09-13",
     "originalFileName": "WG_RiderBike.blend",
-    "originalSha256": "d17c8e93db9e3e7aade1cfb3056ffb3834da7af4282a63734994c9c56b5bbfc3",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/sources/WG_RiderBike.blend; contrib/workout-game-assets/blender/generate_rider_bike.py"

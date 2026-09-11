@@ -706,6 +706,20 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                     ("prepared_workout_library_import", requested),
                 )
 
+    def test_default_ui_selection_only_adds_mtb_when_validation_is_enabled(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertNotIn(
+                "create_edit_mtb_course_lifecycle",
+                UI.selected_ui_tests_from_environment(),
+            )
+        with mock.patch.dict(
+            os.environ, {"GC_UI_VALIDATE_MTB_COURSE": "1"}, clear=True
+        ):
+            self.assertIn(
+                "create_edit_mtb_course_lifecycle",
+                UI.selected_ui_tests_from_environment(),
+            )
+
     def test_ui_test_filter_rejects_evidence_without_game_lifecycle(self):
         for evidence in (
             {"GC_UI_REQUIRE_QUICK3D_EVIDENCE": "1"},
@@ -2280,6 +2294,63 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         self.assertEqual(summary["trainer_target_match_ratio"], 1.0)
         self.assertEqual(summary["trainer_target_recording_delay_ms"], 1000.0)
         self.assertEqual(summary["maximum_trainer_target_delta"], 0.0)
+
+    def test_erg_alignment_prioritizes_coverage_before_exact_single_match(self):
+        recording = [
+            {
+                "secs": seconds,
+                "cad": 80.0,
+                "hr": 140.0,
+                "km": 0.0,
+                "watts": watts,
+                "slope": 0.0,
+                "target": watts,
+                "virtualgear": 6.0,
+            }
+            for seconds, watts in ((0.0, 100.0), (1.0, 101.0), (4.0, 201.0))
+        ]
+        targets = [
+            {
+                "mode": "erg",
+                "value": value,
+                "workout_pos": position,
+                "devices": 1.0,
+            }
+            for position, value in ((0.0, 100.0), (3000.0, 200.0))
+        ]
+
+        summary = ANALYZER.reconcile_acceptance([], targets, recording)
+
+        self.assertEqual(summary["trainer_target_recording_delay_ms"], 1000.0)
+        self.assertEqual(summary["matched_trainer_targets"], 2)
+        self.assertEqual(summary["maximum_trainer_target_delta"], 1.0)
+
+    def test_device_count_uses_effective_coalesced_target(self):
+        recording = [{
+            "secs": 1.0,
+            "cad": 80.0,
+            "hr": 140.0,
+            "km": 0.0,
+            "watts": 180.0,
+            "slope": 0.0,
+            "target": 180.0,
+            "virtualgear": 6.0,
+        }]
+        targets = [
+            {
+                "mode": "erg",
+                "value": value,
+                "workout_pos": 0.0,
+                "devices": devices,
+            }
+            for value, devices in ((175.0, 1.0), (180.0, 0.0))
+        ]
+
+        summary = ANALYZER.reconcile_acceptance([], targets, recording)
+
+        self.assertEqual(summary["trainer_target_dispatches"], 2)
+        self.assertEqual(summary["effective_trainer_targets"], 1)
+        self.assertEqual(summary["trainer_targets_with_devices"], 0)
 
     def test_recording_match_ratio_ignores_rows_after_trace_window(self):
         trace = [{

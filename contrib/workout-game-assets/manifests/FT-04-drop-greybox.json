@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_drop.py",
     "retrievedAt": "2026-09-12",
     "originalFileName": "generate_drop.py",
-    "originalSha256": "e4522407ff281b4c9df1b34bea41eddeee0e685b7ee6ee141304ad3c35155f42",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_drop.py"

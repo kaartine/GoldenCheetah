@@ -1,5 +1,5 @@
 {
-  "format": "goldencheetah-workflow-policy-contract-3",
+  "format": "goldencheetah-workflow-policy-contract-2",
   "policy_workflow": {
     "base_branch": "master",
     "file": "workflow-policy.yml",
@@ -10,6 +10,16 @@
       "reopened",
       "synchronize",
       "ready_for_review"
+    ],
+    "run_sha256": {
+      "Install hash-locked YAML parser": "f344279c1bbe6e470e878471f1e35ebd2d6cbd03f7a451308b06dd68913ab008",
+      "Mark candidate policy pending": "b3b970ea62615147fdc954b8918e966ab6ea89e0100e4dd43312a36728b3dee7",
+      "Publish candidate policy result": "cce048f59e0dc8283cd17ee35b62e238f040216c4645af4b5c8080f7336ed89c",
+      "Validate candidate workflow data": "1d658ab6709085df6726884c4b559bac3c8212eb3e35470033c6ee21db58899d",
+      "Validate pull request identity": "005074f691361f84d94d5894a6d1bfeafd130bcab9a8f332750e2bff506353e5"
+    },
+    "semantic_sha256": [
+      "77ce3408c45f8b42ce2cdb88f99141c8fb3273f676ab58f96a5d25a16d706b6d"
     ],
     "status_context": "Workflow policy / immutable actions"
   },
@@ -47,6 +57,26 @@
       "path_filters": [
         "**"
       ],
+      "run_sha256": {
+        "linux": {
+          "Build and test Linux": "88014b46a8558f28f79941f01f8c9213f1802f145fa7d626ef9d24f44290e2bf"
+        },
+        "macos": {
+          "Build": "c0fe5fa25e9a5e765f68645d9e4947eb3da57b704bc7b5b93194a5c6589e3a9c",
+          "Test": "b6f66eaf761a33fba5b32bab8afb555dae4c92e0cf770272f3452af82539d0b7"
+        },
+        "windows": {
+          "Build and test Windows": "e495bd50922f61b682c613c5265f8f9606aeb1bae9cada9f884476515b85850b"
+        }
+      },
+      "semantic_sha256": [
+        "9ba1cccbb56262a3ce69297a228d20b653da7a8302c6c9310a04264c978fb1e2"
+      ],
+      "trusted_run_sha256": {
+        "report-final": "69e43e6387d779b8f1f330e83971285e707ce9fc32e0184c85421f61ee5f2dc6",
+        "report-pending": "2e6e782c289e5e4d8558e21fb5aedbdb9b5bade456cce9410cece95d8ead3528",
+        "validated-candidate": "3728505d131c5d3965a29775c65fcd37df98db36db13a739704fe3a389730b7b"
+      },
       "status_context": "Candidate CI / build"
     },
     "ridecache-removal-native.yml": {
@@ -109,6 +139,31 @@
         "unittests/FileIO/anchoredFilesystem/**",
         "unittests/Planning/**"
       ],
+      "run_sha256": {
+        "linux": {
+          "Build GUI-010 regression tests": "2d3339f8ae0ed12eb31180c963e27f9411c4903105d67db9e9c42cab1aa98066",
+          "Install build dependencies": "9af84aec1a8eaf73c2b16c017b10391358c3aaa68cdb34b6a50845fa6aa5dbef",
+          "Run GUI-010 regression tests": "3ab275fd752c586e71355ae346802fe46a5cb11c572c429c0df3762b7a7030e2"
+        },
+        "macos": {
+          "Build native activity tests": "ca8c684c4fc8c440b9ef8cda3a95a02cff096bf9e11b747fdda2053f55f80ade",
+          "Install build dependencies": "824a07cf2fd762162811584c2176b0eb9b6042f1bd0b88709e29043a3c98eedf",
+          "Run native activity tests": "7b3ae5f9e4493d525cdcd2e1f400dcfb8ed928068c69d9897ed8404d5ee9b12b"
+        },
+        "windows": {
+          "Build native activity tests": "e2cdf37fe232992db5628a9c3144d02458ba312c6f3ebd7c3ad81026fa88ae11",
+          "Install build dependencies": "f0ee39c9235b9e3293a76eb23cb24a2871f8bd78725ae7efa37a48e07f942f54",
+          "Run native activity tests": "acb346ff527137c0ead119b1fc2323cd7b03ea1abace9928aedeb2e81eb6598a"
+        }
+      },
+      "semantic_sha256": [
+        "a961ebb8417d9049639feade8983e4471009afafbefa8095782ecad2cdc16711"
+      ],
+      "trusted_run_sha256": {
+        "report-final": "219985e59ebf2b3acbead2bd83039235db90541f470df5455bee38a018154b4a",
+        "report-pending": "7fdaac4d43b62faecd06073412e726e0e1e1577761eefd5f522886f205b176f9",
+        "validated-candidate": "3728505d131c5d3965a29775c65fcd37df98db36db13a739704fe3a389730b7b"
+      },
       "status_context": "Candidate CI / native activity transactions"
     },
     "windows-durable-filesystem.yml": {
@@ -138,83 +193,101 @@
         "unittests/FileIO/anchoredFilesystem/**",
         "unittests/FileIO/durableFilesystem/**"
       ],
+      "run_sha256": {
+        "macos": {
+          "Build anchored filesystem test": "fc2d88253d645a8852c4b9c5959e20e1e7f0298119dd71df8e9d2f677219547f",
+          "Run anchored filesystem test": "59a295f37a09aebe98b20d583e1379c8000295636da90d7be48c0cc63989cfdb"
+        },
+        "windows": {
+          "Build test": "81d54b47a70c325158a1c2fe8d59900c3e7256538b218d2d6c87be1b407d2d21",
+          "Run test": "73e228ce8f2586b7fdfa810f8f35a32758a812899b81cadcbb9e269652a46cd1"
+        }
+      },
+      "semantic_sha256": [
+        "c8d6708d321fc8e40c210e8984a7a52a09b3356493f09f7ea8a5198ff0c33cab"
+      ],
+      "trusted_run_sha256": {
+        "report-final": "8804a32eb202cd995a43cdfc411990875ebaf66cd8021db9e1e89c9a10885939",
+        "report-pending": "d83f3ec1913070cda583c52b4695aa2ceda33a9d57eb443b2ec539a729fe347a",
+        "validated-candidate": "3728505d131c5d3965a29775c65fcd37df98db36db13a739704fe3a389730b7b"
+      },
       "status_context": "Candidate CI / durable and anchored filesystem"
     }
   },
-  "protected_files": [
-    ".devcontainer/Dockerfile",
-    ".devcontainer/aqt-requirements.lock",
-    ".devcontainer/gcconfig.pri",
-    ".devcontainer/install-verified-qt.py",
-    ".devcontainer/package-appimage.sh",
-    ".devcontainer/qt-6.8.3-linux-gcc64.lock",
-    ".devcontainer/ubuntu-snapshot.sources.list",
-    ".github/CODEOWNERS",
-    ".github/actions.lock",
-    ".github/master-ruleset.json",
-    ".github/scripts/DMG_README.md",
-    ".github/scripts/after_build.sh",
-    ".github/scripts/before_build.sh",
-    ".github/scripts/build.sh",
-    ".github/scripts/check-immutable-actions.py",
-    ".github/scripts/immutable-actions-requirements.lock",
-    ".github/scripts/install-pinned-homebrew.sh",
-    ".github/scripts/install.sh",
-    ".github/scripts/run-tests.py",
-    "appveyor.yml",
-    "appveyor/check-unconfigured-oauth.py",
-    "appveyor/linux/after_build.sh",
-    "appveyor/linux/apt-get-fail-closed.sh",
-    "appveyor/linux/before_build.sh",
-    "appveyor/linux/build-appimage-pass.sh",
-    "appveyor/linux/build-input-paths.sh",
-    "appveyor/linux/install.sh",
-    "appveyor/linux/package-appimage-pass.sh",
-    "appveyor/linux/reproduce-appimage.sh",
-    "appveyor/linux/ubuntu-snapshot.sources.list",
-    "appveyor/linux/verify-apt-snapshot-bootstrap.sh",
-    "appveyor/linux/verify-apt-snapshot.py",
-    "appveyor/macos/after_build.sh",
-    "appveyor/macos/before_build.sh",
-    "appveyor/macos/install.sh",
-    "appveyor/macos/run-build-regressions.sh",
-    "appveyor/macos/validate-payload.py",
-    "appveyor/safe-extract.py",
-    "appveyor/windows/after_build.ps1",
-    "appveyor/windows/before_build.ps1",
-    "appveyor/windows/install.ps1",
-    "appveyor/windows/run-build-regressions.ps1",
-    "appveyor/windows/vcpkg.json",
-    "src/Python/requirements-appimage.lock",
-    "src/Resources/linux/AppImagePackagingSupport.sh",
-    "src/Resources/linux/MakeAppImageQt6.sh",
-    "src/Resources/linux/capture-linuxdeployqt-transforms.py",
-    "src/Resources/linux/compute-build-input-identity.py",
-    "src/Resources/linux/generate-appimage-sbom.py",
-    "src/Resources/linux/generate-runtime-provenance.py",
-    "src/Resources/linux/normalize-embedded-python.py",
-    "src/Resources/linux/read-appimage-offset.py",
-    "src/Resources/linux/verify-appimage-payload.py",
-    "src/Resources/win32/GC3.8-Master-W64-QT6.nsi",
-    "unittests/Build/appImagePackaging/appImagePackaging.pro",
-    "unittests/Build/appImagePackaging/testAppImagePackaging.sh",
-    "unittests/Build/appImagePackaging/testAptSnapshot.py",
-    "unittests/Build/appImagePackaging/testCiReleaseGates.sh",
-    "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh",
-    "unittests/Build/appImagePackaging/testGeneratedSecrets.ps1",
-    "unittests/Build/appImagePackaging/testImmutableActions.py",
-    "unittests/Build/appImagePackaging/testMacOSPackaging.py",
-    "unittests/Build/appImagePackaging/testReleaseHardening.py",
-    "unittests/Build/appImagePackaging/testSafeExtraction.py",
-    "unittests/Build/appImagePackaging/testSbomProvenance.py",
-    "unittests/Build/appImagePackaging/testUnconfiguredOAuthGate.py",
-    "unittests/Build/appImagePackaging/testVerifiedQtArchives.py",
-    "unittests/Build/appImagePackaging/testWindowsOpenSsl.py",
-    "unittests/Build/appImagePackaging/testWindowsPackaging.ps1",
-    "unittests/Build/ciTestRunner/ciTestRunner.pro",
-    "unittests/Build/ciTestRunner/testCiTestRunner.py",
-    "unittests/ci-required-tests.txt",
-    "unittests/unittests.pri.in",
-    "unittests/unittests.pro"
-  ]
+  "protected_files": {
+    ".devcontainer/Dockerfile": "2a3845e14a794b8add72932ad9f69e24756a684a68c8d23512df6f34874bd29e",
+    ".devcontainer/aqt-requirements.lock": "998f801a3be4edb22d47a9dd8243fbebd1c38357fa2bea4492a8fe6506458f1f",
+    ".devcontainer/gcconfig.pri": "a64b6fac25788d43cc3d7d2d018adf9deaa73e32383011894d1f92dce650ab30",
+    ".devcontainer/install-verified-qt.py": "86bc2ffb5a6d76e6c8b4fafb96a4e798a24063198929e9aa1ba44f8069125ec0",
+    ".devcontainer/package-appimage.sh": "7c5705c415aea513ef80e99b7fe12022e7e21b8b21b365c01c1d69411c942764",
+    ".devcontainer/qt-6.8.3-linux-gcc64.lock": "d46fb86de46322095180c3ae70f6d553799de5784cbc8671ef5e1915c7f84461",
+    ".devcontainer/ubuntu-snapshot.sources.list": "955498b3465f476535b1f94b956155dc15e20b6e3845a8df0d74bced813f674d",
+    ".github/CODEOWNERS": "d278ac997d09ac4a9b23b48e500c42050a41dea9cdf17711a2d417a7e204e830",
+    ".github/actions.lock": "c2cb267618e6b2587d3e2ac5ace498ce2e64f44eba1712e4bdfa6aa14a71c89b",
+    ".github/master-ruleset.json": "a2fa83e9a50edcec8bad3730815f12456b8d0cc6b1809035d64109fc74ba5678",
+    ".github/scripts/DMG_README.md": "420a5a78c7f82d62ecacd446572fa61040c00959cb86d365b849e648b76d20f6",
+    ".github/scripts/after_build.sh": "aced87f919c9f81ca7a97a33dd110d029adf0e7dbed3773635c49b82d38f12fd",
+    ".github/scripts/before_build.sh": "013982f40ac27e626b8df52f1e8fc043f96cc47ce0afcd5e5ae7982c9923a4c2",
+    ".github/scripts/build.sh": "7d61d8a3402db4f553ae610ca8efbd774d93f127156ee4bc7afc21c1326bd855",
+    ".github/scripts/check-immutable-actions.py": "49a91c7331884e88ec54ade9917f8116722933b020c96cfbba5cba6504d64192",
+    ".github/scripts/immutable-actions-requirements.lock": "f4eb4eb9e1a67e2ac46d760f7f364f81319b6af5467b5404ec82a29a0d84bf6e",
+    ".github/scripts/install-pinned-homebrew.sh": "16a919842b9bcffff01146e3d46a674b1672a5504ecdf57050b564f6aa60b874",
+    ".github/scripts/install.sh": "3701459000ce3731f450d101316e3143471cf2623bd8aab95da6d442d34ce236",
+    ".github/scripts/run-tests.py": "83492fcac9b7394d147ead454cb57d4f13ccaf636f3fea5859fee46f9d960923",
+    "appveyor.yml": "3aa901e6f97e26f9c3aacc899dbaf7c1de809b4ddff657c5fa1d47af7e341554",
+    "appveyor/check-unconfigured-oauth.py": "bb9573527b3d3b807c66c731d7556d9734b0959b0aded11d9a235846e2aa06b7",
+    "appveyor/linux/after_build.sh": "52cacd13fa2841a21762fed76d903f4ea21d2c2fcf2e1252acb939f78943dbdc",
+    "appveyor/linux/apt-get-fail-closed.sh": "4e88e13665b2dbe3d04da5df313bc12042547af95724db15cf42cb286d835a27",
+    "appveyor/linux/before_build.sh": "26feda72bfb3a18875738dbd77b697f669c978e3dd74b8b436ea87b25ab82fb7",
+    "appveyor/linux/build-appimage-pass.sh": "912b3a7cb11f076424d6735b6bfaf27bddf02fab6df111fdf0000994d3ea0d94",
+    "appveyor/linux/build-input-paths.sh": "7c3cf8a0c1e9b32c882aeb1072d8a1a39837700d3e8fbe0d60c36efb2c3d9b5c",
+    "appveyor/linux/install.sh": "98645a9ce1b35eb41d8921bc3a9c3b5367246d2c2c4b68e61f41dc6d3de8c2c0",
+    "appveyor/linux/package-appimage-pass.sh": "19e982c009e52c0365ff33e7075d2c8d7bee429fa11bd62b8762d1e6ea48da28",
+    "appveyor/linux/reproduce-appimage.sh": "1e8af63bf5be3073e8e32a89e67a38c2d87a45dae0db8f7966ebd0a5d7d59645",
+    "appveyor/linux/ubuntu-snapshot.sources.list": "090781d92edbdda63f40316d22859542961c91f927f469e0cf5421503ccddae1",
+    "appveyor/linux/verify-apt-snapshot-bootstrap.sh": "bc46556b890f703a1a63c7ef3a988504f87aef07f6a88264b33f73c16bb262bd",
+    "appveyor/linux/verify-apt-snapshot.py": "6d4d551f17cd742a2ce49f1dd3ac823f57fd2386064ca7a71dce14da0f93894f",
+    "appveyor/macos/after_build.sh": "39d9ec210d1eff8ce6c08bc04f91423e2318951aab636da6ec57306dbcb0d42f",
+    "appveyor/macos/before_build.sh": "0718221688aff0944be0d107351ff9b65066f093bcd96fc642fe04db7acbf113",
+    "appveyor/macos/install.sh": "a9510b3f0a251b36ed61c9d09734014d0f6e4852268e67bd84af892ad9978079",
+    "appveyor/macos/run-build-regressions.sh": "a60fe00b301f0fee1b95d948d97c54cdad2dd2b75b32448c323895a2ebb9488a",
+    "appveyor/macos/validate-payload.py": "7630d708e86a84a73e34235ecc08090ff2b3cb00252906bb2b8786272848073d",
+    "appveyor/safe-extract.py": "66cf455f5656d2a6442b8332d7c67edb5ccea3e0587bb5e34913ea0fd6ccec28",
+    "appveyor/windows/after_build.ps1": "520d62cb13d535509488abe6a2dcd97e85db700587a2f50422f064204a0bcd1d",
+    "appveyor/windows/before_build.ps1": "5f9d9787ff7388503060269e700e6b1d22301637848e1a30d2a41664202af4f1",
+    "appveyor/windows/install.ps1": "d9ef29b46a3c2462edad553fcc338e3c6d57808b3267cc542088023cb7a7561d",
+    "appveyor/windows/run-build-regressions.ps1": "7375ad60bf3aba53a9ec14bcad43f06516c026efbd4b3ad32c63c4daa28c6995",
+    "appveyor/windows/vcpkg.json": "b4af642460ca2549fd7b698e5fa2f96bd6456eee729d73e47adadd8fcb751238",
+    "src/Python/requirements-appimage.lock": "7b8c9bb16c8dddbd26352e97650b5313641c7ea71740ba62e70e7c6be7c4883b",
+    "src/Resources/linux/AppImagePackagingSupport.sh": "abe3ed06c231714e443624be85145afef852911ed034309241fa897a10118ff3",
+    "src/Resources/linux/MakeAppImageQt6.sh": "100c84b9e2ec734328f07b54f5eb48ad61169a9a505e310c738bce3c4cbbefd5",
+    "src/Resources/linux/capture-linuxdeployqt-transforms.py": "c02aebb393cc4a04539674046b22e2510f7c708ce2d3b19a37bbf8d6beb565f9",
+    "src/Resources/linux/compute-build-input-identity.py": "8f22ce057dd6b5756362266a16d8f8862ae543e718c0bf47d8c0e4106f270dc3",
+    "src/Resources/linux/generate-appimage-sbom.py": "e4fcac7cd16169ed9fb4253888004bec357b29f3d7ea07bd590feae1d7c35fdd",
+    "src/Resources/linux/generate-runtime-provenance.py": "57c46aea0aba260070c8bc5962d30d26a8bd4cfddca363f84dbf97b19efa7cea",
+    "src/Resources/linux/normalize-embedded-python.py": "81ad8b7764b3ffcd24e2aee3c67592bd68f0648543ae3f4d449674aac979231b",
+    "src/Resources/linux/read-appimage-offset.py": "11c9b09ba2336d466f0fdac04fe92781edd82de84f1150de250cceee085edad9",
+    "src/Resources/linux/verify-appimage-payload.py": "0fe778c44054425e6732eb3235ed5393469b5bd7cbf5e7058e1720afb987804b",
+    "src/Resources/win32/GC3.8-Master-W64-QT6.nsi": "faa9df078f3cce406b1eaf7188c24bc2c8a288958207af55d052f932cefcccde",
+    "unittests/Build/appImagePackaging/appImagePackaging.pro": "cfe1447304665c49477eb2c96660eb31f88e254d7a2f8f9fc444cec884bb8a52",
+    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "4f50b1b44978e66525523dbf2085b7e1ff58c47f94661cd58bbd51b3ad2eb49a",
+    "unittests/Build/appImagePackaging/testAptSnapshot.py": "5a22e82ade11811ce80788400dcdeb60e349f3ba4390f54f87d5221097eef454",
+    "unittests/Build/appImagePackaging/testCiReleaseGates.sh": "f27ad24e7a34a857a44e7cb6047bf3e34c99217add327b17a41e8a52cdc24172",
+    "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "2f14458503e751bc33f284b43d1de13450fa9cfd350ad2866d88dd248e19bc3c",
+    "unittests/Build/appImagePackaging/testGeneratedSecrets.ps1": "c4903413f869dcf2c74b8e4adc65f2f6537e38885be09e2f6abe7a921514cb58",
+    "unittests/Build/appImagePackaging/testImmutableActions.py": "8f27a99d910fce19867176e06a3abd69345b515c14a86f9425c0ab3789cb2992",
+    "unittests/Build/appImagePackaging/testMacOSPackaging.py": "151aaf9cfb9ef12483c5eb5f67ebd2aadb99a70410804e5ef71b4194a5810b04",
+    "unittests/Build/appImagePackaging/testReleaseHardening.py": "560acd29edae07bb92ae184a15eab4dcf5e56247b9b1644d9c54958f3bb0cca8",
+    "unittests/Build/appImagePackaging/testSafeExtraction.py": "b4acb441339418f82b9e5fc253cf25864338f41e99d0dc77aa2d798dc84993c2",
+    "unittests/Build/appImagePackaging/testSbomProvenance.py": "7cc6ea94792397065c1b7f170aa338c743b41ecfe11318371eb2cf7d97c006a7",
+    "unittests/Build/appImagePackaging/testUnconfiguredOAuthGate.py": "f3d79d5c750db0baf9bace5c86459de59421c248ae61116c7f7f2b3a3a04749f",
+    "unittests/Build/appImagePackaging/testVerifiedQtArchives.py": "9c5dbf4f13b6dae0067c3d739c0ac7614b63a9c3cc742c2626b573018c880812",
+    "unittests/Build/appImagePackaging/testWindowsOpenSsl.py": "a96db29f62a16a6566bef53a5b4cad031ec6a1a0ab20a8a344509d0d5a75502d",
+    "unittests/Build/appImagePackaging/testWindowsPackaging.ps1": "6fc97e5353b278f573e3d5f555d610e0d0e10bd58f4c3bccbee055670d15d06f",
+    "unittests/Build/ciTestRunner/ciTestRunner.pro": "2f0afcc5fea392caf3c728960171159afbe1464404a30e9da65256968a284234",
+    "unittests/Build/ciTestRunner/testCiTestRunner.py": "e04e03bc3482957665a4cabe31b4f2412deb6e4a4669296b47472276685b05d2",
+    "unittests/ci-required-tests.txt": "f321418794c87b076616507f86c348028fa3a3b2509a243bed6319e5c45f9504",
+    "unittests/unittests.pri.in": "58c1673c4ed201bb91b0c82375265dfa10011c3401f9529c59bd5ef4691ca69d",
+    "unittests/unittests.pro": "8b72b5ffe97987903fe6ad1524bdffc87da324428b9314976a95079dfcb82b77"
+  }
 }

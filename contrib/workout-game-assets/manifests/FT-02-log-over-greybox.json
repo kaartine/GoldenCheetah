@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_log_over.py",
     "retrievedAt": "2026-08-25",
     "originalFileName": "generate_log_over.py",
-    "originalSha256": "dbd52f0310e120d5a8be1584b0d7a8e8d1b3a4e372e8edda1584a9d9f658a88e",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_log_over.py"
