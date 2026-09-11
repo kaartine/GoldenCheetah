@@ -33,123 +33,99 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
-      "purpose": "source",
-      "sha256": "c8df898b0cdc6c3a5ede4e6cd573b070891febdb24bd30589f18997886eaee3a"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_forest_floor_prop_audit.py",
-      "purpose": "source",
-      "sha256": "44c34ae43bc26159ec9a9498bbb3c4183090cb2d4bf37ac54a87c3c604829a29"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_ForestFloorProps.glb",
-      "purpose": "intermediate",
-      "sha256": "2a9ca9bfd23694267f3659ce620eb4186890d088916429bd7a556653824e54bf"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/WorkoutGameForestFloorProp.qml",
-      "purpose": "runtime",
-      "sha256": "93d3b7d1d24082a766b08ca899c8fd4c1ea9cbcbcf37123e95418ff794248406"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DeadwoodFallen_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "4aca93353a9beec16e38123f5b1d636174e8cdf16d8a99d882f774cdf10f2cb8"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_GraniteLow_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "fe3db41568ca6d10b7c2d8fb95e59472a0a2490bdf9c2d7f02a03f3aefaf1682"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_GranitePair_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "2d84445a96cb03853ba082489196db27cbaa6f36dd6b65e332a155e38025354a"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_GraniteSlab_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "b074d87c6824fd89ee1140912fa7046f426955ca2077e5d87adc2f48de7792b0"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_GraniteUpright_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "0bd8ca0b142282bf70aa22829800ab3fb644a01254c00b9c1a8d9f7cd1faccfd"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_StumpRooted_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "37b0e2e31b7cb3d90093dfa20ebb5536de1a9b96e9959802dccc5fb8411e9448"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_LeafySapling_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "1f523fc2912c3374b647cbf7eb3c3de4444a723f5515bed44d4facdfd5479a0d"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_MushroomCluster_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "376dcb5e23d9cf15c2c80c3cb08d3dcf699dfa145f801fe4fd007daed078bc9f"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_PineSapling_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "2b56a3845545ebd80df4d9c1d5d18dca9df72a5c57d118db6a60b4dd40abcc6f"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_TwigPile_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "81214e9e21fbb1e052390c712274f9feae1c1b1769e547c6c5852705ed236221"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_UnderstoryBilberry_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "84a76c9f50e218126d82cb77abdf2d609d28ca252d8b2a0244690141f9da12f7"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_UnderstoryFern_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "97ba3104e264c55519e8bae42496613259444da845b1300c0aab22bb32cb4be6"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_UnderstoryGrass_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "e23a82845f28159aaaa03d6bff4497e7bc01b12fc81f439381ac3236addfa16b"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_UnderstoryHeather_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "9c6ed05e82f7987040996df84f296b697f06942a7df3ace3de2304e4fa3900f6"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_UnderstoryShrub_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "b7093e4e0046df35616915288436d20004b25b10269715cf3a559c21fb7dc424"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_WildflowerPatch_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "dc723f6a10c12873de928bf85e65caff0f193aad35c323db20bfe883e21fcbfa"
+      "purpose": "runtime"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-audit.json",
-      "purpose": "reference",
-      "sha256": "6d78bb08489a83215157c48544d04ecb4a98102b22e922e6ce064533a39fdb8b"
+      "purpose": "reference"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-front.png",
-      "purpose": "preview",
-      "sha256": "b3845dd6569a61e72bf7aa5ce64c7f85ef4b2a3ae780050e4a7c93f327952e92"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-left-three-quarter.png",
-      "purpose": "preview",
-      "sha256": "1e094c8b0b43dee482df0bb1bfc774cbcf685dd29c880dab3f71207f5a0858a2"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-rear-three-quarter.png",
-      "purpose": "preview",
-      "sha256": "415165dcc4434ca656a9ffcb1362c67740dcbc361b48196c721d696763e368e1"
+      "purpose": "preview"
     }
   ],
   "processing": {
@@ -171,9 +147,9 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 91624,
+    "glbBytes": 83352,
     "trianglesLod0": 656,
-    "materials": 1,
+    "materials": 4,
     "textureBytes": 0,
     "nodes": [
       "GEO_DeadwoodFallen_LOD0",
@@ -227,7 +203,7 @@
     "budgets": {
       "maxGlbBytes": 98304,
       "maxTrianglesLod0": 720,
-      "maxMaterials": 1,
+      "maxMaterials": 4,
       "maxTextureBytes": 0
     }
   },

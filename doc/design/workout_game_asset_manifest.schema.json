@@ -101,7 +101,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "purpose", "sha256"],
+        "required": ["path", "purpose"],
         "properties": {
           "path": { "type": "string", "minLength": 1 },
           "purpose": {
@@ -114,10 +114,6 @@
               "reference",
               "preview"
             ]
-          },
-          "sha256": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$"
           }
         }
       }

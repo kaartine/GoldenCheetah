@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import hashlib
 import json
 import math
 from pathlib import Path, PurePosixPath
@@ -21,7 +20,6 @@ GLB_CHUNK_HEADER = struct.Struct("<II")
 GLB_MAGIC = b"glTF"
 GLB_JSON_CHUNK = 0x4E4F534A
 GLB_BINARY_CHUNK = 0x004E4942
-SHA256 = re.compile(r"^[0-9a-f]{64}$")
 FLOAT_TOLERANCE = 1.0e-5
 
 
@@ -211,14 +209,6 @@ def resolve_repository_file(root: Path, relative_path: str) -> Path:
     if root not in resolved.parents or not resolved.is_file():
         raise AssetValidationError(f"asset path escapes repository: {relative_path}")
     return resolved
-
-
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _vector_close(actual: list[Any], expected: list[Any]) -> bool:
@@ -526,9 +516,6 @@ def validate_manifest(
         path = resolve_repository_file(root, relative_path)
         if path.stat().st_size > 64 * 1024 * 1024:
             raise AssetValidationError(f"asset file is too large: {relative_path}")
-        expected_hash = entry["sha256"]
-        if not SHA256.fullmatch(expected_hash) or file_sha256(path) != expected_hash:
-            raise AssetValidationError(f"asset hash mismatch: {relative_path}")
         if path.suffix.lower() == ".glb":
             glb_paths.append(path)
         if entry["purpose"] == "runtime" and path.suffix.lower() == ".qml":

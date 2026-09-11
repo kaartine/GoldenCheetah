@@ -23,30 +23,30 @@
     "decision": "allow",
     "policyVersion": "2026-08-25",
     "archivedLicensePath": "COPYING",
-    "distributionScopes": ["source", "appimage", "screenshots-video"],
+    "distributionScopes": [
+      "source",
+      "appimage",
+      "screenshots-video"
+    ],
     "conditions": [],
     "reviewNotes": "Project-authored deterministic geometry with no external model, image or texture."
   },
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_distant_ridges.py",
-      "purpose": "source",
-      "sha256": "aa7a17c689ff7685192d8e54d1439b6ca46638e2648c1bfa16d43a0c3996af0c"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_DistantRidges.glb",
-      "purpose": "intermediate",
-      "sha256": "e9875d3a8180c444d465f934e7260052aa28a3256b7d2d2be651c27658b840e5"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/WorkoutGameDistantTerrain.qml",
-      "purpose": "runtime",
-      "sha256": "82aa1623f674b4d9f5356bc7bfb6378a0c2fe1aad1f3ceff450cb0b433fb1734"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DistantRidges_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "21b10c88b4b871204f15a28839845f793234a3d32077322a0b573981a5fc2266"
+      "purpose": "runtime"
     }
   ],
   "processing": {
@@ -79,8 +79,16 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [-240.0, -1.7999999523162842, -240.0],
-      "maximum": [240.0, 20.884323120117188, 240.0]
+      "minimum": [
+        -240.0,
+        -1.7999999523162842,
+        -240.0
+      ],
+      "maximum": [
+        240.0,
+        20.884323120117188,
+        240.0
+      ]
     },
     "budgets": {
       "maxGlbBytes": 32768,

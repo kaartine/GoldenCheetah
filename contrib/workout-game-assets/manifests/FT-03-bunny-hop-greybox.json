@@ -34,23 +34,19 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_bunny_hop.py",
-      "purpose": "source",
-      "sha256": "51037867ed42e1d11dadd38d117be308544e1c29d774e3680d70f0eb29b9ed26"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_BunnyHop_Greybox.glb",
-      "purpose": "intermediate",
-      "sha256": "1bbc3de287f1c1862bc55ed10486da0e07f792bb29cef385cab9204a60c4ceda"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/assets/Wg_BunnyHop_Greybox.qml",
-      "purpose": "runtime",
-      "sha256": "94e0df9995c6c5bcca8a42f057c936af5ce42b2670165ad3114a5cda1a28d2a3"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "3e93f88b83a7f896a5dac017893131b8e58bff79b151c5be91ed8f704fa76b55"
+      "purpose": "runtime"
     }
   ],
   "processing": {
@@ -89,18 +85,34 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [-1.2200000286102295, 0.0, 1.25],
-      "maximum": [1.2200000286102295, 0.20000000298023224, 2.3299999237060547]
+      "minimum": [
+        -1.2200000286102295,
+        0.0,
+        1.25
+      ],
+      "maximum": [
+        1.2200000286102295,
+        0.20000000298023224,
+        2.3299999237060547
+      ]
     },
     "sockets": [
       {
         "name": "SOCKET_IN",
-        "positionMeters": [0.0, 0.0, 0.0],
+        "positionMeters": [
+          0.0,
+          0.0,
+          0.0
+        ],
         "halfWidthMeters": 0.68
       },
       {
         "name": "SOCKET_OUT",
-        "positionMeters": [0.0, 0.0, 3.58],
+        "positionMeters": [
+          0.0,
+          0.0,
+          3.58
+        ],
         "halfWidthMeters": 0.68
       }
     ],
