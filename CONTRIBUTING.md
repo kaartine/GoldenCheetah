@@ -10,6 +10,10 @@
 
 ## How to contribute to GoldenCheetah
 
+When several developers or automation workers contribute concurrently, follow
+the repository's [multi-developer workflow](DEVELOPMENT-WORKFLOW.md) for branch
+ownership, worktrees, layered testing, artifact retention and integration.
+
 #### **Did you find a bug?**
 
 * **Ensure the bug was not already reported** by searching on GitHub under [Issues](https://github.com/GoldenCheetah/GoldenCheetah/issues).
