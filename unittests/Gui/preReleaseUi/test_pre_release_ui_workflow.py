@@ -391,7 +391,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         workflow._select_preset("ride-first")
 
         driver.find.assert_called_once_with(
-            "Ride first", showing=True, timeout=8.0
+            "Ride first", showing=True, timeout=30.0
         )
         driver.click.assert_called_once_with(control)
         driver.checked.assert_called_with(control)
@@ -521,7 +521,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             )
             workflow.activate_stop_training.assert_called_once_with()
             driver.find.assert_called_once_with(
-                "Cancel", "push button", showing=True, timeout=8.0
+                "Cancel", "push button", showing=True, timeout=30.0
             )
             driver.activate.assert_called_once_with(cancel)
             driver.wait_file_removed.assert_called_once_with(recording)
@@ -589,7 +589,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                         "Continue Training",
                         "push button",
                         showing=True,
-                        timeout=8.0,
+                        timeout=30.0,
                     ),
                 ],
             )

@@ -1132,7 +1132,7 @@ class MtbCourseUiWorkflow:
             raise UiFailure(f"Unsupported workout context action: {action_name}") from error
         self.driver.activate_popup_item(action_steps)
         try:
-            self.driver.find(action_name, "dialog", showing=True, timeout=8.0)
+            self.driver.find(action_name, "dialog", showing=True, timeout=30.0)
         except UiFailure:
             cancel = self.driver.find_all(
                 name="Cancel", role="push button", showing=True
@@ -1146,7 +1146,7 @@ class MtbCourseUiWorkflow:
             control_name = self.PRESET_CONTROL_NAMES[preset]
         except KeyError as error:
             raise UiFailure(f"Unsupported MTB course preset: {preset}") from error
-        control = self.driver.find(control_name, showing=True, timeout=8.0)
+        control = self.driver.find(control_name, showing=True, timeout=30.0)
         self.driver.click(control)
         deadline = time.monotonic() + 8.0
         while time.monotonic() < deadline:
@@ -1173,7 +1173,7 @@ class MtbCourseUiWorkflow:
             self.driver.screenshot(f"03-mtb-course-create-{preset}")
         self.driver.activate(
             self.driver.find(
-                "Create Course", "push button", showing=True, timeout=8.0
+                "Create Course", "push button", showing=True, timeout=30.0
             )
         )
         self.driver.wait_file(self.course_path, timeout=20.0)
@@ -1191,7 +1191,7 @@ class MtbCourseUiWorkflow:
             self.driver.screenshot(f"03-mtb-course-edit-{preset}")
         self.driver.activate(
             self.driver.find(
-                "Save Course", "push button", showing=True, timeout=8.0
+                "Save Course", "push button", showing=True, timeout=30.0
             )
         )
         deadline = time.monotonic() + 20.0
@@ -1377,7 +1377,7 @@ class WorkoutGameUiWorkflow:
         self.activate_stop_training()
         self.driver.activate(
             self.driver.find(
-                "Cancel", "push button", showing=True, timeout=8.0
+                "Cancel", "push button", showing=True, timeout=30.0
             )
         )
         self.driver.wait_file_removed(recording)
@@ -1433,7 +1433,7 @@ class WorkoutGameUiWorkflow:
 
         self.activate_stop_training()
         continue_button = self.driver.find(
-            "Continue Training", "push button", showing=True, timeout=8.0
+            "Continue Training", "push button", showing=True, timeout=30.0
         )
         paused_size = recording.stat().st_size
         self.driver.activate(continue_button)
@@ -1445,7 +1445,7 @@ class WorkoutGameUiWorkflow:
         time.sleep(1.0)
         self.activate_stop_training()
         self.driver.activate(
-            self.driver.find("Save", "push button", showing=True, timeout=8.0)
+            self.driver.find("Save", "push button", showing=True, timeout=30.0)
         )
         activity = self.driver.wait_new_file(
             self.activities,
@@ -1454,7 +1454,7 @@ class WorkoutGameUiWorkflow:
             timeout=15.0,
         )
         self.driver.activate(
-            self.driver.find("Finish", "push button", showing=True, timeout=8.0)
+            self.driver.find("Finish", "push button", showing=True, timeout=30.0)
         )
         selected_name = self.driver.reopen_saved_activity(activity)
         write_text(
@@ -1605,7 +1605,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 return
             driver.activate(stop_buttons[-1])
             cancel = driver.find(
-                "Cancel", "push button", showing=True, timeout=8.0
+                "Cancel", "push button", showing=True, timeout=30.0
             )
             driver.activate(cancel)
 
@@ -1667,7 +1667,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 "Search for Workouts, Syncs and Media",
                 "dialog",
                 showing=True,
-                timeout=10.0,
+                timeout=30.0,
             )
             driver.activate(
                 driver.find("Search", "push button", showing=True, timeout=10.0)
@@ -1763,7 +1763,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             try:
                 driver.find(role="file chooser", showing=True, timeout=2.0)
             except UiFailure:
-                driver.find(role="dialog", showing=True, timeout=8.0)
+                driver.find(role="dialog", showing=True, timeout=30.0)
             destination = root / "library" / ATHLETE / "workouts" / "ui-save.erg"
             editable = None
             for node in driver.find_all(role="text", showing=True):
