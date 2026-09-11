@@ -677,6 +677,63 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must be 0 or 1"):
                 UI.skip_save_as_from_environment()
 
+    def test_ui_test_filter_is_validated_and_canonicalized(self):
+        with mock.patch.dict(
+            os.environ,
+            {"GC_UI_TESTS": "graceful_shutdown_request,view_navigation"},
+            clear=True,
+        ):
+            self.assertEqual(
+                UI.selected_ui_tests_from_environment(),
+                ("view_navigation", "graceful_shutdown_request"),
+            )
+        with mock.patch.dict(
+            os.environ, {"GC_UI_TESTS": "missing_test"}, clear=True
+        ):
+            with self.assertRaisesRegex(ValueError, "unknown tests"):
+                UI.selected_ui_tests_from_environment()
+
+    def test_ui_test_filter_adds_workout_import_dependencies(self):
+        for requested in (
+            "create_edit_mtb_course_lifecycle",
+            "workout_game_training_lifecycle",
+        ):
+            with self.subTest(requested=requested), mock.patch.dict(
+                os.environ, {"GC_UI_TESTS": requested}, clear=True
+            ):
+                self.assertEqual(
+                    UI.selected_ui_tests_from_environment(),
+                    ("prepared_workout_library_import", requested),
+                )
+
+    def test_ui_test_filter_rejects_evidence_without_game_lifecycle(self):
+        for evidence in (
+            {"GC_UI_REQUIRE_QUICK3D_EVIDENCE": "1"},
+            {"GC_UI_VALIDATE_TRAINER_ACCEPTANCE": "1"},
+        ):
+            environment = {"GC_UI_TESTS": "graceful_shutdown_request", **evidence}
+            with self.subTest(evidence=evidence), mock.patch.dict(
+                os.environ, environment, clear=True
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "workout_game_training_lifecycle"
+                ):
+                    UI.selected_ui_tests_from_environment()
+
+    def test_ui_test_filter_requires_mtb_lifecycle_for_mtb_validation(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GC_UI_TESTS": "workout_game_training_lifecycle",
+                "GC_UI_VALIDATE_MTB_COURSE": "1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "create_edit_mtb_course_lifecycle"
+            ):
+                UI.selected_ui_tests_from_environment()
+
     def test_trainer_acceptance_gate_is_explicit(self):
         with mock.patch.dict(
             os.environ, {"GC_UI_VALIDATE_TRAINER_ACCEPTANCE": "1"}
@@ -978,6 +1035,20 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         }
 
         self.assertTrue(ANALYZER.validate_cold_start(summary))
+        self.assertEqual(
+            ANALYZER.validate_cold_start(
+                summary, enforce_frame_budget=False
+            ),
+            [],
+        )
+        summary.update({
+            "cold_start_first_swap_ms": 140.0,
+            "cold_start_first_visual_ms": 180.0,
+            "cold_p99_frame_ms": 35.0,
+            "cold_max_frame_ms": 75.0,
+            "cold_consecutive_late": 5,
+            "cold_visual_stall_ms": 80.0,
+        })
         self.assertEqual(
             ANALYZER.validate_cold_start(
                 summary, enforce_frame_budget=False
@@ -2134,6 +2205,80 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
 
         summary = ANALYZER.reconcile_acceptance([], targets, recording)
 
+        self.assertEqual(summary["maximum_trainer_target_delta"], 0.0)
+
+    def test_erg_alignment_selects_session_delay_and_ignores_pause_gap(self):
+        recording = [
+            {
+                "secs": seconds,
+                "cad": 80.0,
+                "hr": 140.0,
+                "km": seconds * 0.005,
+                "watts": target,
+                "slope": 0.0,
+                "target": target,
+                "virtualgear": 6.0,
+            }
+            for seconds, target in (
+                (1.0, 152.0),
+                (2.0, 156.0),
+                (3.0, 160.0),
+                (12.0, 184.0),
+                (14.0, 158.0),
+                (15.0, 158.0),
+            )
+        ]
+        targets = [
+            {
+                "mode": "erg",
+                "value": value,
+                "workout_pos": position,
+                "devices": 1.0,
+            }
+            for position, value in (
+                (987.0, 156.0),
+                (1995.0, 160.0),
+                (10990.0, 184.0),
+                (11996.0, 164.0),
+                (12600.0, 158.0),
+                (14731.0, 158.0),
+            )
+        ]
+
+        summary = ANALYZER.reconcile_acceptance([], targets, recording)
+
+        self.assertEqual(summary["trainer_target_recording_delay_ms"], 1000.0)
+        self.assertEqual(summary["maximum_trainer_target_delta"], 0.0)
+        self.assertEqual(summary["matched_trainer_targets"], 5)
+
+    def test_erg_alignment_uses_latest_target_at_same_workout_position(self):
+        recording = [{
+            "secs": 3.0,
+            "cad": 85.0,
+            "hr": 140.0,
+            "km": 0.01,
+            "watts": 178.0,
+            "slope": 0.0,
+            "target": 178.0,
+            "virtualgear": 7.0,
+        }]
+        targets = [
+            {
+                "mode": "erg",
+                "value": value,
+                "workout_pos": 2121.0,
+                "devices": 1.0,
+            }
+            for value in (162.0, 178.0)
+        ]
+
+        summary = ANALYZER.reconcile_acceptance([], targets, recording)
+
+        self.assertEqual(summary["trainer_target_dispatches"], 2)
+        self.assertEqual(summary["effective_trainer_targets"], 1)
+        self.assertEqual(summary["matched_trainer_targets"], 1)
+        self.assertEqual(summary["trainer_target_match_ratio"], 1.0)
+        self.assertEqual(summary["trainer_target_recording_delay_ms"], 1000.0)
         self.assertEqual(summary["maximum_trainer_target_delta"], 0.0)
 
     def test_recording_match_ratio_ignores_rows_after_trace_window(self):

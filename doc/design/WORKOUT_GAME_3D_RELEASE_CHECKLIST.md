@@ -133,13 +133,14 @@ pixel-level clear-color hole checks.
 ### `PIPE-01` Approve asset rights and provenance
 
 - [x] Complete allow/conditional/reject license policy.
-- [x] Record exact source, author, license/version, attribution and hashes.
+- [x] Record exact source, author, license/version and attribution. Keep hashes
+  for original external inputs; Git identifies committed project files.
 - [x] Reject NC, ND, editorial, personal-use, marketplace-only and unclear use.
 - [x] Record all modification and conversion steps.
 
 **Tests:** validate every manifest against
 `workout_game_asset_manifest.schema.json`; fail packaging for missing,
-rejected, unhashed or unreviewed runtime assets.
+rejected or unreviewed runtime assets.
 
 **Done when:** every AppImage asset can be legally modified and redistributed
 and its original source can be reproduced.
@@ -182,7 +183,7 @@ sphere as a final visible rider, feature or hero-environment object.
 - [x] The current 9,856-byte GLB has 78 vertices and 96 triangles; Khronos
   glTF Validator 2.0.0-dev.3.10 reports zero errors, warnings, infos and hints.
 - [x] Two clean Blender invocations produce the same GLB SHA-256.
-- [x] Validate the manifest, file hashes, GLB policy and malformed fixtures in
+- [x] Validate the manifest, repository paths, GLB policy and malformed fixtures in
   the standard cross-platform unit-test inventory.
 - [x] Two Qt Balsam 6.8.3 conversions produce byte-identical QML and `.mesh`
   files; the production qrc loads and renders them in a real X11/OpenGL test.
@@ -205,7 +206,8 @@ sphere as a final visible rider, feature or hero-environment object.
 - [x] The project-authored log-over candidate is reproducible as a 5,764-byte,
   64-triangle, two-material GLB. Two Blender 4.0.2 and two Balsam 6.8.3 runs
   are byte-identical, Khronos validation reports no issues, and the manifest
-  records the exact source and runtime hashes. Its GLB contains only the
+  records the exact source and runtime paths. Git identifies those committed
+  files. Its GLB contains only the
   obstacle; common runtime trail, forest floor and branch geometry remain the
   sole ground meshes.
 
@@ -1252,8 +1254,9 @@ trainer A/B acceptance remains separately open under `REL-04`.
 **Current B1/B2 evidence (2026-09-03):** the required inventory includes
 `Train/workoutGameGapJumpLaunchWindow` and reconciles 173/173 projects. The
 final X11 inventory passed 172 projects and stopped only at the AppImage policy
-project because two protected inventory hashes were stale. After updating
-exactly those hashes, the complete AppImage project passes its reproducibility,
+project because the former protected-hash inventory was stale. CI policy now
+compares candidates directly with the trusted base snapshot. The complete
+AppImage project passes its reproducibility,
 SBOM, credential, immutable-action and private-OAuth gates without another
 source change. The twelve directly affected suites pass 386/386 under
 ASan/UBSan, with 34 expected opt-in renderer skips. This split-run evidence
@@ -1439,7 +1442,10 @@ The run exposed a test-analyzer clock-phase error rather than an application
 telemetry error: integer-second CSV samples can precede a nearby trace and ERG
 dispatch timer by roughly 100 ms at both edges of a target interval. Bounded
 target-state matching now reconciles only trace samples within 750 ms and ERG
-recording evidence within 1.25 seconds. Reanalysis matched all 24 recording
+recording evidence against the session's 0 or 1 second CSV phase. Consecutive
+dispatches at the same workout position use the last effective target, so a
+target superseded between integer-second samples is not treated as recordable.
+Reanalysis matched all 24 recording
 samples with 6 W maximum and 5 W p95 power disagreement and 0 W dispatched
 target disagreement. A regression covers both rising and falling target edges
 while existing persistent-disagreement tests remain active.

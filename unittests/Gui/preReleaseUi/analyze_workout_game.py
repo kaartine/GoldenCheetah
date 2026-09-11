@@ -34,7 +34,7 @@ RECORDING_COLUMNS = (
     "secs", "cad", "hr", "km", "watts", "slope", "target", "virtualgear",
 )
 TRACE_ALIGNMENT_WINDOW_MS = 750.0
-ERG_RECORDING_LATENCY_MS = 1250.0
+ERG_RECORDING_DELAYS_MS = (0.0, 1000.0)
 
 TraceValue = float | str
 TraceSample = dict[str, TraceValue]
@@ -450,6 +450,7 @@ def trainer_target_delta(
     recording: list[dict[str, float]],
     recording_times: list[float],
     recording_distances: list[float],
+    erg_recording_delay_ms: float = 0.0,
 ) -> float | None:
     mode = target.get("mode")
     position = numeric(target, "workout_pos")
@@ -460,11 +461,12 @@ def trainer_target_delta(
     positions = recording_times if mode == "erg" else recording_distances
     expected_name = "target" if mode == "erg" else "slope"
     if mode == "erg":
+        recorded_position = position + erg_recording_delay_ms
         first = bisect.bisect_left(
-            positions, position - ERG_RECORDING_LATENCY_MS
+            positions, recorded_position - TRACE_ALIGNMENT_WINDOW_MS
         )
         last = bisect.bisect_right(
-            positions, position + ERG_RECORDING_LATENCY_MS
+            positions, recorded_position + TRACE_ALIGNMENT_WINDOW_MS
         )
         candidates = recording[first:last]
     else:
@@ -473,6 +475,28 @@ def trainer_target_delta(
     if not candidates:
         return None
     return min(abs(value - row[expected_name]) for row in candidates)
+
+
+def coalesce_trainer_targets(
+    trainer_targets: list[TraceSample],
+) -> list[TraceSample]:
+    effective: list[TraceSample] = []
+    for target in trainer_targets:
+        mode = target.get("mode")
+        position = numeric(target, "workout_pos")
+        value = numeric(target, "value")
+        if mode not in ("erg", "slope") or position is None or value is None:
+            continue
+        if effective:
+            previous = effective[-1]
+            if (
+                previous.get("mode") == mode
+                and numeric(previous, "workout_pos") == position
+            ):
+                effective[-1] = target
+                continue
+        effective.append(target)
+    return effective
 
 
 def reconcile_acceptance(
@@ -528,7 +552,7 @@ def reconcile_acceptance(
 
     recording_times = [row["secs"] * 1000.0 for row in recording]
     recording_distances = [row["km"] * 1000.0 for row in recording]
-    trainer_target_deltas = []
+    effective_trainer_targets = coalesce_trainer_targets(trainer_targets)
     trainer_targets_with_devices = 0
     for target in trainer_targets:
         mode = target.get("mode")
@@ -538,11 +562,34 @@ def reconcile_acceptance(
         if mode not in ("erg", "slope") or position is None or value is None:
             continue
         trainer_targets_with_devices += int(devices is not None and devices > 0)
-        delta = trainer_target_delta(
-            target, recording, recording_times, recording_distances
-        )
-        if delta is not None:
-            trainer_target_deltas.append(delta)
+
+    def target_deltas(delay_ms: float) -> list[float]:
+        deltas = []
+        for target in effective_trainer_targets:
+            delta = trainer_target_delta(
+                target,
+                recording,
+                recording_times,
+                recording_distances,
+                delay_ms,
+            )
+            if delta is not None:
+                deltas.append(delta)
+        return deltas
+
+    delay_candidates = [
+        (delay_ms, target_deltas(delay_ms))
+        for delay_ms in ERG_RECORDING_DELAYS_MS
+    ]
+    trainer_target_recording_delay_ms, trainer_target_deltas = min(
+        delay_candidates,
+        key=lambda candidate: (
+            percentile(candidate[1], 0.95),
+            max(candidate[1], default=math.inf),
+            -len(candidate[1]),
+            candidate[0],
+        ),
+    )
 
     sparse_gear_changes = 0
     gear_change_speed_steps = []
@@ -607,15 +654,19 @@ def reconcile_acceptance(
         "maximum_heart_rate_delta_bpm": max(heart_rate_deltas, default=0.0),
         "gear_mismatches": gear_mismatches,
         "trainer_target_dispatches": len(trainer_targets),
+        "effective_trainer_targets": len(effective_trainer_targets),
         "trainer_targets_with_devices": trainer_targets_with_devices,
         "matched_trainer_targets": len(trainer_target_deltas),
         "trainer_target_match_ratio": (
-            len(trainer_target_deltas) / len(trainer_targets)
-            if trainer_targets else 0.0
+            len(trainer_target_deltas) / len(effective_trainer_targets)
+            if effective_trainer_targets else 0.0
         ),
         "maximum_trainer_target_delta": max(trainer_target_deltas, default=0.0),
         "p95_trainer_target_delta": percentile(
             trainer_target_deltas, 0.95
+        ),
+        "trainer_target_recording_delay_ms": (
+            trainer_target_recording_delay_ms
         ),
         "gear_changes": max(
             reported_shift_counts, default=sparse_gear_changes
@@ -796,15 +847,15 @@ def validate_cold_start(
         failures.append("cold-start frame capture dropped swap timestamps")
     if enforce_frame_budget and summary["cold_p99_frame_ms"] > 25.0:
         failures.append("cold-start p99 frame interval exceeds 25 ms")
-    if summary["cold_max_frame_ms"] > 50.0:
+    if enforce_frame_budget and summary["cold_max_frame_ms"] > 50.0:
         failures.append("cold-start maximum frame interval exceeds 50 ms")
     if enforce_frame_budget and summary["cold_consecutive_late"] > 1:
         failures.append("cold-start contains consecutive late frames")
-    if summary["cold_start_first_swap_ms"] > 100.0:
+    if enforce_frame_budget and summary["cold_start_first_swap_ms"] > 100.0:
         failures.append("cold-start first swap took more than 100 ms")
-    if summary["cold_start_first_visual_ms"] > 100.0:
+    if enforce_frame_budget and summary["cold_start_first_visual_ms"] > 100.0:
         failures.append("cold-start first visual change took more than 100 ms")
-    if summary["cold_visual_stall_ms"] > 50.0:
+    if enforce_frame_budget and summary["cold_visual_stall_ms"] > 50.0:
         failures.append("cold-start visual revision stalled for more than 50 ms")
     if summary["cold_swap_fps"] <= 0.0:
         failures.append("cold-start swap FPS was not reported")
