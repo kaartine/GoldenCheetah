@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/generate_surface_atlas.py",
     "retrievedAt": "2026-08-26",
     "originalFileName": "generate_surface_atlas.py",
-    "originalSha256": "7aad9dc0ee23ff9bd8d96768edf66e171fe002335aa9ffb8d8978ccb90facbcf",
     "generator": "Python standard library",
     "generatorVersion": "3.12",
     "promptOrScript": "contrib/workout-game-assets/generate_surface_atlas.py"

@@ -15,6 +15,7 @@
 #include "Train/WorkoutGameWorkoutAdapter.h"
 
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTest>
@@ -209,6 +210,64 @@ private slots:
                         >= workout.intervals.size());
                 const QJsonObject expected = contracts.value(
                             contractNames[mode]).toObject();
+                const WorkoutGameCourseModeContract modeContract =
+                        WorkoutGameCoursePrescription::contractFor(
+                            static_cast<WorkoutGameCoursePreset>(mode));
+                QCOMPARE(modeContract.maximumIntervalPowerErrorWatts,
+                         expected.value(QStringLiteral(
+                             "maximumIntervalPowerErrorWatts")).toDouble());
+                QCOMPARE(modeContract.maximumKeyEffortDurationErrorMs,
+                         expected.value(QStringLiteral(
+                             "maximumKeyEffortDurationErrorMs")).toInteger());
+                QCOMPARE(modeContract.minimumRecoveryRetention,
+                         expected.value(QStringLiteral(
+                             "minimumRecoveryRetention")).toDouble());
+                QCOMPARE(modeContract.defaultRecoveryRetention,
+                         expected.value(QStringLiteral(
+                             "defaultRecoveryRetention")).toDouble());
+                QCOMPARE(modeContract.minimumRecoveryExposure,
+                         expected.value(QStringLiteral(
+                             "minimumRuntimeRecoveryExposurePercent"))
+                             .toDouble() / 100.0);
+                QCOMPARE(
+                    modeContract.maximumNonPrescriptiveDurationChangePercent,
+                    expected.value(QStringLiteral(
+                        "maximumNonPrescriptiveChangePercent")).toDouble());
+                QCOMPARE(modeContract.maximumWorkDurationDeviationPercent,
+                         expected.value(QStringLiteral(
+                             "maximumWorkDurationDeviationPercent"))
+                             .toDouble());
+                QCOMPARE(modeContract.maximumRecoveryDurationDeviationPercent,
+                         expected.value(QStringLiteral(
+                             "maximumRecoveryDurationDeviationPercent"))
+                             .toDouble());
+                QCOMPARE(modeContract.maximumTotalDurationDeviationPercent,
+                         expected.value(QStringLiteral(
+                             "maximumTotalDurationDeviationPercent"))
+                             .toDouble());
+                QCOMPARE(modeContract.maximumLoadDeviationPercent,
+                         expected.value(QStringLiteral(
+                             "maximumLoadDeviationPercent"))
+                             .toDouble());
+                const QJsonArray terrainExposure = expected.value(
+                            QStringLiteral(
+                                "technicalTerrainExposurePercent")).toArray();
+                QCOMPARE(
+                    modeContract.targetMinimumTechnicalTerrainExposurePercent,
+                    terrainExposure.at(0).toDouble());
+                QCOMPARE(
+                    modeContract.targetMaximumTechnicalTerrainExposurePercent,
+                    terrainExposure.at(1).toDouble());
+                const QJsonArray featureDensity = expected.value(
+                            QStringLiteral(
+                                "technicalFeatureDensityPerTenSections"))
+                            .toArray();
+                QCOMPARE(
+                    modeContract.minimumTechnicalFeatureDensityPerTenSections,
+                    featureDensity.at(0).toDouble());
+                QCOMPARE(
+                    modeContract.maximumTechnicalFeatureDensityPerTenSections,
+                    featureDensity.at(1).toDouble());
                 QCOMPARE(results[mode].generationParameters.gradeScale,
                          expected.value(QStringLiteral("gradeScale")).toDouble());
                 QCOMPARE(results[mode].generationParameters.technicality,

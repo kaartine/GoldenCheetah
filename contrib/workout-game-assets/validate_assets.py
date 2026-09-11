@@ -487,6 +487,17 @@ def validate_manifest(
     manifest = load_json_file(manifest_path)
     validate_against_schema(manifest, schema)
 
+    source = manifest["source"]
+    has_original_hash = "originalSha256" in source
+    if source["kind"] == "external" and not has_original_hash:
+        raise AssetValidationError(
+            "external source is missing originalSha256"
+        )
+    if source["kind"] != "external" and has_original_hash:
+        raise AssetValidationError(
+            "originalSha256 is reserved for untouched external sources"
+        )
+
     license_data = manifest["license"]
     review = manifest["review"]
     if license_data["decision"] == "reject" or review["status"] == "rejected":

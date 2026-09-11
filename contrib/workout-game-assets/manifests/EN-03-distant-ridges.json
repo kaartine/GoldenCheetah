@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_distant_ridges.py",
     "retrievedAt": "2026-08-26",
     "originalFileName": "generate_distant_ridges.py",
-    "originalSha256": "aa7a17c689ff7685192d8e54d1439b6ca46638e2648c1bfa16d43a0c3996af0c",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_distant_ridges.py"

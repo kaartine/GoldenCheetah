@@ -82,7 +82,8 @@ https://www.gnu.org/licenses/old-licenses/gpl-2.0-faq.en.html
 4. Hash the untouched archive and preferred editable source with SHA-256.
 5. Keep original and generated files separate.
 6. Record every modification, author, date, tool version and conversion command.
-7. Hash every generated GLB, texture, QML and `.mesh` file.
+7. Let Git identify committed project-authored and generated files; do not copy
+   their hashes into manifests.
 8. Record permitted distribution in source, AppImage and screenshots/video.
 9. Never import from image search, mirrors, social media or unknown copies.
 10. Do not assume a current license applies to an older unverified download.
@@ -94,7 +95,8 @@ Each candidate and approved asset must validate against
 
 - Every distributed runtime/source asset has exactly one approved manifest.
 - CI rejects unknown, NC, ND, editorial, personal-use and unapproved licenses.
-- CI rejects missing attribution, license text, source revision or hash mismatch.
+- CI rejects missing attribution, license text, external source revision or the
+  untouched external source hash required by the manifest policy.
 - CI generates `THIRD_PARTY_ASSETS.md` and an in-application attribution view.
 - AppImage extraction tests verify both the assets and notices are present.
 - The Khronos glTF Validator must report no errors:
@@ -104,7 +106,8 @@ Each candidate and approved asset must validate against
 - Archive import rejects absolute paths, traversal entries, symlinks and
   excessive expanded size.
 - CI enforces node, triangle, material, texture-size and decoded-memory budgets.
-- Generated assets are rebuilt and compared by hash or canonical structure.
+- Generated assets are rebuilt and compared by canonical structure or directly
+  with their committed Git snapshot when byte identity is a stated contract.
 
 ## Qt Quick 3D Import Policy
 
