@@ -111,19 +111,20 @@ class CourseConversionContractTest(unittest.TestCase):
     def test_terrain_and_feature_bands_are_distinct(self):
         contracts = self.fixture["contracts"]
         modes = ("WorkoutFirst", "Balanced", "RideFirst")
-        self.assertEqual(
-            [contracts[mode]["gradeScale"] for mode in modes],
-            [0.70, 1.0, 1.30])
-        self.assertEqual(
-            [contracts[mode]["technicality"] for mode in modes],
-            [0.10, 0.55, 0.95])
-        self.assertEqual(
-            [contracts[mode]["technicalTerrainExposurePercent"] for mode in modes],
-            [[10.0, 30.0], [50.0, 75.0], [75.0, 100.0]])
-        self.assertEqual(
-            [contracts[mode]["technicalFeatureDensityPerTenSections"]
-             for mode in modes],
-            [[1.0, 3.0], [5.0, 7.0], [8.0, 10.0]])
+        for field in ("gradeScale", "technicality"):
+            values = [contracts[mode][field] for mode in modes]
+            self.assertTrue(all(math.isfinite(value) for value in values))
+            self.assertEqual(values, sorted(values))
+            self.assertEqual(len(values), len(set(values)))
+        for field in (
+                "technicalTerrainExposurePercent",
+                "technicalFeatureDensityPerTenSections"):
+            bands = [contracts[mode][field] for mode in modes]
+            for lower, upper in bands:
+                self.assertLess(lower, upper)
+            self.assertTrue(all(
+                earlier[0] < later[0] and earlier[1] < later[1]
+                for earlier, later in zip(bands, bands[1:])))
         self.assertEqual(
             [contracts[mode]["minimumRuntimeWorkExposurePercent"]
              for mode in modes],
@@ -230,8 +231,14 @@ class CourseConversionContractTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, source)
         self.assertIn("prescriptionMetadata", conversion)
-        self.assertIn("CurrentSchemaVersion = 4", document)
-        self.assertIn("CurrentConversionAlgorithmVersion = 5", document)
+        self.assertIn(
+            f"CurrentSchemaVersion = {self.fixture['contractVersion']}", document
+        )
+        self.assertIn(
+            "CurrentConversionAlgorithmVersion = "
+            f"{self.fixture['conversionAlgorithmVersion']}",
+            document,
+        )
         self.assertIn("conversionAlgorithmVersion", document)
         self.assertIn("sourceLaps", document)
         self.assertIn("sourceTexts", document)

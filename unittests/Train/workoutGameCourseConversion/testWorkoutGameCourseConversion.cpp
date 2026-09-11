@@ -14,6 +14,9 @@
 #include "Train/WorkoutGameFeatureCatalog.h"
 #include "Train/WorkoutGameWorkoutAdapter.h"
 
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTest>
 
 #include <algorithm>
@@ -163,6 +166,19 @@ class TestWorkoutGameCourseConversion : public QObject
 private slots:
     void representativeProfilesStayExactAndExposureIsMonotonic()
     {
+        QFile contractFile(QFINDTESTDATA("fixtures/mode_contract.json"));
+        QVERIFY2(contractFile.open(QIODevice::ReadOnly),
+                 qPrintable(contractFile.errorString()));
+        const QJsonObject contracts = QJsonDocument::fromJson(
+                    contractFile.readAll()).object().value(
+                    QStringLiteral("contracts")).toObject();
+        const std::array<QString, 3> contractNames {
+            QStringLiteral("WorkoutFirst"),
+            QStringLiteral("Balanced"),
+            QStringLiteral("RideFirst")
+        };
+        QCOMPARE(contracts.size(), int(contractNames.size()));
+
         for (const RepresentativeWorkout &fixture : representativeWorkouts()) {
             const WorkoutGameWorkout workout =
                     WorkoutGameWorkoutAdapter::normalize(fixture.points);
@@ -178,8 +194,6 @@ private slots:
             QVERIFY2(targets.size() >= 4u, fixture.name);
 
             std::array<WorkoutGameCourseConversionResult, 3> results;
-            const std::array<double, 3> expectedGradeScale {0.70, 1.00, 1.30};
-            const std::array<double, 3> expectedTechnicality {0.10, 0.55, 0.95};
             for (std::size_t mode = 0; mode < results.size(); ++mode) {
                 WorkoutGameCourseConversionRequest request;
                 request.intervals = workout.intervals;
@@ -193,10 +207,12 @@ private slots:
                          context.constData());
                 QVERIFY(results[mode].course.sections.size()
                         >= workout.intervals.size());
+                const QJsonObject expected = contracts.value(
+                            contractNames[mode]).toObject();
                 QCOMPARE(results[mode].generationParameters.gradeScale,
-                         expectedGradeScale[mode]);
+                         expected.value(QStringLiteral("gradeScale")).toDouble());
                 QCOMPARE(results[mode].generationParameters.technicality,
-                         expectedTechnicality[mode]);
+                         expected.value(QStringLiteral("technicality")).toDouble());
                 for (std::size_t index = 0;
                         index < workout.intervals.size(); ++index) {
                     const WorkoutGameInterval &source = workout.intervals[index];

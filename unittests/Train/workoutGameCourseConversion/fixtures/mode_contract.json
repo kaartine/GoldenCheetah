@@ -1,5 +1,6 @@
 {
   "contractVersion": 4,
+  "conversionAlgorithmVersion": 5,
   "ftpWatts": 190.0,
   "prescriptionMetadata": null,
   "intervals": [
