@@ -22,9 +22,20 @@ SPEC.loader.exec_module(UI)
 
 MATRIX_PATH = Path(__file__).with_name("run-pre-release-ui-matrix.sh")
 RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui.sh")
+LIBRARY_SOURCE_PATH = MODULE_PATH.parents[3] / "src" / "Train" / "Library.cpp"
 
 
 class PreReleaseUiWorkflowTests(unittest.TestCase):
+    def test_library_search_dialog_exposes_its_title_to_accessibility(self):
+        source = LIBRARY_SOURCE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'const QString dialogTitle = tr("Search for Workouts, Syncs and Media");',
+            source,
+        )
+        self.assertIn("setWindowTitle(dialogTitle);", source)
+        self.assertIn("setAccessibleName(dialogTitle);", source)
+
     def test_course_sidecar_acceptance_requires_exact_prescription_and_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             sidecar = Path(directory) / "ui-test-mtb.gcmtb.json"
