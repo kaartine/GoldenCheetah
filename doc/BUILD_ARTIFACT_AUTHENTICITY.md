@@ -38,13 +38,15 @@ downstream workflow publishes pending and final status directly to the
 candidate commit. Its status reporters are isolated jobs; jobs that check out
 candidate code have no `statuses: write` permission.
 
-The protected workflow set is closed. Candidate workflows and indirect CI
-inputs are compared directly with the trusted base-revision checkout, so the
-contract contains paths and policy structure rather than duplicated file or
-YAML hashes. A candidate cannot authorize its own policy change by editing the
-checked-in contract. Intentional changes to this trust boundary require the
-repository's privileged, Code Owner-reviewed policy-update procedure; normal
-candidate code continues to be treated only as data.
+The protected workflow set is closed, and each workflow's semantics and
+indirect CI inputs are hash-bound by the contract from the base revision. The
+hashes are necessary authorization records because the required policy status
+has no bypass actor. An intentional change therefore uses a reviewed staged
+rotation: first merge a contract-only pull request that authorizes the exact
+proposed hashes (and, for workflow semantics, retains both current and proposed
+hashes), then merge the protected change, and finally remove retired hashes.
+Keep the rotation window short. Contract and protected-file changes in the same
+pull request do not authorize themselves.
 
 Release artifact hashes are different: they cross a repository or transport
 boundary and remain mandatory in the build manifest and SBOM linkage. The

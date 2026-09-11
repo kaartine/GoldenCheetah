@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_forest_verge_clusters.py",
     "retrievedAt": "2026-09-05",
     "originalFileName": "generate_forest_verge_clusters.py",
-    "originalSha256": "0789d967aff8297bf5746183f84ec233c7a60c9aba51360239adf0a61fef2714",
     "generator": "Blender Python",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_forest_verge_clusters.py"

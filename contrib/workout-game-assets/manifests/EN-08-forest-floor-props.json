@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_forest_floor_props.py",
     "retrievedAt": "2026-09-05",
     "originalFileName": "generate_forest_floor_props.py",
-    "originalSha256": "efc0b0b9ef69b238df0d9e2d941a4a1856b2d38239d26947c093b1ecb8ebf4af",
     "generator": "Blender Python",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_forest_floor_props.py"

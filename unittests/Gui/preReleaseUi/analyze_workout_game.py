@@ -35,6 +35,7 @@ RECORDING_COLUMNS = (
 )
 TRACE_ALIGNMENT_WINDOW_MS = 750.0
 ERG_RECORDING_DELAYS_MS = (0.0, 1000.0)
+TRAINER_ALIGNMENT_CLOSE_DELTA = 5.0
 
 TraceValue = float | str
 TraceSample = dict[str, TraceValue]
@@ -554,7 +555,7 @@ def reconcile_acceptance(
     recording_distances = [row["km"] * 1000.0 for row in recording]
     effective_trainer_targets = coalesce_trainer_targets(trainer_targets)
     trainer_targets_with_devices = 0
-    for target in trainer_targets:
+    for target in effective_trainer_targets:
         mode = target.get("mode")
         position = numeric(target, "workout_pos")
         value = numeric(target, "value")
@@ -584,6 +585,10 @@ def reconcile_acceptance(
     trainer_target_recording_delay_ms, trainer_target_deltas = min(
         delay_candidates,
         key=lambda candidate: (
+            -sum(
+                delta <= TRAINER_ALIGNMENT_CLOSE_DELTA
+                for delta in candidate[1]
+            ),
             percentile(candidate[1], 0.95),
             max(candidate[1], default=math.inf),
             -len(candidate[1]),

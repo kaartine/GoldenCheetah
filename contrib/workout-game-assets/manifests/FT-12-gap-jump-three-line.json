@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_gap_jump.py",
     "retrievedAt": "2026-09-05",
     "originalFileName": "generate_gap_jump.py",
-    "originalSha256": "7b75bed27b9666867a12af1c49d2b0bb0a95f2407f91d63d079c86175ff2c52c",
     "generator": "Blender Python",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_gap_jump.py"

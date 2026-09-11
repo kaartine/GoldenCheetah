@@ -417,6 +417,15 @@ def require_run_fragments(step, fragments, description):
     return script
 
 
+def require_run_sha256(step, expected, description):
+    script = scalar_value(
+        required_entry(step, "run", description), f"{description}.run"
+    )
+    actual = hashlib.sha256(script.encode("utf-8")).hexdigest()
+    if actual != expected:
+        raise ValueError(f"{description}.run changed from the trusted contract")
+
+
 def load_contract(path):
     if path.is_symlink() or not path.is_file():
         raise ValueError("workflow policy contract is unavailable or unsafe")
@@ -427,13 +436,14 @@ def load_contract(path):
         "format", "policy_workflow", "build_workflows", "protected_files"
     }:
         raise ValueError("workflow policy contract has an invalid schema")
-    if document["format"] != "goldencheetah-workflow-policy-contract-3":
+    if document["format"] != "goldencheetah-workflow-policy-contract-2":
         raise ValueError("workflow policy contract has an invalid format")
     policy = document["policy_workflow"]
     builds = document["build_workflows"]
     protected_files = document["protected_files"]
     if not isinstance(policy, dict) or set(policy) != {
-        "base_branch", "file", "job", "pull_request_types", "status_context"
+        "base_branch", "file", "job", "pull_request_types", "run_sha256",
+        "semantic_sha256", "status_context"
     } or not isinstance(builds, dict) or not builds:
         raise ValueError("workflow policy contract has an invalid schema")
     if policy["base_branch"] != "master":
@@ -442,16 +452,42 @@ def load_contract(path):
         isinstance(value, str) and value for value in policy["pull_request_types"]
     ):
         raise ValueError("workflow policy contract has invalid PR event types")
+    if not isinstance(policy["run_sha256"], dict) or any(
+        not isinstance(name, str)
+        or not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        for name, digest in policy["run_sha256"].items()
+    ):
+        raise ValueError("workflow policy contract has invalid policy run hashes")
+    if not isinstance(policy["semantic_sha256"], list) or not policy[
+        "semantic_sha256"
+    ] or any(
+        not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        for digest in policy["semantic_sha256"]
+    ):
+        raise ValueError("workflow policy contract has invalid semantic hashes")
     for filename, build in builds.items():
         if not isinstance(filename, str) or not filename.endswith((".yml", ".yaml")):
             raise ValueError("workflow policy contract has an invalid filename")
         if not isinstance(build, dict) or set(build) != {
             "candidate_jobs", "candidate_runs_on", "candidate_step_count",
-            "path_filters", "status_context"
+            "path_filters", "run_sha256", "semantic_sha256", "status_context",
+            "trusted_run_sha256"
         } or not isinstance(build["candidate_jobs"], dict) or not isinstance(
+            build["run_sha256"], dict
+        ) or not isinstance(build["trusted_run_sha256"], dict) or not isinstance(
             build["candidate_runs_on"], dict
         ) or not isinstance(build["candidate_step_count"], dict):
             raise ValueError("workflow policy contract has an invalid build entry")
+        if not isinstance(build["semantic_sha256"], list) or not build[
+            "semantic_sha256"
+        ] or any(
+            not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            for digest in build["semantic_sha256"]
+        ):
+            raise ValueError("workflow policy contract has invalid semantic hashes")
         if not isinstance(build["path_filters"], list) or not build[
             "path_filters"
         ] or any(
@@ -470,6 +506,8 @@ def load_contract(path):
                 raise ValueError(
                     "workflow policy contract has invalid candidate steps"
                 )
+        if set(build["run_sha256"]) != set(build["candidate_jobs"]):
+            raise ValueError("workflow policy contract has incomplete run hashes")
         if set(build["candidate_runs_on"]) != set(build["candidate_jobs"]) or any(
             not isinstance(value, str) or not value
             for value in build["candidate_runs_on"].values()
@@ -480,47 +518,60 @@ def load_contract(path):
             for value in build["candidate_step_count"].values()
         ):
             raise ValueError("workflow policy contract has invalid step counts")
-    if not isinstance(protected_files, list) or not protected_files:
+        for job, hashes in build["run_sha256"].items():
+            if not isinstance(hashes, dict) or any(
+                step not in build["candidate_jobs"][job]
+                or not isinstance(digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                for step, digest in hashes.items()
+            ):
+                raise ValueError("workflow policy contract has invalid run hashes")
+        if set(build["trusted_run_sha256"]) != {
+            "validated-candidate", "report-pending", "report-final"
+        } or any(
+            not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            for digest in build["trusted_run_sha256"].values()
+        ):
+            raise ValueError("workflow policy contract has invalid trusted hashes")
+    if not isinstance(protected_files, dict) or not protected_files:
         raise ValueError("workflow policy contract has no protected files")
-    if protected_files != sorted(set(protected_files)):
+    if list(protected_files) != sorted(protected_files):
         raise ValueError("protected CI files must be sorted")
-    for relative in protected_files:
+    for relative, digest in protected_files.items():
         path = PurePosixPath(relative)
         if (
             not isinstance(relative, str)
             or not relative
             or path.is_absolute()
             or any(part in {"", ".", ".."} for part in path.parts)
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
         ):
             raise ValueError("workflow policy contract has an invalid protected file")
     return document
 
 
-def safe_repository_file(repository_root, relative, repository_name):
+def enforce_protected_files(repository_root, protected_files):
     if repository_root.is_symlink() or not repository_root.is_dir():
-        raise ValueError(f"{repository_name} repository root is unavailable or unsafe")
-    candidate = repository_root.joinpath(*PurePosixPath(relative).parts)
-    current = candidate
-    while current != repository_root:
-        if current.is_symlink():
+        raise ValueError("candidate repository root is unavailable or unsafe")
+    for relative, expected in protected_files.items():
+        candidate = repository_root.joinpath(*PurePosixPath(relative).parts)
+        current = candidate
+        while current != repository_root:
+            if current.is_symlink():
+                raise ValueError(
+                    f"protected CI file is unavailable or unsafe: {relative}"
+                )
+            current = current.parent
+        if not candidate.is_file():
             raise ValueError(
                 f"protected CI file is unavailable or unsafe: {relative}"
             )
-        current = current.parent
-    if not candidate.is_file():
-        raise ValueError(f"protected CI file is unavailable or unsafe: {relative}")
-    if candidate.stat().st_size > MAX_PROTECTED_FILE_BYTES:
-        raise ValueError(f"protected CI file is too large: {relative}")
-    return candidate
-
-
-def enforce_protected_files(repository_root, trusted_repository_root, protected_files):
-    for relative in protected_files:
-        candidate = safe_repository_file(repository_root, relative, "candidate")
-        trusted = safe_repository_file(
-            trusted_repository_root, relative, "trusted"
-        )
-        if candidate.read_bytes() != trusted.read_bytes():
+        if candidate.stat().st_size > MAX_PROTECTED_FILE_BYTES:
+            raise ValueError(f"protected CI file is too large: {relative}")
+        actual = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        if actual != expected:
             raise ValueError(f"protected CI file changed: {relative}")
 
 
@@ -528,6 +579,8 @@ def enforce_policy_workflow(
     root, policy, checkout_reference, protected_files
 ):
     description = "workflow-policy.yml"
+    if semantic_sha256(root) not in policy["semantic_sha256"]:
+        raise ValueError(f"{description} semantic schema changed")
     require_scalar(root, "name", "Workflow policy", description)
     events = required_entry(root, "on", description)
     event_entries = mapping_entries(events, f"{description}.on")
@@ -586,6 +639,17 @@ def enforce_policy_workflow(
     _, steps = require_step_names(
         job, expected_steps, f"{description}.{policy['job']}", exact=True
     )
+    expected_run_steps = {
+        expected_steps[0], expected_steps[1], expected_steps[3],
+        expected_steps[5], expected_steps[6]
+    }
+    if set(policy["run_sha256"]) != expected_run_steps:
+        raise ValueError(f"{description} run hash contract is incomplete")
+    for step_name, digest in policy["run_sha256"].items():
+        require_run_sha256(
+            steps[step_name], digest, f"{description} {step_name}"
+        )
+
     identity = steps[expected_steps[0]]
     require_environment(
         identity,
@@ -865,6 +929,8 @@ def enforce_trusted_macos_release(job, checkout_reference):
 
 
 def enforce_build_workflow(root, filename, build, checkout_reference):
+    if semantic_sha256(root) not in build["semantic_sha256"]:
+        raise ValueError(f"{filename} semantic schema changed")
     events = required_entry(root, "on", filename)
     event_entries = mapping_entries(events, f"{filename}.on")
     if "pull_request" in event_entries or "pull_request_target" in event_entries:
@@ -968,6 +1034,12 @@ def enforce_build_workflow(root, filename, build, checkout_reference):
     )
     if "candidate/" in resolver_script:
         raise ValueError(f"{filename} resolver executes candidate data")
+    require_run_sha256(
+        resolver_steps["Resolve trusted candidate identity"],
+        build["trusted_run_sha256"]["validated-candidate"],
+        f"{filename} candidate resolver",
+    )
+
     pending = job_entries["report-pending"]
     require_scalar(
         pending, "runs-on", "ubuntu-24.04", f"{filename}.report-pending"
@@ -1007,6 +1079,12 @@ def enforce_build_workflow(root, filename, build, checkout_reference):
         ),
         f"{filename} pending reporter",
     )
+    require_run_sha256(
+        pending_steps[0],
+        build["trusted_run_sha256"]["report-pending"],
+        f"{filename} pending reporter",
+    )
+
     for job_name, required_steps in candidate_jobs.items():
         job = job_entries[job_name]
         job_values = mapping_entries(job, f"{filename}.{job_name}")
@@ -1041,6 +1119,20 @@ def enforce_build_workflow(root, filename, build, checkout_reference):
             raise ValueError(
                 f"{filename}.{job_name} step schema changed"
             )
+        for step_name, expected_digest in build["run_sha256"][job_name].items():
+            script = scalar_value(
+                required_entry(
+                    named_steps[step_name],
+                    "run",
+                    f"{filename}.{job_name}.{step_name}",
+                ),
+                f"{filename}.{job_name}.{step_name}.run",
+            )
+            actual_digest = hashlib.sha256(script.encode("utf-8")).hexdigest()
+            if actual_digest != expected_digest:
+                raise ValueError(
+                    f"{filename}.{job_name}.{step_name} run script changed"
+                )
         checkouts = [
             step for step in steps
             if isinstance(step.get("uses"), ScalarNode)
@@ -1110,6 +1202,11 @@ def enforce_build_workflow(root, filename, build, checkout_reference):
         ),
         f"{filename} final reporter",
     )
+    require_run_sha256(
+        final_steps[0],
+        build["trusted_run_sha256"]["report-final"],
+        f"{filename} final reporter",
+    )
     for job_name in candidate_jobs:
         expected = job_name.upper().replace("-", "_") + "_RESULT"
         if f'"${expected}" = success' not in final_script:
@@ -1118,23 +1215,8 @@ def enforce_build_workflow(root, filename, build, checkout_reference):
             )
 
 
-def trusted_workflow_documents(trusted_repository_root, filenames):
-    documents = {}
-    for filename in filenames:
-        relative = f".github/workflows/{filename}"
-        workflow = safe_repository_file(
-            trusted_repository_root, relative, "trusted"
-        )
-        if workflow.stat().st_size > MAX_WORKFLOW_BYTES:
-            raise ValueError(f"trusted workflow file is too large: {filename}")
-        _, _, documents[filename] = extract_uses(
-            workflow.read_text(encoding="utf-8"), workflow
-        )
-    return documents
-
-
 def enforce_repository_policy(
-    documents, contract, allowlist, repository_root, trusted_repository_root
+    documents, contract, allowlist, repository_root
 ):
     policy = contract["policy_workflow"]
     builds = contract["build_workflows"]
@@ -1149,16 +1231,6 @@ def enforce_repository_policy(
         raise ValueError(
             "uncontracted workflow is present: " + ", ".join(unexpected)
         )
-    trusted_documents = trusted_workflow_documents(
-        trusted_repository_root, required
-    )
-    for filename in sorted(required):
-        if semantic_sha256(documents[filename]) != semantic_sha256(
-            trusted_documents[filename]
-        ):
-            raise ValueError(
-                f"{filename} changed from the trusted base snapshot"
-            )
     checkout_revision = allowlist.get("actions/checkout")
     if checkout_revision is None:
         raise ValueError("actions/checkout is missing from the trusted allowlist")
@@ -1171,14 +1243,12 @@ def enforce_repository_policy(
         enforce_build_workflow(
             documents[filename], filename, build, checkout_reference
         )
-    enforce_protected_files(
-        repository_root, trusted_repository_root, contract["protected_files"]
-    )
+    enforce_protected_files(repository_root, contract["protected_files"])
 
 
 def check(
     path, allowlist_path, enforce_policy=False, contract_path=None,
-    repository_root=None, trusted_repository_root=None,
+    repository_root=None,
 ):
     allowlist = load_allowlist(allowlist_path)
     references = 0
@@ -1226,12 +1296,9 @@ def check(
                         "candidate repository root must be specified"
                     )
                 repository_root = path.parent.parent
-            if trusted_repository_root is None:
-                trusted_repository_root = Path(__file__).resolve().parents[2]
             contract = load_contract(contract_path)
             enforce_repository_policy(
-                documents, contract, allowlist, repository_root,
-                trusted_repository_root,
+                documents, contract, allowlist, repository_root
             )
         except (json.JSONDecodeError, ValueError) as error:
             raise ValueError(f"workflow policy contract: {error}") from error
@@ -1247,7 +1314,6 @@ def main():
     )
     parser.add_argument("--enforce-policy", action="store_true")
     parser.add_argument("--repository-root", type=Path)
-    parser.add_argument("--trusted-repository-root", type=Path)
     parser.add_argument(
         "--contract",
         type=Path,
@@ -1264,7 +1330,6 @@ def main():
             arguments.enforce_policy,
             arguments.contract,
             arguments.repository_root,
-            arguments.trusted_repository_root,
         )
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

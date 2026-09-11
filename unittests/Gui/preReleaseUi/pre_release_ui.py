@@ -137,6 +137,8 @@ def selected_ui_tests_from_environment() -> tuple[str, ...]:
     value = os.environ.get("GC_UI_TESTS", "").strip()
     if not value:
         selected = set(UI_TEST_NAMES)
+        if not validate_mtb_course_from_environment():
+            selected.discard("create_edit_mtb_course_lifecycle")
     else:
         requested = [name.strip() for name in value.split(",")]
         if any(not name for name in requested):
@@ -701,9 +703,7 @@ class UiDriver:
             raise UiFailure("accessible action is stale") from error
 
     def activate(self, node):
-        name = self.name(node)
-        role = self.role(node)
-        showing = self.showing(node)
+        name, role, showing = self._accessible_metadata(node)
         last_error = None
         for attempt in range(2):
             try:
@@ -718,9 +718,7 @@ class UiDriver:
         raise UiFailure(f"Cannot activate {role} {name!r}") from last_error
 
     def _mouse_click(self, node, button):
-        name = self.name(node)
-        role = self.role(node)
-        showing = self.showing(node)
+        name, role, showing = self._accessible_metadata(node)
         last_error = None
         for attempt in range(2):
             try:
@@ -733,6 +731,17 @@ class UiDriver:
                         node, name, role, showing
                     )
         raise UiFailure(f"Cannot click {role} {name!r}") from last_error
+
+    def _accessible_metadata(self, node):
+        last_error = None
+        for attempt in range(2):
+            try:
+                return self.name(node), self.role(node), self.showing(node)
+            except Exception as error:
+                last_error = error
+                if attempt == 0:
+                    time.sleep(0.05)
+        raise UiFailure("Cannot inspect accessible control") from last_error
 
     def _mouse_click_once(self, node, button):
         try:
@@ -1940,10 +1949,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             suite.run("train_control_accessibility", train_controls)
         if "data_generator_and_virtual_gears" in selected_tests:
             suite.run("data_generator_and_virtual_gears", generator_and_gears)
-        if (
-            validate_mtb_course_from_environment()
-            and "create_edit_mtb_course_lifecycle" in selected_tests
-        ):
+        if "create_edit_mtb_course_lifecycle" in selected_tests:
             suite.run("create_edit_mtb_course_lifecycle", mtb_course_lifecycle)
         if "workout_game_training_lifecycle" in selected_tests:
             suite.run("workout_game_training_lifecycle", game_training_lifecycle)

@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_bunny_hop.py",
     "retrievedAt": "2026-08-27",
     "originalFileName": "generate_bunny_hop.py",
-    "originalSha256": "609f6955185431d827a57fcb1ba2b4deef2478192078be7d490ce5b12da46336",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_bunny_hop.py"

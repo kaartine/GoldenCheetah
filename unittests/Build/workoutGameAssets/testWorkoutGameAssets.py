@@ -243,6 +243,30 @@ class TestWorkoutGameAssets(unittest.TestCase):
         for entry in manifest["files"]:
             self.assertEqual(set(entry), {"path", "purpose"})
 
+    def test_project_authored_source_cannot_duplicate_git_hash(self) -> None:
+        fixture = AssetFixture()
+        try:
+            fixture.manifest["source"]["originalSha256"] = "0" * 64
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "reserved for untouched external"
+            ):
+                assets.validate_repository(fixture.root)
+        finally:
+            fixture.close()
+
+    def test_external_source_requires_untouched_input_hash(self) -> None:
+        fixture = AssetFixture()
+        try:
+            fixture.manifest["source"]["kind"] = "external"
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "missing originalSha256"
+            ):
+                assets.validate_repository(fixture.root)
+        finally:
+            fixture.close()
+
     def test_parent_traversal_path_is_rejected(self) -> None:
         fixture = AssetFixture()
         try:

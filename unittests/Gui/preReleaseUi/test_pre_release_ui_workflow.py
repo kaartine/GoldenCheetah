@@ -163,6 +163,12 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertIn("mtb-course-runtime-evidence.txt", runner)
         self.assertIn("--cold-start-continuity-only", runner)
         self.assertIn("GC_UI_USE_HARDWARE_GL", runner)
+        self.assertIn(
+            "Hardware GL validation requires GC_UI_EXISTING_DISPLAY", runner
+        )
+        self.assertIn(
+            "Hardware GL validation requires GC_UI_EXPECTED_GPU_PATTERN", runner
+        )
 
     def test_popup_item_activation_uses_position_independent_keyboard_steps(self):
         driver = object.__new__(UI.UiDriver)
@@ -895,6 +901,22 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         driver.refresh_accessible.assert_called_once_with(
             stale, "Start or pause training", "push button", True
         )
+
+    def test_activate_retries_transient_stale_metadata_once(self):
+        control = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.name = mock.Mock(
+            side_effect=[RuntimeError("stale"), "Start or pause training"]
+        )
+        driver.role = mock.Mock(return_value="push button")
+        driver.showing = mock.Mock(return_value=True)
+        driver._activate_once = mock.Mock()
+
+        with mock.patch.object(UI.time, "sleep") as sleep:
+            driver.activate(control)
+
+        sleep.assert_called_once_with(0.05)
+        driver._activate_once.assert_called_once_with(control)
 
     def test_click_refreshes_stale_accessible_bounds_once(self):
         stale = object()

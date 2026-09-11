@@ -1254,8 +1254,9 @@ trainer A/B acceptance remains separately open under `REL-04`.
 **Current B1/B2 evidence (2026-09-03):** the required inventory includes
 `Train/workoutGameGapJumpLaunchWindow` and reconciles 173/173 projects. The
 final X11 inventory passed 172 projects and stopped only at the AppImage policy
-project because the former protected-hash inventory was stale. CI policy now
-compares candidates directly with the trusted base snapshot. The complete
+project because its protected-input authorization hashes were stale. Those
+trust-boundary hashes remain required and use the staged contract-only rotation
+documented in `doc/BUILD_ARTIFACT_AUTHENTICITY.md`. The complete
 AppImage project passes its reproducibility,
 SBOM, credential, immutable-action and private-OAuth gates without another
 source change. The twelve directly affected suites pass 386/386 under

@@ -9,7 +9,6 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_tabletop.py",
     "retrievedAt": "2026-08-25",
     "originalFileName": "generate_tabletop.py",
-    "originalSha256": "c383c0a2d6cb7b61a58588abec7b1aa05fc7181dfdfe4d00ad70b819560c7f5f",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_tabletop.py"

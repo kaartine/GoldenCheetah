@@ -105,6 +105,21 @@ class CourseConversionContractTest(unittest.TestCase):
         self.assertEqual(
             contracts["RideFirst"]["maximumTotalDurationDeviationPercent"],
             8.0)
+        for mode in ("WorkoutFirst", "Balanced", "RideFirst"):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    contracts[mode]["maximumLoadDeviationPercent"],
+                    contracts[mode]["maximumTotalDurationDeviationPercent"],
+                )
+        self.assertEqual(
+            contracts["Balanced"]["maximumWorkDurationDeviationPercent"],
+            3.0)
+        self.assertEqual(
+            contracts["Balanced"]["maximumRecoveryDurationDeviationPercent"],
+            0.0)
+        self.assertEqual(
+            contracts["RideFirst"]["maximumRecoveryDurationDeviationPercent"],
+            8.0)
         self.assertGreaterEqual(
             contracts["RideFirst"]["minimumRecoveryRetention"], 1.0)
 

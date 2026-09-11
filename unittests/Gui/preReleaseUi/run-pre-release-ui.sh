@@ -15,6 +15,24 @@ ARTIFACT_DIR=${2:-$PWD/ui-test-artifacts}
     exit 2
 }
 
+case "${GC_UI_USE_HARDWARE_GL:-0}" in
+    0|1) ;;
+    *)
+        echo "GC_UI_USE_HARDWARE_GL must be 0 or 1" >&2
+        exit 2
+        ;;
+esac
+if [ "${GC_UI_USE_HARDWARE_GL:-0}" = 1 ]; then
+    [ -n "${GC_UI_EXISTING_DISPLAY:-}" ] || {
+        echo "Hardware GL validation requires GC_UI_EXISTING_DISPLAY" >&2
+        exit 2
+    }
+    [ -n "${GC_UI_EXPECTED_GPU_PATTERN:-}" ] || {
+        echo "Hardware GL validation requires GC_UI_EXPECTED_GPU_PATTERN" >&2
+        exit 2
+    }
+fi
+
 REQUIRED_COMMANDS=(dbus-run-session gdbus python3 setsid)
 if [ -z "${GC_UI_EXISTING_DISPLAY:-}" ]; then
     REQUIRED_COMMANDS+=(Xvfb)
