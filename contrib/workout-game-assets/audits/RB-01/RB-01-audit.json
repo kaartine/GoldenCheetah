@@ -1,6 +1,6 @@
 {
   "assetId": "RB-01-rider-bike",
-  "assetSha256": "074ef71f2da7f9bc32506033e96fff3791e7babe9877cc467a84b0d9e8ab656b",
+  "assetSha256": "b92f4f93c5287ebc491e4c4c5f79143f756937938339674d1c2dfc8202e38e4c",
   "catalog": {
     "heightPixels": 540,
     "pose": "neutral-seated-crank-left-high",
@@ -21,7 +21,7 @@
         0.18
       ],
       "path": "RB-01-front.png",
-      "sha256": "be1b7a8b274dd5079ec6fb7a0e1c137b985ee9a7979efb7bba685ca114a0a62b",
+      "sha256": "64013ea705d017c17644f0e834b1956ca7f4ab10b8cd5e82f2f7e77c4715e0f8",
       "view": "front"
     },
     {
@@ -36,7 +36,7 @@
         0.08
       ],
       "path": "RB-01-rear.png",
-      "sha256": "cea412a8f375aaf8393524c21919591ce122730386429b0715e80e90750542e8",
+      "sha256": "1835f8a38bbe5c2a42bac62d8cfaae9063c49b87e67bfefe758e4e79c3fb6376",
       "view": "rear"
     },
     {
@@ -51,7 +51,7 @@
         0.18
       ],
       "path": "RB-01-side.png",
-      "sha256": "1a2cb7914a4988da08d5418522e539c5036089c5e4e2acb7737cadbee1c1ba2a",
+      "sha256": "f5e994fe3fe3a0777917b2088ab77f72c17a08d52678709a699cef74083d9937",
       "view": "side"
     },
     {
@@ -66,7 +66,7 @@
         0.1
       ],
       "path": "RB-01-chase.png",
-      "sha256": "c2dfef83404a8e9d7380efea0ef0f50d5437d1590afd2a25a2797a161904fb06",
+      "sha256": "9937e68f8dc6968f6e175419c543188579060cfe12a9beb8ab9215b36ac6ce07",
       "view": "chase"
     }
   ]

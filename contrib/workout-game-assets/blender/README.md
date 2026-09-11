@@ -128,16 +128,18 @@ two CPUs and 2 GiB RAM by default, and requires repeated GLB, audit and Balsam
 outputs to match before installation. Override the limits only when needed
 with `GC_ASSET_CPUS`, `GC_ASSET_MEMORY` and `GC_ASSET_MEMORY_SWAP`.
 
-- The bicycle has a `0.755 m` outside wheel diameter, `1.313 m` wheelbase,
-  `0.455 m` chainstay and separately articulated main frame, swingarm, fork and
-  rear shock. Its project-authored proportions represent a generic modern
-  long-travel enduro e-bike rather than a digital copy of a named bicycle.
-- The project-authored side silhouette uses a deep integrated 750 Wh-class
+- The bicycle reconstructs the published Pole Voima K2 side geometry with a
+  `0.755 m` outside wheel diameter, `1.313 m` wheelbase, `0.455 m` chainstay
+  `0.480 m` reach, `0.648 m` stack, `0.591 m` top tube, zero bottom-bracket
+  drop, `80 degree` seat-tube angle, `0.360 m` seat tube, `0.140 m` head tube,
+  `63.5 degree` head angle and separately articulated main frame, swingarm,
+  fork and `250 x 75 mm` rear shock. Public product photography is used as a
+  measured silhouette reference; no source CAD or photograph pixels are
+  included.
+- The reconstructed side silhouette uses a deep integrated 750 Wh-class
   battery/down tube, compact mid-drive housing, long twin-beam swingarm, upper
   linkage and rocker, long single-crown fork, hubs, brake rotors and sparse
-  low-poly spokes. The independently authored gold frame, black motor and
-  component group use generic visual cues without reproducing logos,
-  proprietary surfaces or CAD.
+  low-poly spokes. The gold frame contains no logo artwork or source mesh.
 - The `29 x 2.5` black tires have a `0.0635 m` casing width and distinct
   low-poly front-grip and rear-braking tread roles. Their original block
   patterns contain no copied tread mesh, sidewall text or trademark artwork.
@@ -146,8 +148,9 @@ with `GC_ASSET_CPUS`, `GC_ASSET_MEMORY` and `GC_ASSET_MEMORY_SWAP`.
   white-black open-face enduro helmet with a dark visor. The model is not
   authored as a likeness of a named person and contains no portrait texture,
   face scan or source photograph pixels.
-- Rear axle, front axle, crank, steering, pelvis, camera-target and shadow
-  pivots are named in the GLB. The runtime QML uses those same measured values.
+- Rear axle, front axle, crank, suspension linkage, shock, steering, pelvis,
+  camera-target and shadow pivots are named in the GLB. The runtime QML uses
+  the same measured axle, crank and steering values.
 - Main frame, components, swingarm, fork, rear shock, wheels, crank, torso,
   jersey accents, head, beard, eyewear, helmet shell, helmet accents, reusable
   limb and contact-shadow meshes are separate. Runtime wheel rotation
@@ -155,9 +158,16 @@ with `GC_ASSET_CPUS`, `GC_ASSET_MEMORY` and `GC_ASSET_MEMORY_SWAP`.
   motion follow the authoritative pedal-cycle value.
 - The crank mesh includes both pedal platforms, so feet, crank arms and pedals
   share one authoritative phase without adding per-pedal draw calls.
-- The complete source asset has 5,240 triangles, eight opaque flat-color
+- The complete source asset has 5,056 triangles, eight opaque flat-color
   materials, no texture payload and no external source. The runtime component
   adds only a bounded translucent contact-shadow material.
+
+Measurement references:
+
+- [Pole Voima frameset manual and K2 geometry](https://service.polebicycles.com/docs/voima-frameset-manual/)
+- [Complete bicycle side view](https://p.vitalmtb.com/photos/products/34298/photos/83739/original_Pole_Voima_gold.png)
+- [Frameset front three-quarter view](https://p.vitalmtb.com/photos/products/34298/photos/83742/original_Pole_Voima_gold.png)
+- [Frameset rear three-quarter view](https://p.vitalmtb.com/photos/products/34298/photos/83741/original_Pole_Voima_gold.png)
 - Blender validates topology, applied transforms, dimensions, pivots and the
   9,000-triangle budget before export. Asset-policy tests additionally reject
   built-in Quick 3D primitives in the final rider component.

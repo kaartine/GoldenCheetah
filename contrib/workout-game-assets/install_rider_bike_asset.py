@@ -197,6 +197,13 @@ def install(candidate: Path) -> None:
         / "contrib/workout-game-assets/manifests/RB-01-rider-bike.json"
     )
     manifest = assets.load_json_file(manifest_path)
+    manifest["displayName"] = "Arcade Rider And Pole Voima K2"
+    manifest["license"]["reviewNotes"] = (
+        "Project-authored deterministic geometry reconstructing the Pole "
+        "Voima K2 from published dimensions and public product views. No "
+        "external model, CAD, texture, logo, face scan, portrait or "
+        "photograph pixels are embedded."
+    )
 
     destinations: list[tuple[Path, Path]] = [
         (candidate / GLB_NAME, REPOSITORY / GENERATED_RELATIVE),
@@ -268,19 +275,21 @@ def install(candidate: Path) -> None:
         ]
         manifest["review"]["reviewedAt"] = "2026-09-10"
         manifest["review"]["notes"] = (
-            "Approved original stylized rider and generic enduro 29er runtime "
-            "asset. The editable Blender source and generated runtime meshes "
+            "Approved stylized rider and Pole Voima K2 visual reconstruction. "
+            "The bicycle geometry is measured from public product photography "
+            "and Pole's published K2 dimensions; no source CAD or photograph "
+            "pixels are included. The editable Blender source and generated "
+            "runtime meshes "
             "preserve the established axle, crank, steering, pelvis, shadow "
             "and camera pivots plus the snapshot-driven wheel, pedal, "
             "suspension and rider-pose animation contract. The model uses an "
             "open twin-link rear triangle, tapered frame members, detailed "
             "cockpit, one-by drivetrain, platform pedals, suspension, "
-            "open-face helmet and large unbranded black treaded tires. It "
-            "contains no named bicycle design, person likeness, branded "
-            "tread, logo, source mesh or proprietary surface. No endorsement "
-            "is claimed or implied. Deterministic Blender export, Balsam "
-            "conversion, packaged-resource loading and fixed-view visual "
-            "audits are release requirements."
+            "open-face helmet and large black treaded tires. It contains no "
+            "person likeness, branded tread, logo or source mesh. No "
+            "endorsement is claimed or implied. Deterministic Blender export, "
+            "Balsam conversion, packaged-resource loading and fixed-view "
+            "visual audits are release requirements."
         )
 
         manifest_path.write_text(

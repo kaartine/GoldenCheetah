@@ -504,6 +504,11 @@ class TestWorkoutGameAssets(unittest.TestCase):
             "PIVOT_REAR_AXLE",
             "PIVOT_FRONT_AXLE",
             "PIVOT_CRANK",
+            "PIVOT_SWINGARM_FRAME",
+            "PIVOT_UPPER_LINK_SWINGARM",
+            "PIVOT_UPPER_LINK_FRAME",
+            "PIVOT_SHOCK_SWINGARM",
+            "PIVOT_SHOCK_FRAME",
             "PIVOT_STEER",
             "PIVOT_PELVIS",
             "PIVOT_CAMERA_TARGET",
@@ -536,8 +541,30 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertEqual(
             root_extras["reference_model"],
-            "original generic modern enduro 29er",
+            "Pole Voima K2 visual reconstruction",
         )
+        self.assertEqual(root_extras["published_top_tube_m"], 0.591)
+        self.assertEqual(root_extras["published_bb_drop_m"], 0.0)
+        self.assertEqual(root_extras["published_seat_tube_angle_degrees"], 80.0)
+        self.assertEqual(root_extras["published_seat_tube_length_m"], 0.36)
+        self.assertEqual(root_extras["published_front_center_m"], 0.887)
+        self.assertEqual(root_extras["published_fork_offset_min_m"], 0.044)
+        self.assertEqual(root_extras["published_fork_offset_max_m"], 0.051)
+        self.assertGreaterEqual(root_extras["modeled_fork_offset_m"], 0.044)
+        self.assertLessEqual(root_extras["modeled_fork_offset_m"], 0.051)
+        self.assertEqual(root_extras["rear_shock_eye_to_eye_m"], 0.25)
+        shock_swingarm = nodes["PIVOT_SHOCK_SWINGARM"]["translation"]
+        shock_frame = nodes["PIVOT_SHOCK_FRAME"]["translation"]
+        shock_delta = [
+            shock_frame[index] - shock_swingarm[index] for index in range(3)
+        ]
+        self.assertAlmostEqual(
+            sum(value * value for value in shock_delta) ** 0.5,
+            0.25,
+            places=5,
+        )
+        self.assertGreater(shock_delta[1], 0.0)
+        self.assertGreater(shock_delta[2], 0.0)
         self.assertEqual(
             root_extras["rider_reference"],
             "fictional project-authored rider; no specific likeness",
@@ -555,7 +582,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
             "black-white open-face enduro helmet with visor",
         )
         self.assertTrue(root_extras["open_frame_window"])
-        self.assertGreaterEqual(root_extras["frame_window_area_m2"], 0.10)
+        self.assertGreaterEqual(root_extras["frame_window_area_m2"], 0.055)
         self.assertAlmostEqual(root_extras["rider_thigh_length_m"], 0.45)
         self.assertAlmostEqual(root_extras["rider_shin_length_m"], 0.45)
         self.assertAlmostEqual(root_extras["rider_upper_arm_length_m"], 0.32)
@@ -572,11 +599,11 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertEqual(
             nodes["GEO_MainFrame_LOD0"]["extras"]["design_origin"],
-            "project-authored",
+            "photo-measured-reconstruction",
         )
         self.assertEqual(
             nodes["GEO_MainFrame_LOD0"]["extras"]["silhouette_family"],
-            "generic-modern-enduro",
+            "pole-voima-k2",
         )
         self.assertEqual(
             nodes["GEO_BikeComponents_LOD0"]["extras"]["drivetrain_role"],
@@ -601,14 +628,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         rights_text = (
             json.dumps(manifest) + json.dumps(root_extras)
         ).casefold()
-        for protected_reference in (
-            "pole",
-            "voima",
-            "kokkonen",
-            "maxxis",
-            "assegai",
-            "minion",
-        ):
+        for protected_reference in ("kokkonen", "maxxis", "assegai", "minion"):
             self.assertNotIn(protected_reference, rights_text)
         for mesh in document["meshes"]:
             for primitive in mesh["primitives"]:
