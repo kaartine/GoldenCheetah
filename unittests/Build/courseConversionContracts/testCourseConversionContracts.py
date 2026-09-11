@@ -113,17 +113,17 @@ class CourseConversionContractTest(unittest.TestCase):
         modes = ("WorkoutFirst", "Balanced", "RideFirst")
         self.assertEqual(
             [contracts[mode]["gradeScale"] for mode in modes],
-            [0.82, 1.0, 1.18])
+            [0.70, 1.0, 1.30])
         self.assertEqual(
             [contracts[mode]["technicality"] for mode in modes],
-            [0.15, 0.55, 0.95])
+            [0.10, 0.55, 0.95])
         self.assertEqual(
             [contracts[mode]["technicalTerrainExposurePercent"] for mode in modes],
-            [[25.0, 45.0], [50.0, 75.0], [75.0, 100.0]])
+            [[10.0, 30.0], [50.0, 75.0], [75.0, 100.0]])
         self.assertEqual(
             [contracts[mode]["technicalFeatureDensityPerTenSections"]
              for mode in modes],
-            [[2.0, 4.0], [5.0, 7.0], [8.0, 10.0]])
+            [[1.0, 3.0], [5.0, 7.0], [8.0, 10.0]])
         self.assertEqual(
             [contracts[mode]["minimumRuntimeWorkExposurePercent"]
              for mode in modes],
@@ -138,7 +138,7 @@ class CourseConversionContractTest(unittest.TestCase):
             [100.0, 100.0, 100.0])
         self.assertEqual(
             contracts["WorkoutFirst"]["allowedTechnicalTerrain"],
-            ["roots", "rollers", "easy-rock-garden", "log-over"])
+            ["roots", "rollers"])
         self.assertNotIn(
             "gap-jump", contracts["WorkoutFirst"]["allowedTechnicalTerrain"])
         for mode in modes:
@@ -231,7 +231,7 @@ class CourseConversionContractTest(unittest.TestCase):
                 self.assertIn(token, source)
         self.assertIn("prescriptionMetadata", conversion)
         self.assertIn("CurrentSchemaVersion = 4", document)
-        self.assertIn("CurrentConversionAlgorithmVersion = 3", document)
+        self.assertIn("CurrentConversionAlgorithmVersion = 5", document)
         self.assertIn("conversionAlgorithmVersion", document)
         self.assertIn("sourceLaps", document)
         self.assertIn("sourceTexts", document)
