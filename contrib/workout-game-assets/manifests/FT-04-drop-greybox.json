@@ -34,23 +34,19 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_drop.py",
-      "purpose": "source",
-      "sha256": "e4522407ff281b4c9df1b34bea41eddeee0e685b7ee6ee141304ad3c35155f42"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_Drop_Greybox.glb",
-      "purpose": "intermediate",
-      "sha256": "331ff826e2fe2d9d27e173b3e95ae96e734195f810a6f1e92bb82afbdb01096e"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/assets/Wg_Drop_Greybox.qml",
-      "purpose": "runtime",
-      "sha256": "ffbb26f5f64993f47139cb460bd013684022bbb0dda29f36833bb7aca675b7e1"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "ea8d431a7bf452ae0f774eee888f32dab088b04ae9bd26175d3b34e00267d6e1"
+      "purpose": "runtime"
     }
   ],
   "processing": {
@@ -89,18 +85,34 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [-1.7000000476837158, -0.699999988079071, 9.180000305175781],
-      "maximum": [1.7000000476837158, 0.30000001192092896, 10.550000190734863]
+      "minimum": [
+        -1.7000000476837158,
+        -0.699999988079071,
+        9.180000305175781
+      ],
+      "maximum": [
+        1.7000000476837158,
+        0.30000001192092896,
+        10.550000190734863
+      ]
     },
     "sockets": [
       {
         "name": "SOCKET_IN",
-        "positionMeters": [0.0, 0.0, 0.0],
+        "positionMeters": [
+          0.0,
+          0.0,
+          0.0
+        ],
         "halfWidthMeters": 0.68
       },
       {
         "name": "SOCKET_OUT",
-        "positionMeters": [0.0, 0.0, 24.0],
+        "positionMeters": [
+          0.0,
+          0.0,
+          24.0
+        ],
         "halfWidthMeters": 0.68
       }
     ],

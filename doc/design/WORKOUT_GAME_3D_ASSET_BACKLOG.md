@@ -140,9 +140,9 @@ review is complete.
   variant to `96` triangles. Every primitive must carry UV0 for later reuse of
   the project surface atlas; a rock or shrub needs one material pass and the
   stump or deadwood may use at most two.
-- Record project-generated provenance, generator version and hashes in the
-  normal machine-readable manifest. Repeated generation with the pinned
-  Blender patch release must be byte-identical.
+- Record project-generated provenance and generator version in the normal
+  machine-readable manifest. Git identifies committed files; repeated
+  generation with the pinned Blender patch release must still be byte-identical.
 - Render front, left-three-quarter and rear-three-quarter comparison catalogs
   at `960 x 540`, `47` degrees vertical FOV, identical exposure, lighting,
   camera distance, ground datum and per-cell world scale. The catalogs are

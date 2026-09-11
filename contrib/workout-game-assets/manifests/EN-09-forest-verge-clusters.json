@@ -33,78 +33,63 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_verge_clusters.py",
-      "purpose": "source",
-      "sha256": "ad16ba3dfb414f87f433db25d5c3361f50d6c82b4a0d4912faddb497f5bba9c1"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
-      "purpose": "source",
-      "sha256": "c8df898b0cdc6c3a5ede4e6cd573b070891febdb24bd30589f18997886eaee3a"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_forest_verge_cluster_audit.py",
-      "purpose": "source",
-      "sha256": "4fd1fbd2501cbdaf78dfcfef89f3e811837bf9e894660d8a429cad52ffb178d0"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_ForestVergeClusters.glb",
-      "purpose": "intermediate",
-      "sha256": "eb24acb0148b18f2b87e7f87b4254c5abd9e078bbbada8bfc16d1444587afb6f"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/WorkoutGameForestVergeCluster.qml",
-      "purpose": "runtime",
-      "sha256": "e0378b5f1deaf049410d35e1d4c7298b867d2a1b38524747fab8f986d8103951"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeDeadwoodHeather_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "f02369c5af569291293b6105fab0608269dee6e82a41ad3ce81bbf36fa188f29"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeGraniteBilberry_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "fdb02c9a81536dce84580310ca15bd6ff8bed6dd50ea968de783f3ca9ce40c40"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeRockGrass_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "985ba0bec7b3617952f99877846c928ac7640892af344d9f1bc00acf91413927"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeSaplingMushroom_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "afc2df25f06c3e32a78ad8ef2ef75cea9b61049b6f851ff8c89c7bdae1a490b1"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeShrubFlowers_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "8aacc67bd25ae3345dfa77d8b22e416e6557272e8c498e6c7dca5fed5824b7de"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeStumpFern_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "4603a3298ea503bfd15f55d758040498a0201b2b5d0f2aff2a80847911a72b3b"
+      "purpose": "runtime"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-audit.json",
-      "purpose": "reference",
-      "sha256": "c546a606bde31447355c22438eff710ee36bfc847c29dae906d5c3efc9c24f1d"
+      "purpose": "reference"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-front.png",
-      "purpose": "preview",
-      "sha256": "2c7116308d7f57adff3c56262b9e3defc3948a6a3ab808714df932a706e64a03"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-left-three-quarter.png",
-      "purpose": "preview",
-      "sha256": "3f011cf2cf5865c073f26b6a87f997f9165c466b499438360febc3a33044e5c0"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-rear-three-quarter.png",
-      "purpose": "preview",
-      "sha256": "e5fa90aa2882c378c9ac9e26e1583b4f8a5c52426c3620a97fbdf5c97fcd14db"
+      "purpose": "preview"
     }
   ],
   "processing": {
@@ -126,9 +111,9 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 95608,
+    "glbBytes": 86408,
     "trianglesLod0": 760,
-    "materials": 1,
+    "materials": 4,
     "textureBytes": 0,
     "nodes": [
       "GEO_VergeDeadwoodHeather_LOD0",
@@ -162,7 +147,7 @@
     "budgets": {
       "maxGlbBytes": 98304,
       "maxTrianglesLod0": 800,
-      "maxMaterials": 1,
+      "maxMaterials": 4,
       "maxTextureBytes": 0
     }
   },

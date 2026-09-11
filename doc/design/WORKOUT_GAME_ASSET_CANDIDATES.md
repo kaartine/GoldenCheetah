@@ -4,7 +4,7 @@
 
 This is a research shortlist, not an approval or download manifest. An asset
 enters the repository only after its exact archive, revision, license text,
-hashes and conversion steps pass `WORKOUT_GAME_ASSET_LICENSE_POLICY.md` and
+external-input hash and conversion steps pass `WORKOUT_GAME_ASSET_LICENSE_POLICY.md` and
 `workout_game_asset_manifest.schema.json`.
 
 No license-clean ready-made pack covers the complete modular MTB trail. The
@@ -135,7 +135,7 @@ materials and the required sockets and gameplay markers. Khronos glTF Validator
 2.0.0-dev.3.10 reports zero errors, warnings, infos and hints.
 
 The reviewed GLB and deterministic Qt Balsam 6.8.3 QML/`.mesh` output are now
-committed with an allowlisted manifest and exact hashes. The shared production
+committed with an allowlisted manifest; Git identifies its exact files. The shared production
 qrc loads every required node and renders the mesh in a real X11/OpenGL test.
 It remains a vertical-slice candidate until it has safe-line/bypass geometry
 and passes an extracted-AppImage rendering test.
