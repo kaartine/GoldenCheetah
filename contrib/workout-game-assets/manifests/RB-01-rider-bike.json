@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/sources/WG_RiderBike.blend",
     "retrievedAt": "2026-09-10",
     "originalFileName": "WG_RiderBike.blend",
-    "originalSha256": "bfb1b64e11959142f11e6dce4176c21133269ffcbcf32866952f7bbb7eebac6a",
+    "originalSha256": "39ef5607e7e88769d75b8bc56ea4702d29355ccc870ad888cf2178e23e717ee5",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/sources/WG_RiderBike.blend; contrib/workout-game-assets/blender/generate_rider_bike.py"
@@ -35,57 +35,57 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_rider_bike.py",
       "purpose": "source",
-      "sha256": "a5cf29585e7edb6ba94f226552382c41712d173d4cd8137f42c48c471b000578"
+      "sha256": "46e8a8f0fa6b0316b548b731ab7008542522b24a01a4575d0ba532e9c9e38c39"
     },
     {
       "path": "contrib/workout-game-assets/blender/sources/WG_RiderBike.blend",
       "purpose": "source",
-      "sha256": "bfb1b64e11959142f11e6dce4176c21133269ffcbcf32866952f7bbb7eebac6a"
+      "sha256": "39ef5607e7e88769d75b8bc56ea4702d29355ccc870ad888cf2178e23e717ee5"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_rider_bike_audit.py",
       "purpose": "source",
-      "sha256": "8917d741ac37b1513a071db364639a442cc31bd6b31e93a7d7a8b4f716341cc3"
+      "sha256": "ab889b583bd9286c9fa879c6e0a4d5ef47310e53479fcfd3c08dc8d9c1aeff7a"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_RiderBike.glb",
       "purpose": "intermediate",
-      "sha256": "3a6d79836495a3264250a1501f7eb8a017bc6a88cf6545c419dc6abd6efd63eb"
+      "sha256": "074ef71f2da7f9bc32506033e96fff3791e7babe9877cc467a84b0d9e8ab656b"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-audit.json",
       "purpose": "preview",
-      "sha256": "7c539018421b5b7e8a2a19a64e076e830dec4eacc8b8b79ae197a6df2e84b192"
+      "sha256": "907afe7e9899f1e5597ef4eade1a8aad7d9ca79bea81d7c14b5f9ae62d2b4a9c"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-front.png",
       "purpose": "preview",
-      "sha256": "268a20b52661ca5e553d576cce357812c9622ff5fc54ded86195921084a8f958"
+      "sha256": "be1b7a8b274dd5079ec6fb7a0e1c137b985ee9a7979efb7bba685ca114a0a62b"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-rear.png",
       "purpose": "preview",
-      "sha256": "2563a711ccb3326defd1a77976f146c61f41432c7cb292392cfab886deeb2330"
+      "sha256": "cea412a8f375aaf8393524c21919591ce122730386429b0715e80e90750542e8"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-side.png",
       "purpose": "preview",
-      "sha256": "04563bd99a06a1931606e75336dcc8234d27b7d72328480fc6d1928567bcf0a4"
+      "sha256": "1a2cb7914a4988da08d5418522e539c5036089c5e4e2acb7737cadbee1c1ba2a"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-chase.png",
       "purpose": "preview",
-      "sha256": "3aef48137c8dec8e9aadc27579233a9eb26baea42b3c982106a63b05cb065b77"
+      "sha256": "c2dfef83404a8e9d7380efea0ef0f50d5437d1590afd2a25a2797a161904fb06"
     },
     {
       "path": "src/Train/qml/WorkoutGameRiderBike.qml",
       "purpose": "runtime",
-      "sha256": "ea841a5cd50e9d91e3ff3db67b34f38d63faf70b21d143185408da5fd7d2471b"
+      "sha256": "2f0d43d62fa6911c729117467562dc568485b102f4eb2805f15556261d2e9b6b"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_BikeComponents_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "4e64d64270c7d7e8b8828b967086277a040386078c1040a3c7eaf6121f41c101"
+      "sha256": "4ed9049a92d49493681ff5dc2b4ef35316a8802162963857019af852122559a6"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh",
@@ -140,12 +140,12 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "5e131fde301fea3a5202939cc23402a5b94f6b920811e6e52032c462f176cd68"
+      "sha256": "82d01654ddfb0ab77caafaf56a650aeaeb30a8ce650889abaf574cd0d26a0c99"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_RearShock_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "054c029edc07cdd81d75213a5700a22ce933b5be35e5239db9c123df80049c1c"
+      "sha256": "578628befc7de7cf2bb678e18d9ea0015ff3241cd0ebd66697349c0e57c3bd8a"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh",
@@ -160,12 +160,12 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Swingarm_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "bc44741e1b4d3f7764513f6dc5aee07a0812563b38aae5a77f99a6f73d9559be"
+      "sha256": "5acf917b13513a1058b8f90f779c5e4d1f947809ac27300bb3440787aa8df585"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Torso_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "5d6e96f8883fd61b7525327fe19a6b3943e84aee71a5488c6905bb56650b3dd8"
+      "sha256": "ca145d21e623de9b2d3a19b36ab06da77582bf1d9d37f523bc0b0574998d9ac6"
     },
     {
       "path": "src/Resources/images/workout-game-surface-rider.png",
@@ -204,8 +204,8 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 361580,
-    "trianglesLod0": 5240,
+    "glbBytes": 365436,
+    "trianglesLod0": 5260,
     "materials": 8,
     "textureBytes": 0,
     "nodes": [

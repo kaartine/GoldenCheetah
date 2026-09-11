@@ -29,6 +29,11 @@ Node {
     readonly property real crankZ: 0
     readonly property real steerY: 1.085
     readonly property real steerZ: 0.465
+    readonly property real thighLength: 0.45
+    readonly property real shinLength: 0.45
+    readonly property real upperArmLength: 0.32
+    readonly property real forearmLength: 0.36
+    readonly property real gripHalfSpan: 0.39
     readonly property real wheelAngle:
         -distanceMeters / (2 * Math.PI * wheelRadius) * 360
     property real actionHeight: poseState === "preload" ? -0.09
@@ -135,12 +140,26 @@ Node {
         bodyX - 0.12, pelvisY, pelvisZ)
     readonly property vector3d rightHip: Qt.vector3d(
         bodyX + 0.12, pelvisY, pelvisZ)
-    readonly property vector3d leftKnee: Qt.vector3d(
-        -0.13, (leftHip.y + leftPedal.y) * 0.5 + 0.12,
-        (leftHip.z + leftPedal.z) * 0.5 + 0.10)
-    readonly property vector3d rightKnee: Qt.vector3d(
-        0.13, (rightHip.y + rightPedal.y) * 0.5 + 0.12,
-        (rightHip.z + rightPedal.z) * 0.5 + 0.10)
+    readonly property vector3d leftKnee: twoBoneJoint(
+        leftHip, leftPedal, thighLength, shinLength,
+        Qt.vector3d(-0.08, 0, 1))
+    readonly property vector3d rightKnee: twoBoneJoint(
+        rightHip, rightPedal, thighLength, shinLength,
+        Qt.vector3d(0.08, 0, 1))
+    readonly property vector3d leftShoulder: Qt.vector3d(
+        bodyX - 0.19, bodyY + 0.20, bodyZ + 0.08)
+    readonly property vector3d rightShoulder: Qt.vector3d(
+        bodyX + 0.19, bodyY + 0.20, bodyZ + 0.08)
+    readonly property vector3d leftHand: Qt.vector3d(
+        -gripHalfSpan, steerY, steerZ)
+    readonly property vector3d rightHand: Qt.vector3d(
+        gripHalfSpan, steerY, steerZ)
+    readonly property vector3d leftElbow: twoBoneJoint(
+        leftShoulder, leftHand, upperArmLength, forearmLength,
+        Qt.vector3d(-1, -0.25, -0.20))
+    readonly property vector3d rightElbow: twoBoneJoint(
+        rightShoulder, rightHand, upperArmLength, forearmLength,
+        Qt.vector3d(1, -0.25, -0.20))
 
     Texture {
         id: riderPixelTexture
@@ -169,6 +188,38 @@ Node {
         const dz = to.z - from.z
         return -Math.atan2(to.x - from.x, Math.sqrt(dy * dy + dz * dz))
                 * 180 / Math.PI
+    }
+
+    function twoBoneJoint(start, end, firstLength, secondLength, bendHint) {
+        const dx = end.x - start.x
+        const dy = end.y - start.y
+        const dz = end.z - start.z
+        const actualDistance = Math.sqrt(dx * dx + dy * dy + dz * dz)
+        const distance = Math.max(0.0001, Math.min(
+            firstLength + secondLength - 0.0001, actualDistance))
+        const ux = dx / Math.max(actualDistance, 0.0001)
+        const uy = dy / Math.max(actualDistance, 0.0001)
+        const uz = dz / Math.max(actualDistance, 0.0001)
+        const along = (firstLength * firstLength
+                       - secondLength * secondLength + distance * distance)
+                      / (2 * distance)
+        const height = Math.sqrt(Math.max(
+            0, firstLength * firstLength - along * along))
+        const projection = bendHint.x * ux + bendHint.y * uy + bendHint.z * uz
+        let bx = bendHint.x - projection * ux
+        let by = bendHint.y - projection * uy
+        let bz = bendHint.z - projection * uz
+        let bendLength = Math.sqrt(bx * bx + by * by + bz * bz)
+        if (bendLength < 0.0001) {
+            bx = 1
+            by = 0
+            bz = 0
+            bendLength = 1
+        }
+        return Qt.vector3d(
+            start.x + ux * along + bx / bendLength * height,
+            start.y + uy * along + by / bendLength * height,
+            start.z + uz * along + bz / bendLength * height)
     }
 
     PrincipledMaterial {
@@ -392,9 +443,9 @@ Node {
                 objectName: "riderBodyNode"
                 position: Qt.vector3d(root.bodyX, root.bodyY, root.bodyZ)
                 eulerRotation: Qt.vector3d(
-                    13 + 8 * root.standingBlend + root.actionPitch
+                    3 * root.standingBlend + root.actionPitch * 0.35
                         - (root.walking ? 5 : 0),
-                    -root.tailwhip * 0.68,
+                    0,
                     root.effortRoll)
                 Model {
                     source: "assets/meshes/geo_Torso_LOD0_mesh.mesh"
@@ -412,14 +463,14 @@ Node {
                 }
                 Model {
                     source: "assets/meshes/geo_Torso_LOD0_mesh.mesh"
-                    position: Qt.vector3d(0, -0.11, -0.19)
-                    scale: Qt.vector3d(0.72, 0.70, 0.60)
+                    position: Qt.vector3d(0, -0.16, -0.11)
+                    scale: Qt.vector3d(0.72, 0.36, 0.68)
                     materials: shortsMaterial
                     castsShadows: false
                     receivesShadows: false
                 }
                 Node {
-                    position: Qt.vector3d(0, 0.42, -0.03)
+                    position: Qt.vector3d(0, 0.42, 0.23)
                     Model {
                         source: "assets/meshes/geo_Head_LOD0_mesh.mesh"
                         materials: skinMaterial
@@ -466,47 +517,79 @@ Node {
                 from: root.leftKnee
                 to: root.leftPedal
                 thickness: 0.62
-                segmentMaterial: shortsMaterial
+                segmentMaterial: skinMaterial
             }
             LimbSegment {
+                objectName: "rightUpperLeg"
                 from: root.rightHip
                 to: root.rightKnee
                 segmentMaterial: shortsMaterial
             }
             LimbSegment {
+                objectName: "rightLowerLeg"
                 from: root.rightKnee
                 to: root.rightPedal
                 thickness: 0.62
-                segmentMaterial: shortsMaterial
+                segmentMaterial: skinMaterial
             }
 
             LimbSegment {
-                from: Qt.vector3d(root.bodyX - 0.19,
-                                  root.bodyY + 0.24, root.bodyZ - 0.04)
-                to: Qt.vector3d(root.bodyX - 0.25,
-                                root.bodyY + 0.07, root.bodyZ + 0.16)
+                objectName: "leftUpperArm"
+                from: root.leftShoulder
+                to: root.leftElbow
                 thickness: 0.58
             }
             LimbSegment {
-                from: Qt.vector3d(root.bodyX - 0.25,
-                                  root.bodyY + 0.07, root.bodyZ + 0.16)
-                to: Qt.vector3d(-0.30, root.steerY, root.steerZ)
+                objectName: "leftForearm"
+                from: root.leftElbow
+                to: root.leftHand
                 thickness: 0.52
-                segmentMaterial: jerseyMaterial
+                segmentMaterial: skinMaterial
             }
             LimbSegment {
-                from: Qt.vector3d(root.bodyX + 0.19,
-                                  root.bodyY + 0.24, root.bodyZ - 0.04)
-                to: Qt.vector3d(root.bodyX + 0.25,
-                                root.bodyY + 0.07, root.bodyZ + 0.16)
+                objectName: "rightUpperArm"
+                from: root.rightShoulder
+                to: root.rightElbow
                 thickness: 0.58
             }
             LimbSegment {
-                from: Qt.vector3d(root.bodyX + 0.25,
-                                  root.bodyY + 0.07, root.bodyZ + 0.16)
-                to: Qt.vector3d(0.30, root.steerY, root.steerZ)
+                objectName: "rightForearm"
+                from: root.rightElbow
+                to: root.rightHand
                 thickness: 0.52
-                segmentMaterial: jerseyMaterial
+                segmentMaterial: skinMaterial
+            }
+            LimbSegment {
+                objectName: "leftShoe"
+                from: Qt.vector3d(root.leftPedal.x, root.leftPedal.y,
+                                  root.leftPedal.z - 0.065)
+                to: Qt.vector3d(root.leftPedal.x, root.leftPedal.y,
+                                root.leftPedal.z + 0.075)
+                thickness: 0.58
+                segmentMaterial: riderDarkMaterial
+            }
+            LimbSegment {
+                objectName: "rightShoe"
+                from: Qt.vector3d(root.rightPedal.x, root.rightPedal.y,
+                                  root.rightPedal.z - 0.065)
+                to: Qt.vector3d(root.rightPedal.x, root.rightPedal.y,
+                                root.rightPedal.z + 0.075)
+                thickness: 0.58
+                segmentMaterial: riderDarkMaterial
+            }
+            LimbSegment {
+                objectName: "leftGlove"
+                from: Qt.vector3d(-0.45, root.steerY, root.steerZ)
+                to: Qt.vector3d(-0.34, root.steerY, root.steerZ)
+                thickness: 0.48
+                segmentMaterial: riderDarkMaterial
+            }
+            LimbSegment {
+                objectName: "rightGlove"
+                from: Qt.vector3d(0.34, root.steerY, root.steerZ)
+                to: Qt.vector3d(0.45, root.steerY, root.steerZ)
+                thickness: 0.48
+                segmentMaterial: riderDarkMaterial
             }
         }
     }

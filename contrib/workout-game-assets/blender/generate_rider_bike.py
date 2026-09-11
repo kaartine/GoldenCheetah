@@ -58,7 +58,7 @@ FORK_SPLIT = tuple(
 LOWER_LINK_PIVOT = (0.0, 0.50, -0.005)
 SEATSTAY_PIVOT = (0.0, 0.67, -0.205)
 ROCKER_PIVOT = (0.0, 0.755, -0.075)
-SHOCK_UPPER = (0.0, 0.90, -0.17)
+SHOCK_FRAME_MOUNT = (0.0, 0.515, 0.015)
 MOTOR_REFERENCE_RADIUS_M = 0.105
 MOTOR_HALF_WIDTH_M = 0.110
 CRANK_LENGTH_M = 0.160
@@ -95,17 +95,27 @@ TOP_BRIDGE_PROFILE = (
     (1.035, 0.492),
     (0.970, -0.175),
 )
-LOWER_SWINGARM_PROFILE = (
-    (0.325, -0.475),
-    (0.395, 0.015),
-    (0.495, 0.010),
-    (0.415, -0.500),
+FRAME_WINDOW_PROFILE = (
+    (0.540, 0.000),
+    (0.770, -0.100),
+    (0.910, -0.080),
+    (0.960, 0.380),
+    (0.760, 0.270),
 )
-UPPER_SWINGARM_PROFILE = (
-    (0.350, -0.455),
-    (0.625, -0.170),
-    (0.700, -0.245),
-    (0.405, -0.505),
+RIDER_THIGH_LENGTH_M = 0.45
+RIDER_SHIN_LENGTH_M = 0.45
+RIDER_UPPER_ARM_LENGTH_M = 0.32
+RIDER_FOREARM_LENGTH_M = 0.36
+RIDER_GRIP_HALF_SPAN_M = 0.39
+LOWER_SWINGARM_PATH = (
+    (0.3775, -0.455, 0.082, 0.044),
+    (0.395, -0.245, 0.080, 0.047),
+    (0.500, -0.005, 0.076, 0.054),
+)
+UPPER_SWINGARM_PATH = (
+    (0.3775, -0.455, 0.075, 0.040),
+    (0.500, -0.340, 0.073, 0.044),
+    (0.670, -0.205, 0.070, 0.050),
 )
 MAX_GLB_BYTES = 600 * 1024
 MAX_TRIANGLES = 9000
@@ -177,6 +187,14 @@ def vector_scale(value, amount):
 
 def vector_length(value):
     return math.sqrt(sum(component * component for component in value))
+
+
+def polygon_area(profile):
+    return abs(sum(
+        profile[index][0] * profile[(index + 1) % len(profile)][1]
+        - profile[(index + 1) % len(profile)][0] * profile[index][1]
+        for index in range(len(profile))
+    )) * 0.5
 
 
 def vector_normalize(value):
@@ -584,6 +602,8 @@ def tube_mesh(rods):
 def main_frame_mesh():
     vertices = []
     faces = []
+    # The battery member and upper bridge stay visually separate so the
+    # characteristic open front triangle survives low-poly rendering.
     append_path_member(
         vertices,
         faces,
@@ -599,9 +619,9 @@ def main_frame_mesh():
         vertices,
         faces,
         (
-            (0.430, -0.070, 0.078, 0.070),
-            (0.640, -0.105, 0.070, 0.060),
-            (0.900, -0.125, 0.054, 0.050),
+            (0.430, -0.070, 0.084, 0.075),
+            (0.620, -0.105, 0.070, 0.060),
+            (0.835, -0.145, 0.055, 0.050),
         ),
         sides=10,
     )
@@ -609,13 +629,14 @@ def main_frame_mesh():
         vertices,
         faces,
         (
-            (0.575, -0.115, 0.072, 0.060),
-            (0.700, 0.070, 0.069, 0.054),
-            (0.840, 0.290, 0.064, 0.050),
-            (0.985, 0.480, 0.058, 0.047),
+            (0.825, -0.145, 0.060, 0.052),
+            (0.895, 0.105, 0.056, 0.048),
+            (0.950, 0.335, 0.052, 0.044),
+            (0.995, 0.480, 0.048, 0.041),
         ),
         sides=10,
     )
+    append_side_prism(vertices, faces, MOTOR_PROFILE, MOTOR_HALF_WIDTH_M)
     for start, end, radius in (
         (HEAD_LOW, HEAD_HIGH, 0.046),
         ((0.0, 0.62, -0.09), ROCKER_PIVOT, 0.030),
@@ -629,18 +650,18 @@ def bike_components_mesh():
     faces = []
     append_elliptical_housing(
         vertices, faces, (0.0, 0.405, -0.005),
-        MOTOR_HALF_WIDTH_M, 0.125, 0.135,
+        MOTOR_HALF_WIDTH_M + 0.004, 0.082, 0.090,
     )
     append_side_prism(
         vertices,
         faces,
         (
-            (0.390, 0.105),
-            (0.725, 0.535),
-            (0.775, 0.525),
-            (0.455, 0.070),
+            (0.470, 0.100),
+            (0.705, 0.395),
+            (0.730, 0.380),
+            (0.500, 0.075),
         ),
-        DOWN_TUBE_HALF_WIDTH_M + 0.034,
+        DOWN_TUBE_HALF_WIDTH_M + 0.010,
     )
     append_tube(vertices, faces, HEAD_HIGH, STEER, 0.024, sides=8)
     append_tube(
@@ -718,16 +739,16 @@ def bike_components_mesh():
 def swingarm_mesh():
     vertices = []
     faces = []
+    append_path_member(vertices, faces, LOWER_SWINGARM_PATH, sides=10)
+    append_path_member(vertices, faces, UPPER_SWINGARM_PATH, sides=10)
     for side in (-1.0, 1.0):
         rear = (side * 0.068, REAR_AXLE[1], REAR_AXLE[2])
         lower = (side * 0.078, LOWER_LINK_PIVOT[1], LOWER_LINK_PIVOT[2])
         seatstay = (side * 0.070, SEATSTAY_PIVOT[1], SEATSTAY_PIVOT[2])
         rocker = (side * 0.060, ROCKER_PIVOT[1], ROCKER_PIVOT[2])
         for start, end, radius in (
-            (rear, lower, 0.038),
-            (rear, seatstay, 0.032),
-            (seatstay, rocker, 0.030),
-            (lower, rocker, 0.027),
+            (seatstay, rocker, 0.026),
+            (lower, rocker, 0.024),
         ):
             append_tube(vertices, faces, start, end, radius, sides=8)
     append_axle_cylinder(
@@ -780,11 +801,11 @@ def rear_shock_mesh():
         )),
         0.045,
     )
-    midpoint = vector_scale(vector_add(ROCKER_PIVOT, SHOCK_UPPER), 0.5)
+    midpoint = vector_scale(vector_add(ROCKER_PIVOT, SHOCK_FRAME_MOUNT), 0.5)
     append_tube(vertices, faces, ROCKER_PIVOT, midpoint, 0.021, sides=8)
-    append_tube(vertices, faces, midpoint, SHOCK_UPPER, 0.036, sides=10)
-    reservoir_start = (0.0, midpoint[1] + 0.010, midpoint[2] - 0.030)
-    reservoir_end = (0.0, midpoint[1] + 0.105, midpoint[2] - 0.070)
+    append_tube(vertices, faces, midpoint, SHOCK_FRAME_MOUNT, 0.036, sides=10)
+    reservoir_start = (0.0, midpoint[1] + 0.020, midpoint[2] - 0.020)
+    reservoir_end = (0.0, midpoint[1] - 0.020, midpoint[2] + 0.090)
     append_tube(
         vertices, faces, reservoir_start, reservoir_end, 0.030, sides=10,
         end_radius=0.025,
@@ -880,11 +901,11 @@ def torso_mesh():
         vertices,
         faces,
         (
-            (0.00, 0.015, 0.135, 0.105),
-            (0.18, 0.035, 0.185, 0.130),
-            (0.34, 0.060, 0.230, 0.145),
-            (0.43, 0.075, 0.205, 0.135),
-            (0.49, 0.080, 0.120, 0.105),
+            (0.00, 0.000, 0.135, 0.105),
+            (0.18, 0.070, 0.185, 0.130),
+            (0.34, 0.165, 0.230, 0.145),
+            (0.43, 0.225, 0.205, 0.135),
+            (0.49, 0.270, 0.120, 0.105),
         ),
         sides=10,
     )
@@ -1166,6 +1187,13 @@ def build_scene():
     root["contract_reach_m"] = RIDER_CONTRACT_REACH_M
     root["contract_stack_m"] = RIDER_CONTRACT_STACK_M
     root["head_tube_length_m"] = HEAD_TUBE_LENGTH_M
+    root["open_frame_window"] = True
+    root["frame_window_area_m2"] = polygon_area(FRAME_WINDOW_PROFILE)
+    root["rider_thigh_length_m"] = RIDER_THIGH_LENGTH_M
+    root["rider_shin_length_m"] = RIDER_SHIN_LENGTH_M
+    root["rider_upper_arm_length_m"] = RIDER_UPPER_ARM_LENGTH_M
+    root["rider_forearm_length_m"] = RIDER_FOREARM_LENGTH_M
+    root["rider_grip_half_span_m"] = RIDER_GRIP_HALF_SPAN_M
 
     materials = {name: make_material(name, color) for name, color in MATERIALS}
     for name, generator in (
@@ -1301,13 +1329,13 @@ def self_check(root) -> tuple[int, int]:
             or max(motor_z) - min(motor_z) < 0.20
             or MOTOR_HALF_WIDTH_M < 0.10):
         raise RuntimeError("Motor silhouette collapsed")
-    if (min(point[1] for point in LOWER_SWINGARM_PROFILE)
-            > REAR_AXLE[2] - 0.01
-            or max(point[1] for point in LOWER_SWINGARM_PROFILE)
+    if (min(point[1] for point in LOWER_SWINGARM_PATH)
+            > REAR_AXLE[2] + 0.01
+            or max(point[1] for point in LOWER_SWINGARM_PATH)
             < LOWER_LINK_PIVOT[2]
-            or min(point[1] for point in UPPER_SWINGARM_PROFILE)
-            > REAR_AXLE[2] - 0.01
-            or max(point[0] for point in UPPER_SWINGARM_PROFILE)
+            or min(point[1] for point in UPPER_SWINGARM_PATH)
+            > REAR_AXLE[2] + 0.01
+            or max(point[0] for point in UPPER_SWINGARM_PATH)
             < SEATSTAY_PIVOT[1]):
         raise RuntimeError("Long swingarm silhouette collapsed")
     linkage_points = (
@@ -1328,10 +1356,18 @@ def self_check(root) -> tuple[int, int]:
         "contract_reach_m": RIDER_CONTRACT_REACH_M,
         "contract_stack_m": RIDER_CONTRACT_STACK_M,
         "head_tube_length_m": HEAD_TUBE_LENGTH_M,
+        "frame_window_area_m2": polygon_area(FRAME_WINDOW_PROFILE),
+        "rider_thigh_length_m": RIDER_THIGH_LENGTH_M,
+        "rider_shin_length_m": RIDER_SHIN_LENGTH_M,
+        "rider_upper_arm_length_m": RIDER_UPPER_ARM_LENGTH_M,
+        "rider_forearm_length_m": RIDER_FOREARM_LENGTH_M,
+        "rider_grip_half_span_m": RIDER_GRIP_HALF_SPAN_M,
     }
     for property_name, expected in expected_root_properties.items():
         if not math.isclose(float(root[property_name]), expected, abs_tol=1e-9):
             raise RuntimeError(f"Root metadata mismatch for {property_name}")
+    if not root["open_frame_window"] or root["frame_window_area_m2"] < 0.10:
+        raise RuntimeError("Open frame window silhouette collapsed")
     rights_text = " ".join(
         str(root.get(key, "")) for key in (
             "reference_model",
@@ -1365,17 +1401,18 @@ def self_check(root) -> tuple[int, int]:
     critical_mesh_points = {
         "GEO_MainFrame_LOD0": (
             (0.108, 0.405, -0.030),
-            (0.054, 0.900, -0.125),
-            (0.058, 0.985, 0.480),
+            (0.055, 0.835, -0.145),
+            (0.048, 0.995, 0.480),
             HEAD_HIGH,
         ),
         "GEO_BikeComponents_LOD0": (
-            (MOTOR_HALF_WIDTH_M, 0.405, -0.005),
+            (MOTOR_HALF_WIDTH_M + 0.004, 0.405, -0.005),
             (-0.39, STEER[1], STEER[2]),
             (0.39, STEER[1], STEER[2]),
         ),
         "GEO_Swingarm_LOD0": (
-            (0.068, REAR_AXLE[1], REAR_AXLE[2]),
+            (LOWER_SWINGARM_PATH[0][2], LOWER_SWINGARM_PATH[0][0],
+             LOWER_SWINGARM_PATH[0][1]),
             (0.078, LOWER_LINK_PIVOT[1], LOWER_LINK_PIVOT[2]),
             (0.070, SEATSTAY_PIVOT[1], SEATSTAY_PIVOT[2]),
             (0.060, ROCKER_PIVOT[1], ROCKER_PIVOT[2]),
@@ -1385,7 +1422,7 @@ def self_check(root) -> tuple[int, int]:
             (0.052, FORK_SPLIT[1], FORK_SPLIT[2]),
             (0.052, HEAD_LOW[1], HEAD_LOW[2]),
         ),
-        "GEO_RearShock_LOD0": (ROCKER_PIVOT, SHOCK_UPPER),
+        "GEO_RearShock_LOD0": (ROCKER_PIVOT, SHOCK_FRAME_MOUNT),
         "GEO_Crank_LOD0": (
             (-PEDAL_CONTACT_X_M,
              CRANK[1] + CRANK_LENGTH_M, CRANK[2]),
@@ -1404,7 +1441,7 @@ def self_check(root) -> tuple[int, int]:
         "GEO_FrontWheel_LOD0": (
             (0.075, FRONT_AXLE[1], FRONT_AXLE[2]),
         ),
-        "GEO_Torso_LOD0": ((0.12, 0.49, 0.080),),
+        "GEO_Torso_LOD0": ((0.12, 0.49, 0.270),),
         "GEO_HairBeard_LOD0": ((0.105, -0.125, 0.025),),
         "GEO_Eyewear_LOD0": ((0.125, 0.015, 0.105),),
         "GEO_HelmetAccent_LOD0": ((0.151, -0.050, -0.168),),

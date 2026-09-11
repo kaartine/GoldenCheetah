@@ -554,6 +554,13 @@ class TestWorkoutGameAssets(unittest.TestCase):
             root_extras["helmet_reference"],
             "black-white open-face enduro helmet with visor",
         )
+        self.assertTrue(root_extras["open_frame_window"])
+        self.assertGreaterEqual(root_extras["frame_window_area_m2"], 0.10)
+        self.assertAlmostEqual(root_extras["rider_thigh_length_m"], 0.45)
+        self.assertAlmostEqual(root_extras["rider_shin_length_m"], 0.45)
+        self.assertAlmostEqual(root_extras["rider_upper_arm_length_m"], 0.32)
+        self.assertAlmostEqual(root_extras["rider_forearm_length_m"], 0.36)
+        self.assertAlmostEqual(root_extras["rider_grip_half_span_m"], 0.39)
         self.assertAlmostEqual(root_extras["tire_width_m"], 0.0635, places=4)
         self.assertEqual(
             nodes["GEO_FrontWheel_LOD0"]["extras"]["tread_role"],

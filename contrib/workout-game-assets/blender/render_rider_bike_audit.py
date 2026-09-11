@@ -18,6 +18,13 @@ from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generate_tabletop import canonical_to_blender, make_material
+from generate_rider_bike import (
+    RIDER_FOREARM_LENGTH_M,
+    RIDER_GRIP_HALF_SPAN_M,
+    RIDER_SHIN_LENGTH_M,
+    RIDER_THIGH_LENGTH_M,
+    RIDER_UPPER_ARM_LENGTH_M,
+)
 
 
 WIDTH = 960
@@ -73,7 +80,7 @@ def place_canonical(obj, position, rotation_x=0.0) -> None:
     obj.rotation_euler[0] = math.radians(rotation_x)
 
 
-def place_segment(source, name, start, end, thickness) -> None:
+def place_segment(source, name, start, end, thickness, material=None) -> None:
     segment = source.copy()
     segment.data = source.data.copy()
     segment.name = name
@@ -86,59 +93,107 @@ def place_segment(source, name, start, end, thickness) -> None:
     segment.location = start_blender
     segment.rotation_euler = delta.to_track_quat("Z", "Y").to_euler()
     segment.scale = (thickness, thickness, delta.length)
+    if material is not None:
+        segment.data.materials.clear()
+        segment.data.materials.append(material)
+
+
+def two_bone_joint(start, end, first_length, second_length, bend_hint):
+    delta = Vector(end) - Vector(start)
+    actual_distance = delta.length
+    distance = max(0.0001, min(
+        first_length + second_length - 0.0001, actual_distance,
+    ))
+    direction = delta.normalized()
+    along = (
+        first_length * first_length - second_length * second_length
+        + distance * distance
+    ) / (2.0 * distance)
+    height = math.sqrt(max(0.0, first_length * first_length - along * along))
+    hint = Vector(bend_hint)
+    bend = hint - direction * hint.dot(direction)
+    if bend.length < 0.0001:
+        bend = Vector((1.0, 0.0, 0.0))
+    return tuple(Vector(start) + direction * along + bend.normalized() * height)
 
 
 def assemble_neutral_pose(objects) -> None:
-    body_origin = (0.0, 1.23, -0.03)
-    body_pitch = 13.0
     for name in ("GEO_Torso_LOD0", "GEO_JerseyAccent_LOD0"):
-        place_canonical(objects[name], (0.0, 1.08, -0.12), body_pitch)
+        place_canonical(objects[name], (0.0, 1.08, -0.12))
 
     shorts = objects["GEO_Torso_LOD0"].copy()
     shorts.data = objects["GEO_Torso_LOD0"].data.copy()
     shorts.name = "AUDIT_Shorts"
     shorts.parent = None
     bpy.context.collection.objects.link(shorts)
-    place_canonical(shorts, (0.0, 1.12, -0.22), body_pitch)
-    shorts.scale = (0.72, 0.60, 0.70)
+    place_canonical(shorts, (0.0, 1.07, -0.14))
+    shorts.scale = (0.72, 0.36, 0.68)
     shorts.data.materials.clear()
     shorts.data.materials.append(objects["GEO_HairBeard_LOD0"].data.materials[0])
 
-    head_origin = (0.0, 1.69, -0.005)
+    head_origin = (0.0, 1.65, 0.20)
     for name in (
         "GEO_Head_LOD0",
         "GEO_HairBeard_LOD0",
         "GEO_Eyewear_LOD0",
     ):
-        place_canonical(objects[name], head_origin, body_pitch)
+        place_canonical(objects[name], head_origin)
     for name in ("GEO_Helmet_LOD0", "GEO_HelmetAccent_LOD0"):
-        place_canonical(objects[name], (0.0, 1.735, -0.005), body_pitch)
+        place_canonical(objects[name], (0.0, 1.695, 0.20))
 
     left_pedal = (-0.13, 0.5375, 0.0)
     right_pedal = (0.13, 0.2175, 0.0)
     left_hip = (-0.12, 1.08, -0.12)
     right_hip = (0.12, 1.08, -0.12)
-    left_knee = (-0.13, 0.93, 0.04)
-    right_knee = (0.13, 0.75, -0.01)
-    left_shoulder = (-0.19, 1.47, -0.07)
-    right_shoulder = (0.19, 1.47, -0.07)
-    left_elbow = (-0.25, 1.30, 0.13)
-    right_elbow = (0.25, 1.30, 0.13)
-    left_hand = (-0.30, 1.085, 0.465)
-    right_hand = (0.30, 1.085, 0.465)
+    left_knee = two_bone_joint(
+        left_hip, left_pedal, RIDER_THIGH_LENGTH_M, RIDER_SHIN_LENGTH_M,
+        (-0.08, 0.0, 1.0),
+    )
+    right_knee = two_bone_joint(
+        right_hip, right_pedal, RIDER_THIGH_LENGTH_M, RIDER_SHIN_LENGTH_M,
+        (0.08, 0.0, 1.0),
+    )
+    left_shoulder = (-0.19, 1.43, 0.05)
+    right_shoulder = (0.19, 1.43, 0.05)
+    left_hand = (-RIDER_GRIP_HALF_SPAN_M, 1.085, 0.465)
+    right_hand = (RIDER_GRIP_HALF_SPAN_M, 1.085, 0.465)
+    left_elbow = two_bone_joint(
+        left_shoulder, left_hand,
+        RIDER_UPPER_ARM_LENGTH_M, RIDER_FOREARM_LENGTH_M,
+        (-1.0, -0.25, -0.20),
+    )
+    right_elbow = two_bone_joint(
+        right_shoulder, right_hand,
+        RIDER_UPPER_ARM_LENGTH_M, RIDER_FOREARM_LENGTH_M,
+        (1.0, -0.25, -0.20),
+    )
     limb = objects["GEO_Limb_LOD0"]
     limb.hide_render = True
-    for index, (start, end, thickness) in enumerate((
-        (left_hip, left_knee, 0.72),
-        (left_knee, left_pedal, 0.62),
-        (right_hip, right_knee, 0.72),
-        (right_knee, right_pedal, 0.62),
-        (left_shoulder, left_elbow, 0.58),
-        (left_elbow, left_hand, 0.52),
-        (right_shoulder, right_elbow, 0.58),
-        (right_elbow, right_hand, 0.52),
+    dark_material = objects["GEO_HairBeard_LOD0"].data.materials[0]
+    skin_material = objects["GEO_Head_LOD0"].data.materials[0]
+    for index, (start, end, thickness, material) in enumerate((
+        (left_hip, left_knee, 0.72, dark_material),
+        (left_knee, left_pedal, 0.62, skin_material),
+        (right_hip, right_knee, 0.72, dark_material),
+        (right_knee, right_pedal, 0.62, skin_material),
+        (left_shoulder, left_elbow, 0.58, None),
+        (left_elbow, left_hand, 0.52, skin_material),
+        (right_shoulder, right_elbow, 0.58, None),
+        (right_elbow, right_hand, 0.52, skin_material),
+        ((left_pedal[0], left_pedal[1], left_pedal[2] - 0.065),
+         (left_pedal[0], left_pedal[1], left_pedal[2] + 0.075),
+         0.58, dark_material),
+        ((right_pedal[0], right_pedal[1], right_pedal[2] - 0.065),
+         (right_pedal[0], right_pedal[1], right_pedal[2] + 0.075),
+         0.58, dark_material),
+        ((-0.45, 1.085, 0.465), (-0.34, 1.085, 0.465),
+         0.48, dark_material),
+        ((0.34, 1.085, 0.465), (0.45, 1.085, 0.465),
+         0.48, dark_material),
     )):
-        place_segment(limb, f"AUDIT_Limb_{index}", start, end, thickness)
+        place_segment(
+            limb, f"AUDIT_Limb_{index}", start, end, thickness, material,
+        )
 
     objects["GEO_Shadow_LOD0"].hide_render = True
 

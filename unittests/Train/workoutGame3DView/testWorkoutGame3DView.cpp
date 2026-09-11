@@ -59,6 +59,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #if defined(Q_OS_LINUX)
@@ -3983,6 +3984,104 @@ private slots:
                          - 2.0f * 0.3775f) < 0.001f);
         QVERIFY(std::abs(secondLeftPedal.z() + secondRightPedal.z())
                 < 0.001f);
+    }
+
+    void articulatedRiderKeepsAnatomicalJointsOnPedalsAndGrips()
+    {
+        const WorkoutGameCourse course = catalogCourse(
+                WorkoutGameTerrainKind::SmoothTrail);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        viewModel.setFrame(frameAt(road, 8.0), 190.0, 190.0, 86, 148, 6);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(960, 540);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QCoreApplication::processEvents();
+
+        const auto segment = [&window](const QString &name) {
+            return window.rootObject()->findChild<QObject *>(name);
+        };
+        const auto point = [](QObject *object, const char *property) {
+            return object->property(property).value<QVector3D>();
+        };
+        const auto verifyLength = [&point](QObject *object, double expected) {
+            const double length = (point(object, "to")
+                                   - point(object, "from")).length();
+            QVERIFY(std::abs(length - expected) < 0.012);
+        };
+        const auto verifyConnected = [&point](QObject *first, QObject *second) {
+            QVERIFY((point(first, "to") - point(second, "from")).length()
+                    < 0.001);
+        };
+
+        QObject *leftUpperLeg = segment(QStringLiteral("leftUpperLeg"));
+        QObject *leftLowerLeg = segment(QStringLiteral("leftLowerLeg"));
+        QObject *rightUpperLeg = segment(QStringLiteral("rightUpperLeg"));
+        QObject *rightLowerLeg = segment(QStringLiteral("rightLowerLeg"));
+        QObject *leftUpperArm = segment(QStringLiteral("leftUpperArm"));
+        QObject *leftForearm = segment(QStringLiteral("leftForearm"));
+        QObject *rightUpperArm = segment(QStringLiteral("rightUpperArm"));
+        QObject *rightForearm = segment(QStringLiteral("rightForearm"));
+        QObject *leftPedal = segment(QStringLiteral("leftPedalContact"));
+        QObject *rightPedal = segment(QStringLiteral("rightPedalContact"));
+        QObject *leftShoe = segment(QStringLiteral("leftShoe"));
+        QObject *rightShoe = segment(QStringLiteral("rightShoe"));
+        QObject *leftGlove = segment(QStringLiteral("leftGlove"));
+        QObject *rightGlove = segment(QStringLiteral("rightGlove"));
+        for (QObject *object : {leftUpperLeg, leftLowerLeg,
+                                rightUpperLeg, rightLowerLeg,
+                                leftUpperArm, leftForearm,
+                                rightUpperArm, rightForearm,
+                                leftPedal, rightPedal,
+                                leftShoe, rightShoe,
+                                leftGlove, rightGlove}) {
+            QVERIFY(object);
+        }
+
+        for (QObject *limb : {leftUpperLeg, leftLowerLeg,
+                              rightUpperLeg, rightLowerLeg}) {
+            verifyLength(limb, 0.45);
+        }
+        verifyLength(leftUpperArm, 0.32);
+        verifyLength(rightUpperArm, 0.32);
+        verifyLength(leftForearm, 0.36);
+        verifyLength(rightForearm, 0.36);
+        verifyConnected(leftUpperLeg, leftLowerLeg);
+        verifyConnected(rightUpperLeg, rightLowerLeg);
+        verifyConnected(leftUpperArm, leftForearm);
+        verifyConnected(rightUpperArm, rightForearm);
+        QVERIFY((point(leftLowerLeg, "to")
+                 - leftPedal->property("position").value<QVector3D>()).length()
+                < 0.001);
+        QVERIFY((point(rightLowerLeg, "to")
+                 - rightPedal->property("position").value<QVector3D>()).length()
+                < 0.001);
+        QCOMPARE(point(leftForearm, "to"), QVector3D(-0.39f, 1.085f, 0.465f));
+        QCOMPARE(point(rightForearm, "to"), QVector3D(0.39f, 1.085f, 0.465f));
+        for (const auto &[shoe, pedal] : {
+                 std::pair(leftShoe, leftPedal),
+                 std::pair(rightShoe, rightPedal)}) {
+            const QVector3D contact = pedal->property("position").value<QVector3D>();
+            QCOMPARE(point(shoe, "from").x(), contact.x());
+            QCOMPARE(point(shoe, "to").x(), contact.x());
+            QCOMPARE(point(shoe, "from").y(), contact.y());
+            QCOMPARE(point(shoe, "to").y(), contact.y());
+            QVERIFY(point(shoe, "from").z() < contact.z());
+            QVERIFY(point(shoe, "to").z() > contact.z());
+        }
+        QVERIFY(point(leftGlove, "from").x() < -0.39f);
+        QVERIFY(point(leftGlove, "to").x() > -0.39f);
+        QVERIFY(point(rightGlove, "from").x() < 0.39f);
+        QVERIFY(point(rightGlove, "to").x() > 0.39f);
     }
 
     void riderReadabilitySourceUsesScopedLightingWithoutEmission()
