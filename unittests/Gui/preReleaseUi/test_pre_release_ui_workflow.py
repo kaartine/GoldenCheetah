@@ -601,6 +601,30 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                 recording, recording.stat().st_size
             )
 
+    def test_reopened_stop_dialog_accepts_stale_atspi_showing_state(self):
+        button = object()
+        driver = mock.Mock()
+        driver.find.side_effect = [UI.UiFailure("stale state"), button]
+        workflow = object.__new__(UI.WorkoutGameUiWorkflow)
+        workflow.driver = driver
+
+        workflow.activate_stop_dialog_button("Save")
+
+        self.assertEqual(
+            driver.find.call_args_list,
+            [
+                mock.call(
+                    "Save", "push button", showing=True, timeout=30.0
+                ),
+                mock.call("Save", "push button", timeout=1.0),
+            ],
+        )
+        self.assertEqual(
+            driver.send_named_key.call_args_list,
+            [mock.call("Tab"), mock.call("Tab"), mock.call("Return")],
+        )
+        driver.activate.assert_not_called()
+
     def test_stop_save_reopens_the_new_isolated_activity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
