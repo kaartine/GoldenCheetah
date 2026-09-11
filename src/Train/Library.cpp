@@ -512,7 +512,9 @@ Library::removeRef(Context *context, QString ref)
 LibrarySearchDialog::LibrarySearchDialog(Context *context) : context(context)
 {
     setAttribute(Qt::WA_DeleteOnClose);
-    setWindowTitle(tr("Search for Workouts, Syncs and Media"));
+    const QString dialogTitle = tr("Search for Workouts, Syncs and Media");
+    setWindowTitle(dialogTitle);
+    setAccessibleName(dialogTitle);
     HelpWhatsThis *help = new HelpWhatsThis(this);
     this->setWhatsThis(help->getWhatsThisText(HelpWhatsThis::MenuBar_Tools_ScanDisk_WorkoutVideo));
     setMinimumWidth(600 *dpiXFactor);
