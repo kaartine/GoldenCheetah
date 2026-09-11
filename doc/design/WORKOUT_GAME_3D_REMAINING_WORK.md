@@ -119,9 +119,10 @@ the Quick 3D View suite, where Qt 6.8.3 retains a known 600-byte offscreen
 renderer allocation after its platform-dependent cases are skipped.
 
 The required inventory reconciles 173/173 projects. Its earlier X11 run passed
-172 projects and stopped only at the AppImage policy project because two
-protected inventory hashes were stale. After updating exactly those hashes,
-the complete AppImage project, including reproducibility, SBOM, credential,
+172 projects and stopped only at the AppImage policy project because the
+former protected-hash inventory was stale. CI policy now compares candidates
+directly with the trusted base snapshot. The complete AppImage project,
+including reproducibility, SBOM, credential,
 immutable-action and private-OAuth gates, passes without any other source
 change. This split-run evidence covers every project at that revision; the
 current single-run confirmation is the B4 aggregate rollup.

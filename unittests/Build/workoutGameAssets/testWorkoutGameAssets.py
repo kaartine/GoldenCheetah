@@ -238,15 +238,10 @@ class TestWorkoutGameAssets(unittest.TestCase):
         with self.assertRaisesRegex(assets.AssetValidationError, "too few items"):
             assets.validate_against_schema(manifest, schema)
 
-    def test_hash_mismatch_is_rejected(self) -> None:
-        fixture = AssetFixture()
-        try:
-            qml = fixture.root / "src/Train/qml/assets/Wg_Tabletop_Greybox.qml"
-            qml.write_text(qml.read_text(encoding="utf-8") + "// changed\n")
-            with self.assertRaisesRegex(assets.AssetValidationError, "hash mismatch"):
-                assets.validate_repository(fixture.root)
-        finally:
-            fixture.close()
+    def test_repository_file_hashes_are_not_duplicated_in_manifests(self) -> None:
+        manifest = assets.load_json_file(MANIFEST_PATH)
+        for entry in manifest["files"]:
+            self.assertEqual(set(entry), {"path", "purpose"})
 
     def test_parent_traversal_path_is_rejected(self) -> None:
         fixture = AssetFixture()
@@ -278,11 +273,6 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 + '\nRuntimeLoader { source: "https://example.invalid/model.glb" }\n',
                 encoding="utf-8",
             )
-            qml_hash = sha256(qml)
-            for entry in fixture.manifest["files"]:
-                if entry["path"].endswith("Wg_Tabletop_Greybox.qml"):
-                    entry["sha256"] = qml_hash
-            fixture.write_manifest()
             with self.assertRaisesRegex(
                 assets.AssetValidationError, "dynamic or external"
             ):
@@ -638,7 +628,6 @@ class TestWorkoutGameAssets(unittest.TestCase):
             self.assertTrue(mesh_path.is_file(), relative_path)
             self.assertIn(relative_path, manifest_files)
             self.assertEqual(manifest_files[relative_path]["purpose"], "runtime")
-            self.assertEqual(manifest_files[relative_path]["sha256"], sha256(mesh_path))
             self.assertIn(f'assets/meshes/{mesh_name}', runtime_qml)
             self.assertIn(f'alias="qml/assets/meshes/{mesh_name}"', resources)
 

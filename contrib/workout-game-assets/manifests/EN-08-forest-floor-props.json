@@ -29,83 +29,67 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
-      "purpose": "source",
-      "sha256": "efc0b0b9ef69b238df0d9e2d941a4a1856b2d38239d26947c093b1ecb8ebf4af"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_forest_floor_prop_audit.py",
-      "purpose": "source",
-      "sha256": "1eaa38afd81ba98c3bc65735b2ef92c6c4ea3dbb210dd6212afaf55950b30401"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_ForestFloorProps.glb",
-      "purpose": "intermediate",
-      "sha256": "7e1f793cb6e9c1128f833a334ca70bffd1230e44982b2e0b435fe99e3c2c0d06"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/WorkoutGameForestFloorProp.qml",
-      "purpose": "runtime",
-      "sha256": "478885ee083d9c0b8c18b094842c056628ccf6a2c44141a7189fa818481f1360"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DeadwoodFallen_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "400f9f226aa6b97286d21332ad4a6af04fe4f16666c6a7dd23c5e564790ea330"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_GraniteLow_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "fb7f4d7fee25c1c318f6047664b4605a1bfc4a4d1a8cc21d5fe3a1073f75d707"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_GraniteSlab_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "ba195fd89642773fd7965b34f7b5deb67a17c77c9db1f8b5d620354ffab90a8d"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_GraniteUpright_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "eb52aa87e32258b4f70dcca6cf07d200afb8ed835b463ab861e017f71345e0cb"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_StumpRooted_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "44766ab3edd0c1e258d7f0ce489a3843e6170e3fd669c1ce465727172b320be7"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_UnderstoryBilberry_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "37bef73c2a684645aa5335ccc0a57547a087c6859b82c0ee8cae075ea0d06ce4"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_UnderstoryFern_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "9e1b4b6bd98a4de4ab98531050515923bb740fec86dc48169d1bb42ed17b7b67"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_UnderstoryHeather_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "dcb3eafe5d3a7283c3b2aef01c9734e4edd3ac7b704e25cc4f39d2832ff86d44"
+      "purpose": "runtime"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-audit.json",
-      "purpose": "reference",
-      "sha256": "ee434d7cb3b8bafadddec59a1a9a03a47e135c0cc250d57870dbfc884bf09425"
+      "purpose": "reference"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-front.png",
-      "purpose": "preview",
-      "sha256": "673d0ad20db80e9017619cbf2ee54cf5eea7b773710068544078c40ad36aee14"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-left-three-quarter.png",
-      "purpose": "preview",
-      "sha256": "43cc527c1c5b358c39497e2e27456b20ed1ba3239fd005d24210bf650e6d8d30"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-08/EN-08-rear-three-quarter.png",
-      "purpose": "preview",
-      "sha256": "67a7024735ace97e2197b4a1786ebc304fa621fac7403135ea25bc9f0bec85b6"
+      "purpose": "preview"
     }
   ],
   "processing": {

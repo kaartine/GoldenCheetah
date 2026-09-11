@@ -34,23 +34,19 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_drop.py",
-      "purpose": "source",
-      "sha256": "b436484413e5104c895ffb165f91e156b26173bb349a5f6e08e2ae8fbec5a764"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_Drop_Greybox.glb",
-      "purpose": "intermediate",
-      "sha256": "0d933599758389c047f25b6ebd8cb39cc41b25a2cc477f5e84b489c0a48bdba0"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/assets/Wg_Drop_Greybox.qml",
-      "purpose": "runtime",
-      "sha256": "ffbb26f5f64993f47139cb460bd013684022bbb0dda29f36833bb7aca675b7e1"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "53e3a2e304fd03e4256e10d626ed586fd405ea1a147724acbe315f3752e78388"
+      "purpose": "runtime"
     }
   ],
   "processing": {

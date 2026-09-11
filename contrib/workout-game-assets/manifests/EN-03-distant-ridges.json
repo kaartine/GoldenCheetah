@@ -30,23 +30,19 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_distant_ridges.py",
-      "purpose": "source",
-      "sha256": "a2ed42f79677bef6842f46064cee0b83db0ce2d7f9fd6edf56386157afa14237"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_DistantRidges.glb",
-      "purpose": "intermediate",
-      "sha256": "cf7477b0139b9086380af0b9a1a8384d93f92d8faa41e09b317c02f3e5f5c3af"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/WorkoutGameDistantTerrain.qml",
-      "purpose": "runtime",
-      "sha256": "82aa1623f674b4d9f5356bc7bfb6378a0c2fe1aad1f3ceff450cb0b433fb1734"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DistantRidges_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "aef67837b2b305f4d92878c8baeb788814ec8532aac0773e957b269e47f54bc1"
+      "purpose": "runtime"
     }
   ],
   "processing": {

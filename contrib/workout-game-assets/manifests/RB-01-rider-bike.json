@@ -34,138 +34,111 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_rider_bike.py",
-      "purpose": "source",
-      "sha256": "120be205c43cb20e8b9a8e8e796551bcd67a129f5764e9db6bb1f63fd5675b84"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_rider_bike_audit.py",
-      "purpose": "source",
-      "sha256": "6e20312606d4a9a0df034ca500505ab93ce5064227dab5f9c4c67a2248f2ad22"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_RiderBike.glb",
-      "purpose": "intermediate",
-      "sha256": "49a9cc20828a4eadf356c25722ff63ea2aebead732e1e278c0b7bd70e4f1dea9"
+      "purpose": "intermediate"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-audit.json",
-      "purpose": "preview",
-      "sha256": "da63ec84b11480c877ea0e7ce28929296dfa5a443c02d920973c29815ea3a7a1"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-front.png",
-      "purpose": "preview",
-      "sha256": "8a7d8c09d7bb185cc6b662b3099568cd36cf56e1420f7dd354be18a8c0c573ab"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-rear.png",
-      "purpose": "preview",
-      "sha256": "7ef9633c1d40d79324ff01f15845df4f3d3cff823aa57e26dd88fa6624fdf5d4"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-side.png",
-      "purpose": "preview",
-      "sha256": "34bfc99c2987d88f4bfd9c01f0c58cc494f6517279e7a38f2d7ef5c00c91a7b1"
+      "purpose": "preview"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-chase.png",
-      "purpose": "preview",
-      "sha256": "561bb567543fbd889289f871da822bddef8422e670c808c63fb81a6c38ca1fde"
+      "purpose": "preview"
     },
     {
       "path": "src/Train/qml/WorkoutGameRiderBike.qml",
-      "purpose": "runtime",
-      "sha256": "ea841a5cd50e9d91e3ff3db67b34f38d63faf70b21d143185408da5fd7d2471b"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_BikeComponents_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "9cbd5ee7be44c9c8cc8fd19ffbfb71f85894a66d28c1953c438e066892e37cdc"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Crank_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "0731f0e33c721231c1ad1794ab1f0be4ec27f1e0f103648ccc694508b97fe056"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Eyewear_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "785bacdcc4e04ba330a48e7374c3c1b5f9e4a8be48de609919e123dc076d8abf"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Fork_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "1747be0ab177ab7868babaf935959b1588587c5abd2ae649ed0e609c928fbbc5"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "7b0105f249d1fd0b1e724037d3fcc55420a1999ab9e5d60361c403d1b517b30e"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_HairBeard_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "95994a2b0424e255697bcdd2cef6943a5c5bc977827fefba6a0231d6c33ab243"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Head_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "3a765427093f81df86edfdc8a0b61e7cf877515ab1df76bcacd088f0de313743"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "6f67265eda2eb66c9758d6ce7d120ba0d07ac59d505ff974ddb2a13d7eab2fc0"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_HelmetAccent_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "d1c1b7cee4792a075ff6b5ceedac41b7fb2fee2d4c07205df7c15e1d7888215d"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_JerseyAccent_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "d08fe252d80f3540999c4aa87a627db25327d1625142fa3a1b665a2de0cd52d6"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Limb_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "16d6f3d2b35a7b33d41be788dc75cc2adcc37d89271c43a36c8bc15f6347f5db"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "5c5e61b67251b1061c2f2ed4cb12f761f321fd34a3a32b8bc0fec27aeba5555d"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_RearShock_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "8a866687d47f2c1b4ab22f8632bed9b2afa96eb1ba585927b2566041978495d2"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "a520dc8aa242a9721ae280d39db6ea7026529ac49d4948e76f95bab56532cea0"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Shadow_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "64528a34eb93d7ee298d95b742ea2b00c246e7268769ea72c8b99c7b0918c7a7"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Swingarm_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "9bbabb385fc6c2b0cd57b736e4a0315568e18f18a99507d1585d0ba4d124bc01"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Torso_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "831ff029230c0bf052f0876056b0c44ac59186b1ffe65a01ff8a010f77a87290"
+      "purpose": "runtime"
     },
     {
       "path": "src/Resources/images/workout-game-surface-rider.png",
-      "purpose": "texture",
-      "sha256": "6d7d4395be1ee3aa1b9c4f6c04fd362aede586b320280ee62abce72a9744d552"
+      "purpose": "texture"
     }
   ],
   "processing": {

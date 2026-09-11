@@ -38,9 +38,16 @@ downstream workflow publishes pending and final status directly to the
 candidate commit. Its status reporters are isolated jobs; jobs that check out
 candidate code have no `statuses: write` permission.
 
-The protected workflow set is closed, and each workflow's semantics are
-hash-bound by the contract from the base revision. An intentional workflow
-change therefore uses a reviewed rotation: first add both the current and
-proposed semantic hashes to the contract, then merge the workflow change, and
-finally remove the retired hash. Contract and workflow changes in the same
-pull request do not authorize themselves.
+The protected workflow set is closed. Candidate workflows and indirect CI
+inputs are compared directly with the trusted base-revision checkout, so the
+contract contains paths and policy structure rather than duplicated file or
+YAML hashes. A candidate cannot authorize its own policy change by editing the
+checked-in contract. Intentional changes to this trust boundary require the
+repository's privileged, Code Owner-reviewed policy-update procedure; normal
+candidate code continues to be treated only as data.
+
+Release artifact hashes are different: they cross a repository or transport
+boundary and remain mandatory in the build manifest and SBOM linkage. The
+AppImage promotion store retains the verified current and previous artifacts
+and removes older inactive generations only after the new generation pointer
+has been published and verified.

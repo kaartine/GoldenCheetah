@@ -34,23 +34,19 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_bunny_hop.py",
-      "purpose": "source",
-      "sha256": "609f6955185431d827a57fcb1ba2b4deef2478192078be7d490ce5b12da46336"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_BunnyHop_Greybox.glb",
-      "purpose": "intermediate",
-      "sha256": "e159a8355cf5acf01a613112b38fb90722dd1721da147f5483276a9a0f72bb13"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/assets/Wg_BunnyHop_Greybox.qml",
-      "purpose": "runtime",
-      "sha256": "94e0df9995c6c5bcca8a42f057c936af5ce42b2670165ad3114a5cda1a28d2a3"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "21166c3ee6cfcc115b77f5b2e296a0723a433d552a46fa9eb55cdfacec4ce51f"
+      "purpose": "runtime"
     }
   ],
   "processing": {

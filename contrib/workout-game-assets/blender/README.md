@@ -355,7 +355,7 @@ data differently, so cross-version byte hashes are not promised.
 ## Validation and runtime conversion
 
 The reviewed GLB is committed under `contrib/workout-game-assets/generated`.
-Validate its manifest, provenance, hashes, structure, sockets and budgets with:
+Validate its manifest, provenance, repository paths, structure, sockets and budgets with:
 
 ```bash
 python3 contrib/workout-game-assets/validate_assets.py --root "$PWD"
@@ -372,7 +372,8 @@ QT_QPA_PLATFORM=offscreen balsam \
   contrib/workout-game-assets/generated/WG_Tabletop_Greybox.glb
 ```
 
-For this toolchain, repeated Balsam runs must match the manifest hashes. The
+For this toolchain, repeated Balsam runs must be byte-identical. Git identifies
+the committed source and runtime files without duplicating their hashes. The
 `Build/workoutGameAssets` tests cover policy failures, and the
 `Train/workoutGame3DView` tests load and render the production qrc output.
 

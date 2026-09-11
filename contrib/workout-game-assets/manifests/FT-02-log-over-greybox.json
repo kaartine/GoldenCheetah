@@ -34,23 +34,19 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_log_over.py",
-      "purpose": "source",
-      "sha256": "dbd52f0310e120d5a8be1584b0d7a8e8d1b3a4e372e8edda1584a9d9f658a88e"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_LogOver_Greybox.glb",
-      "purpose": "intermediate",
-      "sha256": "e26996bbee99fe9817022791875bb2b16d0ccb18a2d3bfbec3c36e9fd2cd5501"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/assets/Wg_LogOver_Greybox.qml",
-      "purpose": "runtime",
-      "sha256": "7505e8b8044ce1634f75848c7b7cb8f4c08ac5c4c838bf15e17f8b1cfc6b34a3"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_LogOverObstacle_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "d8683080fcc05ad863a7335c5bedb14e47f327de440f444975ae9e86c18c7051"
+      "purpose": "runtime"
     }
   ],
   "processing": {

@@ -30,38 +30,31 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/generate_surface_atlas.py",
-      "purpose": "source",
-      "sha256": "7aad9dc0ee23ff9bd8d96768edf66e171fe002335aa9ffb8d8978ccb90facbcf"
+      "purpose": "source"
     },
     {
       "path": "src/Resources/images/workout-game-surface-atlas.png",
-      "purpose": "texture",
-      "sha256": "e7c9ac93e10b43b19b69dcf193272793ff8c0331f21a6b3b5fa0f071fe8fbfcd"
+      "purpose": "texture"
     },
     {
       "path": "src/Resources/images/workout-game-surface-forest.png",
-      "purpose": "texture",
-      "sha256": "2df8597036bdd40fd06239b3b2e3168e3f8f36da735d1e095e2d855edab2d798"
+      "purpose": "texture"
     },
     {
       "path": "src/Resources/images/workout-game-surface-dirt.png",
-      "purpose": "texture",
-      "sha256": "df2954e6f45a76554ceda777522c3d5ca9571e9fef8fec1527a4cf5a12457d9e"
+      "purpose": "texture"
     },
     {
       "path": "src/Resources/images/workout-game-surface-stone.png",
-      "purpose": "texture",
-      "sha256": "b7de6f9e61c6407b07259490569029fe6daa51eeebefee71511ce0fa41bf7d04"
+      "purpose": "texture"
     },
     {
       "path": "src/Resources/images/workout-game-surface-wood.png",
-      "purpose": "texture",
-      "sha256": "6b4d6c2ff12cc9c41c10d6c3b6801d779cceb3c9bf87e9fc0185014de828c27f"
+      "purpose": "texture"
     },
     {
       "path": "src/Resources/images/workout-game-surface-rider.png",
-      "purpose": "texture",
-      "sha256": "6d7d4395be1ee3aa1b9c4f6c04fd362aede586b320280ee62abce72a9744d552"
+      "purpose": "texture"
     }
   ],
   "processing": {

@@ -30,58 +30,47 @@
   "files": [
     {
       "path": "contrib/workout-game-assets/blender/generate_conifer_set.py",
-      "purpose": "source",
-      "sha256": "7b6b96daaeaf9cf6a23068788346da2b637a10079d2b238251262f8b4db7de3c"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_mixed_forest_audit.py",
-      "purpose": "source",
-      "sha256": "9654144455ed1ad7a9c1e8f124dc63001f5229315f3428283d7a1bbde721f1b0"
+      "purpose": "source"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_ConiferSet.glb",
-      "purpose": "intermediate",
-      "sha256": "b80a7f00d39ba01d30c93cd58923e0244225bf6acaf42286165f66c2cdac4920"
+      "purpose": "intermediate"
     },
     {
       "path": "src/Train/qml/WorkoutGameConifer.qml",
-      "purpose": "runtime",
-      "sha256": "c1f9ae5358a49eefcb50423722d689d4eed29b6fb5d0cc6724a71d6e2daf5865"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_BirchCrown_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "d0b585f3c1789f48b59a3950608386a06cf9af95b17537c7b3d2de82412aebf3"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_BirchTrunk_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "6bbe78fd1f2de6f4305c0908e796cc8035605bafbcd4779347e036e1bb939610"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "68cfe53a35ff525907b92bc772237318caa6978d4e90021a34ebb1094b189be7"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "3e811569a8b818d48a8a7f2f2f7a91e6b467d11e4f5218e887863e64d16ea64c"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "ff4f98f6fa083c62b99a83fbd4a93ac161828f418cef640c352a3a99448ee848"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ScotsPineCrown_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "c2b81108a129a87c8f1fb0bb9f6832e60596f70607830cec898fb18dd9c8444e"
+      "purpose": "runtime"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_ScotsPineTrunk_LOD0_mesh.mesh",
-      "purpose": "runtime",
-      "sha256": "a911a6e85e3d2f7691f628f82229d8eadf61c12247915ddac480f7ac305fe4d0"
+      "purpose": "runtime"
     }
   ],
   "processing": {

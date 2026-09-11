@@ -464,6 +464,20 @@ class ImmutableActionTests(unittest.TestCase):
         self.assertTrue(required <= protected, sorted(required - protected))
         self.assertEqual(list(contract["protected_files"]), sorted(protected))
 
+    def test_policy_contract_uses_trusted_git_snapshot_not_stored_hashes(self):
+        contract = json.loads(POLICY_CONTRACT.read_text(encoding="ascii"))
+
+        self.assertEqual(
+            contract["format"], "goldencheetah-workflow-policy-contract-3"
+        )
+        self.assertIsInstance(contract["protected_files"], list)
+        self.assertNotIn("run_sha256", contract["policy_workflow"])
+        self.assertNotIn("semantic_sha256", contract["policy_workflow"])
+        for workflow in contract["build_workflows"].values():
+            self.assertNotIn("run_sha256", workflow)
+            self.assertNotIn("semantic_sha256", workflow)
+            self.assertNotIn("trusted_run_sha256", workflow)
+
     def test_repository_policy_rejects_each_protected_ci_input_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary) / "repository"
