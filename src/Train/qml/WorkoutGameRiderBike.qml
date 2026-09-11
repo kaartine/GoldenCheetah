@@ -525,14 +525,12 @@ Node {
                     }
                     Model {
                         source: "assets/meshes/geo_Helmet_LOD0_mesh.mesh"
-                        y: 0.045
                         materials: helmetMaterial
                         castsShadows: false
                         receivesShadows: false
                     }
                     Model {
                         source: "assets/meshes/geo_HelmetAccent_LOD0_mesh.mesh"
-                        y: 0.045
                         materials: riderDarkMaterial
                         castsShadows: false
                         receivesShadows: false

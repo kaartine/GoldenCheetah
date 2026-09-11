@@ -120,6 +120,10 @@ RIDER_SHIN_LENGTH_M = 0.45
 RIDER_UPPER_ARM_LENGTH_M = 0.32
 RIDER_FOREARM_LENGTH_M = 0.36
 RIDER_GRIP_HALF_SPAN_M = 0.39
+FACE_OPENING_HEIGHT_M = 0.155
+EYEWEAR_HEIGHT_M = 0.032
+NECK_LENGTH_M = 0.100
+HELMET_BROW_Y_M = 0.068
 MAIN_SWINGARM_PROFILE = (
     (0.325, -0.475),
     (0.410, -0.480),
@@ -388,7 +392,7 @@ def append_torus(
             faces.extend(((a, b, c), (a, c, d)))
 
 
-def append_side_prism(vertices, faces, profile_yz, half_width):
+def append_side_prism(vertices, faces, profile_yz, half_width, center_x=0.0):
     """Extrude a convex side profile across X with triangulated caps."""
     if len(profile_yz) < 3:
         raise RuntimeError("A side profile requires at least three points")
@@ -405,7 +409,7 @@ def append_side_prism(vertices, faces, profile_yz, half_width):
             or all(turn < -EPSILON for turn in turns)):
         raise RuntimeError("A side profile must be strictly convex")
     base = len(vertices)
-    for x_value in (-half_width, half_width):
+    for x_value in (center_x - half_width, center_x + half_width):
         vertices.extend((x_value, y_value, z_value)
                         for y_value, z_value in profile_yz)
     count = len(profile_yz)
@@ -938,16 +942,29 @@ def jersey_accent_mesh():
 
 def head_mesh():
     vertices, faces = low_poly_sphere((0.0, 0.0, 0.0), 0.14)
+    vertices = [
+        (x_value * 0.86, y_value * 1.02, z_value * 0.94)
+        for x_value, y_value, z_value in vertices
+    ]
     append_side_prism(
         vertices,
         faces,
         (
-            (-0.020, 0.105),
-            (-0.010, 0.170),
-            (0.030, 0.182),
-            (0.050, 0.108),
+            (0.008, 0.112),
+            (0.012, 0.164),
+            (0.035, 0.174),
+            (0.052, 0.118),
         ),
-        0.040,
+        0.032,
+    )
+    append_tube(
+        vertices,
+        faces,
+        (0.0, -0.105, -0.040),
+        (0.0, -0.205, -0.075),
+        0.064,
+        sides=8,
+        end_radius=0.075,
     )
     return vertices, faces
 
@@ -955,29 +972,27 @@ def head_mesh():
 def hair_beard_mesh():
     vertices = []
     faces = []
-    append_side_prism(
-        vertices,
-        faces,
-        (
-            (-0.125, 0.025),
-            (-0.105, 0.135),
-            (0.010, 0.165),
-            (0.055, 0.105),
-            (0.015, 0.045),
-            (-0.080, 0.005),
-        ),
-        0.105,
+    # Keep the beard below the cheek so the face remains readable in profile.
+    beard_vertices, beard_faces = low_poly_sphere((0.0, 0.0, 0.0), 1.0)
+    base = len(vertices)
+    vertices.extend(
+        (x_value * 0.075,
+         -0.065 + y_value * 0.060,
+         0.075 + z_value * 0.045)
+        for x_value, y_value, z_value in beard_vertices
     )
+    faces.extend(tuple(base + index for index in face) for face in beard_faces)
+    # Hair follows the rear of the skull instead of forming a face mask.
     append_side_prism(
         vertices,
         faces,
         (
-            (0.020, -0.135),
-            (0.035, 0.025),
-            (0.120, 0.065),
-            (0.145, -0.090),
+            (-0.045, -0.120),
+            (0.045, -0.135),
+            (0.085, -0.095),
+            (0.020, -0.060),
         ),
-        0.115,
+        0.090,
     )
     return vertices, faces
 
@@ -985,16 +1000,21 @@ def hair_beard_mesh():
 def eyewear_mesh():
     vertices = []
     faces = []
-    append_side_prism(
-        vertices,
-        faces,
-        (
-            (0.015, 0.105),
-            (0.020, 0.170),
-            (0.072, 0.162),
-            (0.082, 0.095),
-        ),
-        0.125,
+    lens_profile = (
+        (0.020, 0.112),
+        (0.022, 0.168),
+        (0.050, 0.162),
+        (0.052, 0.108),
+    )
+    for x_offset in (-0.055, 0.055):
+        append_side_prism(
+            vertices, faces, lens_profile, 0.045, center_x=x_offset
+        )
+    append_tube(
+        vertices, faces,
+        (-0.018, 0.036, 0.151),
+        (0.018, 0.036, 0.151),
+        0.006, sides=4,
     )
     return vertices, faces
 
@@ -1004,12 +1024,12 @@ def visor_mesh(vertices, faces):
         vertices,
         faces,
         (
-            (0.005, 0.070),
-            (0.005, 0.205),
-            (0.035, 0.225),
-            (0.060, 0.090),
+            (0.058, 0.082),
+            (0.058, 0.188),
+            (0.076, 0.210),
+            (0.088, 0.096),
         ),
-        0.092,
+        0.088,
     )
 
 
@@ -1054,9 +1074,9 @@ def low_poly_sphere(center, radius, lower_fraction=-1.0):
 def helmet_mesh():
     vertices = []
     rings = (
-        (-0.050, 0.145, 0.170),
-        (0.055, 0.150, 0.155),
-        (0.125, 0.105, 0.115),
+        (HELMET_BROW_Y_M, 0.145, 0.145),
+        (0.120, 0.138, 0.128),
+        (0.158, 0.090, 0.080),
     )
     for y_value, radius_x, radius_z in rings:
         for index in range(12):
@@ -1066,7 +1086,7 @@ def helmet_mesh():
                 y_value,
                 radius_z * math.sin(angle) - 0.018,
             ))
-    vertices.append((0.0, 0.165, -0.018))
+    vertices.append((0.0, 0.175, -0.018))
     top = len(vertices) - 1
     faces = []
     for ring in range(len(rings) - 1):
@@ -1089,34 +1109,12 @@ def helmet_accent_mesh():
     vertices = []
     faces = []
     visor_mesh(vertices, faces)
-    append_side_prism(
-        vertices,
-        faces,
-        (
-            (-0.050, -0.168),
-            (-0.045, 0.090),
-            (0.008, 0.120),
-            (0.025, -0.155),
-        ),
-        0.151,
-    )
-    append_side_prism(
-        vertices,
-        faces,
-        (
-            (0.080, -0.055),
-            (0.080, 0.045),
-            (0.132, 0.035),
-            (0.140, -0.070),
-        ),
-        0.080,
-    )
     for x_offset in (-0.092, 0.092):
         append_tube(
             vertices, faces,
-            (x_offset, 0.055, -0.105),
-            (x_offset, 0.120, 0.015),
-            0.014, sides=4,
+            (x_offset, 0.103, -0.105),
+            (x_offset, 0.145, 0.008),
+            0.011, sides=4,
         )
     return vertices, faces
 
@@ -1206,6 +1204,10 @@ def build_scene():
     root["rider_upper_arm_length_m"] = RIDER_UPPER_ARM_LENGTH_M
     root["rider_forearm_length_m"] = RIDER_FOREARM_LENGTH_M
     root["rider_grip_half_span_m"] = RIDER_GRIP_HALF_SPAN_M
+    root["face_profile"] = "readable-open-face-side-profile"
+    root["face_opening_height_m"] = FACE_OPENING_HEIGHT_M
+    root["eyewear_height_m"] = EYEWEAR_HEIGHT_M
+    root["neck_length_m"] = NECK_LENGTH_M
 
     materials = {name: make_material(name, color) for name, color in MATERIALS}
     for name, generator in (
@@ -1268,13 +1270,19 @@ def build_scene():
     create_mesh(root, "GEO_JerseyAccent_LOD0", vertices, faces,
                 materials["MAT_Helmet_White"])
     vertices, faces = head_mesh()
-    create_mesh(root, "GEO_Head_LOD0", vertices, faces, materials["MAT_Skin"])
+    create_mesh(root, "GEO_Head_LOD0", vertices, faces, materials["MAT_Skin"], {
+        "face_role": "skin-profile-and-neck",
+    })
     vertices, faces = hair_beard_mesh()
     create_mesh(root, "GEO_HairBeard_LOD0", vertices, faces,
-                materials["MAT_Rider_Black"])
+                materials["MAT_Rider_Black"], {
+                    "beard_role": "lower-jaw-only",
+                })
     vertices, faces = eyewear_mesh()
     create_mesh(root, "GEO_Eyewear_LOD0", vertices, faces,
-                materials["MAT_Component_Black"])
+                materials["MAT_Component_Black"], {
+                    "eyewear_role": "slim-wraparound-lens",
+                })
     vertices, faces = helmet_mesh()
     create_mesh(root, "GEO_Helmet_LOD0", vertices, faces,
                 materials["MAT_Helmet_White"], {
@@ -1386,6 +1394,9 @@ def self_check(root) -> tuple[int, int]:
         "rider_upper_arm_length_m": RIDER_UPPER_ARM_LENGTH_M,
         "rider_forearm_length_m": RIDER_FOREARM_LENGTH_M,
         "rider_grip_half_span_m": RIDER_GRIP_HALF_SPAN_M,
+        "face_opening_height_m": FACE_OPENING_HEIGHT_M,
+        "eyewear_height_m": EYEWEAR_HEIGHT_M,
+        "neck_length_m": NECK_LENGTH_M,
     }
     for property_name, expected in expected_root_properties.items():
         if not math.isclose(float(root[property_name]), expected, abs_tol=1e-9):
@@ -1465,9 +1476,11 @@ def self_check(root) -> tuple[int, int]:
             (0.075, FRONT_AXLE[1], FRONT_AXLE[2]),
         ),
         "GEO_Torso_LOD0": ((0.12, 0.49, 0.270),),
-        "GEO_HairBeard_LOD0": ((0.105, -0.125, 0.025),),
-        "GEO_Eyewear_LOD0": ((0.125, 0.015, 0.105),),
-        "GEO_HelmetAccent_LOD0": ((0.151, -0.050, -0.168),),
+        "GEO_Head_LOD0": ((0.032, 0.008, 0.112),),
+        "GEO_HairBeard_LOD0": ((0.075, -0.065, 0.075),),
+        "GEO_Eyewear_LOD0": ((0.100, 0.020, 0.112),),
+        "GEO_Helmet_LOD0": ((0.145, HELMET_BROW_Y_M, -0.018),),
+        "GEO_HelmetAccent_LOD0": ((0.088, 0.058, 0.082),),
     }
     for mesh_name, points in critical_mesh_points.items():
         for point in points:

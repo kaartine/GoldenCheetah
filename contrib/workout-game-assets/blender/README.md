@@ -158,7 +158,7 @@ with `GC_ASSET_CPUS`, `GC_ASSET_MEMORY` and `GC_ASSET_MEMORY_SWAP`.
   motion follow the authoritative pedal-cycle value.
 - The crank mesh includes both pedal platforms, so feet, crank arms and pedals
   share one authoritative phase without adding per-pedal draw calls.
-- The complete source asset has 5,056 triangles, eight opaque flat-color
+- The complete source asset has 5,144 triangles, eight opaque flat-color
   materials, no texture payload and no external source. The runtime component
   adds only a bounded translucent contact-shadow material.
 

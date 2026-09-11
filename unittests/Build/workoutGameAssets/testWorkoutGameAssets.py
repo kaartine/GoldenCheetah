@@ -581,6 +581,13 @@ class TestWorkoutGameAssets(unittest.TestCase):
             root_extras["helmet_reference"],
             "black-white open-face enduro helmet with visor",
         )
+        self.assertEqual(
+            root_extras["face_profile"],
+            "readable-open-face-side-profile",
+        )
+        self.assertGreaterEqual(root_extras["face_opening_height_m"], 0.10)
+        self.assertLessEqual(root_extras["eyewear_height_m"], 0.04)
+        self.assertGreaterEqual(root_extras["neck_length_m"], 0.09)
         self.assertTrue(root_extras["open_frame_window"])
         self.assertGreaterEqual(root_extras["frame_window_area_m2"], 0.055)
         self.assertAlmostEqual(root_extras["rider_thigh_length_m"], 0.45)
@@ -612,6 +619,18 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertEqual(
             nodes["GEO_Helmet_LOD0"]["extras"]["helmet_role"],
             "open-face-enduro-shell",
+        )
+        self.assertEqual(
+            nodes["GEO_Head_LOD0"]["extras"]["face_role"],
+            "skin-profile-and-neck",
+        )
+        self.assertEqual(
+            nodes["GEO_HairBeard_LOD0"]["extras"]["beard_role"],
+            "lower-jaw-only",
+        )
+        self.assertEqual(
+            nodes["GEO_Eyewear_LOD0"]["extras"]["eyewear_role"],
+            "slim-wraparound-lens",
         )
         crank_extras = nodes["GEO_Crank_LOD0"]["extras"]
         self.assertEqual(crank_extras["left_pedal_contact_m"], [-0.13, 0.5375, 0.0])
