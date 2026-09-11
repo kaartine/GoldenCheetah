@@ -123,7 +123,10 @@ RIDER_GRIP_HALF_SPAN_M = 0.39
 FACE_OPENING_HEIGHT_M = 0.155
 EYEWEAR_HEIGHT_M = 0.032
 NECK_LENGTH_M = 0.100
-HELMET_BROW_Y_M = 0.068
+HELMET_BROW_Y_M = 0.045
+HELMET_REAR_COVERAGE_M = 0.205
+HELMET_VISOR_REACH_M = 0.242
+HELMET_VENT_COUNT = 7
 MAIN_SWINGARM_PROFILE = (
     (0.325, -0.475),
     (0.410, -0.480),
@@ -982,18 +985,8 @@ def hair_beard_mesh():
         for x_value, y_value, z_value in beard_vertices
     )
     faces.extend(tuple(base + index for index in face) for face in beard_faces)
-    # Hair follows the rear of the skull instead of forming a face mask.
-    append_side_prism(
-        vertices,
-        faces,
-        (
-            (-0.045, -0.120),
-            (0.045, -0.135),
-            (0.085, -0.095),
-            (0.020, -0.060),
-        ),
-        0.090,
-    )
+    # The deep helmet covers the hair. Avoid a separate rear plate that can
+    # read as a hole through the head in the opening side presentation.
     return vertices, faces
 
 
@@ -1024,12 +1017,12 @@ def visor_mesh(vertices, faces):
         vertices,
         faces,
         (
-            (0.058, 0.082),
-            (0.058, 0.188),
-            (0.076, 0.210),
-            (0.088, 0.096),
+            (0.064, 0.054),
+            (0.061, 0.222),
+            (0.078, HELMET_VISOR_REACH_M),
+            (0.101, 0.060),
         ),
-        0.088,
+        0.132,
     )
 
 
@@ -1074,9 +1067,9 @@ def low_poly_sphere(center, radius, lower_fraction=-1.0):
 def helmet_mesh():
     vertices = []
     rings = (
-        (HELMET_BROW_Y_M, 0.145, 0.145),
-        (0.120, 0.138, 0.128),
-        (0.158, 0.090, 0.080),
+        (HELMET_BROW_Y_M, 0.153, 0.168),
+        (0.108, 0.145, 0.151),
+        (0.158, 0.105, 0.105),
     )
     for y_value, radius_x, radius_z in rings:
         for index in range(12):
@@ -1084,9 +1077,9 @@ def helmet_mesh():
             vertices.append((
                 radius_x * math.cos(angle),
                 y_value,
-                radius_z * math.sin(angle) - 0.018,
+                radius_z * math.sin(angle) - 0.030,
             ))
-    vertices.append((0.0, 0.175, -0.018))
+    vertices.append((0.0, 0.190, -0.038))
     top = len(vertices) - 1
     faces = []
     for ring in range(len(rings) - 1):
@@ -1102,6 +1095,21 @@ def helmet_mesh():
     for index in range(12):
         following = (index + 1) % 12
         faces.append((top, upper + following, upper + index))
+    # A solid rear/temple skirt gives the half-shell its deep enduro profile
+    # and keeps the opening presentation opaque behind the rider's head.
+    append_side_prism(
+        vertices,
+        faces,
+        (
+            (-0.064, -HELMET_REAR_COVERAGE_M),
+            (0.040, -0.202),
+            (0.091, -0.154),
+            (0.096, 0.028),
+            (0.032, 0.052),
+            (-0.050, -0.012),
+        ),
+        0.136,
+    )
     return vertices, faces
 
 
@@ -1109,13 +1117,41 @@ def helmet_accent_mesh():
     vertices = []
     faces = []
     visor_mesh(vertices, faces)
-    for x_offset in (-0.092, 0.092):
-        append_tube(
-            vertices, faces,
-            (x_offset, 0.103, -0.105),
-            (x_offset, 0.145, 0.008),
-            0.011, sides=4,
+    # Low black side shell and angular inset vents echo the reference's
+    # layered trail-helmet construction without reproducing its branding.
+    for x_offset in (-0.140, 0.140):
+        append_side_prism(
+            vertices,
+            faces,
+            (
+                (-0.052, -0.188),
+                (0.027, -0.184),
+                (0.070, -0.132),
+                (0.068, 0.012),
+                (0.018, 0.032),
+                (-0.043, -0.022),
+            ),
+            0.006,
+            center_x=x_offset,
         )
+        for profile in (
+            ((0.075, -0.159), (0.094, -0.143),
+             (0.106, -0.088), (0.087, -0.105)),
+            ((0.087, -0.063), (0.108, -0.048),
+             (0.114, 0.004), (0.093, -0.010)),
+            ((0.115, 0.022), (0.135, 0.034),
+             (0.142, 0.077), (0.121, 0.066)),
+        ):
+            append_side_prism(
+                vertices, faces, profile, 0.007, center_x=x_offset
+            )
+    append_side_prism(
+        vertices,
+        faces,
+        ((0.153, -0.086), (0.169, -0.068),
+         (0.172, -0.012), (0.156, -0.029)),
+        0.044,
+    )
     return vertices, faces
 
 
@@ -1172,7 +1208,9 @@ def build_scene():
     root["rider_reference"] = (
         "fictional project-authored rider; no specific likeness"
     )
-    root["helmet_reference"] = "black-white open-face enduro helmet with visor"
+    root["helmet_reference"] = (
+        "logo-free black-white deep-coverage enduro helmet with extended visor"
+    )
     root["front_tire"] = "unbranded 29x2.5 aggressive front-grip tire"
     root["rear_tire"] = "unbranded 29x2.5 rear-braking tire"
     root["tire_width_m"] = TIRE_WIDTH_M
@@ -1208,6 +1246,10 @@ def build_scene():
     root["face_opening_height_m"] = FACE_OPENING_HEIGHT_M
     root["eyewear_height_m"] = EYEWEAR_HEIGHT_M
     root["neck_length_m"] = NECK_LENGTH_M
+    root["helmet_rear_coverage_m"] = HELMET_REAR_COVERAGE_M
+    root["helmet_visor_reach_m"] = HELMET_VISOR_REACH_M
+    root["helmet_vent_count"] = HELMET_VENT_COUNT
+    root["opaque_head_shell"] = True
 
     materials = {name: make_material(name, color) for name, color in MATERIALS}
     for name, generator in (
@@ -1277,6 +1319,7 @@ def build_scene():
     create_mesh(root, "GEO_HairBeard_LOD0", vertices, faces,
                 materials["MAT_Rider_Black"], {
                     "beard_role": "lower-jaw-only",
+                    "hair_role": "fully-covered-by-helmet",
                 })
     vertices, faces = eyewear_mesh()
     create_mesh(root, "GEO_Eyewear_LOD0", vertices, faces,
@@ -1286,7 +1329,7 @@ def build_scene():
     vertices, faces = helmet_mesh()
     create_mesh(root, "GEO_Helmet_LOD0", vertices, faces,
                 materials["MAT_Helmet_White"], {
-                    "helmet_role": "open-face-enduro-shell",
+                    "helmet_role": "deep-coverage-open-face-enduro-shell",
                     "design_origin": "project-authored",
                 })
     vertices, faces = helmet_accent_mesh()
@@ -1397,6 +1440,9 @@ def self_check(root) -> tuple[int, int]:
         "face_opening_height_m": FACE_OPENING_HEIGHT_M,
         "eyewear_height_m": EYEWEAR_HEIGHT_M,
         "neck_length_m": NECK_LENGTH_M,
+        "helmet_rear_coverage_m": HELMET_REAR_COVERAGE_M,
+        "helmet_visor_reach_m": HELMET_VISOR_REACH_M,
+        "helmet_vent_count": HELMET_VENT_COUNT,
     }
     for property_name, expected in expected_root_properties.items():
         if not math.isclose(float(root[property_name]), expected, abs_tol=1e-9):
@@ -1430,7 +1476,7 @@ def self_check(root) -> tuple[int, int]:
             != "unbranded-one-by-chain-cassette-derailleur"):
         raise RuntimeError("One-by drivetrain contract changed")
     if (objects["GEO_Helmet_LOD0"].get("helmet_role")
-            != "open-face-enduro-shell"):
+            != "deep-coverage-open-face-enduro-shell"):
         raise RuntimeError("Helmet silhouette contract changed")
     critical_mesh_points = {
         "GEO_MainFrame_LOD0": (
@@ -1479,8 +1525,8 @@ def self_check(root) -> tuple[int, int]:
         "GEO_Head_LOD0": ((0.032, 0.008, 0.112),),
         "GEO_HairBeard_LOD0": ((0.075, -0.065, 0.075),),
         "GEO_Eyewear_LOD0": ((0.100, 0.020, 0.112),),
-        "GEO_Helmet_LOD0": ((0.145, HELMET_BROW_Y_M, -0.018),),
-        "GEO_HelmetAccent_LOD0": ((0.088, 0.058, 0.082),),
+        "GEO_Helmet_LOD0": ((0.153, HELMET_BROW_Y_M, -0.030),),
+        "GEO_HelmetAccent_LOD0": ((0.132, 0.064, 0.054),),
     }
     for mesh_name, points in critical_mesh_points.items():
         for point in points:

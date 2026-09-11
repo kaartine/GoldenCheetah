@@ -2069,8 +2069,11 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
         prop.insert(QStringLiteral("z"), position.second);
         prop.insert(QStringLiteral("distance"), distance);
         prop.insert(QStringLiteral("lateral"), lateral);
+        const double orientationOffset =
+                (double((random >> 10) & 255u) / 255.0 - 0.5) * 50.0;
         prop.insert(QStringLiteral("yaw"),
-                    sample.center.headingRadians * 180.0 / Pi);
+                    sample.center.headingRadians * 180.0 / Pi
+                            + orientationOffset);
         prop.insert(QStringLiteral("pitch"),
                     -std::atan(sample.baseGradePercent / 100.0)
                             * 180.0 / Pi);

@@ -55,8 +55,8 @@ downloads or embeds external assets.
   collision or physics authority.
 - The granite material is a cool restrained mid-grey; flat-shaded irregular
   facets distinguish the three rock silhouettes without another material pass.
-- The crooked 2.07-metre deadwood has varying seven-sided cross-sections, two
-  tapered branch stubs and uneven broken ends. It rests on several ground
+- The compact 1.08-metre deadwood has thick varying seven-sided cross-sections,
+  two tapered branch stubs and uneven broken ends. It rests on several ground
   contacts, is only 0.302 metres high and explicitly records `scenery-only`,
   `collision_role=none` and `feature_role=none`. It is not the taller
   trail-spanning `FT-02` obstacle and may only be placed off trail in a later
@@ -145,7 +145,8 @@ with `GC_ASSET_CPUS`, `GC_ASSET_MEMORY` and `GC_ASSET_MEMORY_SWAP`.
   patterns contain no copied tread mesh, sidewall text or trademark artwork.
 - The stylized fictional rider has a generic low-poly face, dark beard,
   wraparound eyewear, blue-white riding clothes and a clearly separate
-  white-black open-face enduro helmet with a dark visor. The model is not
+  logo-free black-white deep-coverage enduro helmet with an extended dark
+  visor, angular vents and an opaque rear shell. The model is not
   authored as a likeness of a named person and contains no portrait texture,
   face scan or source photograph pixels.
 - Rear axle, front axle, crank, suspension linkage, shock, steering, pelvis,

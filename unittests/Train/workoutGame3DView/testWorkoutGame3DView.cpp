@@ -2562,7 +2562,11 @@ private slots:
         QCOMPARE(vergeClusters.size(), 3);
         QCOMPARE(floorProps.size() + vergeClusters.size(), 7);
 
-        const auto verifyPlacement = [&road, &viewModel](
+        constexpr double RadiansToDegrees =
+                180.0 / 3.14159265358979323846;
+        QSet<int> orientationBuckets;
+        const auto verifyPlacement = [
+                &road, &viewModel, &orientationBuckets, RadiansToDegrees](
                 const QVariant &entry, int maximumVariant) {
             const QVariantMap prop = entry.toMap();
             const double distance = prop.value(
@@ -2584,8 +2588,14 @@ private slots:
                             terrain, lateral);
             QVERIFY(std::abs(prop.value(QStringLiteral("y")).toDouble()
                              - expectedY) < 1.0e-9);
-            QVERIFY(std::isfinite(
-                    prop.value(QStringLiteral("yaw")).toDouble()));
+            const double yaw = prop.value(QStringLiteral("yaw")).toDouble();
+            QVERIFY(std::isfinite(yaw));
+            const double trailYaw = sample.center.headingRadians
+                    * RadiansToDegrees;
+            const double orientationOffset = std::remainder(
+                    yaw - trailYaw, 360.0);
+            QVERIFY(std::abs(orientationOffset) <= 25.1);
+            orientationBuckets.insert(int(std::round(orientationOffset)));
             QVERIFY(std::isfinite(
                     prop.value(QStringLiteral("terrainRoll")).toDouble()));
             QVERIFY(prop.value(QStringLiteral("scale")).toDouble() >= 0.72);
@@ -2607,6 +2617,27 @@ private slots:
         };
         for (const QVariant &entry : floorProps) verifyPlacement(entry, 7);
         for (const QVariant &entry : vergeClusters) verifyPlacement(entry, 2);
+        QVERIFY2(orientationBuckets.size() >= 2,
+                 "forest dressing still forms parallel stick-like rows");
+    }
+
+    void legacyProceduralForestLayerIsRetired()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const WorkoutGame3DMeshData mesh =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    road, 0.0, std::min(road.visualLengthMeters, 160.0));
+        QVERIFY(!mesh.ready);
+        QVERIFY(mesh.vertexData.isEmpty());
+        QVERIFY(mesh.indexData.isEmpty());
+
+        QFile scene(QStringLiteral(":/qml/WorkoutGame3D.qml"));
+        QVERIFY(scene.open(QIODevice::ReadOnly));
+        QVERIFY(!scene.readAll().contains("forestDressingModel"));
     }
 
     void forestDressingStaysOutsideAuthoredGapJumpGround()
@@ -6427,8 +6458,8 @@ private slots:
         QVERIFY(forestDressingGeometry);
         QVERIFY(bypassGeometry->ready());
         QVERIFY(bypassGeometry->sampleCount() >= 20);
-        QVERIFY(forestDressingGeometry->ready());
-        QVERIFY(forestDressingGeometry->sampleCount() >= 70);
+        QVERIFY(!forestDressingGeometry->ready());
+        QCOMPARE(forestDressingGeometry->sampleCount(), 0);
         QVERIFY(viewModel.trees().size() >= 12);
         QVERIFY(viewModel.trees().size() <= 18);
         QVERIFY(viewModel.features().size() <= 32);
@@ -6451,7 +6482,7 @@ private slots:
                 QStringLiteral("ROOT_Tabletop")));
         QVERIFY(window.rootObject()->findChild<QObject *>(
                 QStringLiteral("riderGroundShadow")));
-        QVERIFY(window.rootObject()->findChild<QObject *>(
+        QVERIFY(!window.rootObject()->findChild<QObject *>(
                 QStringLiteral("forestDressingModel")));
 
         const QImage first = window.grabWindow();

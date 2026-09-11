@@ -67,6 +67,8 @@ MAXIMUM_HEIGHT_METERS = 0.70
 DEADWOOD_MAXIMUM_HEIGHT_METERS = 0.34
 DEADWOOD_CROSS_SECTION_SIDES = 7
 DEADWOOD_BRANCH_STUB_COUNT = 2
+DEADWOOD_LENGTH_METERS = 1.08
+DEADWOOD_MINIMUM_TRUNK_DIAMETER_METERS = 0.26
 GRANITE_BASE_COLOR = (0.30, 0.36, 0.39, 1.0)
 EPSILON = 1.0e-7
 
@@ -232,10 +234,10 @@ def fallen_deadwood():
     material_indices = []
     sides = DEADWOOD_CROSS_SECTION_SIDES
     rings = (
-        (-0.97, 0.105, -0.090, 0.105, 0.125, -0.18),
-        (-0.40, 0.145, 0.025, 0.142, 0.145, 0.05),
-        (0.25, 0.105, 0.082, 0.103, 0.120, 0.32),
-        (0.94, 0.075, -0.045, 0.072, 0.083, 0.51),
+        (-0.48, 0.145, -0.080, 0.145, 0.165, -0.18),
+        (-0.18, 0.165, 0.018, 0.165, 0.180, 0.05),
+        (0.16, 0.150, 0.070, 0.150, 0.170, 0.32),
+        (0.46, 0.135, -0.038, 0.135, 0.150, 0.51),
     )
     broken_offsets = (
         (-0.050, 0.018, -0.022, 0.040, -0.032, 0.011, -0.015),
@@ -274,8 +276,8 @@ def fallen_deadwood():
             add_face(faces, material_indices,
                      (first + side, second + following, first + following), 0)
     for ring_index, center in (
-        (0, (-1.045, 0.105, -0.090)),
-        (3, (1.025, 0.075, -0.045)),
+        (0, (-0.515, 0.145, -0.080)),
+        (3, (0.495, 0.135, -0.038)),
     ):
         center_index = len(vertices)
         vertices.append(center)
@@ -288,8 +290,8 @@ def fallen_deadwood():
             add_face(faces, material_indices, order, 1)
 
     branches = (
-        ((-0.48, 0.175, -0.075), (-0.60, 0.285, -0.285), 0.040, 0.20),
-        ((0.24, 0.145, 0.105), (0.40, 0.275, 0.300), 0.038, 0.95),
+        ((-0.20, 0.195, -0.060), (-0.29, 0.285, -0.255), 0.050, 0.20),
+        ((0.16, 0.185, 0.100), (0.28, 0.275, 0.275), 0.048, 0.95),
     )
     for branch in branches:
         tapered_branch_stub(vertices, faces, material_indices, *branch)
@@ -482,9 +484,12 @@ def build_scene():
                            {"silhouette": "rooted-broken-stump"}),
         VARIANT_NAMES[4]: (fallen_deadwood(),
                            (MATERIAL_NAMES[1], MATERIAL_NAMES[2]),
-                           {"silhouette": "crooked-tapered-deadwood",
+                           {"silhouette": "compact-thick-decay-log",
                             "cross_section_sides": DEADWOOD_CROSS_SECTION_SIDES,
                             "branch_stub_count": DEADWOOD_BRANCH_STUB_COUNT,
+                            "length_m": DEADWOOD_LENGTH_METERS,
+                            "minimum_trunk_diameter_m":
+                                DEADWOOD_MINIMUM_TRUNK_DIAMETER_METERS,
                             "placement_role": "scenery-only",
                             "collision_role": "none",
                             "feature_role": "none"}),
@@ -581,6 +586,9 @@ def self_check(root):
     deadwood_bounds = canonical_bounds(objects["GEO_DeadwoodFallen_LOD0"])
     if deadwood_bounds[1][1] > DEADWOOD_MAXIMUM_HEIGHT_METERS + EPSILON:
         raise RuntimeError("Decorative deadwood exceeds non-feature height")
+    if deadwood_bounds[1][0] - deadwood_bounds[0][0] \
+            > DEADWOOD_LENGTH_METERS + EPSILON:
+        raise RuntimeError("Decorative deadwood exceeds compact length")
     deadwood = objects["GEO_DeadwoodFallen_LOD0"]
     if len(deadwood.data.vertices) != 42:
         raise RuntimeError("Decorative deadwood structure changed")

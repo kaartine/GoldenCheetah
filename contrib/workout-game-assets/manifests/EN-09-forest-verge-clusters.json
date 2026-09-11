@@ -35,7 +35,7 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
       "purpose": "source",
-      "sha256": "efc0b0b9ef69b238df0d9e2d941a4a1856b2d38239d26947c093b1ecb8ebf4af"
+      "sha256": "93ad3299937e634b1e07b66d572228b6999d4f7137f73d76ac3a2977c1e8a795"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_forest_verge_cluster_audit.py",
@@ -45,7 +45,7 @@
     {
       "path": "contrib/workout-game-assets/generated/WG_ForestVergeClusters.glb",
       "purpose": "intermediate",
-      "sha256": "ac550bcc05eba93f5402941f3b4ee8070bc153dff8d26b5d18d16c2331a8fe76"
+      "sha256": "253580b31cd09804681843efd70d06d0a7c27f780ceae2a07d9134fbfb04b082"
     },
     {
       "path": "src/Train/qml/WorkoutGameForestVergeCluster.qml",
@@ -55,7 +55,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeDeadwoodHeather_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "1f7bb8cbf2e819e7fa316934831ea5ce148a8cc6e4e07ed9f9f65266b73adb31"
+      "sha256": "795c82c412042a684befc5ee0fefd0fecbb6f92d0ef375f75a31c2ed8929bd80"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeGraniteBilberry_LOD0_mesh.mesh",
@@ -70,22 +70,22 @@
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-audit.json",
       "purpose": "reference",
-      "sha256": "e9f05c6b5ee4f16cd31e6d835b6d257c6dcf089cc12a28db6fbe230123295ec0"
+      "sha256": "095f93816bfbf6c27637fe82fcd62e622c238086202f935505598b9baaa00123"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-front.png",
       "purpose": "preview",
-      "sha256": "09aa965ba7a3e96dcf7f11d370e347aebff811ed4816e538ade8bc936eb0e9f5"
+      "sha256": "6b67963a522cded4476773422d29d4c8f630b77a9c79b9d05bbefbd9bb5ccb7d"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-left-three-quarter.png",
       "purpose": "preview",
-      "sha256": "3c87ef267fc92e2e83daf535cea10a5f1c213738c3406aa03f1aa7c2c2f54a91"
+      "sha256": "4df898f0007f0d6500fe9d88551be107a934c308ea2b1e09026e446c9424e5d9"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-rear-three-quarter.png",
       "purpose": "preview",
-      "sha256": "f04c62ae8c4d12af5bd720128cf078e076e05ee0c8b44deb01ccb69310f97a8e"
+      "sha256": "113bd9cfa05789be01228d6cad41b03f6910f2121a3095e12b70bcab7be4e460"
     }
   ],
   "processing": {
@@ -107,7 +107,7 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 45488,
+    "glbBytes": 45484,
     "trianglesLod0": 382,
     "materials": 4,
     "textureBytes": 0,
@@ -139,7 +139,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering asset audit",
-    "reviewedAt": "2026-09-06",
-    "notes": "Approved for deterministic AppImage runtime packaging as scenery-only geometry. Fixed-camera before/after catalogs verify the brighter original palette and moss details while all three cluster triangle counts, pivots, bounds, clearances and material-pass counts remain unchanged. Runtime Qt Quick 3D tests verify terrain anchoring and rider/trail readability. No target-GPU performance claim is made."
+    "reviewedAt": "2026-09-11",
+    "notes": "Approved for deterministic AppImage runtime packaging as scenery-only geometry. Fixed-camera catalogs verify the brighter original palette, moss details and compact fallen-deadwood clusters while all three cluster triangle counts, pivots, clearances and material-pass counts remain unchanged. Runtime Qt Quick 3D tests verify terrain anchoring and rider/trail readability. No target-GPU performance claim is made."
   }
 }

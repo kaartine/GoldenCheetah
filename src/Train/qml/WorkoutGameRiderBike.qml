@@ -288,6 +288,7 @@ Node {
         id: skinMaterial
         baseColor: "#dc9a6a"
         roughness: 0.90
+        cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: helmetMaterial
@@ -295,6 +296,7 @@ Node {
         baseColor: "#d7dad8"
         baseColorMap: riderPixelTexture
         roughness: 0.54
+        cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: riderDarkMaterial
@@ -302,6 +304,7 @@ Node {
         baseColor: "#2b3437"
         baseColorMap: riderPixelTexture
         roughness: 0.82
+        cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: shadowMaterial

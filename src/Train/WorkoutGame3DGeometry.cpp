@@ -500,8 +500,8 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
         return buildClimbs(course, startDistanceMeters, endDistanceMeters);
     }
     if (layer == Layer::ForestDressing) {
-        return buildForestDressing(
-                course, startDistanceMeters, endDistanceMeters);
+        // Resident authored trees and forest props supersede the legacy cards.
+        return {};
     }
     if (layer == Layer::GapJump) {
         return buildGapJumps(course, startDistanceMeters, endDistanceMeters);

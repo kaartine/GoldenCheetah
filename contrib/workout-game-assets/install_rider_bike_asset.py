@@ -236,7 +236,7 @@ def install(candidate: Path) -> None:
                 "https://github.com/kaartine/GoldenCheetah/blob/master/"
                 + BLEND_RELATIVE
             ),
-            "retrievedAt": "2026-09-10",
+            "retrievedAt": "2026-09-11",
             "originalFileName": "WG_RiderBike.blend",
             "originalSha256": blend_hash,
             "generator": "Blender",
@@ -273,7 +273,7 @@ def install(candidate: Path) -> None:
             "Render front, rear, side and chase audit views twice with fixed pose, cameras, field of view and lighting.",
             "Require repeated audit output to be byte-identical before installation.",
         ]
-        manifest["review"]["reviewedAt"] = "2026-09-10"
+        manifest["review"]["reviewedAt"] = "2026-09-11"
         manifest["review"]["notes"] = (
             "Approved stylized rider and Pole Voima K2 visual reconstruction. "
             "The bicycle geometry is measured from public product photography "
@@ -285,7 +285,8 @@ def install(candidate: Path) -> None:
             "suspension and rider-pose animation contract. The model uses an "
             "open twin-link rear triangle, tapered frame members, detailed "
             "cockpit, one-by drivetrain, platform pedals, suspension, "
-            "open-face helmet and large black treaded tires. It contains no "
+            "logo-free deep-coverage enduro helmet with an extended visor "
+            "and large black treaded tires. It contains no "
             "person likeness, branded tread, logo or source mesh. No "
             "endorsement is claimed or implied. Deterministic Blender export, "
             "Balsam conversion, packaged-resource loading and fixed-view "

@@ -579,8 +579,12 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertEqual(
             root_extras["helmet_reference"],
-            "black-white open-face enduro helmet with visor",
+            "logo-free black-white deep-coverage enduro helmet with extended visor",
         )
+        self.assertGreaterEqual(root_extras["helmet_rear_coverage_m"], 0.19)
+        self.assertGreaterEqual(root_extras["helmet_visor_reach_m"], 0.20)
+        self.assertGreaterEqual(root_extras["helmet_vent_count"], 5)
+        self.assertTrue(root_extras["opaque_head_shell"])
         self.assertEqual(
             root_extras["face_profile"],
             "readable-open-face-side-profile",
@@ -618,7 +622,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertEqual(
             nodes["GEO_Helmet_LOD0"]["extras"]["helmet_role"],
-            "open-face-enduro-shell",
+            "deep-coverage-open-face-enduro-shell",
         )
         self.assertEqual(
             nodes["GEO_Head_LOD0"]["extras"]["face_role"],
@@ -627,6 +631,10 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertEqual(
             nodes["GEO_HairBeard_LOD0"]["extras"]["beard_role"],
             "lower-jaw-only",
+        )
+        self.assertEqual(
+            nodes["GEO_HairBeard_LOD0"]["extras"]["hair_role"],
+            "fully-covered-by-helmet",
         )
         self.assertEqual(
             nodes["GEO_Eyewear_LOD0"]["extras"]["eyewear_role"],
@@ -664,6 +672,23 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertIn('baseColor: "#2f68b2"', runtime_qml)
         self.assertIn('baseColor: "#d7dad8"', runtime_qml)
+        for material_id in ("skinMaterial", "helmetMaterial", "riderDarkMaterial"):
+            material_block = runtime_qml.split(
+                f"id: {material_id}", 1
+            )[1].split("}", 1)[0]
+            self.assertIn("cullMode: Material.NoCulling", material_block)
+
+        helmet_node = nodes["GEO_Helmet_LOD0"]
+        helmet_mesh = document["meshes"][helmet_node["mesh"]]
+        helmet_positions = []
+        for primitive in helmet_mesh["primitives"]:
+            helmet_positions.extend(glb_accessor_values(
+                RIDER_GLB_PATH,
+                document,
+                primitive["attributes"]["POSITION"],
+            ))
+        self.assertLessEqual(min(point[1] for point in helmet_positions), -0.04)
+        self.assertLessEqual(min(point[2] for point in helmet_positions), -0.19)
 
     def test_rider_bike_has_editable_blender_source_and_pipeline(self) -> None:
         manifest = assets.load_json_file(RIDER_MANIFEST_PATH)
@@ -989,6 +1014,9 @@ class TestWorkoutGameAssets(unittest.TestCase):
         extras = node["extras"]
         self.assertEqual(extras["cross_section_sides"], 7)
         self.assertEqual(extras["branch_stub_count"], 2)
+        self.assertEqual(extras["silhouette"], "compact-thick-decay-log")
+        self.assertLessEqual(extras["length_m"], 1.10)
+        self.assertGreaterEqual(extras["minimum_trunk_diameter_m"], 0.26)
         self.assertEqual(extras["placement_role"], "scenery-only")
         self.assertEqual(extras["collision_role"], "none")
         self.assertEqual(extras["feature_role"], "none")
@@ -1011,6 +1039,11 @@ class TestWorkoutGameAssets(unittest.TestCase):
         unique_positions = {tuple(round(value, 5) for value in p) for p in positions}
         self.assertEqual(len(unique_positions), 40)
         self.assertGreaterEqual(len({p[0] for p in unique_positions}), 12)
+        self.assertLessEqual(
+            max(p[0] for p in unique_positions)
+            - min(p[0] for p in unique_positions),
+            1.10,
+        )
         self.assertGreater(max(p[2] for p in unique_positions)
                            - min(p[2] for p in unique_positions), 0.55)
 
