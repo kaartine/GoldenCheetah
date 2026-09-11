@@ -22,6 +22,7 @@ SPEC.loader.exec_module(UI)
 
 MATRIX_PATH = Path(__file__).with_name("run-pre-release-ui-matrix.sh")
 RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui.sh")
+ENVIRONMENT_HELPER_PATH = Path(__file__).with_name("ui-test-environment.sh")
 LIBRARY_SOURCE_PATH = MODULE_PATH.parents[3] / "src" / "Train" / "Library.cpp"
 
 
@@ -157,6 +158,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
     def test_runner_requires_generated_distance_course_at_game_start(self):
         runner = RUNNER_PATH.read_text(encoding="utf-8")
+        helper = ENVIRONMENT_HELPER_PATH.read_text(encoding="utf-8")
 
         self.assertIn("GC_UI_VALIDATE_MTB_COURSE", runner)
         self.assertIn("Workout Game session course: distance-course", runner)
@@ -169,6 +171,144 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertIn(
             "Hardware GL validation requires GC_UI_EXPECTED_GPU_PATTERN", runner
         )
+        self.assertIn("require_unlocked_desktop_session", runner)
+        self.assertIn("org.gnome.ScreenSaver.GetActive", helper)
+        self.assertIn("Existing desktop session is locked", helper)
+
+    def test_desktop_unlock_check_fails_closed(self):
+        cases = (
+            ("printf '(false,)\\n'", 0, ""),
+            ("printf '(true,)\\n'", 1, "is locked"),
+            ("printf '(unknown,)\\n'", 2, "invalid state"),
+            ("return 1", 2, "Cannot verify"),
+        )
+        for fake_gdbus, expected_status, expected_error in cases:
+            with self.subTest(fake_gdbus=fake_gdbus):
+                completed = subprocess.run(
+                    [
+                        "bash", "-c",
+                        'source "$1"; '
+                        f'gdbus() {{ {fake_gdbus}; }}; '
+                        "require_unlocked_desktop_session",
+                        "bash", str(ENVIRONMENT_HELPER_PATH),
+                    ],
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+
+                self.assertEqual(completed.returncode, expected_status)
+                self.assertIn(expected_error, completed.stderr)
+
+    def test_xvfb_recursion_drops_the_callers_runtime_before_at_spi(self):
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("-u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR", runner)
+        self.assertLess(
+            runner.index('configure_ui_test_xdg_environment "$TEST_ROOT/home"'),
+            runner.index("AT_SPI_REPLY=$(gdbus call"),
+        )
+
+    def test_xvfb_environment_uses_an_isolated_runtime_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            environment = dict(os.environ)
+            environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
+            environment.pop("XDG_RUNTIME_DIR", None)
+            completed = subprocess.run(
+                [
+                    "bash", "-c",
+                    'source "$1"; '
+                    'capture_ui_test_session_environment ""; '
+                    'configure_ui_test_xdg_environment "$2"; '
+                    'printf "%s|%s" "$XDG_RUNTIME_DIR" '
+                    '"$(stat -Lc %a -- "$XDG_RUNTIME_DIR")"',
+                    "bash", str(ENVIRONMENT_HELPER_PATH), str(home),
+                ],
+                env=environment,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout, f"{home / '.runtime'}|700")
+            for relative in (
+                ".config", ".cache", ".local/share", ".local/state"
+            ):
+                self.assertTrue((home / relative).is_dir())
+
+    def test_existing_display_preserves_a_valid_session_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / "desktop-runtime"
+            home = root / "home"
+            runtime.mkdir(mode=0o700)
+            marker = runtime / "session-socket-placeholder"
+            marker.write_text("keep\n", encoding="ascii")
+            environment = dict(
+                os.environ,
+                DBUS_SESSION_BUS_ADDRESS="unix:path=/test/session-bus",
+                XDG_RUNTIME_DIR=str(runtime),
+            )
+            completed = subprocess.run(
+                [
+                    "bash", "-c",
+                    'source "$1"; '
+                    'capture_ui_test_session_environment ":1"; '
+                    'configure_ui_test_xdg_environment "$2"; '
+                    'printf "%s|%s" "$XDG_RUNTIME_DIR" '
+                    '"$(stat -Lc %a -- "$XDG_RUNTIME_DIR")"',
+                    "bash", str(ENVIRONMENT_HELPER_PATH), str(home),
+                ],
+                env=environment,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout, f"{runtime}|700")
+            self.assertEqual(marker.read_text(encoding="ascii"), "keep\n")
+
+    def test_existing_display_rejects_invalid_session_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wrong_mode = root / "wrong-mode"
+            wrong_mode.mkdir(mode=0o755)
+            cases = (
+                ("", "unix:path=/test/session-bus", "absolute"),
+                ("relative", "unix:path=/test/session-bus", "absolute"),
+                (str(root / "missing"), "unix:path=/test/session-bus",
+                 "not a directory"),
+                (str(wrong_mode), "unix:path=/test/session-bus", "mode 0700"),
+                (str(root), "", "desktop D-Bus session"),
+            )
+            for runtime, bus, expected_error in cases:
+                with self.subTest(runtime=runtime, bus=bus):
+                    environment = dict(os.environ, XDG_RUNTIME_DIR=runtime)
+                    if bus:
+                        environment["DBUS_SESSION_BUS_ADDRESS"] = bus
+                    else:
+                        environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
+                    completed = subprocess.run(
+                        [
+                            "bash", "-c",
+                            'source "$1"; '
+                            'capture_ui_test_session_environment ":1"',
+                            "bash", str(ENVIRONMENT_HELPER_PATH),
+                        ],
+                        env=environment,
+                        check=False,
+                        text=True,
+                        capture_output=True,
+                    )
+
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertIn(expected_error, completed.stderr)
+
+        helper = ENVIRONMENT_HELPER_PATH.read_text(encoding="utf-8")
+        self.assertIn('[ -O "$runtime_dir" ]', helper)
 
     def test_popup_item_activation_uses_position_independent_keyboard_steps(self):
         driver = object.__new__(UI.UiDriver)
@@ -884,9 +1024,9 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         stale = object()
         replacement = object()
         driver = object.__new__(UI.UiDriver)
-        driver.name = mock.Mock(return_value="Start or pause training")
-        driver.role = mock.Mock(return_value="push button")
-        driver.showing = mock.Mock(return_value=True)
+        driver._accessible_metadata = mock.Mock(
+            return_value=("Start or pause training", "push button", True)
+        )
         driver._activate_once = mock.Mock(
             side_effect=[UI.UiFailure("stale"), None]
         )
@@ -903,13 +1043,14 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         )
 
     def test_activate_retries_transient_stale_metadata_once(self):
-        control = object()
-        driver = object.__new__(UI.UiDriver)
-        driver.name = mock.Mock(
+        control = mock.Mock()
+        type(control).name = mock.PropertyMock(
             side_effect=[RuntimeError("stale"), "Start or pause training"]
         )
-        driver.role = mock.Mock(return_value="push button")
-        driver.showing = mock.Mock(return_value=True)
+        control.getRoleName.return_value = "push button"
+        control.getState.return_value.contains.return_value = True
+        driver = object.__new__(UI.UiDriver)
+        driver.pyatspi = mock.Mock(STATE_SHOWING=1)
         driver._activate_once = mock.Mock()
 
         with mock.patch.object(UI.time, "sleep") as sleep:
@@ -922,9 +1063,9 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         stale = object()
         replacement = object()
         driver = object.__new__(UI.UiDriver)
-        driver.name = mock.Mock(return_value="Save")
-        driver.role = mock.Mock(return_value="push button")
-        driver.showing = mock.Mock(return_value=True)
+        driver._accessible_metadata = mock.Mock(
+            return_value=("Save", "push button", True)
+        )
         driver._mouse_click_once = mock.Mock(
             side_effect=[UI.UiFailure("stale"), None]
         )

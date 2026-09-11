@@ -26,6 +26,7 @@ UI = importlib.util.module_from_spec(UI_SPEC)
 assert UI_SPEC.loader is not None
 UI_SPEC.loader.exec_module(UI)
 RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui.sh")
+ENVIRONMENT_HELPER_PATH = Path(__file__).with_name("ui-test-environment.sh")
 REAL_TRAINER_RUNNER_PATH = Path(__file__).with_name(
     "run-real-trainer-acceptance.sh"
 )
@@ -377,19 +378,25 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         ):
             self.assertFalse(UI.process_belongs_to_group(5678, 1234))
 
-    def test_ui_runner_isolates_every_xdg_persistence_location(self):
+    def test_ui_runners_isolate_persistence_and_share_only_desktop_runtime(self):
         runner = RUNNER_PATH.read_text(encoding="utf-8")
         trainer_runner = REAL_TRAINER_RUNNER_PATH.read_text(encoding="utf-8")
+        helper = ENVIRONMENT_HELPER_PATH.read_text(encoding="utf-8")
 
         for variable in (
             "XDG_CONFIG_HOME",
             "XDG_CACHE_HOME",
             "XDG_DATA_HOME",
             "XDG_STATE_HOME",
-            "XDG_RUNTIME_DIR",
         ):
-            self.assertIn(f"export {variable}=", runner)
-            self.assertIn(f"export {variable}=", trainer_runner)
+            self.assertIn(f"export {variable}=", helper)
+        for script in (runner, trainer_runner):
+            self.assertIn('source "$SCRIPT_DIR/ui-test-environment.sh"', script)
+            self.assertIn("capture_ui_test_session_environment", script)
+            self.assertIn("configure_ui_test_xdg_environment", script)
+        self.assertIn("PRESERVED_XDG_RUNTIME_DIR", helper)
+        self.assertIn("export XDG_RUNTIME_DIR=$PRESERVED_XDG_RUNTIME_DIR", helper)
+        self.assertIn("export XDG_RUNTIME_DIR=$HOME/.runtime", helper)
 
     def test_native_quick_3d_canvas_uses_trace_for_motion_gate(self):
         self.assertFalse(
@@ -428,6 +435,58 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 showing=True,
                 timeout=0.01,
             )
+
+    def test_find_enabled_reacquires_a_control_after_state_change(self):
+        stale = object()
+        replacement = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(side_effect=[[stale], [replacement]])
+        driver.enabled = mock.Mock(
+            side_effect=lambda node: node is replacement
+        )
+
+        with mock.patch.object(UI.time, "sleep"):
+            found = driver.find_enabled(
+                "Virtual gear", "spin button", timeout=1.0
+            )
+
+        self.assertIs(found, replacement)
+        self.assertEqual(driver.find_all.call_count, 2)
+
+    def test_select_named_uses_the_selection_interface_even_if_selected(self):
+        item = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[item])
+        driver.role = mock.Mock(return_value="table cell")
+        driver.select_accessible_item = mock.Mock()
+        driver.click = mock.Mock()
+
+        driver.select_named("Data Generator", timeout=1.0)
+
+        driver.select_accessible_item.assert_called_once_with(
+            item, timeout=mock.ANY
+        )
+        driver.click.assert_not_called()
+
+    def test_select_accessible_item_verifies_the_same_container(self):
+        item = mock.Mock()
+        parent = mock.Mock()
+        selection = mock.Mock()
+        item.parent = parent
+        item.getIndexInParent.return_value = 3
+        parent.querySelection.return_value = selection
+        selection.selectChild.return_value = True
+        selection.isChildSelected.return_value = True
+        driver = object.__new__(UI.UiDriver)
+        driver._accessible_metadata = mock.Mock(
+            return_value=("Data Generator", "table cell", True)
+        )
+        driver.enabled = mock.Mock(return_value=True)
+
+        driver.select_accessible_item(item, timeout=0.01)
+
+        selection.selectChild.assert_called_once_with(3)
+        selection.isChildSelected.assert_called_once_with(3)
 
     def test_combo_selection_accepts_selected_item_when_name_is_stale(self):
         combo = object()
@@ -548,6 +607,60 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
 
         self.assertIs(selected, visible_combo)
+
+    def test_combo_with_items_accepts_one_named_closed_selector(self):
+        combo = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[combo])
+        driver.all_nodes = mock.Mock(return_value=[combo])
+        driver.role = mock.Mock(return_value="combo box")
+        driver.name = mock.Mock(return_value="Workout Editor")
+        driver.showing = mock.Mock(return_value=True)
+        driver.enabled = mock.Mock(return_value=True)
+
+        selected = driver.combo_with_items(
+            ["Workout Game", "Workout Editor"],
+            timeout=0.01,
+            require_interactable=True,
+        )
+
+        self.assertIs(selected, combo)
+
+    def test_combo_with_items_does_not_guess_between_named_selectors(self):
+        first = object()
+        second = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[first, second])
+        driver.all_nodes = mock.Mock(side_effect=lambda combo: [combo])
+        driver.role = mock.Mock(return_value="combo box")
+        driver.name = mock.Mock(
+            side_effect=lambda combo: (
+                "Workout Editor" if combo is first else "Workout Game"
+            )
+        )
+        driver.showing = mock.Mock(return_value=True)
+        driver.enabled = mock.Mock(return_value=True)
+
+        with self.assertRaisesRegex(UI.UiFailure, "Perspective selector lacks"):
+            driver.combo_with_items(
+                ["Workout Game", "Workout Editor"],
+                timeout=0.01,
+                require_interactable=True,
+            )
+
+    def test_combo_with_items_rejects_a_hidden_named_selector(self):
+        combo = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[combo])
+        driver.all_nodes = mock.Mock(return_value=[combo])
+        driver.role = mock.Mock(return_value="combo box")
+        driver.name = mock.Mock(return_value="Workout Editor")
+        driver.showing = mock.Mock(return_value=False)
+
+        with self.assertRaisesRegex(UI.UiFailure, "Perspective selector lacks"):
+            driver.combo_with_items(
+                ["Workout Game", "Workout Editor"], timeout=0.01
+            )
 
     def test_prepare_anchors_a_usable_workout_library(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -7,6 +7,7 @@ if [ "$#" -ne 2 ]; then
 fi
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$SCRIPT_DIR/ui-test-environment.sh"
 IMAGE=$(cd -- "$(dirname -- "$1")" && pwd -P)/$(basename -- "$1")
 ARTIFACT_DIR=$2
 
@@ -22,10 +23,13 @@ ARTIFACT_DIR=$2
     echo "DISPLAY is not set; run this from the target desktop session" >&2
     exit 2
 }
-command -v setsid >/dev/null || {
-    echo "Missing real-trainer test dependency: setsid" >&2
-    exit 2
-}
+for command in setsid stat; do
+    command -v "$command" >/dev/null || {
+        echo "Missing real-trainer test dependency: $command" >&2
+        exit 2
+    }
+done
+capture_ui_test_session_environment "$DISPLAY"
 
 mkdir -p -- "$ARTIFACT_DIR"
 ARTIFACT_DIR=$(cd -- "$ARTIFACT_DIR" && pwd -P)
@@ -62,15 +66,7 @@ trap cleanup EXIT HUP INT TERM
 
 python3 "$SCRIPT_DIR/pre_release_ui.py" prepare "$TEST_ROOT"
 
-export HOME=$TEST_ROOT/home
-export XDG_CONFIG_HOME=$HOME/.config
-export XDG_CACHE_HOME=$HOME/.cache
-export XDG_DATA_HOME=$HOME/.local/share
-export XDG_STATE_HOME=$HOME/.local/state
-export XDG_RUNTIME_DIR=$HOME/.runtime
-mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" \
-    "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
-chmod 700 "$XDG_RUNTIME_DIR"
+configure_ui_test_xdg_environment "$TEST_ROOT/home"
 export APPIMAGE_EXTRACT_AND_RUN=${APPIMAGE_EXTRACT_AND_RUN:-1}
 export GC_WORKOUT_GAME_TRACE=1
 export GC_WORKOUT_GAME_DIAGNOSTICS=${GC_WORKOUT_GAME_DIAGNOSTICS:-1}
