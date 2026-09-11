@@ -30,6 +30,25 @@ GENERATOR_MODES = {
     "cadence-low",
     "cadence-high",
 }
+UI_TEST_NAMES = (
+    "startup_and_main_navigation",
+    "view_navigation",
+    "prepared_workout_library_import",
+    "train_control_accessibility",
+    "data_generator_and_virtual_gears",
+    "create_edit_mtb_course_lifecycle",
+    "workout_game_training_lifecycle",
+    "new_workout_save_as",
+    "graceful_shutdown_request",
+)
+UI_TEST_DEPENDENCIES = {
+    "create_edit_mtb_course_lifecycle": (
+        "prepared_workout_library_import",
+    ),
+    "workout_game_training_lifecycle": (
+        "prepared_workout_library_import",
+    ),
+}
 
 
 def canvas_requires_pixel_motion(accessible_name: str) -> bool:
@@ -112,6 +131,49 @@ def validate_mtb_course_from_environment() -> bool:
     if value not in ("0", "1"):
         raise ValueError("GC_UI_VALIDATE_MTB_COURSE must be 0 or 1")
     return value == "1"
+
+
+def selected_ui_tests_from_environment() -> tuple[str, ...]:
+    value = os.environ.get("GC_UI_TESTS", "").strip()
+    if not value:
+        selected = set(UI_TEST_NAMES)
+    else:
+        requested = [name.strip() for name in value.split(",")]
+        if any(not name for name in requested):
+            raise ValueError("GC_UI_TESTS contains an empty test name")
+        if len(requested) != len(set(requested)):
+            raise ValueError("GC_UI_TESTS contains duplicate test names")
+        unknown = sorted(set(requested) - set(UI_TEST_NAMES))
+        if unknown:
+            raise ValueError(
+                "GC_UI_TESTS contains unknown tests: " + ", ".join(unknown)
+            )
+        selected = set(requested)
+
+    pending = list(selected)
+    while pending:
+        test_name = pending.pop()
+        for dependency in UI_TEST_DEPENDENCIES.get(test_name, ()):
+            if dependency not in selected:
+                selected.add(dependency)
+                pending.append(dependency)
+
+    if validate_mtb_course_from_environment() and (
+        "create_edit_mtb_course_lifecycle" not in selected
+    ):
+        raise ValueError(
+            "GC_UI_VALIDATE_MTB_COURSE requires "
+            "create_edit_mtb_course_lifecycle in GC_UI_TESTS"
+        )
+    if (
+        validate_trainer_acceptance_from_environment()
+        or os.environ.get("GC_UI_REQUIRE_QUICK3D_EVIDENCE") == "1"
+    ) and "workout_game_training_lifecycle" not in selected:
+        raise ValueError(
+            "trainer or Quick3D evidence requires "
+            "workout_game_training_lifecycle in GC_UI_TESTS"
+        )
+    return tuple(name for name in UI_TEST_NAMES if name in selected)
 
 
 def preserve_game_recording(source: Path, artifacts: Path) -> Path:
@@ -605,11 +667,24 @@ class UiDriver:
                 f"Missing visible accessible content: {', '.join(missing)}"
             )
 
-    def activate(self, node):
-        if not self.enabled(node):
-            raise UiFailure(
-                f"Control is disabled: {self.role(node)} {self.name(node)!r}"
+    def refresh_accessible(self, node, name, role, showing, timeout=1.0):
+        if not name and not role:
+            return node
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            matches = self.find_all(
+                name=name or None,
+                role=role or None,
+                showing=True if showing else None,
             )
+            if matches:
+                return matches[-1] if showing else matches[0]
+            time.sleep(0.1)
+        return node
+
+    def _activate_once(self, node):
+        if not self.enabled(node):
+            raise UiFailure("accessible control is disabled or stale")
         try:
             action = node.queryAction()
             for index in range(action.nActions):
@@ -623,11 +698,43 @@ class UiDriver:
             parent.querySelection().selectChild(node.getIndexInParent())
             return
         except Exception as error:
-            raise UiFailure(
-                f"Cannot activate {self.role(node)} {self.name(node)!r}"
-            ) from error
+            raise UiFailure("accessible action is stale") from error
+
+    def activate(self, node):
+        name = self.name(node)
+        role = self.role(node)
+        showing = self.showing(node)
+        last_error = None
+        for attempt in range(2):
+            try:
+                self._activate_once(node)
+                return
+            except UiFailure as error:
+                last_error = error
+                if attempt == 0:
+                    node = self.refresh_accessible(
+                        node, name, role, showing
+                    )
+        raise UiFailure(f"Cannot activate {role} {name!r}") from last_error
 
     def _mouse_click(self, node, button):
+        name = self.name(node)
+        role = self.role(node)
+        showing = self.showing(node)
+        last_error = None
+        for attempt in range(2):
+            try:
+                self._mouse_click_once(node, button)
+                return
+            except Exception as error:
+                last_error = error
+                if attempt == 0:
+                    node = self.refresh_accessible(
+                        node, name, role, showing
+                    )
+        raise UiFailure(f"Cannot click {role} {name!r}") from last_error
+
+    def _mouse_click_once(self, node, button):
         try:
             bounds = node.queryComponent().getExtents(
                 self.pyatspi.DESKTOP_COORDS
@@ -641,9 +748,7 @@ class UiDriver:
             self.xtest.fake_input(self.display, self.X.ButtonRelease, button)
             self.display.sync()
         except Exception as error:
-            raise UiFailure(
-                f"Cannot click {self.role(node)} {self.name(node)!r}"
-            ) from error
+            raise UiFailure("accessible bounds are stale") from error
 
     def click(self, node):
         self._mouse_click(node, 1)
@@ -1595,6 +1700,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
     try:
         driver = UiDriver(root, artifacts, app_pgid)
         suite = Suite(driver, artifacts)
+        selected_tests = set(selected_ui_tests_from_environment())
         capture_screenshots = ui_screenshots_enabled_from_environment()
         generated_course = {}
 
@@ -1824,17 +1930,30 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 time.sleep(0.1)
             raise UiFailure("GoldenCheetah did not exit after Quit")
 
-        suite.run("startup_and_main_navigation", startup)
-        suite.run("view_navigation", views)
-        suite.run("prepared_workout_library_import", import_prepared_workout)
-        suite.run("train_control_accessibility", train_controls)
-        suite.run("data_generator_and_virtual_gears", generator_and_gears)
-        if validate_mtb_course_from_environment():
+        if "startup_and_main_navigation" in selected_tests:
+            suite.run("startup_and_main_navigation", startup)
+        if "view_navigation" in selected_tests:
+            suite.run("view_navigation", views)
+        if "prepared_workout_library_import" in selected_tests:
+            suite.run("prepared_workout_library_import", import_prepared_workout)
+        if "train_control_accessibility" in selected_tests:
+            suite.run("train_control_accessibility", train_controls)
+        if "data_generator_and_virtual_gears" in selected_tests:
+            suite.run("data_generator_and_virtual_gears", generator_and_gears)
+        if (
+            validate_mtb_course_from_environment()
+            and "create_edit_mtb_course_lifecycle" in selected_tests
+        ):
             suite.run("create_edit_mtb_course_lifecycle", mtb_course_lifecycle)
-        suite.run("workout_game_training_lifecycle", game_training_lifecycle)
-        if not skip_save_as_from_environment():
+        if "workout_game_training_lifecycle" in selected_tests:
+            suite.run("workout_game_training_lifecycle", game_training_lifecycle)
+        if (
+            "new_workout_save_as" in selected_tests
+            and not skip_save_as_from_environment()
+        ):
             suite.run("new_workout_save_as", save_workout)
-        suite.run("graceful_shutdown_request", shutdown)
+        if "graceful_shutdown_request" in selected_tests:
+            suite.run("graceful_shutdown_request", shutdown)
         return 1 if suite.write_junit() else 0
     except Exception:
         error = traceback.format_exc()

@@ -874,6 +874,50 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
         driver.activate.assert_called_once_with(control)
 
+    def test_activate_refreshes_a_stale_accessible_control_once(self):
+        stale = object()
+        replacement = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.name = mock.Mock(return_value="Start or pause training")
+        driver.role = mock.Mock(return_value="push button")
+        driver.showing = mock.Mock(return_value=True)
+        driver._activate_once = mock.Mock(
+            side_effect=[UI.UiFailure("stale"), None]
+        )
+        driver.refresh_accessible = mock.Mock(return_value=replacement)
+
+        driver.activate(stale)
+
+        self.assertEqual(
+            driver._activate_once.call_args_list,
+            [mock.call(stale), mock.call(replacement)],
+        )
+        driver.refresh_accessible.assert_called_once_with(
+            stale, "Start or pause training", "push button", True
+        )
+
+    def test_click_refreshes_stale_accessible_bounds_once(self):
+        stale = object()
+        replacement = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.name = mock.Mock(return_value="Save")
+        driver.role = mock.Mock(return_value="push button")
+        driver.showing = mock.Mock(return_value=True)
+        driver._mouse_click_once = mock.Mock(
+            side_effect=[UI.UiFailure("stale"), None]
+        )
+        driver.refresh_accessible = mock.Mock(return_value=replacement)
+
+        driver.click(stale)
+
+        self.assertEqual(
+            driver._mouse_click_once.call_args_list,
+            [mock.call(stale, 1), mock.call(replacement, 1)],
+        )
+        driver.refresh_accessible.assert_called_once_with(
+            stale, "Save", "push button", True
+        )
+
     def test_quick3d_capture_defers_motion_validation_to_renderer_trace(self):
         with tempfile.TemporaryDirectory() as directory:
             recording = Path(directory) / "recording.csv"

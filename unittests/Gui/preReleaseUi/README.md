@@ -14,6 +14,23 @@ unittests/Gui/preReleaseUi/run-pre-release-ui-matrix.sh \
 The output directory contains `junit.xml`, `goldencheetah.log`, screenshots and,
 when `GC_UI_RECORD_VIDEO=1` and `ffmpeg` are available, `session.mp4`.
 
+During development, `GC_UI_TESTS` can select a comma-separated subset in the
+normal suite order. Unknown and duplicate names fail before exercising the UI.
+Known prerequisites are added automatically; the course and Workout Game
+lifecycle cases both add `prepared_workout_library_import`.
+Evidence modes enforce their dependencies: MTB validation requires
+`create_edit_mtb_course_lifecycle`, and trainer or Quick 3D evidence requires
+`workout_game_training_lifecycle`. For example:
+
+```bash
+GC_UI_TESTS=workout_game_training_lifecycle,graceful_shutdown_request \
+unittests/Gui/preReleaseUi/run-pre-release-ui.sh \
+  /path/to/GoldenCheetah.AppImage artifacts/ui-focused
+```
+
+Omitting `GC_UI_TESTS` preserves the full enabled suite. The release matrix
+always runs without a filter.
+
 The Workout Game lifecycle is verified through its filesystem effects as well
 as its visible controls. One isolated Data Generator session starts in Game
 mode and verifies that selecting Workout Game automatically selects Workout
@@ -53,6 +70,10 @@ targets and feature outcomes with the trace. This mode requires
 `GC_WORKOUT_GAME_TRACE=1`, selects the 3D renderer by default and never reads
 the normal athlete library. Trace validation replaces the two synchronous X11
 game screenshots in this mode so readback cannot distort workout timing.
+Integer-second recording samples are evaluated against the session's best
+supported 0 or 1 second recording phase. Consecutive dispatches at the same
+workout position are coalesced to the latest target because an earlier target
+superseded between CSV samples cannot appear in the recording.
 
 For an unpackaged development binary, set `GC_UI_APPDIR` to an extracted
 AppImage root whose `lib`, `plugins` and `qml` directories provide the matching
@@ -94,7 +115,11 @@ unittests/Gui/preReleaseUi/run-pre-release-ui.sh \
 ```
 
 On a test session where direct rendering is available, add
-`GC_UI_USE_HARDWARE_GL=1`. Every mode still uses the temporary athlete library
+`GC_UI_USE_HARDWARE_GL=1`. Xvfb software rendering enforces renderer selection,
+complete evidence, forward progress, queue bounds, trace consistency and the
+general continuity limits, but it does not enforce target-GPU cold-start frame
+budgets. Hardware mode enforces those strict p99, maximum-frame, first-visual
+and visual-stall budgets. Every mode still uses the temporary athlete library
 created by the runner.
 
 To exercise the target desktop GPU instead of Xvfb, set
