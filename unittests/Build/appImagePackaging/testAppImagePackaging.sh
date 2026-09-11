@@ -932,6 +932,10 @@ chmod +x "$SECOND_APPIMAGE"
 SECOND_MANIFEST="$SECOND_APPIMAGE.manifest"
 finalize_appimage_manifest \
     "$SECOND_APPIMAGE" "$BASE_MANIFEST" "$SECOND_MANIFEST"
+printf 'preserve unexpected entry\n' \
+    >"$TEMP_DIR/.GoldenCheetah-release.store/sets/manual-note"
+printf 'preserve unexpected entry\n' \
+    >"$TEMP_DIR/.GoldenCheetah-release.store/artifacts/manual-note"
 GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
 GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
     promote_appimage_release \
@@ -957,6 +961,16 @@ cmp -s "$FAKE_SBOM" \
 cmp -s "$FAKE_SBOM" \
     "$RELEASE_LINK/previous.AppImage.sbom.cdx.json" ||
     fail "the previous release SBOM was not retained"
+[ "$(find "$TEMP_DIR/.GoldenCheetah-release.store/sets" \
+    -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ] ||
+    fail "release retention kept inactive generation sets"
+[ "$(find "$TEMP_DIR/.GoldenCheetah-release.store/artifacts" \
+    -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ] ||
+    fail "release retention kept artifacts older than previous"
+[ -f "$TEMP_DIR/.GoldenCheetah-release.store/sets/manual-note" ] ||
+    fail "release retention deleted an unexpected set entry"
+[ -f "$TEMP_DIR/.GoldenCheetah-release.store/artifacts/manual-note" ] ||
+    fail "release retention deleted an unexpected artifact entry"
 
 LEGACY_RELEASE_LINK="$TEMP_DIR/GoldenCheetah-legacy-release"
 GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
