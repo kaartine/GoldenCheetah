@@ -2482,6 +2482,46 @@ promote_appimage_release()
         fi
     }
 
+    prune_inactive_release_generations()
+    {
+        local active_set=$1
+        local latest_artifact previous_artifact entry name
+        local -a retained_artifacts
+
+        latest_artifact=$(dirname -- "$(readlink -f -- \
+            "$active_set/latest.AppImage")") || return
+        previous_artifact=$(dirname -- "$(readlink -f -- \
+            "$active_set/previous.AppImage")") || return
+        case "$latest_artifact" in "$artifacts"/*) ;; *) return 1 ;; esac
+        case "$previous_artifact" in "$artifacts"/*) ;; *) return 1 ;; esac
+        retained_artifacts=("$latest_artifact" "$previous_artifact")
+
+        for entry in "$sets"/*; do
+            [ -e "$entry" ] || continue
+            name=$(basename -- "$entry")
+            if [ -L "$entry" ] || [ ! -d "$entry" ] ||
+               [[ ! "$name" =~ ^[0-9a-f]{64}-[0-9a-f]{64}$ ]]; then
+                echo "Skipping unsafe release-set retention entry: $entry" >&2
+                continue
+            fi
+            [ "$entry" = "$active_set" ] || rm -rf -- "$entry"
+        done
+        for entry in "$artifacts"/*; do
+            [ -e "$entry" ] || continue
+            name=$(basename -- "$entry")
+            if [ -L "$entry" ] || [ ! -d "$entry" ] ||
+               [[ ! "$name" =~ ^[0-9a-f]{40}-[0-9a-f]{64}$ ]]; then
+                echo "Skipping unsafe release-artifact retention entry: $entry" >&2
+                continue
+            fi
+            if [ "$entry" != "${retained_artifacts[0]}" ] &&
+               [ "$entry" != "${retained_artifacts[1]}" ]; then
+                rm -rf -- "$entry"
+            fi
+        done
+        sync -f "$store"
+    }
+
     verify_appimage_manifest "$image" "$manifest" || {
         echo "Refusing to promote an unverified AppImage." >&2
         return 1
@@ -2617,6 +2657,8 @@ promote_appimage_release()
                 "$current_dir/latest.AppImage.manifest" || return 1
             cmp -s -- "$sbom" \
                 "$current_dir/latest.AppImage.sbom.cdx.json" || return 1
+            prune_inactive_release_generations "$current_dir" ||
+                echo "Warning: inactive AppImage generations were not pruned." >&2
             printf '%s\n' "$release_link/latest.AppImage"
             return 0
         fi
@@ -2717,6 +2759,8 @@ promote_appimage_release()
         sync -f "$release_parent" || return
         return 1
     fi
+    prune_inactive_release_generations "$set_dir" ||
+        echo "Warning: inactive AppImage generations were not pruned." >&2
     printf '%s\n' "$release_link/latest.AppImage"
 )
 
