@@ -90,8 +90,6 @@ Node {
                                   - (walking ? 0.10 : 0)
     readonly property real bodyZ: -0.03 + 0.12 * standingBlend
                                   + actionForward
-    readonly property real pelvisY: bodyY - 0.15
-    readonly property real pelvisZ: bodyZ - 0.09
 
     function riderFrustumScenePoints() {
         return [
@@ -136,20 +134,32 @@ Node {
         0.13,
         crankY - 0.16 * Math.cos(crankRadians),
         crankZ - 0.16 * Math.sin(crankRadians))
-    readonly property vector3d leftHip: Qt.vector3d(
-        bodyX - 0.12, pelvisY, pelvisZ)
-    readonly property vector3d rightHip: Qt.vector3d(
-        bodyX + 0.12, pelvisY, pelvisZ)
+
+    function bodyAnchor(localPoint) {
+        // Track both parts of the body transform before mapping the anchor.
+        const bodyPosition = body.position
+        const bodyRotation = body.eulerRotation
+        const transformState = bodyPosition.x + bodyPosition.y + bodyPosition.z
+                + bodyRotation.x + bodyRotation.y + bodyRotation.z
+        if (!Number.isFinite(transformState))
+            return Qt.vector3d(0, 0, 0)
+        return body.mapPositionToNode(sprungBike, localPoint)
+    }
+
+    readonly property vector3d leftHip: bodyAnchor(
+        Qt.vector3d(-0.12, -0.15, -0.09))
+    readonly property vector3d rightHip: bodyAnchor(
+        Qt.vector3d(0.12, -0.15, -0.09))
     readonly property vector3d leftKnee: twoBoneJoint(
         leftHip, leftPedal, thighLength, shinLength,
         Qt.vector3d(-0.08, 0, 1))
     readonly property vector3d rightKnee: twoBoneJoint(
         rightHip, rightPedal, thighLength, shinLength,
         Qt.vector3d(0.08, 0, 1))
-    readonly property vector3d leftShoulder: Qt.vector3d(
-        bodyX - 0.19, bodyY + 0.20, bodyZ + 0.08)
-    readonly property vector3d rightShoulder: Qt.vector3d(
-        bodyX + 0.19, bodyY + 0.20, bodyZ + 0.08)
+    readonly property vector3d leftShoulder: bodyAnchor(
+        Qt.vector3d(-0.19, 0.20, 0.08))
+    readonly property vector3d rightShoulder: bodyAnchor(
+        Qt.vector3d(0.19, 0.20, 0.08))
     readonly property vector3d leftHand: Qt.vector3d(
         -gripHalfSpan, steerY, steerZ)
     readonly property vector3d rightHand: Qt.vector3d(
@@ -177,6 +187,23 @@ Node {
         const dy = to.y - from.y
         const dz = to.z - from.z
         return Math.sqrt(dx * dx + dy * dy + dz * dz)
+    }
+
+    function segmentDirection(from, to) {
+        const length = segmentLength(from, to)
+        if (length < 0.0001)
+            return Qt.vector3d(0, 1, 0)
+        return Qt.vector3d(
+            (to.x - from.x) / length,
+            (to.y - from.y) / length,
+            (to.z - from.z) / length)
+    }
+
+    function offsetPoint(point, direction, amount) {
+        return Qt.vector3d(
+            point.x + direction.x * amount,
+            point.y + direction.y * amount,
+            point.z + direction.z * amount)
     }
 
     function segmentPitch(from, to) {
@@ -288,15 +315,22 @@ Node {
         required property vector3d to
         property real thickness: 0.72
         property var segmentMaterial: jerseyMaterial
+        property real jointOverlap: Math.min(
+            0.022, root.segmentLength(from, to) * 0.08)
+        readonly property vector3d direction: root.segmentDirection(from, to)
+        readonly property vector3d visualFrom: root.offsetPoint(
+            from, direction, -jointOverlap)
+        readonly property vector3d visualTo: root.offsetPoint(
+            to, direction, jointOverlap)
 
-        position: from
-        eulerRotation.x: root.segmentPitch(from, to)
-        eulerRotation.z: root.segmentRoll(from, to)
+        position: visualFrom
+        eulerRotation.x: root.segmentPitch(visualFrom, visualTo)
+        eulerRotation.z: root.segmentRoll(visualFrom, visualTo)
         Model {
             source: "assets/meshes/geo_Limb_LOD0_mesh.mesh"
             scale: Qt.vector3d(
                 parent.thickness,
-                root.segmentLength(parent.from, parent.to),
+                root.segmentLength(parent.visualFrom, parent.visualTo),
                 parent.thickness)
             materials: parent.segmentMaterial
             castsShadows: false

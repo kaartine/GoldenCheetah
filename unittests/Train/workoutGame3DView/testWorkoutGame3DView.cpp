@@ -38,6 +38,7 @@
 #include <QJsonObject>
 #include <QPainter>
 #include <QPointer>
+#include <QQuaternion>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -4022,6 +4023,31 @@ private slots:
             QVERIFY((point(first, "to") - point(second, "from")).length()
                     < 0.001);
         };
+        const auto verifyRenderedDirection = [&point](QObject *limb) {
+            const QVector3D expected = (
+                    point(limb, "to") - point(limb, "from")).normalized();
+            const QQuaternion rotation =
+                    limb->property("rotation").value<QQuaternion>();
+            const QVector3D rendered = rotation.rotatedVector(
+                    QVector3D(0.0f, 1.0f, 0.0f)).normalized();
+            QVERIFY2((rendered - expected).length() < 0.001f,
+                     qPrintable(QStringLiteral(
+                         "%1 rendered axis misses its joints by %2")
+                         .arg(limb->objectName())
+                         .arg((rendered - expected).length())));
+        };
+        const auto verifyJointOverlap = [&point](QObject *limb) {
+            const float overlap = limb->property("jointOverlap").toFloat();
+            QVERIFY(overlap >= 0.015f);
+            const QVector3D direction = (
+                    point(limb, "to") - point(limb, "from")).normalized();
+            const QVector3D visualFrom = point(limb, "visualFrom");
+            const QVector3D visualTo = point(limb, "visualTo");
+            QVERIFY((visualFrom - (point(limb, "from")
+                    - direction * overlap)).length() < 0.001f);
+            QVERIFY((visualTo - (point(limb, "to")
+                    + direction * overlap)).length() < 0.001f);
+        };
 
         QObject *leftUpperLeg = segment(QStringLiteral("leftUpperLeg"));
         QObject *leftLowerLeg = segment(QStringLiteral("leftLowerLeg"));
@@ -4055,6 +4081,13 @@ private slots:
         verifyLength(rightUpperArm, 0.32);
         verifyLength(leftForearm, 0.36);
         verifyLength(rightForearm, 0.36);
+        for (QObject *limb : {leftUpperLeg, leftLowerLeg,
+                              rightUpperLeg, rightLowerLeg,
+                              leftUpperArm, leftForearm,
+                              rightUpperArm, rightForearm}) {
+            verifyRenderedDirection(limb);
+            verifyJointOverlap(limb);
+        }
         verifyConnected(leftUpperLeg, leftLowerLeg);
         verifyConnected(rightUpperLeg, rightLowerLeg);
         verifyConnected(leftUpperArm, leftForearm);
@@ -4082,6 +4115,40 @@ private slots:
         QVERIFY(point(leftGlove, "to").x() > -0.39f);
         QVERIFY(point(rightGlove, "from").x() < 0.39f);
         QVERIFY(point(rightGlove, "to").x() > 0.39f);
+
+        QObject *body = segment(QStringLiteral("riderBodyNode"));
+        QVERIFY(body);
+        const auto verifyBodyAnchors = [&]() {
+            const QVector3D bodyPosition =
+                    body->property("position").value<QVector3D>();
+            const QQuaternion bodyRotation =
+                    body->property("rotation").value<QQuaternion>();
+            const QVector3D expectedLeftShoulder = bodyPosition
+                    + bodyRotation.rotatedVector(
+                        QVector3D(-0.19f, 0.20f, 0.08f));
+            const QVector3D expectedRightShoulder = bodyPosition
+                    + bodyRotation.rotatedVector(
+                        QVector3D(0.19f, 0.20f, 0.08f));
+            const QVector3D expectedLeftHip = bodyPosition
+                    + bodyRotation.rotatedVector(
+                        QVector3D(-0.12f, -0.15f, -0.09f));
+            const QVector3D expectedRightHip = bodyPosition
+                    + bodyRotation.rotatedVector(
+                        QVector3D(0.12f, -0.15f, -0.09f));
+            QVERIFY((point(leftUpperArm, "from")
+                    - expectedLeftShoulder).length() < 0.001f);
+            QVERIFY((point(rightUpperArm, "from")
+                    - expectedRightShoulder).length() < 0.001f);
+            QVERIFY((point(leftUpperLeg, "from")
+                    - expectedLeftHip).length() < 0.001f);
+            QVERIFY((point(rightUpperLeg, "from")
+                    - expectedRightHip).length() < 0.001f);
+        };
+        verifyBodyAnchors();
+        QVERIFY(body->setProperty(
+            "eulerRotation", QVariant::fromValue(QVector3D(9.0f, 0.0f, 7.0f))));
+        QCoreApplication::processEvents();
+        verifyBodyAnchors();
     }
 
     void riderReadabilitySourceUsesScopedLightingWithoutEmission()
