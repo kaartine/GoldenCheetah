@@ -639,6 +639,18 @@ class UiDriver:
             "Accessible object not found with any name: " + ", ".join(names)
         )
 
+    def find_enabled(self, name, role=None, showing=True, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for node in reversed(self.find_all(name, role, showing)):
+                if self.enabled(node):
+                    return node
+            time.sleep(0.1)
+        raise UiFailure(
+            f"Enabled accessible object not found: name={name!r}, "
+            f"role={role!r}"
+        )
+
     def require_names(self, names, role=None, timeout=10.0):
         deadline = time.monotonic() + timeout
         missing = list(names)
@@ -736,7 +748,11 @@ class UiDriver:
         last_error = None
         for attempt in range(2):
             try:
-                return self.name(node), self.role(node), self.showing(node)
+                return (
+                    node.name or "",
+                    node.getRoleName(),
+                    node.getState().contains(self.pyatspi.STATE_SHOWING),
+                )
             except Exception as error:
                 last_error = error
                 if attempt == 0:
@@ -820,15 +836,44 @@ class UiDriver:
         raise UiFailure(f"Cannot open view {name!r}") from last_error
 
     def select_named(self, name, timeout=10.0):
-        nodes = self.find_all(name=name, showing=True)
+        deadline = time.monotonic() + timeout
+        nodes = [
+            node for node in self.find_all(name=name, showing=True)
+            if self.role(node) in ("list item", "table cell")
+        ]
+        last_error = None
         for node in reversed(nodes):
-            if self.role(node) in ("list item", "table cell"):
-                try:
-                    self.activate(node)
-                    time.sleep(0.5)
-                    return
-                except UiFailure:
-                    continue
+            try:
+                self.select_accessible_item(
+                    node,
+                    timeout=min(1.0, max(0.1, deadline - time.monotonic())),
+                )
+                return
+            except UiFailure as error:
+                last_error = error
+                continue
+
+        for node in reversed(nodes):
+            try:
+                parent = node.parent
+                index = node.getIndexInParent()
+                selection = parent.querySelection()
+                self.click(node)
+                confirmation_deadline = min(
+                    deadline, time.monotonic() + 1.0
+                )
+                while time.monotonic() < confirmation_deadline:
+                    if selection.isChildSelected(index):
+                        return
+                    time.sleep(0.1)
+                last_error = UiFailure(
+                    f"Mouse click did not select {name!r}"
+                )
+            except Exception as error:
+                last_error = error
+        if nodes:
+            raise UiFailure(f"Selectable item did not select {name!r}") \
+                from last_error
         for combo in self.find_all(role="combo box"):
             if not any(
                 self.role(node) == "list item" and self.name(node) == name
@@ -850,6 +895,32 @@ class UiDriver:
                 time.sleep(0.1)
             raise UiFailure(f"Combo box did not select {name!r}")
         raise UiFailure(f"Cannot select {name!r}")
+
+    def select_accessible_item(self, node, timeout=1.0):
+        name, role, showing = self._accessible_metadata(node)
+        last_error = None
+        for attempt in range(2):
+            try:
+                if not self.enabled(node):
+                    raise UiFailure("accessible item is disabled or stale")
+                parent = node.parent
+                index = node.getIndexInParent()
+                selection = parent.querySelection()
+                if index < 0 or not selection.selectChild(index):
+                    raise UiFailure("accessible container rejected selection")
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    if selection.isChildSelected(index):
+                        return
+                    time.sleep(0.1)
+                raise UiFailure("accessible container did not retain selection")
+            except Exception as error:
+                last_error = error
+                if attempt == 0:
+                    node = self.refresh_accessible(
+                        node, name, role, showing
+                    )
+        raise UiFailure(f"Cannot select {role} {name!r}") from last_error
 
     def click_named_item(self, name):
         for node in reversed(self.find_all(name=name, showing=True)):
@@ -875,10 +946,14 @@ class UiDriver:
         expected = set(expected)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            named_candidates = []
             for combo in self.find_all(role="combo box"):
-                if require_interactable and (
-                        not self.showing(combo) or not self.enabled(combo)):
+                if not self.showing(combo):
                     continue
+                if require_interactable and not self.enabled(combo):
+                    continue
+                if self.name(combo) in expected:
+                    named_candidates.append(combo)
                 descendants = {
                     self.name(node)
                     for node in self.all_nodes(combo)
@@ -886,6 +961,8 @@ class UiDriver:
                 }
                 if expected.issubset(descendants):
                     return combo
+            if len(named_candidates) == 1:
+                return named_candidates[0]
             time.sleep(0.15)
         raise UiFailure(f"Perspective selector lacks: {sorted(expected)!r}")
 
@@ -1400,11 +1477,17 @@ class WorkoutGameUiWorkflow:
                     "Connect training devices", "push button", showing=True
                 )
             )
-            deadline = time.monotonic() + 8.0
-            while not self.driver.enabled(self.gear) and time.monotonic() < deadline:
-                time.sleep(0.1)
-            if not self.driver.enabled(self.gear):
-                raise UiFailure("Data Generator did not connect for Workout Game")
+            try:
+                self.gear = self.driver.find_enabled(
+                    "Virtual gear", "spin button", showing=True, timeout=15.0
+                )
+                self.stop_training_button = self.driver.find(
+                    "Stop training", "push button", showing=True
+                )
+            except UiFailure as error:
+                raise UiFailure(
+                    "Data Generator did not connect for Workout Game"
+                ) from error
 
         if workout_ride_expected is not None:
             ride_mode = self.driver.combo_with_items(
@@ -1822,12 +1905,12 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 "Connect training devices", "push button", showing=True
             )
             driver.activate(connect)
-            gear = driver.find("Virtual gear", "spin button", showing=True)
-            deadline = time.monotonic() + 8.0
-            while not driver.enabled(gear) and time.monotonic() < deadline:
-                time.sleep(0.1)
-            if not driver.enabled(gear):
-                raise UiFailure("Data Generator did not connect")
+            try:
+                gear = driver.find_enabled(
+                    "Virtual gear", "spin button", showing=True, timeout=15.0
+                )
+            except UiFailure as error:
+                raise UiFailure("Data Generator did not connect") from error
             driver.select_named("Manual Erg Mode")
             driver.activate(
                 driver.find(

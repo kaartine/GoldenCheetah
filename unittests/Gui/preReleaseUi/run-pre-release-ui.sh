@@ -7,6 +7,7 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
 fi
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$SCRIPT_DIR/ui-test-environment.sh"
 IMAGE=$(cd -- "$(dirname -- "$1")" && pwd -P)/$(basename -- "$1")
 ARTIFACT_DIR=${2:-$PWD/ui-test-artifacts}
 
@@ -33,7 +34,7 @@ if [ "${GC_UI_USE_HARDWARE_GL:-0}" = 1 ]; then
     }
 fi
 
-REQUIRED_COMMANDS=(dbus-run-session gdbus python3 setsid)
+REQUIRED_COMMANDS=(dbus-run-session gdbus python3 setsid stat)
 if [ -z "${GC_UI_EXISTING_DISPLAY:-}" ]; then
     REQUIRED_COMMANDS+=(Xvfb)
 fi
@@ -43,14 +44,23 @@ for command in "${REQUIRED_COMMANDS[@]}"; do
         exit 2
     }
 done
+capture_ui_test_session_environment "${GC_UI_EXISTING_DISPLAY:-}"
+if [ "${GC_UI_USE_HARDWARE_GL:-0}" = 1 ]; then
+    require_unlocked_desktop_session
+fi
 python3 -c 'import pyatspi; import Xlib' 2>/dev/null || {
     echo "Missing Python UI dependencies: pyatspi and/or Xlib" >&2
     exit 2
 }
 
 if [ -z "${GC_UI_DBUS_SESSION:-}" ]; then
-    exec env -u DBUS_SESSION_BUS_ADDRESS GC_UI_DBUS_SESSION=1 \
-        dbus-run-session -- "$0" "$IMAGE" "$ARTIFACT_DIR"
+    if [ -n "${GC_UI_EXISTING_DISPLAY:-}" ]; then
+        export GC_UI_DBUS_SESSION=1
+    else
+        exec env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR \
+            GC_UI_DBUS_SESSION=1 \
+            dbus-run-session -- "$0" "$IMAGE" "$ARTIFACT_DIR"
+    fi
 fi
 
 mkdir -p -- "$ARTIFACT_DIR"
@@ -90,6 +100,7 @@ cleanup()
 trap cleanup EXIT HUP INT TERM
 
 python3 "$SCRIPT_DIR/pre_release_ui.py" prepare "$TEST_ROOT"
+configure_ui_test_xdg_environment "$TEST_ROOT/home"
 
 if [ -n "${GC_UI_EXISTING_DISPLAY:-}" ]; then
     export DISPLAY=$GC_UI_EXISTING_DISPLAY
@@ -155,15 +166,6 @@ done
     exit 1
 }
 
-export HOME=$TEST_ROOT/home
-export XDG_CONFIG_HOME=$HOME/.config
-export XDG_CACHE_HOME=$HOME/.cache
-export XDG_DATA_HOME=$HOME/.local/share
-export XDG_STATE_HOME=$HOME/.local/state
-export XDG_RUNTIME_DIR=$HOME/.runtime
-mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" \
-    "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
-chmod 700 "$XDG_RUNTIME_DIR"
 export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 export QT_ACCESSIBILITY=1
 if [ "${GC_UI_USE_HARDWARE_GL:-0}" = 1 ]; then
