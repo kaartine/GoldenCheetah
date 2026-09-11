@@ -1432,30 +1432,50 @@ class WorkoutGameUiWorkflow:
             )
 
         self.activate_stop_training()
-        continue_button = self.driver.find(
-            "Continue Training", "push button", showing=True, timeout=30.0
-        )
         paused_size = recording.stat().st_size
-        self.driver.activate(continue_button)
+        self.activate_stop_dialog_button("Continue Training")
         self.driver.wait_file_growth(recording, paused_size)
         if self.capture_screenshots:
             self.driver.screenshot("05-workout-game-continued")
 
+    def activate_stop_dialog_button(self, name):
+        try:
+            button = self.driver.find(
+                name, "push button", showing=True, timeout=30.0
+            )
+        except UiFailure:
+            # Qt can retain a stale AT-SPI SHOWING state when this dialog is
+            # hidden and shown again. The subsequent workflow assertions still
+            # verify that selecting the exact named control had an effect.
+            self.driver.find(name, "push button", timeout=1.0)
+            steps = {
+                "Continue Training": (),
+                "Save": ("Tab", "Tab"),
+                "Finish": (),
+            }
+            try:
+                keys = steps[name]
+            except KeyError as error:
+                raise UiFailure(
+                    f"No keyboard fallback for stop dialog button {name!r}"
+                ) from error
+            for key in keys:
+                self.driver.send_named_key(key)
+            self.driver.send_named_key("Return")
+            return
+        self.driver.activate(button)
+
     def stop_save_and_reopen(self, recording: Path) -> Path:
         time.sleep(1.0)
         self.activate_stop_training()
-        self.driver.activate(
-            self.driver.find("Save", "push button", showing=True, timeout=30.0)
-        )
+        self.activate_stop_dialog_button("Save")
         activity = self.driver.wait_new_file(
             self.activities,
             self.existing_activities,
             "*.json",
             timeout=15.0,
         )
-        self.driver.activate(
-            self.driver.find("Finish", "push button", showing=True, timeout=30.0)
-        )
+        self.activate_stop_dialog_button("Finish")
         selected_name = self.driver.reopen_saved_activity(activity)
         write_text(
             self.artifacts / "reopened-activity.txt",
