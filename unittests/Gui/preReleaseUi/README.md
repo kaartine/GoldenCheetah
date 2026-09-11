@@ -128,8 +128,16 @@ To exercise the target desktop GPU instead of Xvfb, set
 `GC_UI_EXPECTED_GPU_PATTERN` to a case-insensitive extended regular expression
 matching the intended adapter. The runner requires that adapter in the same
 application log and saves the matching line as `gpu-evidence.txt`. The
-application remains on the isolated athlete library, but its test window is
-visible on that desktop.
+application remains on the isolated athlete library and temporary XDG config,
+cache, data and state paths, but its test window is visible on that desktop.
+Existing-display mode deliberately preserves the caller's desktop D-Bus session
+and `XDG_RUNTIME_DIR` so AT-SPI, portals and keyrings keep their matching session
+sockets. The runtime directory must be absolute, owned by the caller and have
+mode `0700`; the runner never creates, changes or removes it. Run this hardware
+gate in a dedicated test login when sharing those session services is not
+acceptable. The automated hardware runner currently requires the session's
+`org.gnome.ScreenSaver` service and fails closed unless it can confirm that the
+desktop is unlocked.
 The desktop must remain unlocked for the complete run; a screen lock hides the
 window and removes its visible controls from AT-SPI. The runner starts the
 AppImage in an owned process group and terminates that complete group on every

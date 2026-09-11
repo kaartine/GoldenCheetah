@@ -71,7 +71,9 @@ unittests/Gui/preReleaseUi/run-pre-release-ui-matrix.sh \
 Xvfb software rendering is a functional and continuity gate. Target frame-time
 budgets require `GC_UI_USE_HARDWARE_GL=1`, an explicitly identified GPU and an
 accessible test display. Do not describe an Xvfb timing result as target-GPU
-acceptance.
+acceptance. Existing-display runs share the selected desktop's D-Bus and
+`XDG_RUNTIME_DIR` while keeping the athlete library and persistent XDG paths
+isolated; prefer a dedicated test login for that hardware gate.
 
 ## Build and artifact ownership
 
