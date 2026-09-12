@@ -84,6 +84,24 @@ and live gates also pass.
   and the release UI workflow are all covered by the current focused and
   aggregate gates.
 
+The current WG-08/WG-10/WG-11 release slice strengthens the all-feature lab
+without changing trainer control or recording. Bunny-hop and drop use
+deterministically generated, wider authored meshes with explicit trail-facing
+silhouettes. Procedural root geometry is closed and manifold at both ends, and
+the retired forest-dressing runtime layer remains empty while its legacy mesh
+generator is available only to A/B audit tests. Rider preload, airborne,
+landing and terrain-specific suspension motion now advance through one bounded
+elapsed-time state machine. Duplicate simulation timestamps leave both camera
+and rider motion unchanged.
+
+Current source evidence covers all 12 catalog views, completed and bypassed
+bunny-hop/drop sequences and grounded roller motion. The asset suite passes
+38/38, geometry 49/49 and the full X11/OpenGL ViewModel suite 125/125; the
+focused motion export passes 5/5. Changed geometry passes 49/49 and selected
+camera/motion paths 10/10 under ASan/UBSan. These captures use Xvfb with
+software OpenGL and are functional evidence only, not the packaged AppImage,
+NVIDIA or physical-trainer acceptance required by B3-B5.
+
 The current B4 hardening pass reproduces and closes the case where the HUD
 remained visible but the rider, trail and near world disappeared on a long
 course. Camera framing is bounded against the authoritative rider direction,

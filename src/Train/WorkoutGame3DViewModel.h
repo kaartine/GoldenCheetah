@@ -484,13 +484,7 @@ private:
     double currentFrontSuspensionCompression = 0.0;
     bool currentRiderWalking = false;
     QString currentRiderPoseState = QStringLiteral("pedal");
-    bool rootCompressionInitialized = false;
-    double previousRootCompression = 0.0;
     std::int64_t lastRiderPoseTimeMs = -1;
-    bool rockCompressionInitialized = false;
-    double previousRockCompression = 0.0;
-    bool slabCompressionInitialized = false;
-    double previousSlabCompression = 0.0;
     double currentPedalAngle = 0.0;
     double currentSpeedKph = 0.0;
     double currentDistanceMeters = 0.0;

@@ -23,12 +23,15 @@ CORE_LENGTH_M = 0.22
 TILE_LENGTH_M = DEAD_ZONE_M * 2.0 + CORE_LENGTH_M
 HURDLE_CENTER_Z_M = TILE_LENGTH_M * 0.5
 HURDLE_HEIGHT_M = 0.20
-BAR_HALF_LENGTH_M = 1.02
-BAR_HALF_DEPTH_M = 0.12
-BAR_HALF_HEIGHT_M = 0.05
-SUPPORT_CENTER_X_M = 0.84
-SUPPORT_HALF_WIDTH_M = 0.10
-SUPPORT_HALF_DEPTH_M = 0.38
+BAR_HALF_LENGTH_M = 1.22
+BAR_HALF_DEPTH_M = 0.16
+BAR_HALF_HEIGHT_M = 0.065
+SUPPORT_CENTER_X_M = 0.98
+SUPPORT_HALF_WIDTH_M = 0.13
+SUPPORT_HALF_DEPTH_M = 0.45
+FOOT_HALF_WIDTH_M = 0.22
+FOOT_HALF_DEPTH_M = 0.54
+FOOT_HALF_HEIGHT_M = 0.025
 
 MAT_BAR = "MAT_BunnyHopBar_Grey"
 MAT_SUPPORT = "MAT_BunnyHopSupport_Grey"
@@ -106,6 +109,7 @@ def add_box(
     material_indices: list[int],
     center: tuple[float, float, float],
     half_size: tuple[float, float, float],
+    material_index: int,
 ) -> None:
     start = len(vertices)
     cx, cy, cz = center
@@ -121,17 +125,17 @@ def add_box(
         return start + vertical * 4 + lateral * 2 + forward
 
     quads = (
-        ((1, 0, 0), (1, 0, 1), (1, 1, 1), (1, 1, 0), 0),
-        ((0, 1, 0), (0, 1, 1), (0, 0, 1), (0, 0, 0), 1),
-        ((0, 0, 0), (0, 0, 1), (1, 0, 1), (1, 0, 0), 1),
-        ((0, 1, 1), (0, 1, 0), (1, 1, 0), (1, 1, 1), 1),
-        ((0, 0, 1), (0, 1, 1), (1, 1, 1), (1, 0, 1), 0),
-        ((0, 1, 0), (0, 0, 0), (1, 0, 0), (1, 1, 0), 0),
+        ((1, 0, 0), (1, 0, 1), (1, 1, 1), (1, 1, 0)),
+        ((0, 1, 0), (0, 1, 1), (0, 0, 1), (0, 0, 0)),
+        ((0, 0, 0), (0, 0, 1), (1, 0, 1), (1, 0, 0)),
+        ((0, 1, 1), (0, 1, 0), (1, 1, 0), (1, 1, 1)),
+        ((0, 0, 1), (0, 1, 1), (1, 1, 1), (1, 0, 1)),
+        ((0, 1, 0), (0, 0, 0), (1, 0, 0), (1, 1, 0)),
     )
-    for a, b, c, d, material in quads:
+    for a, b, c, d in quads:
         ia, ib, ic, id_ = (index(*corner) for corner in (a, b, c, d))
         faces.extend(((ia, ib, ic), (ia, ic, id_)))
-        material_indices.extend((material, material))
+        material_indices.extend((material_index, material_index))
 
 
 def add_support_prism(
@@ -172,9 +176,18 @@ def create_hurdle(root, materials):
         material_indices,
         (0.0, HURDLE_HEIGHT_M - BAR_HALF_HEIGHT_M, HURDLE_CENTER_Z_M),
         (BAR_HALF_LENGTH_M, BAR_HALF_HEIGHT_M, BAR_HALF_DEPTH_M),
+        0,
     )
-    add_support_prism(vertices, faces, material_indices, -SUPPORT_CENTER_X_M)
-    add_support_prism(vertices, faces, material_indices, SUPPORT_CENTER_X_M)
+    for center_x in (-SUPPORT_CENTER_X_M, SUPPORT_CENTER_X_M):
+        add_support_prism(vertices, faces, material_indices, center_x)
+        add_box(
+            vertices,
+            faces,
+            material_indices,
+            (center_x, FOOT_HALF_HEIGHT_M, HURDLE_CENTER_Z_M),
+            (FOOT_HALF_WIDTH_M, FOOT_HALF_HEIGHT_M, FOOT_HALF_DEPTH_M),
+            1,
+        )
 
     mesh = bpy.data.meshes.new(name=MESH_NAME)
     mesh.from_pydata(
@@ -262,8 +275,12 @@ def self_check(root, hurdle, vertices: Sequence[Sequence[float]]) -> None:
     assert_close(TILE_LENGTH_M, 3.58, "Bunny-hop tile length")
     if HURDLE_HEIGHT_M >= 0.54:
         raise RuntimeError("Bunny-hop hurdle must remain lower than the log")
-    if BAR_HALF_LENGTH_M <= SOCKET_HALF_WIDTH_M + 0.25:
+    if BAR_HALF_LENGTH_M <= SOCKET_HALF_WIDTH_M + 0.45:
         raise RuntimeError("Hurdle must extend beyond both trail edges")
+    if BAR_HALF_DEPTH_M * 2.0 < 0.28:
+        raise RuntimeError("Hurdle bar is too thin to read from 10 metres")
+    if FOOT_HALF_DEPTH_M * 2.0 < 1.0:
+        raise RuntimeError("Hurdle feet do not form a stable A-frame silhouette")
     for point in vertices:
         assert_finite(point, "Non-finite canonical mesh coordinate")
     if hurdle.location.length > EPSILON \
@@ -275,7 +292,7 @@ def self_check(root, hurdle, vertices: Sequence[Sequence[float]]) -> None:
     if any(polygon.loop_total != 3 or polygon.area <= EPSILON
            for polygon in hurdle.data.polygons):
         raise RuntimeError("Hurdle contains invalid triangles")
-    if len(hurdle.data.vertices) != 20 or len(hurdle.data.polygons) != 28:
+    if len(hurdle.data.vertices) != 36 or len(hurdle.data.polygons) != 52:
         raise RuntimeError("Unexpected bunny-hop topology")
     for socket_name, socket_z in (("SOCKET_IN", 0.0),
                                   ("SOCKET_OUT", TILE_LENGTH_M)):

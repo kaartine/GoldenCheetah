@@ -24,6 +24,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <utility>
 
 namespace {
@@ -928,14 +929,78 @@ private slots:
         QVERIFY(roots.ready());
         QCOMPARE(roots.sampleCount(),
                  int(profile.segments.size()) * 5);
+        const int rootCount = int(profile.segments.size());
         QCOMPARE(roots.vertexData().size(),
-                 roots.sampleCount() * 8 * roots.stride());
+                 rootCount * (5 * 8 + 2) * roots.stride());
         QCOMPARE(roots.indexData().size(),
-                 int(profile.segments.size()) * 4 * 8 * 6
+                 rootCount * ((5 - 1) * 8 * 6 + 2 * 8 * 3)
                     * int(sizeof(quint32)));
         QVERIFY(roots.boundsMax().x() - roots.boundsMin().x() > 1.4f);
         QVERIFY(roots.boundsMax().y() > roots.boundsMin().y() + 0.07f);
         QVERIFY(roots.boundsMax().z() > roots.boundsMin().z() + 3.0f);
+    }
+
+    void rootsCloseEverySegmentWithoutVisibleEndHoles()
+    {
+        WorkoutGame3DGeometry roots(WorkoutGame3DGeometry::Layer::Roots);
+        roots.setCourse(rootsCourse());
+
+        QVERIFY(roots.ready());
+        std::map<std::pair<quint32, quint32>, int> edgeUseCounts;
+        const int indexCount = roots.indexData().size()
+                / int(sizeof(quint32));
+        for (int index = 0; index + 2 < indexCount; index += 3) {
+            const std::array<quint32, 3> triangle = {{
+                indexValue(roots.indexData(), index),
+                indexValue(roots.indexData(), index + 1),
+                indexValue(roots.indexData(), index + 2)
+            }};
+            for (int edge = 0; edge < 3; ++edge) {
+                const quint32 first = triangle[std::size_t(edge)];
+                const quint32 second = triangle[std::size_t((edge + 1) % 3)];
+                ++edgeUseCounts[std::minmax(first, second)];
+            }
+        }
+
+        QVERIFY(!edgeUseCounts.empty());
+        for (const auto &edge : edgeUseCounts) {
+            QCOMPARE(edge.second, 2);
+        }
+
+        constexpr int RingsPerRoot = 5;
+        constexpr int Sides = 8;
+        const int verticesPerRoot = RingsPerRoot * Sides + 2;
+        for (int root = 0; root < roots.sampleCount() / RingsPerRoot; ++root) {
+            const int base = root * verticesPerRoot;
+            const int startCap = base + RingsPerRoot * Sides;
+            const int endCap = startCap + 1;
+            const QVector3D start(
+                    vertexFloat(roots.vertexData(), roots.stride(),
+                                startCap, 0),
+                    vertexFloat(roots.vertexData(), roots.stride(),
+                                startCap, 4),
+                    vertexFloat(roots.vertexData(), roots.stride(),
+                                startCap, 8));
+            const QVector3D end(
+                    vertexFloat(roots.vertexData(), roots.stride(),
+                                endCap, 0),
+                    vertexFloat(roots.vertexData(), roots.stride(),
+                                endCap, 4),
+                    vertexFloat(roots.vertexData(), roots.stride(),
+                                endCap, 8));
+            const QVector3D axis = (end - start).normalized();
+            const auto normalAt = [&roots](int vertex) {
+                return QVector3D(
+                        vertexFloat(roots.vertexData(), roots.stride(),
+                                    vertex, 12),
+                        vertexFloat(roots.vertexData(), roots.stride(),
+                                    vertex, 16),
+                        vertexFloat(roots.vertexData(), roots.stride(),
+                                    vertex, 20));
+            };
+            QVERIFY(QVector3D::dotProduct(normalAt(startCap), axis) < -0.99f);
+            QVERIFY(QVector3D::dotProduct(normalAt(endCap), axis) > 0.99f);
+        }
     }
 
     void rootsRangeBuildExcludesDistantTiles()
@@ -1176,16 +1241,27 @@ private slots:
         QVERIFY(colorDistance > 0.15f);
     }
 
+    void retiredForestDressingLayerProducesNoRuntimeMesh()
+    {
+        const WorkoutGame3DMeshData dressing =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                    straightCourse(160.0), 0.0, 145.0);
+
+        QVERIFY(!dressing.ready);
+        QVERIFY(dressing.vertexData.isEmpty());
+        QVERIFY(dressing.indexData.isEmpty());
+        QCOMPARE(dressing.sampleCount, 0);
+    }
+
     void forestDressingBuildsDenseDeterministicBatchedTreeLine()
     {
         const WorkoutGameRoadCourse course = straightCourse(160.0, 5.0);
         const WorkoutGame3DMeshData first =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     course, 0.0, 145.0);
         const WorkoutGame3DMeshData second =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     course, 0.0, 145.0);
 
         QVERIFY(first.ready);
@@ -1205,8 +1281,7 @@ private slots:
     void forestDressingIncludesRocksStumpsAndShrubsInTheSameBatch()
     {
         const WorkoutGame3DMeshData dressing =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     straightCourse(160.0, 5.0), 0.0, 145.0);
         QVERIFY(dressing.ready);
 
@@ -1242,8 +1317,7 @@ private slots:
     void forestDressingIncludesRecognizableBirchVariation()
     {
         const WorkoutGame3DMeshData dressing =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     straightCourse(160.0), 0.0, 145.0);
         QVERIFY(dressing.ready);
 
@@ -1299,8 +1373,7 @@ private slots:
     {
         const WorkoutGameRoadCourse course = straightCourse(160.0);
         const WorkoutGame3DMeshData dressing =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     course, 0.0, 145.0);
         QVERIFY(dressing.ready);
 
@@ -1350,8 +1423,7 @@ private slots:
     void forestDressingIncludesFallenDeadTimber()
     {
         const WorkoutGame3DMeshData dressing =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     straightCourse(160.0), 0.0, 145.0);
         QVERIFY(dressing.ready);
 
@@ -1404,8 +1476,7 @@ private slots:
     void forestDressingIncludesSparseGroundVegetation()
     {
         const WorkoutGame3DMeshData dressing =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     straightCourse(160.0), 0.0, 145.0);
         QVERIFY(dressing.ready);
 
@@ -1448,12 +1519,10 @@ private slots:
     {
         const WorkoutGameRoadCourse course = straightCourse(170.0);
         const WorkoutGame3DMeshData first =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     course, 0.0, 110.0);
         const WorkoutGame3DMeshData second =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     course, 40.0, 145.0);
         QVERIFY(first.ready);
         QVERIFY(second.ready);
@@ -1487,8 +1556,7 @@ private slots:
     {
         const WorkoutGameRoadCourse course = straightCourse(160.0, 9.0);
         const WorkoutGame3DMeshData dressing =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     course, 0.0, 145.0);
         QVERIFY(dressing.ready);
 
@@ -1595,8 +1663,7 @@ private slots:
     void forestDressingKeepsEntireTreesOutsideTheCameraCorridor()
     {
         const WorkoutGame3DMeshData dressing =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     straightCourse(160.0), 0.0, 145.0);
         QVERIFY(dressing.ready);
 
@@ -1636,8 +1703,7 @@ private slots:
         constexpr double EndDistanceMeters = 155.0;
         constexpr float EdgeInsetMeters = 1.5f;
         const WorkoutGame3DMeshData dressing =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     straightCourse(180.0),
                     StartDistanceMeters, EndDistanceMeters);
         QVERIFY(dressing.ready);
@@ -1668,8 +1734,7 @@ private slots:
                 });
         QVERIFY(challenge != course.pieces.cend());
         const WorkoutGame3DMeshData dressing =
-                WorkoutGame3DGeometry::buildMeshData(
-                    WorkoutGame3DGeometry::Layer::ForestDressing,
+                WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                     course, 0.0, course.totalLengthMeters);
         QVERIFY(dressing.ready);
 
@@ -1811,8 +1876,7 @@ private slots:
                     + 2.0;
 
             const WorkoutGame3DMeshData dressing =
-                    WorkoutGame3DGeometry::buildMeshData(
-                        WorkoutGame3DGeometry::Layer::ForestDressing,
+                    WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
                         course, 0.0, course.totalLengthMeters);
             QVERIFY(dressing.ready);
             int propVertices = 0;

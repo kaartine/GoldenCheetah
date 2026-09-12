@@ -178,6 +178,22 @@ def glb_accessor_values(path: Path, document: dict, accessor_index: int) -> list
     ]
 
 
+def mesh_positions_by_material(
+    path: Path, document: dict, mesh_name: str
+) -> dict[str, list[tuple[float, ...]]]:
+    """Group authored mesh positions by their visible material contract."""
+    mesh = next(item for item in document["meshes"] if item["name"] == mesh_name)
+    grouped: dict[str, list[tuple[float, ...]]] = {}
+    for primitive in mesh["primitives"]:
+        material = document["materials"][primitive["material"]]["name"]
+        grouped.setdefault(material, []).extend(
+            glb_accessor_values(
+                path, document, primitive["attributes"]["POSITION"]
+            )
+        )
+    return grouped
+
+
 class AssetFixture:
     def __init__(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="gc-workout-assets-")
@@ -343,7 +359,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         bounds = manifest["technical"]["boundsMeters"]
         self.assertLessEqual(bounds["maximum"][0] - bounds["minimum"][0], 2.24)
 
-    def test_bunny_hop_is_a_compact_supported_hurdle(self) -> None:
+    def test_bunny_hop_has_a_readable_full_width_hurdle_silhouette(self) -> None:
         document, size = assets.read_glb(BUNNY_GLB_PATH)
         manifest = assets.load_json_file(BUNNY_MANIFEST_PATH)
         assets.validate_glb_document(document, size, manifest)
@@ -356,15 +372,68 @@ class TestWorkoutGameAssets(unittest.TestCase):
             },
         )
         bounds = manifest["technical"]["boundsMeters"]
-        self.assertLessEqual(bounds["maximum"][1], 0.20)
-        self.assertGreater(bounds["maximum"][0], 0.68 + 0.25)
+        self.assertAlmostEqual(bounds["maximum"][1], 0.20, places=5)
+        self.assertGreaterEqual(
+            bounds["maximum"][0] - bounds["minimum"][0], 2.36
+        )
+        self.assertGreaterEqual(
+            bounds["maximum"][2] - bounds["minimum"][2], 1.00
+        )
         self.assertEqual(
             manifest["technical"]["sockets"][1]["positionMeters"],
             [0.0, 0.0, 3.58],
         )
         self.assertLessEqual(manifest["technical"]["materials"], 2)
 
-    def test_drop_asset_is_a_bounded_face_with_low_rock_shoulders(self) -> None:
+        positions = mesh_positions_by_material(
+            BUNNY_GLB_PATH, document, "GEO_BunnyHopHurdle_LOD0"
+        )
+        bar = positions["MAT_BunnyHopBar_Grey"]
+        supports = positions["MAT_BunnyHopSupport_Grey"]
+        self.assertGreaterEqual(max(point[0] for point in bar), 1.18)
+        self.assertLessEqual(min(point[0] for point in bar), -1.18)
+        self.assertLessEqual(min(point[1] for point in bar), 0.075)
+        self.assertGreaterEqual(
+            max(point[2] for point in bar) - min(point[2] for point in bar),
+            0.28,
+        )
+        grounded = [point for point in supports if point[1] <= 0.055]
+        self.assertGreaterEqual(
+            max(point[0] for point in grounded)
+            - min(point[0] for point in grounded),
+            2.30,
+        )
+        self.assertGreaterEqual(
+            max(point[2] for point in grounded)
+            - min(point[2] for point in grounded),
+            1.00,
+        )
+
+        nodes = {node["name"]: node for node in document["nodes"]}
+        self.assertNotIn("translation", nodes["ROOT_BunnyHop"])
+        self.assertEqual(
+            nodes["ROOT_BunnyHop"]["extras"]["physics_authority"],
+            "external",
+        )
+        self.assertNotIn("rotation", nodes["ROOT_BunnyHop"])
+        self.assertNotIn("scale", nodes["ROOT_BunnyHop"])
+        bunny_contract = {
+            "SOCKET_IN": [0.0, 0.0, 0.0],
+            "SOCKET_OUT": [0.0, 0.0, 3.58],
+            "MARKER_PREPARE": [0.0, 0.0, 0.0],
+            "MARKER_DECISION": [0.0, 0.0, 0.375],
+            "MARKER_ACTION": [0.0, 0.0, 0.75],
+            "MARKER_PRELOAD": [0.0, 0.0, 0.75],
+            "MARKER_TAKEOFF": [0.0, 0.0, 1.20],
+            "MARKER_APEX": [0.0, 0.20, 1.79],
+            "MARKER_LAND": [0.0, 0.0, 2.83],
+        }
+        for name, expected in bunny_contract.items():
+            actual = nodes[name].get("translation", [0.0, 0.0, 0.0])
+            for actual_value, expected_value in zip(actual, expected):
+                self.assertAlmostEqual(actual_value, expected_value, places=5)
+
+    def test_drop_has_a_broad_undercut_lip_and_framing_rock_shoulders(self) -> None:
         document, size = assets.read_glb(DROP_GLB_PATH)
         manifest = assets.load_json_file(DROP_MANIFEST_PATH)
         assets.validate_glb_document(document, size, manifest)
@@ -378,15 +447,72 @@ class TestWorkoutGameAssets(unittest.TestCase):
             ["GEO_DropFace_LOD0"],
         )
         bounds = manifest["technical"]["boundsMeters"]
-        self.assertLessEqual(bounds["maximum"][1], 0.30)
-        self.assertLessEqual(bounds["minimum"][1], -0.70)
-        self.assertLessEqual(
-            bounds["maximum"][2] - bounds["minimum"][2], 0.76
+        self.assertAlmostEqual(bounds["maximum"][1], 0.30, places=5)
+        self.assertAlmostEqual(bounds["minimum"][1], -0.70, places=5)
+        self.assertGreaterEqual(
+            bounds["maximum"][0] - bounds["minimum"][0], 3.40
+        )
+        self.assertGreaterEqual(
+            bounds["maximum"][2] - bounds["minimum"][2], 1.35
         )
         self.assertEqual(
             manifest["technical"]["sockets"][1]["positionMeters"],
             [0.0, 0.0, 24.0],
         )
+
+        positions = mesh_positions_by_material(
+            DROP_GLB_PATH, document, "GEO_DropFace_LOD0"
+        )
+        face = positions["MAT_DropFace_Grey"]
+        edge = positions["MAT_DropEdge_Grey"]
+        lower_face = [
+            point for point in face
+            if abs(point[0]) <= 0.68 + 1.0e-5 and point[1] <= -0.68
+        ]
+        self.assertTrue(lower_face)
+        self.assertGreaterEqual(min(point[2] for point in lower_face), 10.30)
+
+        left_shoulder = [
+            point for point in edge if point[0] <= -0.72 and point[1] >= 0.24
+        ]
+        right_shoulder = [
+            point for point in edge if point[0] >= 0.72 and point[1] >= 0.24
+        ]
+        self.assertTrue(left_shoulder)
+        self.assertTrue(right_shoulder)
+        self.assertLessEqual(min(point[2] for point in left_shoulder), 9.30)
+        self.assertLessEqual(min(point[2] for point in right_shoulder), 9.30)
+
+        lip = [
+            point for point in edge
+            if abs(point[0]) <= 0.68 + 1.0e-5 and point[1] >= -0.08
+        ]
+        self.assertTrue(lip)
+        self.assertLessEqual(min(point[2] for point in lip), 9.25)
+        self.assertGreaterEqual(max(point[2] for point in lip), 10.10)
+
+        nodes = {node["name"]: node for node in document["nodes"]}
+        self.assertNotIn("translation", nodes["ROOT_Drop"])
+        self.assertEqual(
+            nodes["ROOT_Drop"]["extras"]["physics_authority"], "external"
+        )
+        self.assertNotIn("rotation", nodes["ROOT_Drop"])
+        self.assertNotIn("scale", nodes["ROOT_Drop"])
+        drop_contract = {
+            "SOCKET_IN": [0.0, 0.0, 0.0],
+            "SOCKET_OUT": [0.0, 0.0, 24.0],
+            "MARKER_PREPARE": [0.0, 0.0, 0.0],
+            "MARKER_DECISION": [0.0, 0.0, 6.0],
+            "MARKER_ACTION": [0.0, 0.0, 9.5],
+            "MARKER_LIP": [0.0, 0.0, 10.0],
+            "MARKER_AIR": [0.0, -0.20, 10.65],
+            "MARKER_LAND": [0.0, -0.70, 12.5],
+            "MARKER_RECOVERY": [0.0, -0.70, 16.0],
+        }
+        for name, expected in drop_contract.items():
+            actual = nodes[name].get("translation", [0.0, 0.0, 0.0])
+            for actual_value, expected_value in zip(actual, expected):
+                self.assertAlmostEqual(actual_value, expected_value, places=5)
 
     def test_gap_jump_has_three_open_speed_progressive_lines(self) -> None:
         document, size = assets.read_glb(GAP_JUMP_GLB_PATH)

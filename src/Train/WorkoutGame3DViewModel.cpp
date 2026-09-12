@@ -439,9 +439,6 @@ void WorkoutGame3DViewModel::setCourse(
     currentRiderPoseState = QStringLiteral("pedal");
     riderPoseInitialized = false;
     riderBankRollActive = false;
-    rootCompressionInitialized = false;
-    rockCompressionInitialized = false;
-    slabCompressionInitialized = false;
     lastRiderPoseTimeMs = -1;
     cameraPresentationController.reset();
     cameraPresentationSnapshot = {
@@ -747,158 +744,103 @@ void WorkoutGame3DViewModel::setFrame(
             - currentRiderPedalEffort) * effortBlend;
     currentRiderPedalEffort = std::clamp(
             currentRiderPedalEffort, 0.0, 1.0);
-    const double suspensionBlend = 1.0 - std::exp(
-            -poseElapsedSeconds / 0.055);
-    currentRearSuspensionCompression += (std::clamp(
-            finiteOrZero(frame.world.rider.rearSuspension), 0.0, 1.0)
-            - currentRearSuspensionCompression) * suspensionBlend;
-    currentFrontSuspensionCompression += (std::clamp(
-            finiteOrZero(frame.world.rider.frontSuspension), 0.0, 1.0)
-            - currentFrontSuspensionCompression) * suspensionBlend;
-    if (frame.world.terrain != WorkoutGameTerrainKind::Roots) {
-        rootCompressionInitialized = false;
-    }
-    if (frame.world.terrain != WorkoutGameTerrainKind::RockGarden) {
-        rockCompressionInitialized = false;
-    }
-    if (frame.world.terrain != WorkoutGameTerrainKind::RockSlab) {
-        slabCompressionInitialized = false;
-    }
-    if (frame.world.terrain == WorkoutGameTerrainKind::Tabletop
-            && frame.feature.route == WorkoutGameRoute::MainLine) {
-        double target = 0.0;
-        if (frame.world.rider.airborne) {
-            target = 0.045;
-        } else if (currentLandingImpact > 0.01) {
-            target = -0.10 * currentLandingImpact;
-        } else if (sample.pieceIndex < roadCourse.pieces.size()) {
-            const WorkoutGameRoadPiece &piece =
-                    roadCourse.pieces[sample.pieceIndex];
-            if (piece.challenge.enabled) {
-                const WorkoutGameTabletopGeometryProfile tabletop =
-                        WorkoutGameTabletopGeometry::profile(
-                            piece.difficulty);
+    using MotionPhase = WorkoutGameRiderMotionPhase;
+    MotionPhase motionPhase = MotionPhase::Pedal;
+    double motionProgress = 0.0;
+    double roughSurfacePumpMeters = 0.0;
+    if (currentLandingImpact > 0.01) {
+        motionPhase = MotionPhase::Landing;
+    } else if (frame.world.rider.airborne) {
+        motionPhase = MotionPhase::Airborne;
+        motionProgress = flightProgress;
+    } else if (frame.feature.ready
+            && frame.feature.phase == WorkoutGameFeaturePhase::Committed
+            && (frame.feature.motion == WorkoutGameFeatureMotion::Jump
+                || frame.feature.motion == WorkoutGameFeatureMotion::Drop)) {
+        motionPhase = MotionPhase::Preload;
+        motionProgress = std::clamp(
+                (frame.feature.visualDistanceMeters
+                    - frame.feature.decisionDistanceMeters)
+                    / std::max(0.01,
+                        frame.feature.actionStartDistanceMeters
+                            - frame.feature.decisionDistanceMeters),
+                0.0, 1.0);
+    } else if (frame.feature.route == WorkoutGameRoute::MainLine
+            && (frame.world.terrain == WorkoutGameTerrainKind::Roots
+                || frame.world.terrain
+                    == WorkoutGameTerrainKind::RockGarden
+                || frame.world.terrain == WorkoutGameTerrainKind::RockSlab
+                || frame.world.terrain == WorkoutGameTerrainKind::Rollers)) {
+        motionPhase = MotionPhase::RoughSurface;
+        const double rearTarget = std::clamp(
+                finiteOrZero(frame.world.rider.rearSuspension), 0.0, 1.0);
+        const double frontTarget = std::clamp(
+                finiteOrZero(frame.world.rider.frontSuspension), 0.0, 1.0);
+        const double compressionDelta = 0.5 * (
+                rearTarget - currentRearSuspensionCompression
+                + frontTarget - currentFrontSuspensionCompression);
+        double responseGain = 0.10;
+        double minimumPumpMeters = -0.05;
+        double maximumPumpMeters = 0.025;
+        if (frame.world.terrain == WorkoutGameTerrainKind::RockGarden) {
+            responseGain = 0.16;
+            minimumPumpMeters = -0.08;
+            maximumPumpMeters = 0.04;
+        } else if (frame.world.terrain
+                == WorkoutGameTerrainKind::RockSlab) {
+            responseGain = 0.14;
+            minimumPumpMeters = -0.07;
+            maximumPumpMeters = 0.035;
+        }
+        roughSurfacePumpMeters = -responseGain * compressionDelta;
+        if (frame.world.terrain == WorkoutGameTerrainKind::Rollers) {
+            minimumPumpMeters = -0.10;
+            maximumPumpMeters = 0.06;
+            double profilePose = 0.0;
+            for (const std::size_t index : rollerChallengePieceIndices) {
+                const WorkoutGameRoadPiece &piece = roadCourse.pieces[index];
+                const WorkoutGameFeatureGeometryProfile profile =
+                        WorkoutGameFeatureGeometry::profile(
+                            piece.terrain, piece.difficulty);
                 const double local = distanceMeters
                         - piece.challenge.obstacleDistanceMeters;
-                const double preloadStart = tabletop.lipMeters - 0.9;
-                if (local >= preloadStart
-                        && local <= tabletop.lipMeters) {
-                    const double progress = std::clamp(
-                            (local - preloadStart) / 0.9, 0.0, 1.0);
-                    target = -0.075 * std::sin(Pi * progress);
+                if (!profile.ready || local < profile.plateauStartMeters
+                        || local > profile.plateauEndMeters) {
+                    continue;
                 }
+                const double crestPhase = profile.heightMeters > 0.0
+                        ? std::clamp(profile.surfaceOffset(local)
+                                / profile.heightMeters, 0.0, 1.0)
+                        : 0.0;
+                profilePose = 0.06 - 0.16 * crestPhase;
+                break;
             }
+            roughSurfacePumpMeters = profilePose
+                    + (0.5 - 0.5 * (rearTarget + frontTarget)) * 0.04;
         }
-        const double elapsedSeconds = lastRiderPoseTimeMs >= 0
-                ? std::clamp(double(frame.simulation.workoutTimeMs
-                                    - lastRiderPoseTimeMs) / 1000.0,
-                             0.0, 0.25)
-                : 0.08;
-        const double blend = 1.0 - std::exp(-elapsedSeconds / 0.09);
-        riderPumpMeters += (target - riderPumpMeters) * blend;
-        riderPumpMeters = std::clamp(riderPumpMeters, -0.10, 0.05);
-    } else if (frame.world.terrain == WorkoutGameTerrainKind::Roots
-            && frame.feature.route == WorkoutGameRoute::MainLine
-            && !frame.world.rider.airborne) {
-        const double compression = std::clamp(0.5 * (
-                finiteOrZero(frame.world.rider.rearSuspension)
-                + finiteOrZero(frame.world.rider.frontSuspension)), 0.0, 1.0);
-        if (!rootCompressionInitialized) {
-            previousRootCompression = compression;
-            rootCompressionInitialized = true;
-        }
-        const double compressionDelta = compression - previousRootCompression;
-        const double target = std::clamp(
-                -0.10 * compressionDelta, -0.05, 0.025);
-        const double elapsedSeconds = lastRiderPoseTimeMs >= 0
-                ? std::clamp(double(frame.simulation.workoutTimeMs
-                                    - lastRiderPoseTimeMs) / 1000.0,
-                             0.0, 0.25)
-                : 0.08;
-        const double blend = 1.0 - std::exp(
-                -elapsedSeconds / 0.08);
-        riderPumpMeters += (target - riderPumpMeters) * blend;
-        riderPumpMeters = std::clamp(riderPumpMeters, -0.05, 0.025);
-        previousRootCompression = compression;
-    } else if (frame.world.terrain == WorkoutGameTerrainKind::RockGarden
-            && frame.feature.route == WorkoutGameRoute::MainLine
-            && !frame.world.rider.airborne) {
-        const double compression = std::clamp(0.5 * (
-                finiteOrZero(frame.world.rider.rearSuspension)
-                + finiteOrZero(frame.world.rider.frontSuspension)), 0.0, 1.0);
-        if (!rockCompressionInitialized) {
-            previousRockCompression = compression;
-            rockCompressionInitialized = true;
-        }
-        const double compressionDelta = compression
-                - previousRockCompression;
-        const double target = std::clamp(
-                -0.16 * compressionDelta, -0.08, 0.04);
-        const double elapsedSeconds = lastRiderPoseTimeMs >= 0
-                ? std::clamp(double(frame.simulation.workoutTimeMs
-                                    - lastRiderPoseTimeMs) / 1000.0,
-                             0.0, 0.25)
-                : 0.07;
-        const double blend = 1.0 - std::exp(
-                -elapsedSeconds / 0.07);
-        riderPumpMeters += (target - riderPumpMeters) * blend;
-        riderPumpMeters = std::clamp(riderPumpMeters, -0.08, 0.04);
-        previousRockCompression = compression;
-    } else if (frame.world.terrain == WorkoutGameTerrainKind::RockSlab
-            && frame.feature.route == WorkoutGameRoute::MainLine
-            && !frame.world.rider.airborne) {
-        const double compression = std::clamp(0.5 * (
-                finiteOrZero(frame.world.rider.rearSuspension)
-                + finiteOrZero(frame.world.rider.frontSuspension)), 0.0, 1.0);
-        if (!slabCompressionInitialized) {
-            previousSlabCompression = compression;
-            slabCompressionInitialized = true;
-        }
-        const double target = std::clamp(
-                -0.14 * (compression - previousSlabCompression),
-                -0.07, 0.035);
-        const double elapsedSeconds = lastRiderPoseTimeMs >= 0
-                ? std::clamp(double(frame.simulation.workoutTimeMs
-                                    - lastRiderPoseTimeMs) / 1000.0,
-                             0.0, 0.25)
-                : 0.075;
-        const double blend = 1.0 - std::exp(
-                -elapsedSeconds / 0.075);
-        riderPumpMeters += (target - riderPumpMeters) * blend;
-        riderPumpMeters = std::clamp(riderPumpMeters, -0.07, 0.035);
-        previousSlabCompression = compression;
-    } else if (frame.world.terrain == WorkoutGameTerrainKind::Rollers
-            && frame.feature.route == WorkoutGameRoute::MainLine
-            && !frame.world.rider.airborne) {
-        const double compression = std::clamp(0.5 * (
-                finiteOrZero(frame.world.rider.rearSuspension)
-                + finiteOrZero(frame.world.rider.frontSuspension)), 0.0, 1.0);
-        double profilePose = 0.0;
-        for (const std::size_t index : rollerChallengePieceIndices) {
-            const WorkoutGameRoadPiece &piece = roadCourse.pieces[index];
-            const WorkoutGameFeatureGeometryProfile profile =
-                    WorkoutGameFeatureGeometry::profile(
-                        piece.terrain, piece.difficulty);
-            const double local = distanceMeters
-                    - piece.challenge.obstacleDistanceMeters;
-            if (!profile.ready || local < profile.plateauStartMeters
-                    || local > profile.plateauEndMeters) {
-                continue;
-            }
-            const double crestPhase = profile.heightMeters > 0.0
-                    ? std::clamp(profile.surfaceOffset(local)
-                            / profile.heightMeters, 0.0, 1.0)
-                    : 0.0;
-            profilePose = 0.06 - 0.16 * crestPhase;
-            break;
-        }
-        const double suspensionFineMotion =
-                (0.5 - compression) * 0.04;
-        riderPumpMeters = std::clamp(
-                profilePose + suspensionFineMotion, -0.10, 0.06);
-    } else {
-        riderPumpMeters = 0.0;
+        roughSurfacePumpMeters = std::clamp(
+                roughSurfacePumpMeters,
+                minimumPumpMeters, maximumPumpMeters);
     }
+    const WorkoutGameRiderMotionState motion =
+            WorkoutGameRiderAnimation::advanceMotion({
+                riderPumpMeters,
+                currentRearSuspensionCompression,
+                currentFrontSuspensionCompression
+            }, {
+                poseElapsedSeconds,
+                motionPhase,
+                motionProgress,
+                currentLandingImpact,
+                finiteOrZero(frame.world.rider.rearSuspension),
+                finiteOrZero(frame.world.rider.frontSuspension),
+                roughSurfacePumpMeters
+            });
+    riderPumpMeters = motion.pumpMeters;
+    currentRearSuspensionCompression =
+            motion.rearSuspensionCompression;
+    currentFrontSuspensionCompression =
+            motion.frontSuspensionCompression;
     lastRiderPoseTimeMs = frame.simulation.workoutTimeMs;
     currentPedalAngle = std::fmod(
             finiteOrZero(frame.riderPedalCycles) * 360.0, 360.0);
@@ -926,7 +868,7 @@ void WorkoutGame3DViewModel::setFrame(
     } else if (currentLandingImpact > 0.20) {
         currentRiderPoseState = QStringLiteral("land");
     } else if (frame.feature.ready
-            && frame.feature.phase == WorkoutGameFeaturePhase::Action
+            && frame.feature.phase == WorkoutGameFeaturePhase::Committed
             && (frame.feature.motion == WorkoutGameFeatureMotion::Jump
                 || frame.feature.motion == WorkoutGameFeatureMotion::Drop)) {
         currentRiderPoseState = QStringLiteral("preload");
@@ -1019,6 +961,9 @@ void WorkoutGame3DViewModel::updateCameraPose(
         std::int64_t workoutTimeMs)
 {
     const std::int64_t now = std::max<std::int64_t>(0, workoutTimeMs);
+    if (cameraPoseInitialized && now == lastCameraPoseTimeMs) {
+        return;
+    }
     if (!cameraPoseInitialized || now < lastCameraPoseTimeMs) {
         cameraPresentationPoseBlend = std::clamp(
                 cameraPresentationSnapshot.sideBlend, 0.0, 1.0);

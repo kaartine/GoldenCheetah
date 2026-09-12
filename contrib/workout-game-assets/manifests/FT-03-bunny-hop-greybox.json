@@ -7,9 +7,9 @@
     "provider": "GoldenCheetah",
     "author": "GoldenCheetah contributors",
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_bunny_hop.py",
-    "retrievedAt": "2026-08-27",
+    "retrievedAt": "2026-09-12",
     "originalFileName": "generate_bunny_hop.py",
-    "originalSha256": "609f6955185431d827a57fcb1ba2b4deef2478192078be7d490ce5b12da46336",
+    "originalSha256": "51037867ed42e1d11dadd38d117be308544e1c29d774e3680d70f0eb29b9ed26",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_bunny_hop.py"
@@ -35,12 +35,12 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_bunny_hop.py",
       "purpose": "source",
-      "sha256": "609f6955185431d827a57fcb1ba2b4deef2478192078be7d490ce5b12da46336"
+      "sha256": "51037867ed42e1d11dadd38d117be308544e1c29d774e3680d70f0eb29b9ed26"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_BunnyHop_Greybox.glb",
       "purpose": "intermediate",
-      "sha256": "e159a8355cf5acf01a613112b38fb90722dd1721da147f5483276a9a0f72bb13"
+      "sha256": "1bbc3de287f1c1862bc55ed10486da0e07f792bb29cef385cab9204a60c4ceda"
     },
     {
       "path": "src/Train/qml/assets/Wg_BunnyHop_Greybox.qml",
@@ -50,7 +50,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "21166c3ee6cfcc115b77f5b2e296a0723a433d552a46fa9eb55cdfacec4ce51f"
+      "sha256": "3e93f88b83a7f896a5dac017893131b8e58bff79b151c5be91ed8f704fa76b55"
     }
   ],
   "processing": {
@@ -69,8 +69,8 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 4888,
-    "trianglesLod0": 28,
+    "glbBytes": 6160,
+    "trianglesLod0": 52,
     "materials": 2,
     "textureBytes": 0,
     "nodes": [
@@ -89,8 +89,8 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [-1.02, 0.015, 1.41],
-      "maximum": [1.02, 0.20, 2.17]
+      "minimum": [-1.2200000286102295, 0.0, 1.25],
+      "maximum": [1.2200000286102295, 0.20000000298023224, 2.3299999237060547]
     },
     "sockets": [
       {
@@ -117,7 +117,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
-    "reviewedAt": "2026-08-27",
-    "notes": "Approved project-authored 0.20 m compact practice hurdle with a high-value crossbar, broad grounded supports outside the 1.36 m tread and exact 3.58 m ordinary-trail sockets. The official NZ Mountain Bike Trail Design Guidelines supplied dimensional design guidance only; no external diagram or photograph was copied. Runtime trail, terrain, branch and physics remain authoritative."
+    "reviewedAt": "2026-09-12",
+    "notes": "Approved project-authored 0.20 m compact practice hurdle with a thicker full-width high-value crossbar and broad four-point A-frame feet that remain readable at the fixed 10 m chase approach. Exact 3.58 m ordinary-trail sockets, identity pivot and external physics authority are preserved. The official NZ Mountain Bike Trail Design Guidelines supplied dimensional design guidance only; no external diagram or photograph was copied. Runtime trail, terrain, branch and physics remain authoritative."
   }
 }

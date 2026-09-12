@@ -210,7 +210,7 @@ struct FeatureCatalogEntry
     const char *name;
 };
 
-constexpr std::array<FeatureCatalogEntry, 11> FeatureCatalog = {{
+constexpr std::array<FeatureCatalogEntry, 12> FeatureCatalog = {{
     {WorkoutGameTerrainKind::Roots, "roots"},
     {WorkoutGameTerrainKind::Rollers, "rollers"},
     {WorkoutGameTerrainKind::Climb, "climb"},
@@ -221,7 +221,8 @@ constexpr std::array<FeatureCatalogEntry, 11> FeatureCatalog = {{
     {WorkoutGameTerrainKind::Berm, "berm"},
     {WorkoutGameTerrainKind::LogOver, "log-over"},
     {WorkoutGameTerrainKind::Tabletop, "tabletop"},
-    {WorkoutGameTerrainKind::RockSlab, "rock-slab"}
+    {WorkoutGameTerrainKind::RockSlab, "rock-slab"},
+    {WorkoutGameTerrainKind::GapJump, "gap-jump"}
 }};
 
 WorkoutGameCourse catalogCourse(WorkoutGameTerrainKind terrain)
@@ -236,6 +237,7 @@ WorkoutGameCourse catalogCourse(WorkoutGameTerrainKind terrain)
             : terrain == WorkoutGameTerrainKind::BunnyHop
                     || terrain == WorkoutGameTerrainKind::LogOver
                     || terrain == WorkoutGameTerrainKind::Tabletop
+                    || terrain == WorkoutGameTerrainKind::GapJump
             ? WorkoutGameFeature::SprintJump
             : terrain == WorkoutGameTerrainKind::Drop
             ? WorkoutGameFeature::RecoveryDescent
@@ -370,7 +372,7 @@ WorkoutGameCourse renderBudgetCourse()
     course.status = WorkoutGameCourseStatus::Ready;
     course.seed = 0x51a7u;
     std::int64_t startMs = 0;
-    const std::array<WorkoutGameTerrainKind, 11> terrains = {{
+    const std::array<WorkoutGameTerrainKind, 12> terrains = {{
         WorkoutGameTerrainKind::BunnyHop,
         WorkoutGameTerrainKind::LogOver,
         WorkoutGameTerrainKind::Drop,
@@ -380,6 +382,7 @@ WorkoutGameCourse renderBudgetCourse()
         WorkoutGameTerrainKind::Climb,
         WorkoutGameTerrainKind::Berm,
         WorkoutGameTerrainKind::Tabletop,
+        WorkoutGameTerrainKind::GapJump,
         WorkoutGameTerrainKind::RockSlab,
         WorkoutGameTerrainKind::Rollers
     }};
@@ -387,7 +390,8 @@ WorkoutGameCourse renderBudgetCourse()
         WorkoutGameSection section = catalogCourse(terrain).sections.front();
         section.startMs = startMs;
         section.durationMs = 30000;
-        section.lengthMeters = 42.0;
+        section.lengthMeters = terrain == WorkoutGameTerrainKind::GapJump
+                ? 84.0 : 42.0;
         course.sections.push_back(section);
         startMs += section.durationMs;
     }
@@ -811,6 +815,102 @@ private slots:
         QCOMPARE(WorkoutGameRiderAnimation::target({
             310.0, 260.0, 10.0, 55.0, false, true
         }).standingBlend, 0.0);
+    }
+
+    void riderFeatureMotionRemainsContinuousAcrossPhysicalStates()
+    {
+        using Phase = WorkoutGameRiderMotionPhase;
+        using Input = WorkoutGameRiderMotionInput;
+
+        WorkoutGameRiderMotionState state;
+        double previousPump = state.pumpMeters;
+        double previousRearSuspension = state.rearSuspensionCompression;
+        double previousFrontSuspension = state.frontSuspensionCompression;
+        double maximumPumpStep = 0.0;
+        double maximumSuspensionStep = 0.0;
+
+        const auto advance = [&](Phase phase, double progress,
+                                 double landingImpact,
+                                 double rearSuspension,
+                                 double frontSuspension) {
+            state = WorkoutGameRiderAnimation::advanceMotion(state, Input {
+                1.0 / 60.0,
+                phase,
+                progress,
+                landingImpact,
+                rearSuspension,
+                frontSuspension
+            });
+            maximumPumpStep = std::max(
+                    maximumPumpStep,
+                    std::abs(state.pumpMeters - previousPump));
+            maximumSuspensionStep = std::max({
+                maximumSuspensionStep,
+                std::abs(state.rearSuspensionCompression
+                         - previousRearSuspension),
+                std::abs(state.frontSuspensionCompression
+                         - previousFrontSuspension)
+            });
+            previousPump = state.pumpMeters;
+            previousRearSuspension = state.rearSuspensionCompression;
+            previousFrontSuspension = state.frontSuspensionCompression;
+            QVERIFY(std::isfinite(state.pumpMeters));
+            QVERIFY(state.pumpMeters >= -0.12);
+            QVERIFY(state.pumpMeters <= 0.06);
+            QVERIFY(state.rearSuspensionCompression >= 0.0);
+            QVERIFY(state.rearSuspensionCompression <= 1.0);
+            QVERIFY(state.frontSuspensionCompression >= 0.0);
+            QVERIFY(state.frontSuspensionCompression <= 1.0);
+        };
+
+        for (int frame = 0; frame < 24; ++frame) {
+            advance(Phase::Preload, double(frame) / 23.0,
+                    0.0, 0.25 + frame * 0.015, 0.22 + frame * 0.012);
+        }
+        const double preloadPump = state.pumpMeters;
+        QVERIFY(preloadPump < -0.035);
+
+        advance(Phase::Airborne, 0.0, 0.0, 0.10, 0.08);
+        QVERIFY(state.pumpMeters < 0.0);
+        for (int frame = 1; frame <= 36; ++frame) {
+            advance(Phase::Airborne, double(frame) / 36.0,
+                    0.0, 0.02, 0.02);
+        }
+        QVERIFY(state.pumpMeters > -0.005);
+
+        advance(Phase::Landing, 0.0, 1.0, 1.0, 0.92);
+        QVERIFY(state.pumpMeters > -0.03);
+        for (int frame = 1; frame <= 20; ++frame) {
+            const double impact = 1.0 - double(frame) / 20.0;
+            advance(Phase::Landing, 0.0, impact,
+                    0.25 + 0.75 * impact, 0.20 + 0.72 * impact);
+        }
+
+        const double beforeRough = state.pumpMeters;
+        advance(Phase::RoughSurface, 0.0, 0.0, 0.72, 0.38);
+        QVERIFY(std::abs(state.pumpMeters - beforeRough) < 0.02);
+        for (int frame = 0; frame < 60; ++frame) {
+            const bool crest = (frame / 5) % 2 == 0;
+            advance(Phase::RoughSurface, 0.0, 0.0,
+                    crest ? 0.82 : 0.18, crest ? 0.42 : 0.76);
+        }
+
+        QVERIFY2(maximumPumpStep < 0.02,
+                 "Feature-state transitions must not snap the rider pose");
+        QVERIFY2(maximumSuspensionStep < 0.11,
+                 "Rough-surface suspension must remain visually continuous");
+        QVERIFY(std::abs(state.rearSuspensionCompression
+                         - state.frontSuspensionCompression) > 0.01);
+
+        const WorkoutGameRiderMotionState held =
+                WorkoutGameRiderAnimation::advanceMotion(state, Input {
+                    0.0, Phase::Pedal, 0.0, 0.0, 0.0, 0.0
+                });
+        QCOMPARE(held.pumpMeters, state.pumpMeters);
+        QCOMPARE(held.rearSuspensionCompression,
+                 state.rearSuspensionCompression);
+        QCOMPARE(held.frontSuspensionCompression,
+                 state.frontSuspensionCompression);
     }
 
     void tailwhipIsAirborneSpeedScaledAndReturnsToNeutral()
@@ -3799,7 +3899,7 @@ private slots:
         verifyRoot();
         const QImage baseline = capture(QStringLiteral("baseline"));
 
-        frame.feature.phase = WorkoutGameFeaturePhase::Action;
+        frame.feature.phase = WorkoutGameFeaturePhase::Committed;
         frame.feature.motion = WorkoutGameFeatureMotion::Jump;
         viewModel.setFrame(frame, 235.0, 220.0, 92, 152, 7);
         QCOMPARE(viewModel.riderPoseState(), QStringLiteral("preload"));
@@ -3886,8 +3986,13 @@ private slots:
         frame.world.terrain = WorkoutGameTerrainKind::Rollers;
         frame.world.rider.rearSuspension = 1.0;
         frame.world.rider.frontSuspension = 1.0;
-        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-        QCOMPARE(viewModel.riderPump(), -0.10);
+        for (int index = 0; index < 6; ++index) {
+            frame.simulation.workoutTimeMs = 1000 + index * 80;
+            viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        }
+        const double compressedPump = viewModel.riderPump();
+        QVERIFY(compressedPump < -0.02);
+        QVERIFY(compressedPump >= -0.10);
 
         QQuickView window;
         window.setResizeMode(QQuickView::SizeRootObjectToView);
@@ -3914,12 +4019,19 @@ private slots:
         frame.world.rider.frontSuspension = 0.0;
         frame.world.rider.distanceMeters =
                 piece->challenge.obstacleDistanceMeters + 1.5;
-        viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-        QCOMPARE(viewModel.riderPump(), 0.06);
+        for (int index = 0; index < 6; ++index) {
+            frame.simulation.workoutTimeMs += 80;
+            viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        }
+        const double releasedPump = viewModel.riderPump();
+        QVERIFY(releasedPump > 0.01);
+        QVERIFY(releasedPump <= 0.06);
 
         frame.feature.route = WorkoutGameRoute::SafeBypass;
+        frame.simulation.workoutTimeMs += 80;
         viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-        QCOMPARE(viewModel.riderPump(), 0.0);
+        QVERIFY(viewModel.riderPump() < releasedPump);
+        QVERIFY(viewModel.riderPump() > -0.01);
     }
 
     void authoredRiderWheelsAndDrivetrainFollowDistanceAndCadence()
@@ -4438,7 +4550,7 @@ private slots:
         verifyPose(QStringLiteral("coast"));
 
         frame.feature.motion = WorkoutGameFeatureMotion::Jump;
-        frame.feature.phase = WorkoutGameFeaturePhase::Action;
+        frame.feature.phase = WorkoutGameFeaturePhase::Committed;
         frame.feature.ready = true;
         viewModel.setFrame(frame, 230.0, 220.0, 90, 150, 7);
         verifyPose(QStringLiteral("preload"));
@@ -4455,6 +4567,7 @@ private slots:
 
         frame.world.landingImpact = 0.0;
         frame.feature.motion = WorkoutGameFeatureMotion::Absorb;
+        frame.feature.phase = WorkoutGameFeaturePhase::Action;
         viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
         verifyPose(QStringLiteral("absorb"));
 
@@ -4755,7 +4868,8 @@ private slots:
         QVERIFY(rootsGeometry->sampleCount() >= 40);
         QVERIFY(viewModel.visibleTriangles() > 0);
         QVERIFY(viewModel.visibleTriangles() < 30000);
-        QCOMPARE(viewModel.riderPump(), 0.0);
+        const double initialPump = viewModel.riderPump();
+        QVERIFY(initialPump < 0.0);
 
         const double cameraX = viewModel.cameraX();
         const double cameraY = viewModel.cameraY();
@@ -4764,7 +4878,8 @@ private slots:
         frame.world.rider.frontSuspension = 1.0;
         frame.simulation.workoutTimeMs = 1080;
         viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-        QVERIFY(viewModel.riderPump() < -0.01);
+        const double compressedPump = viewModel.riderPump();
+        QVERIFY(compressedPump < initialPump);
         QVERIFY(viewModel.riderPump() >= -0.05);
         QCOMPARE(viewModel.cameraX(), cameraX);
         QCOMPARE(viewModel.cameraY(), cameraY);
@@ -4773,7 +4888,8 @@ private slots:
         frame.feature.route = WorkoutGameRoute::SafeBypass;
         frame.simulation.workoutTimeMs = 1160;
         viewModel.setFrame(frame, 180.0, 220.0, 80, 145, 7);
-        QCOMPARE(viewModel.riderPump(), 0.0);
+        QVERIFY(std::abs(viewModel.riderPump())
+                < std::abs(compressedPump));
     }
 
     void rockGardenUsesFilteredSuspensionMotionWithoutCameraVibration()
@@ -4817,7 +4933,8 @@ private slots:
         QCOMPARE(rocksGeometry->sampleCount(), 12 * 15);
         QVERIFY(viewModel.visibleTriangles() > 0);
         QVERIFY(viewModel.visibleTriangles() < 30000);
-        QCOMPARE(viewModel.riderPump(), 0.0);
+        const double initialPump = viewModel.riderPump();
+        QVERIFY(initialPump < 0.0);
 
         const double cameraX = viewModel.cameraX();
         const double cameraY = viewModel.cameraY();
@@ -4826,7 +4943,8 @@ private slots:
         frame.world.rider.frontSuspension = 1.0;
         frame.simulation.workoutTimeMs = 1070;
         viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-        QVERIFY(viewModel.riderPump() < -0.015);
+        const double compressedPump = viewModel.riderPump();
+        QVERIFY(compressedPump < initialPump);
         QVERIFY(viewModel.riderPump() >= -0.08);
         QCOMPARE(viewModel.cameraX(), cameraX);
         QCOMPARE(viewModel.cameraY(), cameraY);
@@ -4835,7 +4953,8 @@ private slots:
         frame.feature.route = WorkoutGameRoute::SafeBypass;
         frame.simulation.workoutTimeMs = 1140;
         viewModel.setFrame(frame, 170.0, 220.0, 78, 145, 4);
-        QCOMPARE(viewModel.riderPump(), 0.0);
+        QVERIFY(std::abs(viewModel.riderPump())
+                < std::abs(compressedPump));
     }
 
     void rockSlabUsesFilteredSuspensionMotionWithoutCameraVibration()
@@ -4879,7 +4998,8 @@ private slots:
         QCOMPARE(slabGeometry->sampleCount(), 147);
         QVERIFY(viewModel.visibleTriangles() > 0);
         QVERIFY(viewModel.visibleTriangles() < 30000);
-        QCOMPARE(viewModel.riderPump(), 0.0);
+        const double initialPump = viewModel.riderPump();
+        QVERIFY(initialPump < 0.0);
 
         const double cameraX = viewModel.cameraX();
         const double cameraY = viewModel.cameraY();
@@ -4888,7 +5008,8 @@ private slots:
         frame.world.rider.frontSuspension = 1.0;
         frame.simulation.workoutTimeMs = 1075;
         viewModel.setFrame(frame, 225.0, 220.0, 88, 150, 7);
-        QVERIFY(viewModel.riderPump() < -0.01);
+        const double compressedPump = viewModel.riderPump();
+        QVERIFY(compressedPump < initialPump);
         QVERIFY(viewModel.riderPump() >= -0.07);
         QCOMPARE(viewModel.cameraX(), cameraX);
         QCOMPARE(viewModel.cameraY(), cameraY);
@@ -4897,7 +5018,8 @@ private slots:
         frame.feature.route = WorkoutGameRoute::SafeBypass;
         frame.simulation.workoutTimeMs = 1150;
         viewModel.setFrame(frame, 170.0, 220.0, 78, 145, 4);
-        QCOMPARE(viewModel.riderPump(), 0.0);
+        QVERIFY(std::abs(viewModel.riderPump())
+                < std::abs(compressedPump));
     }
 
     void bermRiderRollUsesTheRoadBankAndNotASeparateAnimation()
@@ -5568,9 +5690,20 @@ private slots:
         WorkoutGameVisualSnapshot preload = frameAt(
                 road, piece->challenge.obstacleDistanceMeters
                     + tabletop.lipMeters - 0.45);
-        preload.feature.ready = true;
-        preload.feature.terrain = WorkoutGameTerrainKind::Tabletop;
-        preload.feature.route = WorkoutGameRoute::MainLine;
+        preload.simulation.activeSection = 0;
+        preload.simulation.sectionProgress = std::clamp(
+                preload.world.rider.distanceMeters
+                    / road.timeline.front().endDistanceMeters,
+                0.0, 1.0);
+        preload.simulation.featureOutcome =
+                WorkoutGameFeatureOutcome::Completed;
+        preload.simulation.route = WorkoutGameRoute::MainLine;
+        preload.simulation.challenge = piece->challenge.profile;
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        preload.feature = runtime.update(preload.simulation, 250.0, 240.0);
+        QCOMPARE(preload.feature.phase, WorkoutGameFeaturePhase::Committed);
+        QCOMPARE(preload.feature.motion, WorkoutGameFeatureMotion::Jump);
         preload.world.terrain = WorkoutGameTerrainKind::Tabletop;
         for (int index = 0; index < 8; ++index) {
             preload.simulation.workoutTimeMs = 1000 + index * 80;
@@ -5578,7 +5711,21 @@ private slots:
         }
         QVERIFY(viewModel.riderPump() < -0.03);
 
-        WorkoutGameVisualSnapshot airborne = preload;
+        const double airborneDistance = 0.5 * (
+                preload.feature.actionStartDistanceMeters
+                + preload.feature.actionEndDistanceMeters);
+        WorkoutGameVisualSnapshot airborne = frameAt(road, airborneDistance);
+        airborne.simulation.activeSection = 0;
+        airborne.simulation.sectionProgress = std::clamp(
+                airborneDistance / road.timeline.front().endDistanceMeters,
+                0.0, 1.0);
+        airborne.simulation.featureOutcome =
+                WorkoutGameFeatureOutcome::Completed;
+        airborne.simulation.route = WorkoutGameRoute::MainLine;
+        airborne.simulation.challenge = piece->challenge.profile;
+        airborne.feature = runtime.update(
+                airborne.simulation, 250.0, 240.0);
+        QCOMPARE(airborne.feature.phase, WorkoutGameFeaturePhase::Action);
         airborne.world.rider.airborne = true;
         airborne.world.rider.clearanceMeters = 1.82;
         for (int index = 0; index < 8; ++index) {
@@ -5793,7 +5940,7 @@ private slots:
         QFile mesh(QStringLiteral(
                 ":/qml/assets/meshes/geo_BunnyHopHurdle_LOD0_mesh.mesh"));
         QVERIFY(mesh.open(QIODevice::ReadOnly));
-        QCOMPARE(mesh.size(), qint64(2164));
+        QCOMPARE(mesh.size(), qint64(3604));
     }
 
     void packagedDropAssetLoadsWithRequiredNodes()
@@ -5833,7 +5980,7 @@ private slots:
         QFile mesh(QStringLiteral(
                 ":/qml/assets/meshes/geo_DropFace_LOD0_mesh.mesh"));
         QVERIFY(mesh.open(QIODevice::ReadOnly));
-        QCOMPARE(mesh.size(), qint64(3660));
+        QCOMPARE(mesh.size(), qint64(4836));
     }
 
     void bypassRiderUsesTheSameBranchAndTerrainSurfaceAsItsMesh()
@@ -7162,6 +7309,7 @@ private slots:
             WorkoutGamePhysicsInput input;
             input.workoutTimeMs = std::int64_t(std::llround(
                     (distance - start) / SpeedMetersPerSecond * 1000.0));
+            frame.simulation.workoutTimeMs = input.workoutTimeMs;
             input.courseDistanceMeters = distance;
             input.terrain = WorkoutGameTerrainKind::Rollers;
             input.desiredSpeedMetersPerSecond = SpeedMetersPerSecond;

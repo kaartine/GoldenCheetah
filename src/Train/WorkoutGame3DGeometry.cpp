@@ -824,6 +824,16 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildMeshData(
     return meshData(vertices, indices, boundsMin, boundsMax, count);
 }
 
+WorkoutGame3DMeshData
+WorkoutGame3DGeometry::buildLegacyForestDressingAuditMesh(
+        const WorkoutGameRoadCourse &course,
+        double startDistanceMeters,
+        double endDistanceMeters)
+{
+    return buildForestDressing(
+            course, startDistanceMeters, endDistanceMeters);
+}
+
 WorkoutGame3DMeshData WorkoutGame3DGeometry::buildForestDressing(
         const WorkoutGameRoadCourse &course,
         double startDistanceMeters,
@@ -2460,6 +2470,40 @@ WorkoutGame3DMeshData WorkoutGame3DGeometry::buildRoots(
                         current + next
                     });
                 }
+            }
+            const std::uint32_t last = first
+                    + std::uint32_t((RingsPerRoot - 1) * Sides);
+            const auto ringCenter = [&vertices](std::uint32_t ring) {
+                QVector3D center;
+                for (int side = 0; side < Sides; ++side) {
+                    const Vertex &vertex = vertices[
+                            ring + std::uint32_t(side)];
+                    center += QVector3D(vertex.x, vertex.y, vertex.z);
+                }
+                return center / float(Sides);
+            };
+            const QVector3D startCenter = ringCenter(first);
+            const QVector3D endCenter = ringCenter(last);
+            const QVector3D axis = (endCenter - startCenter).normalized();
+            const std::uint32_t startCap = std::uint32_t(vertices.size());
+            vertices.push_back({
+                startCenter.x(), startCenter.y(), startCenter.z(),
+                -axis.x(), -axis.y(), -axis.z(),
+                0.42f, 0.24f, 0.10f, 1.0f, 0.5f, 0.0f
+            });
+            const std::uint32_t endCap = std::uint32_t(vertices.size());
+            vertices.push_back({
+                endCenter.x(), endCenter.y(), endCenter.z(),
+                axis.x(), axis.y(), axis.z(),
+                0.42f, 0.24f, 0.10f, 1.0f, 0.5f, 1.0f
+            });
+            for (int side = 0; side < Sides; ++side) {
+                const std::uint32_t current = std::uint32_t(side);
+                const std::uint32_t next = std::uint32_t((side + 1) % Sides);
+                indices.insert(indices.end(), {
+                    startCap, first + next, first + current,
+                    endCap, last + current, last + next
+                });
             }
             ++rootCount;
             }

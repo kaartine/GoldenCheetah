@@ -66,6 +66,10 @@ public:
             const WorkoutGameRoadCourse &course,
             double startDistanceMeters,
             double endDistanceMeters);
+    static WorkoutGame3DMeshData buildLegacyForestDressingAuditMesh(
+            const WorkoutGameRoadCourse &course,
+            double startDistanceMeters,
+            double endDistanceMeters);
     bool ready() const { return geometryReady; }
     int sampleCount() const { return generatedSampleCount; }
     int triangleCount() const
