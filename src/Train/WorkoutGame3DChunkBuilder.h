@@ -36,7 +36,7 @@ struct WorkoutGame3DStreamingCoverage
 
 struct WorkoutGame3DChunk
 {
-    static constexpr std::size_t LayerCount = 8;
+    static constexpr std::size_t LayerCount = 9;
 
     std::array<WorkoutGame3DMeshData, LayerCount> layers;
     int bucket = 0;
@@ -46,7 +46,7 @@ struct WorkoutGame3DChunk
     double endDistanceMeters = 0.0;
 
     int triangleCount() const;
-    bool floorReady() const { return layers[0].ready; }
+    bool floorReady() const { return layers[0].ready && layers[1].ready; }
 };
 
 class WorkoutGame3DChunkBuilder

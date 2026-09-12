@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 import shutil
 import struct
@@ -1459,6 +1460,20 @@ class TestWorkoutGameAssets(unittest.TestCase):
         bounds = manifest["technical"]["boundsMeters"]
         self.assertGreaterEqual(bounds["maximum"][0], 230.0)
         self.assertLessEqual(bounds["minimum"][0], -230.0)
+        positions = []
+        for mesh in document["meshes"]:
+            for primitive in mesh["primitives"]:
+                positions.extend(glb_accessor_values(
+                    DISTANT_GLB_PATH,
+                    document,
+                    primitive["attributes"]["POSITION"],
+                ))
+        minimum_radius = min(math.hypot(x, z) for x, _, z in positions)
+        self.assertLessEqual(
+            minimum_radius,
+            10.0,
+            "distant terrain must overlap the 14 m near-terrain edge",
+        )
 
         runtime_qml = (
             REPOSITORY / "src/Train/qml/WorkoutGameDistantTerrain.qml"

@@ -44,20 +44,19 @@ constexpr double FeatureAheadMeters = 180.0;
 constexpr double FeatureRefreshAheadMeters = 60.0;
 constexpr int MaximumVisibleFeatures = 32;
 constexpr double TreeSpacingMeters = 7.0;
-constexpr double TreeBehindMeters = 14.0;
-constexpr double TreeAheadMeters = 49.0;
-constexpr double TreeRefreshAheadMeters = 14.0;
-constexpr int MaximumVisibleTrees = 14;
+constexpr double TreeBehindMeters = 24.0;
+constexpr int MaximumVisibleTrees = 18;
+constexpr int MaximumVisibleTreeSlots = MaximumVisibleTrees / 2;
+constexpr double ForestDressingBehindMeters = 14.0;
+constexpr double ForestDressingAheadMeters = 49.0;
 constexpr int MaximumVisibleForestFloorProps = 4;
 constexpr int MaximumVisibleForestVergeClusters = 3;
 constexpr double ForestDressingSpacingMeters = 8.5;
 constexpr double TreeCrownRadiusMeters = 1.35;
-constexpr double CameraCorridorClearanceMeters = 0.85;
 constexpr double ForestDressingCameraClearanceMeters = 1.70;
 constexpr double ForestDressingCorridorBehindMeters = 8.2;
 constexpr double ForestDressingCorridorAheadMeters = 12.0;
 constexpr double ForestDressingFeatureClearanceMeters = 2.0;
-constexpr double TreeInvisibleEntryAheadMeters = 29.0;
 constexpr double CameraIntegrationStepSeconds = 0.05;
 constexpr double MaximumCameraCatchupSeconds = 0.25;
 constexpr double MaximumCameraSpeedMetersPerSecond = 16.0;
@@ -323,13 +322,15 @@ void WorkoutGame3DStableListModel::sync(const QVariantList &nextItems)
 
 WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     QObject(parent),
-    trail(std::make_unique<WorkoutGame3DGeometry>(
-            WorkoutGame3DGeometry::Layer::Trail)),
     bypass(std::make_unique<WorkoutGame3DGeometry>(
             WorkoutGame3DGeometry::Layer::Bypass)),
     gapJump(std::make_unique<WorkoutGame3DGeometry>(
             WorkoutGame3DGeometry::Layer::GapJump))
 {
+    for (std::unique_ptr<WorkoutGame3DGeometry> &buffer : trailBuffers) {
+        buffer = std::make_unique<WorkoutGame3DGeometry>(
+                WorkoutGame3DGeometry::Layer::Trail);
+    }
     for (std::unique_ptr<WorkoutGame3DGeometry> &buffer : floorBuffers) {
         buffer = std::make_unique<WorkoutGame3DGeometry>(
                 WorkoutGame3DGeometry::Layer::ForestFloor);
@@ -396,7 +397,6 @@ void WorkoutGame3DViewModel::setCourse(
         }
     }
     rebuildPowerProfile(course);
-    trail->setCourse(roadCourse);
     bypass->setCourse(roadCourse);
     gapJump->setCourse({});
     floorBucket = std::numeric_limits<int>::min();
@@ -404,9 +404,8 @@ void WorkoutGame3DViewModel::setCourse(
     nextFloorBucket = 0;
     requestedFloorCoverage = {};
     featureCoverage = {};
-    treeCoverage = {};
-    lastTreeStreamDistanceMeters =
-            std::numeric_limits<double>::quiet_NaN();
+    treeFirstSlot = std::numeric_limits<int>::min();
+    treeLastSlot = std::numeric_limits<int>::min();
     forestDressingFirstSlot = std::numeric_limits<int>::min();
     forestDressingLastSlot = std::numeric_limits<int>::min();
     visibleTrees.clear();
@@ -451,7 +450,8 @@ void WorkoutGame3DViewModel::setCourse(
     cameraPresentationPoseBlend = 1.0;
     lastCameraPoseTimeMs = 0;
     rebuildFloor(0.0, true);
-    sceneReady = roadCourse.ready && trail->ready()
+    sceneReady = roadCourse.ready
+            && trailBuffers[std::size_t(activeFloorBuffer)]->ready()
             && floorBuffers[std::size_t(activeFloorBuffer)]->ready();
     rebuildFeatures(0.0);
     if (sceneReady) {
@@ -1637,6 +1637,8 @@ void WorkoutGame3DViewModel::rebuildFloor(
         bool immediate)
 {
     if (!roadCourse.ready) {
+        trailBuffers[0]->setCourse(roadCourse);
+        trailBuffers[1]->setCourse(roadCourse);
         floorBuffers[0]->setCourse(roadCourse);
         floorBuffers[1]->setCourse(roadCourse);
         bermBuffers[0]->setCourse(roadCourse);
@@ -1688,6 +1690,7 @@ void WorkoutGame3DViewModel::rebuildFloor(
     const int nextBuffer = 1 - activeFloorBuffer;
     const std::array<WorkoutGame3DGeometry::Layer,
                      WorkoutGame3DChunk::LayerCount> layers = {{
+        WorkoutGame3DGeometry::Layer::Trail,
         WorkoutGame3DGeometry::Layer::ForestFloor,
         WorkoutGame3DGeometry::Layer::Berm,
         WorkoutGame3DGeometry::Layer::Roots,
@@ -1699,6 +1702,7 @@ void WorkoutGame3DViewModel::rebuildFloor(
     }};
     std::array<WorkoutGame3DGeometry *, WorkoutGame3DChunk::LayerCount>
             targets = {{
+        trailBuffers[std::size_t(nextBuffer)].get(),
         floorBuffers[std::size_t(nextBuffer)].get(),
         bermBuffers[std::size_t(nextBuffer)].get(),
         rootBuffers[std::size_t(nextBuffer)].get(),
@@ -1733,6 +1737,7 @@ void WorkoutGame3DViewModel::installReadyFloorChunk()
     const int nextBuffer = 1 - activeFloorBuffer;
     std::array<WorkoutGame3DGeometry *, WorkoutGame3DChunk::LayerCount>
             targets = {{
+        trailBuffers[std::size_t(nextBuffer)].get(),
         floorBuffers[std::size_t(nextBuffer)].get(),
         bermBuffers[std::size_t(nextBuffer)].get(),
         rootBuffers[std::size_t(nextBuffer)].get(),
@@ -1774,7 +1779,7 @@ void WorkoutGame3DViewModel::scheduleReadyFloorChunk()
 void WorkoutGame3DViewModel::updateVisibleTriangleCount()
 {
     const std::size_t active = std::size_t(activeFloorBuffer);
-    int triangles = trail->triangleCount()
+    int triangles = trailBuffers[active]->triangleCount()
             + bermBuffers[active]->triangleCount()
             + bypass->triangleCount();
     triangles += floorBuffers[active]->triangleCount();
@@ -1793,54 +1798,19 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
 {
     if (!roadCourse.ready) return;
     rebuildForestDressing(distanceMeters);
-    const bool discontinuousMove =
-            !std::isfinite(lastTreeStreamDistanceMeters)
-            || std::abs(distanceMeters - lastTreeStreamDistanceMeters)
-                    > TreeInvisibleEntryAheadMeters;
-    lastTreeStreamDistanceMeters = distanceMeters;
-    const bool initialPopulation = !treeCoverage.valid() || discontinuousMove;
-    QSet<QString> residentTreeIds;
-    for (const QVariant &entry : visibleTrees) {
-        residentTreeIds.insert(stableItemId(entry));
-    }
-    const bool sidePresentation =
-            cameraPresentationSnapshot.sideBlend > 0.0;
-    bool cameraClearanceChanged = false;
-    for (const QVariant &entry : visibleTrees) {
-        ++workCounters.treeClearanceEntriesVisited;
-        const QVariantMap tree = entry.toMap();
-        const double requiredClearance =
-                tree.value(QStringLiteral("crownRadius")).toDouble()
-                + CameraCorridorClearanceMeters
-                + (sidePresentation ? 1.05 : 0.0);
-        if (horizontalDistanceToSegmentSquared(
-                    tree.value(QStringLiteral("x")).toDouble(),
-                    tree.value(QStringLiteral("z")).toDouble(),
-                    cameraPositionX, cameraPositionZ,
-                    cameraTargetPositionX, cameraTargetPositionZ)
-                < requiredClearance * requiredClearance) {
-            cameraClearanceChanged = true;
-            break;
-        }
-    }
     const double courseEnd = std::max(
             roadCourse.totalLengthMeters, roadCourse.visualLengthMeters);
-    if (!cameraClearanceChanged && !treeCoverage.needsRefresh(
-                distanceMeters, courseEnd,
-                TreeBehindMeters, TreeRefreshAheadMeters)) {
-        return;
-    }
+    const int firstSlot = std::max(0, int(std::floor(
+            (distanceMeters - TreeBehindMeters) / TreeSpacingMeters)));
+    const int courseLastSlot = std::max(0, int(std::floor(
+            courseEnd / TreeSpacingMeters)));
+    const int finalSlot = std::min(
+            courseLastSlot, firstSlot + MaximumVisibleTreeSlots - 1);
+    if (firstSlot == treeFirstSlot && finalSlot == treeLastSlot) return;
     ++workCounters.treeModelRegenerations;
-    const double coverageStart = std::max(
-            0.0, distanceMeters - TreeBehindMeters);
-    const double coverageEnd = std::min(
-            courseEnd, distanceMeters + TreeAheadMeters);
-    treeCoverage = {coverageStart, coverageEnd};
+    treeFirstSlot = firstSlot;
+    treeLastSlot = finalSlot;
     visibleTrees.clear();
-    const int firstSlot = std::max(
-            0, int(std::floor(coverageStart / TreeSpacingMeters)));
-    const int finalSlot = std::max(
-            firstSlot, int(std::floor(coverageEnd / TreeSpacingMeters)));
     for (int slot = firstSlot; slot <= finalSlot; ++slot) {
         for (int sideIndex = 0; sideIndex < 2; ++sideIndex) {
             const std::uint32_t random = mix(
@@ -1854,13 +1824,7 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
             const QString stableId = QStringLiteral("tree-%1-%2")
                     .arg(slot).arg(sideIndex);
             if (distance < 0.0) continue;
-            if (distance < coverageStart) continue;
-            if (distance > coverageEnd || distance > courseEnd) break;
-            if (!initialPopulation && !residentTreeIds.contains(stableId)
-                    && distance - distanceMeters
-                            < TreeInvisibleEntryAheadMeters) {
-                continue;
-            }
+            if (distance > courseEnd) break;
             const WorkoutGameRoadSample sample =
                     WorkoutGameRoadCourseBuilder::sampleVisual(
                         roadCourse, distance);
@@ -1882,16 +1846,6 @@ void WorkoutGame3DViewModel::rebuildTrees(double distanceMeters)
             const double treeY =
                     WorkoutGame3DTerrainProfile::elevationAtLateral(
                         terrain, lateral);
-            const double requiredClearance = crownRadius
-                    + CameraCorridorClearanceMeters
-                    + (sidePresentation ? 1.05 : 0.0);
-            if (horizontalDistanceToSegmentSquared(
-                        treeX, treeZ,
-                        cameraPositionX, cameraPositionZ,
-                        cameraTargetPositionX, cameraTargetPositionZ)
-                    < requiredClearance * requiredClearance) {
-                continue;
-            }
             QVariantMap tree;
             tree.insert(QStringLiteral("x"), treeX);
             tree.insert(QStringLiteral("y"), treeY);
@@ -1918,9 +1872,9 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
     const double courseEnd = std::max(
             roadCourse.totalLengthMeters, roadCourse.visualLengthMeters);
     const double coverageStart = std::max(
-            0.0, distanceMeters - TreeBehindMeters);
+            0.0, distanceMeters - ForestDressingBehindMeters);
     const double coverageEnd = std::min(
-            courseEnd, distanceMeters + TreeAheadMeters);
+            courseEnd, distanceMeters + ForestDressingAheadMeters);
     const double halfSpacing = ForestDressingSpacingMeters * 0.5;
     const int firstSlot = std::max(0, int(std::ceil(
             (coverageStart - halfSpacing) / ForestDressingSpacingMeters

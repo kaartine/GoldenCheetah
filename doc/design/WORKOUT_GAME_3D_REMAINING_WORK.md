@@ -136,6 +136,17 @@ detection remains enabled except for
 the Quick 3D View suite, where Qt 6.8.3 retains a known 600-byte offscreen
 renderer allocation after its platform-dependent cases are skipped.
 
+The 2026-09-12 world-streaming slice closes four concrete presentation
+regressions without declaring WG-15 complete. Trail and supporting forest floor
+now share one bounded, double-buffered chunk; the distant radial terrain
+overlaps the near ground; the resident foreground forest uses 18 stable tree
+identities; and camera/edge crossings fade rather than removing a nearby tree.
+The slice passes 35 asset-policy tests, 8 chunk-builder tests, 99 offscreen and
+126 X11/OpenGL ViewModel tests, plus the changed chunk suite and seven focused
+ViewModel cases under ASan/UBSan.
+Forest species, materials, instancing and final target-GPU visual acceptance
+remain part of WG-15.
+
 The required inventory reconciles 173/173 projects. Its earlier X11 run passed
 172 projects and stopped only at the AppImage policy project because two
 protected inventory hashes were stale. After updating exactly those hashes,

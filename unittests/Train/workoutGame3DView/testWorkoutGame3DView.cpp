@@ -1829,9 +1829,7 @@ private slots:
         QCOMPARE(counters.featureModelRegenerations, std::uint64_t(0));
         QCOMPARE(counters.treeModelRegenerations, std::uint64_t(0));
         QCOMPARE(counters.forestModelRegenerations, std::uint64_t(0));
-        QVERIFY(counters.treeClearanceEntriesVisited > 0);
-        QVERIFY(counters.treeClearanceEntriesVisited
-                <= std::uint64_t(OrdinaryFrames * 18));
+        QCOMPARE(counters.treeClearanceEntriesVisited, std::uint64_t(0));
         QCOMPARE(courseSignals.count(), 0);
         QCOMPARE(treeSignals.count(), 0);
         QCOMPARE(forestSignals.count(), 0);
@@ -1910,7 +1908,7 @@ private slots:
         QVERIFY(viewModel);
         QTRY_VERIFY_WITH_TIMEOUT(viewModel->visibleTriangles() > 0, 3000);
         QVERIFY(viewModel->visibleTriangles() < 30000);
-        QVERIFY(viewModel->trees().size() <= 14);
+        QCOMPARE(viewModel->trees().size(), 18);
         QCOMPARE(viewModel->forestFloorProps().size(), 4);
         QCOMPARE(viewModel->forestVergeClusters().size(), 3);
         QVERIFY(viewModel->geometryQueueDepth() <= 1);
@@ -2501,7 +2499,7 @@ private slots:
         }
     }
 
-    void treesStayOutsideCameraAndCueCorridor()
+    void treeSlotsRemainResidentDuringSubSlotCameraMotion()
     {
         const WorkoutGameCourse course = cameraMotionCourse();
         const WorkoutGameRoadCourse road =
@@ -2509,33 +2507,31 @@ private slots:
         QVERIFY(road.ready);
         WorkoutGame3DViewModel viewModel;
         viewModel.setCourse(course, FtpWatts);
-        int inspectedTrees = 0;
+        viewModel.setFrame(frameAt(road, 42.0), 220.0, 220.0, 88, 150, 7);
+        QSet<QString> residentIds;
+        for (const QVariant &entry : viewModel.trees()) {
+            residentIds.insert(entry.toMap().value(
+                    QStringLiteral("stableId")).toString());
+        }
+        QCOMPARE(residentIds.size(), 18);
+        viewModel.resetFrameWorkCounters();
 
-        for (double distance = 0.0;
-             distance <= road.totalLengthMeters; distance += 0.5) {
+        for (int step = 1; step <= 8; ++step) {
+            const double distance = 42.0 + 0.25 * step;
             WorkoutGameVisualSnapshot frame = frameAt(road, distance);
             frame.simulation.workoutTimeMs =
                     std::int64_t(std::llround(distance * 100.0));
             viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-            QVERIFY(viewModel.trees().size() <= 18);
+            QCOMPARE(viewModel.trees().size(), 18);
+            QSet<QString> currentIds;
             for (const QVariant &entry : viewModel.trees()) {
-                const QVariantMap tree = entry.toMap();
-                const double clearance = horizontalDistanceToSegment(
-                        tree.value(QStringLiteral("x")).toDouble(),
-                        tree.value(QStringLiteral("z")).toDouble(),
-                        viewModel.cameraX(), viewModel.cameraZ(),
-                        viewModel.cameraTargetX(), viewModel.cameraTargetZ());
-                const double required = tree.value(
-                        QStringLiteral("crownRadius")).toDouble() + 0.85;
-                QVERIFY2(clearance + 1.0e-6 >= required,
-                         qPrintable(QStringLiteral(
-                             "tree clearance %1 is below required %2")
-                             .arg(clearance).arg(required)));
-                ++inspectedTrees;
+                currentIds.insert(entry.toMap().value(
+                        QStringLiteral("stableId")).toString());
             }
+            QCOMPARE(currentIds, residentIds);
         }
-        QVERIFY2(inspectedTrees >= 1000,
-                 "camera exclusion removed the forest instead of relocating it");
+        QCOMPARE(viewModel.frameWorkCounters().treeModelRegenerations,
+                 std::uint64_t(0));
     }
 
     void nearForestFillsBothSidesOfTheSingletrack()
@@ -2548,8 +2544,7 @@ private slots:
         viewModel.setCourse(course, FtpWatts);
         viewModel.setFrame(frameAt(road, 42.0), 220.0, 220.0, 88, 150, 7);
 
-        QVERIFY2(viewModel.trees().size() >= 12,
-                 "the near forest still reads as sparse roadside props");
+        QCOMPARE(viewModel.trees().size(), 18);
         bool left = false;
         bool right = false;
         for (const QVariant &entry : viewModel.trees()) {
@@ -3021,6 +3016,18 @@ private slots:
         QVERIFY(!priorFloor.isEmpty());
         QVERIFY(!priorVerge.isEmpty());
 
+        const auto opacities = [](const DelegateMap &items) {
+            QHash<QString, double> result;
+            for (auto item = items.cbegin(); item != items.cend(); ++item) {
+                if (!item.value().isNull()) {
+                    result.insert(item.key(), item.value()->property(
+                            "targetOpacity").toDouble());
+                }
+            }
+            return result;
+        };
+        QHash<QString, double> priorTreeOpacities = opacities(priorTrees);
+
         int treeBoundaries = 0;
         int dressingBoundaries = 0;
         int invisibleTreeEntries = 0;
@@ -3105,6 +3112,15 @@ private slots:
                                  .arg(opacity, 0, 'f', 3)));
                     ++invisibleTreeEntries;
                 }
+                for (auto item = priorTreeOpacities.cbegin();
+                     item != priorTreeOpacities.cend(); ++item) {
+                    if (currentTrees.contains(item.key())) continue;
+                    QVERIFY2(item.value() <= 0.05,
+                             qPrintable(QStringLiteral(
+                                 "tree %1 left while opacity was %2")
+                                 .arg(item.key())
+                                 .arg(item.value(), 0, 'f', 3)));
+                }
             }
             const bool dressingChanged =
                     keySet(currentFloor) != keySet(priorFloor)
@@ -3131,6 +3147,7 @@ private slots:
                 inspectNewDressing(priorVerge, currentVerge);
             }
             priorTrees = currentTrees;
+            priorTreeOpacities = opacities(currentTrees);
             priorFloor = currentFloor;
             priorVerge = currentVerge;
         }
@@ -3165,6 +3182,34 @@ private slots:
         QCOMPARE(window.status(), QQuickView::Ready);
         QTest::qWait(500);
 
+        const auto edgeOpacity = [&window](double distance) {
+            QVariant result;
+            const bool invoked = QMetaObject::invokeMethod(
+                    window.rootObject(), "treeEdgeOpacity",
+                    Q_RETURN_ARG(QVariant, result),
+                    Q_ARG(QVariant, QVariant(distance)));
+            return invoked ? result.toDouble() : -1.0;
+        };
+        QCOMPARE(edgeOpacity(-19.0), 0.0);
+        QCOMPARE(edgeOpacity(-13.0), 1.0);
+        QCOMPARE(edgeOpacity(26.0), 1.0);
+        QCOMPARE(edgeOpacity(34.0), 0.0);
+
+        const auto cameraOpacity = [&window](double x, double z, double radius) {
+            QVariant result;
+            const bool invoked = QMetaObject::invokeMethod(
+                    window.rootObject(), "treeCameraOpacity",
+                    Q_RETURN_ARG(QVariant, result),
+                    Q_ARG(QVariant, QVariant(x)),
+                    Q_ARG(QVariant, QVariant(z)),
+                    Q_ARG(QVariant, QVariant(radius)));
+            return invoked ? result.toDouble() : -1.0;
+        };
+        QCOMPARE(cameraOpacity(viewModel.cameraX(), viewModel.cameraZ(), 1.0),
+                 0.0);
+        QCOMPARE(cameraOpacity(viewModel.cameraX() + 20.0,
+                               viewModel.cameraZ() + 20.0, 1.0), 1.0);
+
         const QList<QObject *> trees = window.rootObject()->findChildren<QObject *>(
                 QStringLiteral("workoutGameTree"));
         QVERIFY(trees.size() >= 4);
@@ -3187,6 +3232,32 @@ private slots:
         }
         QVERIFY(foundOpaqueNearTree);
         QVERIFY(foundFadedEdgeTree);
+    }
+
+    void trailAndForestFloorUseTheSameBoundedStreamingWindow()
+    {
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const WorkoutGame3DMeshData completeTrail =
+                WorkoutGame3DGeometry::buildMeshData(
+                    WorkoutGame3DGeometry::Layer::Trail,
+                    road, 0.0, road.visualLengthMeters);
+        QVERIFY(completeTrail.ready);
+
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, FtpWatts);
+        auto *trail = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.trailGeometry());
+        auto *floor = qobject_cast<WorkoutGame3DGeometry *>(
+                viewModel.floorGeometry());
+        QVERIFY(trail && floor);
+        QVERIFY(trail->ready());
+        QVERIFY(floor->ready());
+        QCOMPARE(trail->sampleCount(), floor->sampleCount());
+        QVERIFY2(trail->sampleCount() < completeTrail.sampleCount,
+                 "trail still renders beyond the resident terrain window");
     }
 
     void distantTerrainAndFogFollowTheBoundedSceneContract()

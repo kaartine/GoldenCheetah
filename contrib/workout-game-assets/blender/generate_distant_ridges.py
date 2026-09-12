@@ -19,8 +19,8 @@ from generate_tabletop import canonical_to_blender, create_empty, make_material
 ROOT_NAME = "ROOT_DistantRidges"
 MESH_NAME = "GEO_DistantRidges_LOD0"
 REQUIRED_NAMES = {ROOT_NAME, MESH_NAME, "PIVOT_CENTER"}
-RADII_METERS = (42.0, 72.0, 110.0, 165.0, 240.0)
-BASE_HEIGHTS_METERS = (-1.8, 1.4, 4.8, 9.0, 14.0)
+RADII_METERS = (10.0, 42.0, 86.0, 155.0, 240.0)
+BASE_HEIGHTS_METERS = (-1.8, 0.8, 4.2, 8.8, 14.0)
 AMPLITUDES_METERS = (0.0, 0.8, 2.1, 4.0, 7.0)
 SEGMENTS = 32
 EPSILON = 1.0e-7
@@ -131,6 +131,10 @@ def self_check(root) -> int:
         raise RuntimeError(f"Unexpected triangle count: {triangles}")
     maximum_radius = max(
         math.hypot(vertex.co.x, vertex.co.y) for vertex in obj.data.vertices)
+    minimum_radius = min(
+        math.hypot(vertex.co.x, vertex.co.y) for vertex in obj.data.vertices)
+    if not math.isclose(minimum_radius, 10.0, abs_tol=1.0e-4):
+        raise RuntimeError(f"Unexpected inner radius: {minimum_radius}")
     if not math.isclose(maximum_radius, 240.0, abs_tol=1.0e-4):
         raise RuntimeError(f"Unexpected outer radius: {maximum_radius}")
     return triangles

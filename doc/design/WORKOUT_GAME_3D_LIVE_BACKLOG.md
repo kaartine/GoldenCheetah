@@ -46,7 +46,7 @@ Status values are `open`, `in progress`, `verified` and `deferred`.
 | ID | Status | Observation | Acceptance |
 | --- | --- | --- | --- |
 | LIVE-WORLD-01 | in progress | The forest is dominated by repeated trees and can feel like an open field. | Deterministic rocks, stumps, shrubs, fallen wood and other forest-floor debris add near/mid-ground variety without hiding the trail. |
-| LIVE-WORLD-02 | open | Trees and props have previously popped in, floated, intersected, or exposed underground parts. | Props are anchored to sampled terrain, preserve trail/camera clearance, use stable world slots and enter/leave through a bounded visibility band. |
+| LIVE-WORLD-02 | in progress | Trees and props have previously popped in, floated, intersected, or exposed underground parts. | Props are anchored to sampled terrain, preserve trail/camera clearance, use stable world slots and enter/leave through a bounded visibility band. |
 | LIVE-WORLD-03 | open | Feature meshes can look pasted onto the trail or intersect adjacent geometry. | Every physical feature shares the trail socket contract and surrounding terrain closes around it without gaps, z-fighting or clipping. |
 | LIVE-WORLD-04 | open | Some feature silhouettes remain difficult to identify. | Each feature is recognisable without HUD text in the fixed camera catalog and live approach sequence. |
 | LIVE-WORLD-05 | open | Forest density and additional detail must not harm the old laptop. | Added dressing is batched or instanced, deterministic, outside physics, and remains within tested triangle, frame-time and chunk-build budgets. |
@@ -113,3 +113,12 @@ Status values are `open`, `in progress`, `verified` and `deferred`.
   that tight region and ordinary trail pixels. Dense 20 km and maximum-size
   4096-piece geometry regressions also preserve uniform coverage and every
   mandatory drop/gap boundary without drawing a triangle over open air.
+- 2026-09-12 world-streaming hardening puts trail and forest floor in the same
+  nine-layer capacity-one chunk and swaps them together. The resident forest
+  keeps 18 deterministic tree identities between slot boundaries and fades
+  camera/edge crossings without deleting a tree near the rider. The authored
+  distant terrain begins at 10 m and overlaps the 14 m near-ground edge instead
+  of leaving a floating-island gap. Source asset validation passes 35/35,
+  chunk-builder tests 8/8, ViewModel tests 99/99 offscreen and 126/126 under
+  X11/OpenGL; the changed chunk path passes 8/8 and seven focused ViewModel
+  cases pass 9/9 with test lifecycle under ASan/UBSan.

@@ -69,6 +69,9 @@ private slots:
         QCOMPARE(chunk.bucket, 39);
         QCOMPARE(chunk.courseGeneration, std::uint64_t(77));
         QVERIFY(chunk.floorReady());
+        QVERIFY(chunk.layers[0].ready);
+        QVERIFY(chunk.layers[1].ready);
+        QCOMPARE(chunk.layers[0].sampleCount, chunk.layers[1].sampleCount);
         QCOMPARE(builder.maximumPendingDepth(), std::size_t(1));
         QCOMPARE(builder.maximumResultDepth(), std::size_t(1));
         QVERIFY(builder.completedBuildCount() >= std::uint64_t(1));

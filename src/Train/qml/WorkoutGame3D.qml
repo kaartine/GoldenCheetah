@@ -65,9 +65,31 @@ Item {
     }
 
     function treeEdgeOpacity(relativeMeters) {
-        const behind = Math.max(0, Math.min(1, (relativeMeters + 18) / 6))
-        const ahead = Math.max(0, Math.min(1, (29 - relativeMeters) / 10))
+        const behind = Math.max(0, Math.min(1, (relativeMeters + 19) / 6))
+        const ahead = Math.max(0, Math.min(1, (34 - relativeMeters) / 8))
         return Math.min(behind, ahead)
+    }
+
+    function distanceToCameraCorridor(x, z) {
+        const ax = workoutGame3D.cameraX
+        const az = workoutGame3D.cameraZ
+        const bx = workoutGame3D.cameraTargetX
+        const bz = workoutGame3D.cameraTargetZ
+        const dx = bx - ax
+        const dz = bz - az
+        const lengthSquared = dx * dx + dz * dz
+        const progress = lengthSquared > 0.0001
+            ? Math.max(0, Math.min(1,
+                ((x - ax) * dx + (z - az) * dz) / lengthSquared))
+            : 0
+        return Math.hypot(x - (ax + progress * dx),
+                          z - (az + progress * dz))
+    }
+
+    function treeCameraOpacity(x, z, crownRadius) {
+        const clearance = crownRadius + 0.85
+        return Math.max(0, Math.min(1,
+            (distanceToCameraCorridor(x, z) - clearance) / 1.25))
     }
 
     function dressingEdgeOpacity(relativeMeters) {
@@ -332,7 +354,9 @@ Item {
                 readonly property real relativeDistance:
                     modelData.distance - workoutGame3D.distanceMeters
                 readonly property real targetOpacity:
-                    root.treeEdgeOpacity(relativeDistance)
+                    Math.min(root.treeEdgeOpacity(relativeDistance),
+                             root.treeCameraOpacity(modelData.x, modelData.z,
+                                                    modelData.crownRadius))
                 property real presentedOpacity: 0
                 position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
                 scale: Qt.vector3d(modelData.scale, modelData.scale, modelData.scale)

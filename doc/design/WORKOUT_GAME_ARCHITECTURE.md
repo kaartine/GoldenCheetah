@@ -201,7 +201,7 @@ per second, and HUD texture rebuilding is limited to 10 Hz.
 
 ### Current Execution Model
 
-This section describes the implementation as of August 2026.
+This section describes the implementation as of September 2026.
 
 GoldenCheetah gives Workout Game four execution contexts when Quick 3D is active:
 
@@ -266,7 +266,7 @@ authoritative rider distance                                [GUI]
        +--> overwrite newest terrain-bucket request
                               |
                               v
-       build six immutable resident mesh payloads           [chunk worker]
+       build nine immutable resident mesh payloads          [chunk worker]
        +--> discard if a newer bucket/course supersedes work
        +--> overwrite capacity-one completed-result slot
                               |
@@ -322,8 +322,8 @@ Mutable state has the following owners:
 | Workout-time-to-road mapping and sampled surface | Immutable `WorkoutGameRoadCourse`; the engine publishes its authoritative distance, while Box2D and the scene graph sample the same base elevation, feature surface offset, and grade |
 | Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`, assembled into connector-compatible `WorkoutGameTrailTile` values; feature meshes are anchored to the base surface and projected by the scene graph so the course feature height is not applied twice |
 | Distant terrain silhouette | Pure deterministic `WorkoutGameHorizon` samples generated from course seed and distance; presentation-only and never consumed by physics or trainer control |
-| Near forest dressing | Ten camera-safe authored foreground trees plus one deterministic batched tree-line mesh generated from the course seed and authoritative terrain profile; the batched layer is built with the resident terrain window on the low-priority chunk worker and installed through the same capacity-one, double-buffered handoff |
-| Quick 3D resident terrain meshes | Plain immutable payloads formed by `WorkoutGame3DChunkBuilder`; generation-tagged results are installed into inactive GUI-owned geometry before one double-buffer swap |
+| Near forest dressing | Eighteen deterministic foreground-tree slots plus bounded floor and verge dressing generated from the course seed and authoritative terrain profile; tree identities stay resident between seven-metre slot boundaries and QML fades camera-corridor and visibility-band crossings instead of deleting delegates mid-frame |
+| Quick 3D resident terrain meshes | Nine plain immutable payloads, including trail and forest floor, formed together by `WorkoutGame3DChunkBuilder`; generation-tagged results are installed into inactive GUI-owned geometry before one double-buffer swap, so trail cannot outlive its supporting terrain window |
 | Quick 3D distant ridge and fog | One immutable project-authored radial mesh follows the rider at the sampled ground offset; the scene environment applies bounded depth fog. Both are presentation-only and never enter road, Box2D, trainer or recording state |
 | Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
 | Runner input and latest output slot | Separate small mutexes in `WorkoutGameRunner`; heavy simulation occurs outside both critical sections |
@@ -442,8 +442,9 @@ never on the simulation thread or trainer-control path.
 The Quick 3D distant environment is deliberately independent of streamed near
 terrain. `WorkoutGameDistantTerrain` loads one 256-triangle authored radial
 mesh and follows the rider's horizontal position plus a fixed ground-relative
-vertical offset. Its closed 42-to-240-metre bands prevent an exposed horizon
-when camera yaw changes without rebuilding geometry. A fragment-shader depth
+vertical offset. Its closed 10-to-240-metre bands overlap the 14-metre near
+terrain edge, preventing an exposed gap or horizon when camera yaw changes
+without rebuilding geometry. A fragment-shader depth
 fog starts beyond the readable near trail at 68 metres and reaches the scene
 colour at 260 metres. Neither component samples future simulation state,
 changes authoritative elevation or adds work to trainer and recording paths.

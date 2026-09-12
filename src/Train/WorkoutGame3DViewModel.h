@@ -71,7 +71,8 @@ struct WorkoutGame3DFrameWorkCounters
 class WorkoutGame3DViewModel : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QObject *trailGeometry READ trailGeometry CONSTANT)
+    Q_PROPERTY(QObject *trailGeometry READ trailGeometry
+               NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *bermGeometry READ bermGeometry
                NOTIFY floorGeometryChanged)
     Q_PROPERTY(QObject *bypassGeometry READ bypassGeometry CONSTANT)
@@ -222,7 +223,10 @@ public:
     WorkoutGame3DFrameWorkCounters frameWorkCounters() const;
     void resetFrameWorkCounters();
 
-    QObject *trailGeometry() const { return trail.get(); }
+    QObject *trailGeometry() const
+    {
+        return trailBuffers[std::size_t(activeFloorBuffer)].get();
+    }
     QObject *bermGeometry() const
     {
         return bermBuffers[std::size_t(activeFloorBuffer)].get();
@@ -420,7 +424,7 @@ private:
     void updateCameraPose(double distanceMeters, double lateralMeters,
                           std::int64_t workoutTimeMs);
 
-    std::unique_ptr<WorkoutGame3DGeometry> trail;
+    std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> trailBuffers;
     std::unique_ptr<WorkoutGame3DGeometry> bypass;
     std::unique_ptr<WorkoutGame3DGeometry> gapJump;
     std::array<std::unique_ptr<WorkoutGame3DGeometry>, 2> floorBuffers;
@@ -456,9 +460,8 @@ private:
     int nextFloorBucket = 0;
     WorkoutGame3DStreamingCoverage requestedFloorCoverage;
     WorkoutGame3DStreamingCoverage featureCoverage;
-    WorkoutGame3DStreamingCoverage treeCoverage;
-    double lastTreeStreamDistanceMeters =
-            std::numeric_limits<double>::quiet_NaN();
+    int treeFirstSlot = std::numeric_limits<int>::min();
+    int treeLastSlot = std::numeric_limits<int>::min();
     double riderPositionX = 0.0;
     double riderPositionY = 0.0;
     double riderPositionZ = 0.0;

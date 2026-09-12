@@ -9,7 +9,7 @@
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/generate_distant_ridges.py",
     "retrievedAt": "2026-08-26",
     "originalFileName": "generate_distant_ridges.py",
-    "originalSha256": "a2ed42f79677bef6842f46064cee0b83db0ce2d7f9fd6edf56386157afa14237",
+    "originalSha256": "aa7a17c689ff7685192d8e54d1439b6ca46638e2648c1bfa16d43a0c3996af0c",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/generate_distant_ridges.py"
@@ -31,12 +31,12 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_distant_ridges.py",
       "purpose": "source",
-      "sha256": "a2ed42f79677bef6842f46064cee0b83db0ce2d7f9fd6edf56386157afa14237"
+      "sha256": "aa7a17c689ff7685192d8e54d1439b6ca46638e2648c1bfa16d43a0c3996af0c"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_DistantRidges.glb",
       "purpose": "intermediate",
-      "sha256": "cf7477b0139b9086380af0b9a1a8384d93f92d8faa41e09b317c02f3e5f5c3af"
+      "sha256": "e9875d3a8180c444d465f934e7260052aa28a3256b7d2d2be651c27658b840e5"
     },
     {
       "path": "src/Train/qml/WorkoutGameDistantTerrain.qml",
@@ -46,7 +46,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_DistantRidges_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "aef67837b2b305f4d92878c8baeb788814ec8532aac0773e957b269e47f54bc1"
+      "sha256": "21b10c88b4b871204f15a28839845f793234a3d32077322a0b573981a5fc2266"
     }
   ],
   "processing": {
@@ -67,7 +67,7 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 27600,
+    "glbBytes": 27472,
     "trianglesLod0": 256,
     "materials": 1,
     "textureBytes": 0,
@@ -95,7 +95,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah engineering audit",
-    "reviewedAt": "2026-08-26",
-    "notes": "Approved after real X11/OpenGL still and 72-frame motion review verified an uneven continuous horizon, readable trail, bounded fog and no rider-relative seam."
+    "reviewedAt": "2026-09-12",
+    "notes": "Approved after the deterministic inner ring was extended beneath the near terrain; source and packaged-render tests verify an uneven continuous horizon, readable trail, bounded fog and no rider-relative seam."
   }
 }
