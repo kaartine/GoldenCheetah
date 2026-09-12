@@ -36,7 +36,7 @@ fi
 
 REQUIRED_COMMANDS=(dbus-run-session gdbus python3 setsid stat)
 if [ -z "${GC_UI_EXISTING_DISPLAY:-}" ]; then
-    REQUIRED_COMMANDS+=(Xvfb)
+    REQUIRED_COMMANDS+=(Xvfb dbus-update-activation-environment)
 fi
 for command in "${REQUIRED_COMMANDS[@]}"; do
     command -v "$command" >/dev/null || {
@@ -140,6 +140,7 @@ else
         echo "Xvfb did not become ready" >&2
         exit 1
     }
+    dbus-update-activation-environment DISPLAY
 fi
 
 AT_SPI_REPLY=$(gdbus call --session --dest org.a11y.Bus \

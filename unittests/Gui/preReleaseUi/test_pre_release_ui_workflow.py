@@ -369,6 +369,37 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                 ],
             )
 
+    def test_runner_updates_dbus_activation_environment_after_display(self):
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+
+        configured_xdg = runner.index(
+            'configure_ui_test_xdg_environment "$TEST_ROOT/home"'
+        )
+        existing_display_branch = runner.index(
+            'if [ -n "${GC_UI_EXISTING_DISPLAY:-}" ]; then', configured_xdg
+        )
+        xvfb_branch = runner.index("\nelse\n", existing_display_branch)
+        export_display = runner.index("export DISPLAY=:$DISPLAY_NUMBER")
+        readiness_gate = runner.index('echo "Xvfb did not become ready"')
+        update_dbus = runner.index(
+            "dbus-update-activation-environment DISPLAY"
+        )
+        xvfb_branch_end = runner.index("\nfi\n", update_dbus)
+        start_at_spi = runner.index("AT_SPI_REPLY=$(gdbus call")
+
+        self.assertEqual(
+            runner.count("dbus-update-activation-environment DISPLAY"), 1
+        )
+        self.assertLess(xvfb_branch, export_display)
+        self.assertLess(export_display, update_dbus)
+        self.assertLess(readiness_gate, update_dbus)
+        self.assertLess(update_dbus, xvfb_branch_end)
+        self.assertLess(update_dbus, start_at_spi)
+        self.assertIn(
+            "REQUIRED_COMMANDS+=(Xvfb dbus-update-activation-environment)",
+            runner,
+        )
+
     def test_workout_game_lifecycle_has_one_ordered_training_session(self):
         workflow = object.__new__(UI.WorkoutGameUiWorkflow)
         calls = mock.Mock()
