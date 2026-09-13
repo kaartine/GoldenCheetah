@@ -24,6 +24,29 @@ if command -v blender >/dev/null 2>&1; then
         --root "$repository" "$@"
 fi
 
+forwarded_args=()
+candidate_directory=""
+while (($#)); do
+    case "$1" in
+        --candidate-directory)
+            if (($# < 2)); then
+                printf '%s requires a directory argument.\n' "$1" >&2
+                exit 2
+            fi
+            candidate_directory="$2"
+            shift 2
+            ;;
+        --candidate-directory=*)
+            candidate_directory="${1#*=}"
+            shift
+            ;;
+        *)
+            forwarded_args+=("$1")
+            shift
+            ;;
+    esac
+done
+
 if [[ -z "${DISPLAY:-}" ]]; then
     printf 'DISPLAY is not set; the Blender gallery needs a graphical session.\n' >&2
     exit 1
@@ -46,6 +69,22 @@ docker_args=(
     --workdir /work
 )
 
+if [[ -n "$candidate_directory" ]]; then
+    candidate_directory="$(realpath -e -- "$candidate_directory")"
+    if [[ ! -d "$candidate_directory" ]]; then
+        printf 'Candidate path is not a directory: %s\n' "$candidate_directory" >&2
+        exit 2
+    fi
+    case "$candidate_directory/" in
+        "$repository/"|"$repository/"*)
+            printf 'Candidate directory must remain outside the repository.\n' >&2
+            exit 2
+            ;;
+    esac
+    docker_args+=(--volume "$candidate_directory:/candidate:ro")
+    forwarded_args+=(--candidate-directory /candidate)
+fi
+
 xauthority="${XAUTHORITY:-$HOME/.Xauthority}"
 if [[ -r "$xauthority" ]]; then
     docker_args+=(
@@ -62,4 +101,5 @@ fi
 
 exec docker "${docker_args[@]}" \
     --entrypoint /bin/bash "$image" \
-    /work/contrib/workout-game-assets/blender/run_gallery_container.sh "$@"
+    /work/contrib/workout-game-assets/blender/run_gallery_container.sh \
+    "${forwarded_args[@]}"

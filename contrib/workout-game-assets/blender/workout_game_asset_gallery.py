@@ -16,7 +16,12 @@ SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIRECTORY))
 sys.path.insert(0, str(SCRIPT_DIRECTORY.parent))
 
-from gallery_catalog import GalleryAsset, load_gallery_assets  # noqa: E402
+from gallery_catalog import (  # noqa: E402
+    GalleryAsset,
+    load_candidate_gallery_assets,
+    load_gallery_assets,
+    validate_gallery_asset_file,
+)
 from render_rider_bike_audit import assemble_neutral_pose  # noqa: E402
 
 
@@ -43,6 +48,11 @@ def _arguments() -> argparse.Namespace:
         default="",
         help="Initial asset id, display name or GLB stem",
     )
+    parser.add_argument(
+        "--candidate-directory",
+        default="",
+        help="External verified TripoSR candidate directory (review only)",
+    )
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--ui-smoke-test", action="store_true")
     return parser.parse_args(arguments)
@@ -65,6 +75,7 @@ def _active_collection(collection: bpy.types.Collection) -> None:
 
 
 def _import_asset(asset: GalleryAsset) -> ImportedAsset:
+    validate_gallery_asset_file(asset)
     collection = bpy.data.collections.new(f"WG Gallery - {asset.display_name}")
     bpy.context.scene.collection.children.link(collection)
     _active_collection(collection)
@@ -139,6 +150,10 @@ def _show_asset(scene: bpy.types.Scene, _context=None) -> None:
     scene["workout_game_gallery_details"] = (
         f"{active.catalog.asset_id} | {active.catalog.role} | "
         f"{active.catalog.triangles:,} triangles"
+    )
+    scene["workout_game_gallery_review_warning"] = (
+        "EXTERNAL REVIEW ONLY - never installed in runtime"
+        if active.catalog.review_only else ""
     )
     if not bpy.app.background and not bpy.app.timers.is_registered(
         _frame_all_viewports
@@ -263,6 +278,11 @@ class WG_GALLERY_PT_models(bpy.types.Panel):
             operator.axis = axis
 
         layout.prop(scene, "workout_game_gallery_wireframe", text="Wireframe")
+        warning = scene.get("workout_game_gallery_review_warning", "")
+        if warning:
+            row = layout.row()
+            row.alert = True
+            row.label(text=warning, icon="ERROR")
         layout.label(text=scene.get("workout_game_gallery_details", ""))
 
 
@@ -353,6 +373,11 @@ def main() -> None:
     arguments = _arguments()
     repository = Path(arguments.root).expanduser().resolve()
     catalog = load_gallery_assets(repository)
+    if arguments.candidate_directory:
+        catalog.extend(load_candidate_gallery_assets(
+            repository,
+            Path(arguments.candidate_directory),
+        ))
     if not catalog:
         raise RuntimeError("no manifest-backed GLB assets found")
 
