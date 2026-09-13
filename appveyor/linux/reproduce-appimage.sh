@@ -12,6 +12,7 @@ OUTPUT_ROOT=$2
 BUILD_PASS=${GC_APPIMAGE_BUILD_PASS_SCRIPT:-$SCRIPT_DIR/build-appimage-pass.sh}
 PACKAGE_PASS=${GC_APPIMAGE_PACKAGE_PASS_SCRIPT:-$SCRIPT_DIR/package-appimage-pass.sh}
 SUPPORT="$SCRIPT_DIR/../../src/Resources/linux/AppImagePackagingSupport.sh"
+OAUTH_POLICY=${GC_APPIMAGE_OAUTH_POLICY:-unconfigured}
 WORK_ROOT=
 ACTIVE_SOURCE=
 
@@ -36,7 +37,8 @@ create_reproduction_source()
     ACTIVE_SOURCE="$WORK_ROOT/source"
     run_reproducible_git -C "$SOURCE_ROOT" worktree add --quiet --detach \
         "$ACTIVE_SOURCE" "$REVISION"
-    install_reproducible_build_inputs "$SOURCE_ROOT" "$ACTIVE_SOURCE"
+    install_reproducible_build_inputs \
+        "$SOURCE_ROOT" "$ACTIVE_SOURCE" "$OAUTH_POLICY"
 }
 
 remove_reproduction_source()
@@ -55,6 +57,14 @@ trap 'exit 143' TERM
 
 # shellcheck source=/dev/null
 . "$SUPPORT"
+
+case "$OAUTH_POLICY" in
+configured|unconfigured) ;;
+*)
+    echo "Unknown GC_APPIMAGE_OAUTH_POLICY: $OAUTH_POLICY" >&2
+    exit 1
+    ;;
+esac
 
 [ -x "$BUILD_PASS" ] && [ ! -L "$BUILD_PASS" ] || {
     echo "Independent AppImage build pass is unavailable or unsafe." >&2
@@ -89,7 +99,9 @@ for label in one two; do
     pass_output="$WORK_ROOT/package-$label"
     mkdir -p -- "$pass_build" "$pass_output"
     create_reproduction_source
-    "$BUILD_PASS" "$ACTIVE_SOURCE" "$pass_build" "$SOURCE_ROOT"
+    GC_APPIMAGE_OAUTH_POLICY="$OAUTH_POLICY" \
+        "$BUILD_PASS" "$ACTIVE_SOURCE" "$pass_build" "$SOURCE_ROOT" \
+        "$OAUTH_POLICY"
     remove_reproduction_source
 done
 
@@ -115,6 +127,7 @@ for label in one two; do
     create_reproduction_source
     GC_APPIMAGE_REPOSITORY_ROOT="$ACTIVE_SOURCE" \
         GC_APPIMAGE_BINARY="$pass_build/src/GoldenCheetah" \
+        GC_APPIMAGE_OAUTH_POLICY="$OAUTH_POLICY" \
         "$PACKAGE_PASS" "$pass_output"
     remove_reproduction_source
 done

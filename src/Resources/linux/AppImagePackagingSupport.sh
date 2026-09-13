@@ -117,12 +117,13 @@ run_reproducible_git()
 
 install_reproducible_build_inputs()
 {
-    if [ "$#" -ne 2 ]; then
-        echo "Usage: install_reproducible_build_inputs INPUT_SOURCE SOURCE_TREE" >&2
+    if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+        echo "Usage: install_reproducible_build_inputs INPUT_SOURCE SOURCE_TREE [OAUTH_POLICY]" >&2
         return 2
     fi
     local input_source=$1
     local source_tree=$2
+    local oauth_policy=${3:-${GC_APPIMAGE_OAUTH_POLICY:-unconfigured}}
     local input_config="$input_source/src/gcconfig.pri"
     local input_secrets="$input_source/src/Core/GeneratedSecrets.h"
     local input_qwt_config="$input_source/qwt/qwtconfig.pri"
@@ -130,7 +131,15 @@ install_reproducible_build_inputs()
     local output_config="$source_tree/src/gcconfig.pri"
     local output_secrets="$source_tree/src/Core/GeneratedSecrets.h"
     local output_qwt_config="$source_tree/qwt/qwtconfig.pri"
-    local output
+    local output qwt_config_source
+
+    case "$oauth_policy" in
+    configured|unconfigured) ;;
+    *)
+        echo "Unknown GC_APPIMAGE_OAUTH_POLICY: $oauth_policy" >&2
+        return 1
+        ;;
+    esac
 
     [ -d "$input_source" ] && [ ! -L "$input_source" ] &&
         [ -d "$source_tree" ] && [ ! -L "$source_tree" ] &&
@@ -151,32 +160,36 @@ install_reproducible_build_inputs()
         echo "Effective gcconfig.pri is required for reproducible builds." >&2
         return 1
     }
-    install -m 0644 -- "$input_config" "$output_config" ||
-        return
-
-    if [ -f "$input_secrets" ] && [ ! -L "$input_secrets" ]; then
-        install -m 0600 -- "$input_secrets" "$output_secrets" || return
-    elif [ -e "$input_secrets" ] || [ -L "$input_secrets" ]; then
-        echo "GeneratedSecrets.h is not a regular input file." >&2
-        return 1
+    # GeneratedSecrets.h can contain credentials for several services. Public
+    # builds must not inspect or copy it even though the historical policy
+    # variable is named after Strava.
+    if [ "$oauth_policy" = configured ]; then
+        if [ ! -f "$input_secrets" ] || [ -L "$input_secrets" ]; then
+            echo "Configured builds require a regular GeneratedSecrets.h input." >&2
+            return 1
+        fi
     elif [ -e "$output_secrets" ] || [ -L "$output_secrets" ]; then
-        echo "Unexpected GeneratedSecrets.h exists in the source tree." >&2
+        echo "Unconfigured build source contains GeneratedSecrets.h." >&2
         return 1
     fi
 
     if [ -f "$input_qwt_config" ] && [ ! -L "$input_qwt_config" ]; then
-        install -m 0644 -- "$input_qwt_config" \
-            "$output_qwt_config"
+        qwt_config_source=$input_qwt_config
     elif [ -e "$input_qwt_config" ] || [ -L "$input_qwt_config" ]; then
         echo "qwtconfig.pri is not a regular input file." >&2
         return 1
     elif [ -f "$default_qwt_config" ] && [ ! -L "$default_qwt_config" ]; then
-        install -m 0644 -- "$default_qwt_config" \
-            "$output_qwt_config"
+        qwt_config_source=$default_qwt_config
     else
         echo "Default qwtconfig.pri input is unavailable." >&2
         return 1
     fi
+
+    install -m 0644 -- "$input_config" "$output_config" || return
+    if [ "$oauth_policy" = configured ]; then
+        install -m 0600 -- "$input_secrets" "$output_secrets" || return
+    fi
+    install -m 0644 -- "$qwt_config_source" "$output_qwt_config"
 }
 
 run_reproducible_build_tool()

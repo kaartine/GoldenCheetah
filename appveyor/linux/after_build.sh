@@ -25,7 +25,8 @@ fi
 . "$REPOSITORY_ROOT/src/Resources/linux/AppImagePackagingSupport.sh"
 
 rm -f -- "$IMAGE" "$MANIFEST" "$SBOM"
-"$REPRODUCE_APPIMAGE" "$REPOSITORY_ROOT" "$REPRODUCTION_OUTPUT"
+GC_APPIMAGE_OAUTH_POLICY=unconfigured \
+    "$REPRODUCE_APPIMAGE" "$REPOSITORY_ROOT" "$REPRODUCTION_OUTPUT"
 
 install -m 0755 "$REPRODUCTION_OUTPUT/GoldenCheetah.AppImage" "$IMAGE"
 install -m 0600 "$REPRODUCTION_OUTPUT/GoldenCheetah.AppImage.manifest" "$MANIFEST"
