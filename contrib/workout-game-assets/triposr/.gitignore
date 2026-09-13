@@ -1,0 +1,18 @@
+# TripoSR inputs and outputs are deliberately kept outside the repository.
+# These patterns are a second line of defence against accidental staging.
+private/
+work/
+candidates/
+references/
+weights/
+*.ckpt
+*.glb
+*.gltf
+*.jpeg
+*.jpg
+*.onnx
+*.png
+*.pt
+*.pth
+*.safetensors
+*.webp

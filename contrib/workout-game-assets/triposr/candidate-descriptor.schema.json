@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://goldencheetah.org/schemas/workout-game/triposr-candidate-v1.json",
+  "title": "Workout Game TripoSR review candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "candidateId",
+    "status",
+    "sourceReference",
+    "generator",
+    "coordinateSystem",
+    "technical",
+    "files",
+    "validation",
+    "installation"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "workout-game-triposr-candidate" },
+    "candidateId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+    },
+    "status": { "const": "review-required" },
+    "sourceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "bytes", "mimeType", "rightsBasis", "sourceUri"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+        "mimeType": {
+          "enum": ["image/jpeg", "image/png", "image/webp"]
+        },
+        "rightsBasis": {
+          "enum": [
+            "owned",
+            "licensed",
+            "permission",
+            "public-domain",
+            "unverified-review-only"
+          ]
+        },
+        "sourceUri": {
+          "oneOf": [
+            { "const": "local-private" },
+            {
+              "type": "string",
+              "pattern": "^https://[^/?#@\\s]+(?:/[^?#\\s]*)?$"
+            }
+          ]
+        }
+      }
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "repository",
+        "revision",
+        "codeLicense",
+        "modelId",
+        "modelWeightsSha256",
+        "modelLicense",
+        "settings"
+      ],
+      "properties": {
+        "name": { "const": "TripoSR" },
+        "repository": { "const": "https://github.com/VAST-AI-Research/TripoSR" },
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "codeLicense": { "const": "MIT" },
+        "modelId": { "type": "string", "minLength": 1 },
+        "modelWeightsSha256": { "$ref": "#/$defs/sha256" },
+        "modelLicense": { "type": "string", "minLength": 1 },
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "seed",
+            "mcResolution",
+            "chunkSize",
+            "foregroundRemoval"
+          ],
+          "properties": {
+            "seed": { "type": "integer", "minimum": 0 },
+            "mcResolution": { "type": "integer", "minimum": 16 },
+            "chunkSize": { "type": "integer", "minimum": 1 },
+            "foregroundRemoval": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "coordinateSystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unitMeters", "upAxis", "forwardAxis"],
+      "properties": {
+        "unitMeters": { "type": "number", "exclusiveMinimum": 0 },
+        "upAxis": { "$ref": "#/$defs/axis" },
+        "forwardAxis": { "$ref": "#/$defs/axis" }
+      }
+    },
+    "technical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lod0", "lod1", "lod1TriangleRatio"],
+      "properties": {
+        "lod0": { "$ref": "#/$defs/technical" },
+        "lod1": { "$ref": "#/$defs/lod1Technical" },
+        "collisionProxy": { "$ref": "#/$defs/collisionTechnical" },
+        "lod1TriangleRatio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "prefixItems": [
+        { "$ref": "#/$defs/lod0File" },
+        { "$ref": "#/$defs/lod1File" },
+        { "$ref": "#/$defs/collisionFile" }
+      ],
+      "items": false
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["validator", "budgets", "checks"],
+      "properties": {
+        "validator": { "const": "triposr_candidate.py/1" },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxGlbBytes",
+            "maxTrianglesLod0",
+            "maxTrianglesLod1",
+            "maxMaterials",
+            "maxTextures",
+            "maxTextureBytes",
+            "maxCollisionGlbBytes",
+            "maxCollisionTriangles"
+          ],
+          "properties": {
+            "maxGlbBytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+            "maxTrianglesLod0": { "type": "integer", "minimum": 1, "maximum": 18000 },
+            "maxTrianglesLod1": { "type": "integer", "minimum": 1, "maximum": 9000 },
+            "maxMaterials": { "type": "integer", "minimum": 0, "maximum": 16 },
+            "maxTextures": { "const": 0 },
+            "maxTextureBytes": { "const": 0 },
+            "maxCollisionGlbBytes": { "const": 4194304 },
+            "maxCollisionTriangles": { "const": 100 }
+          }
+        },
+        "checks": {
+          "const": [
+            "source-reference-sha256",
+            "model-weights-sha256",
+            "candidate-glb-sha256",
+            "glb-container-structure",
+            "embedded-resources-only",
+            "finite-float-accessors-and-transforms",
+            "finite-nonempty-triangle-geometry",
+            "valid-position-and-index-ranges",
+            "declared-axis-and-unit-metadata",
+            "glb-size-budget",
+            "triangle-budget",
+            "lod1-lighter-than-lod0",
+            "material-budget",
+            "texture-count-and-byte-budget",
+            "optional-collision-proxy-contract"
+          ]
+        }
+      }
+    },
+    "installation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["automatic", "target", "decision"],
+      "properties": {
+        "automatic": { "const": false },
+        "target": { "const": "RB-01" },
+        "decision": { "const": "prohibited-pending-human-review" }
+      }
+    },
+    "collisionProxyProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generator",
+        "derivedFromRole",
+        "derivedFromSha256",
+        "sha256",
+        "status"
+      ],
+      "properties": {
+        "generator": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._+()\\-]{0,127}$"
+        },
+        "derivedFromRole": { "const": "review-model-lod0" },
+        "derivedFromSha256": { "$ref": "#/$defs/sha256" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "status": { "const": "review-required" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "files": { "minItems": 3 } },
+        "required": ["files"]
+      },
+      "then": {
+        "required": ["collisionProxyProvenance"],
+        "properties": {
+          "technical": { "required": ["collisionProxy"] }
+        }
+      },
+      "else": {
+        "not": { "required": ["collisionProxyProvenance"] },
+        "properties": {
+          "technical": { "not": { "required": ["collisionProxy"] } }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "axis": { "enum": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"] },
+    "vector3": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "number" },
+        { "type": "number" },
+        { "type": "number" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "technical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "glbBytes",
+        "triangles",
+        "materials",
+        "textures",
+        "textureBytes",
+        "meshes",
+        "primitives",
+        "vertices",
+        "bounds"
+      ],
+      "properties": {
+        "format": { "const": "glb-2.0" },
+        "glbBytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+        "triangles": { "type": "integer", "minimum": 1, "maximum": 18000 },
+        "materials": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "textures": { "const": 0 },
+        "textureBytes": { "const": 0 },
+        "meshes": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "primitives": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "vertices": { "type": "integer", "minimum": 3, "maximum": 2000000 },
+        "bounds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimum", "maximum"],
+          "properties": {
+            "minimum": { "$ref": "#/$defs/vector3" },
+            "maximum": { "$ref": "#/$defs/vector3" }
+          }
+        }
+      }
+    },
+    "lod1Technical": {
+      "allOf": [
+        { "$ref": "#/$defs/technical" },
+        {
+          "type": "object",
+          "properties": {
+            "triangles": { "type": "integer", "minimum": 1, "maximum": 9000 }
+          }
+        }
+      ]
+    },
+    "collisionTechnical": {
+      "allOf": [
+        { "$ref": "#/$defs/technical" },
+        {
+          "type": "object",
+          "properties": {
+            "glbBytes": { "type": "integer", "minimum": 1, "maximum": 4194304 },
+            "triangles": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "materials": { "const": 0 },
+            "textures": { "const": 0 },
+            "textureBytes": { "const": 0 }
+          }
+        }
+      ]
+    },
+    "lod0File": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "name", "sha256", "bytes"],
+      "properties": {
+        "role": { "const": "review-model-lod0" },
+        "name": { "const": "candidate-lod0.glb" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 67108864 }
+      }
+    },
+    "lod1File": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "name", "sha256", "bytes"],
+      "properties": {
+        "role": { "const": "review-model-lod1" },
+        "name": { "const": "candidate-lod1.glb" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 67108864 }
+      }
+    },
+    "collisionFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "name", "sha256", "bytes"],
+      "properties": {
+        "role": { "const": "collision-proxy" },
+        "name": { "const": "candidate-collision.glb" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 4194304 }
+      }
+    }
+  }
+}
