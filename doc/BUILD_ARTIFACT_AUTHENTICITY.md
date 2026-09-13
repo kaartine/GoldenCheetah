@@ -33,20 +33,17 @@ Configure these exact commit-status contexts as required before merge:
 - `Candidate CI / durable and anchored filesystem`
 
 The workflow-policy status checks candidate workflows as untrusted data using
-the checker and semantic contract from the protected base revision. Each
+the checker and structural policy from the protected base revision. Each
 downstream workflow publishes pending and final status directly to the
 candidate commit. Its status reporters are isolated jobs; jobs that check out
 candidate code have no `statuses: write` permission.
 
-The protected workflow set is closed, and each workflow's semantics and
-indirect CI inputs are hash-bound by the contract from the base revision. The
-hashes are necessary authorization records because the required policy status
-has no bypass actor. An intentional change therefore uses a reviewed staged
-rotation: first merge a contract-only pull request that authorizes the exact
-proposed hashes (and, for workflow semantics, retains both current and proposed
-hashes), then merge the protected change, and finally remove retired hashes.
-Keep the rotation window short. Contract and protected-file changes in the same
-pull request do not authorize themselves.
+The workflow set and security-sensitive structure remain closed: candidate jobs
+cannot access repository secrets or write-capable tokens, action revisions and
+container images are immutable, failures cannot be suppressed, and publishing
+credentials remain isolated to a trusted push to `master`. Project-owned
+workflow, build, test and packaging files are reviewed and versioned normally in
+Git. Their contents are not duplicated as hashes in the policy file.
 
 Release artifact hashes are different: they cross a repository or transport
 boundary and remain mandatory in the build manifest and SBOM linkage. The

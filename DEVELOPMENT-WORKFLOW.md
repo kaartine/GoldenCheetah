@@ -90,10 +90,9 @@ isolated; prefer a dedicated test login for that hardware gate.
 ## Integrity and provenance
 
 Git commit IDs identify files committed in a source snapshot. Do not duplicate
-those file hashes in an asset inventory. CI trust-boundary inputs are the
-exception: their checked-in hashes are authorization records evaluated from the
-trusted base branch. Rotate them with the staged contract-only procedure in
-`doc/BUILD_ARTIFACT_AUTHENTICITY.md` before changing a protected input.
+those file hashes in an asset inventory or CI policy. Changes to project-owned
+workflows, build scripts and packaging files use the normal pull-request review,
+tests and Git history instead of a separately maintained hash authorization.
 
 Cryptographic hashes remain required at trust boundaries: downloaded
 dependencies, original external source archives, produced release artifacts,

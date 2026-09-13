@@ -18,7 +18,9 @@ CHECKER = REPOSITORY_ROOT / ".github" / "scripts" / "check-immutable-actions.py"
 PRODUCTION_ALLOWLIST = REPOSITORY_ROOT / ".github" / "actions.lock"
 PARSER_LOCK = REPOSITORY_ROOT / ".github" / "scripts" / "immutable-actions-requirements.lock"
 POLICY_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "workflow-policy.yml"
-POLICY_CONTRACT = REPOSITORY_ROOT / ".github" / "workflow-policy-contract.json"
+POLICY_CONFIGURATION = (
+    REPOSITORY_ROOT / ".github" / "workflow-policy-contract.json"
+)
 CODEOWNERS = REPOSITORY_ROOT / ".github" / "CODEOWNERS"
 MASTER_RULESET = REPOSITORY_ROOT / ".github" / "master-ruleset.json"
 RELEASE_POLICY_DOCUMENT = (
@@ -281,19 +283,6 @@ class ImmutableActionTests(unittest.TestCase):
             text=True,
         )
 
-    def copy_repository_policy_fixture(self, destination):
-        contract = json.loads(POLICY_CONTRACT.read_text(encoding="ascii"))
-        shutil.copytree(
-            REPOSITORY_ROOT / ".github" / "workflows",
-            destination / ".github" / "workflows",
-        )
-        for relative in contract["protected_files"]:
-            source = REPOSITORY_ROOT / relative
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-        return contract
-
     def test_repository_policy_rejects_required_workflow_deletion(self):
         with tempfile.TemporaryDirectory() as temporary:
             workflows = Path(temporary) / "workflows"
@@ -322,7 +311,7 @@ class ImmutableActionTests(unittest.TestCase):
             )
             result = self.run_repository_policy(workflows)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("uncontracted workflow", result.stderr)
+        self.assertIn("workflow missing from policy", result.stderr)
 
     def test_repository_policy_rejects_semantic_weakening(self):
         mutations = {
@@ -336,10 +325,35 @@ class ImmutableActionTests(unittest.TestCase):
                 "  macos:\n",
                 "  macos:\n    permissions:\n      statuses: write\n",
             ),
+            "candidate id-token permission": (
+                "ci.yml",
+                "  macos:\n",
+                "  macos:\n    permissions:\n      id-token: write\n",
+            ),
+            "candidate repository write permission": (
+                "ci.yml",
+                "  macos:\n",
+                "  macos:\n    permissions:\n      contents: write\n",
+            ),
             "candidate secret injection": (
                 "ci.yml",
                 "  macos:\n",
                 "  macos:\n    env:\n      LEAK: ${{ secrets.GC_NOKIA_CLIENT_SECRET }}\n",
+            ),
+            "candidate bracket secret injection": (
+                "ci.yml",
+                "  macos:\n",
+                "  macos:\n    env:\n      LEAK: ${{ secrets['GC_NOKIA_CLIENT_SECRET'] }}\n",
+            ),
+            "candidate all-secrets injection": (
+                "ci.yml",
+                "  macos:\n",
+                "  macos:\n    env:\n      LEAK: ${{ toJSON(secrets) }}\n",
+            ),
+            "candidate inherited secrets": (
+                "ci.yml",
+                "  macos:\n",
+                "  macos:\n    secrets: inherit\n",
             ),
             "trusted release event weakening": (
                 "ci.yml",
@@ -348,25 +362,15 @@ class ImmutableActionTests(unittest.TestCase):
                 "'[publish binaries]') }}\n",
                 "    if: ${{ always() }}\n",
             ),
-            "build command weakening": (
+            "candidate runner weakening": (
                 "ci.yml",
-                "        run: ./.github/scripts/build.sh\n",
-                "        run: 'true'\n",
+                "    runs-on: macos-latest\n",
+                "    runs-on: self-hosted\n",
             ),
             "test failure suppression": (
                 "ci.yml",
                 "      - name: Test\n",
                 "      - name: Test\n        continue-on-error: true\n",
-            ),
-            "build shell replacement": (
-                "ci.yml",
-                "      - name: Build\n",
-                "      - name: Build\n        shell: 'true {0}'\n",
-            ),
-            "candidate runner weakening": (
-                "ci.yml",
-                "    runs-on: macos-latest\n",
-                "    runs-on: self-hosted\n",
             ),
             "extra bypass step": (
                 "ci.yml",
@@ -421,82 +425,28 @@ class ImmutableActionTests(unittest.TestCase):
                 )
                 result = self.run_repository_policy(workflows)
                 self.assertNotEqual(result.returncode, 0, result.stderr)
-                self.assertIn("workflow policy contract", result.stderr)
+                self.assertIn("workflow policy", result.stderr)
 
-    def test_repository_policy_binds_every_indirect_ci_input(self):
-        contract = json.loads(POLICY_CONTRACT.read_text(encoding="ascii"))
-        protected = set(contract["protected_files"])
-        required = {
-            ".github/CODEOWNERS",
-            ".github/actions.lock",
-            ".github/master-ruleset.json",
-            ".github/scripts/after_build.sh",
-            ".github/scripts/before_build.sh",
-            ".github/scripts/build.sh",
-            ".github/scripts/check-immutable-actions.py",
-            ".github/scripts/immutable-actions-requirements.lock",
-            ".github/scripts/install-pinned-homebrew.sh",
-            ".github/scripts/install.sh",
-            ".github/scripts/run-tests.py",
-            "appveyor.yml",
-            "appveyor/linux/before_build.sh",
-            "appveyor/linux/build-appimage-pass.sh",
-            "appveyor/linux/build-input-paths.sh",
-            "appveyor/linux/install.sh",
-            "appveyor/linux/package-appimage-pass.sh",
-            "appveyor/linux/reproduce-appimage.sh",
-            "appveyor/macos/run-build-regressions.sh",
-            "appveyor/safe-extract.py",
-            "appveyor/windows/before_build.ps1",
-            "appveyor/windows/install.ps1",
-            "appveyor/windows/vcpkg.json",
-            "src/Python/requirements-appimage.lock",
-            "src/Resources/linux/capture-linuxdeployqt-transforms.py",
-            "src/Resources/linux/compute-build-input-identity.py",
-            "src/Resources/linux/read-appimage-offset.py",
-            "src/Resources/linux/verify-appimage-payload.py",
-            "unittests/Build/appImagePackaging/testCiReleaseGates.sh",
-            "unittests/Build/appImagePackaging/testImmutableActions.py",
-            "unittests/Build/appImagePackaging/testMacOSPackaging.py",
-            "unittests/Build/appImagePackaging/testReleaseHardening.py",
-            "unittests/ci-required-tests.txt",
-        }
-        self.assertTrue(required <= protected, sorted(required - protected))
-        self.assertEqual(list(contract["protected_files"]), sorted(protected))
+    def test_repository_policy_has_no_project_file_hash_authorization(self):
+        policy = json.loads(POLICY_CONFIGURATION.read_text(encoding="ascii"))
+        serialized = json.dumps(policy, sort_keys=True)
+        self.assertEqual(policy["format"], "goldencheetah-workflow-policy-3")
+        for removed_field in (
+            "protected_files", "run_sha256", "semantic_sha256",
+            "trusted_run_sha256",
+        ):
+            self.assertNotIn(removed_field, serialized)
 
-    def test_repository_policy_rejects_each_protected_ci_input_mutation(self):
+    def test_repository_policy_allows_normal_project_file_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary) / "repository"
-            contract = self.copy_repository_policy_fixture(repository)
             workflows = repository / ".github" / "workflows"
-            baseline = self.run_repository_policy(workflows, repository)
-            self.assertEqual(baseline.returncode, 0, baseline.stderr)
-
-            for relative in contract["protected_files"]:
-                with self.subTest(path=relative):
-                    target = repository / relative
-                    original = target.read_bytes()
-                    target.write_bytes(original + b"\nmutation\n")
-                    result = self.run_repository_policy(workflows, repository)
-                    self.assertNotEqual(result.returncode, 0, result.stderr)
-                    self.assertIn("protected CI file changed", result.stderr)
-                    target.write_bytes(original)
-
-    def test_repository_policy_rejects_missing_or_symlinked_ci_inputs(self):
-        for mode in ("missing", "symlink"):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
-                repository = Path(temporary) / "repository"
-                contract = self.copy_repository_policy_fixture(repository)
-                relative = next(iter(contract["protected_files"]))
-                target = repository / relative
-                target.unlink()
-                if mode == "symlink":
-                    target.symlink_to("/dev/null")
-                result = self.run_repository_policy(
-                    repository / ".github" / "workflows", repository
-                )
-                self.assertNotEqual(result.returncode, 0, result.stderr)
-                self.assertIn("protected CI file is unavailable or unsafe", result.stderr)
+            shutil.copytree(REPOSITORY_ROOT / ".github" / "workflows", workflows)
+            script = repository / ".github" / "scripts" / "build.sh"
+            script.parent.mkdir(parents=True)
+            script.write_text("#!/bin/sh\n# ordinary reviewed change\n", encoding="ascii")
+            result = self.run_repository_policy(workflows, repository)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_mutable_action_and_container_tags_are_rejected(self):
         for reference in (
