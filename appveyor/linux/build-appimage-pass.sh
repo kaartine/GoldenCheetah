@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
-    echo "Usage: build-appimage-pass.sh SOURCE_TREE BUILD_TREE INPUT_SOURCE" >&2
+if [ "$#" -ne 4 ]; then
+    echo "Usage: build-appimage-pass.sh SOURCE_TREE BUILD_TREE INPUT_SOURCE OAUTH_POLICY" >&2
     exit 2
 fi
 
 SOURCE_TREE=$(cd -- "$1" && pwd -P)
 BUILD_TREE=$2
 INPUT_SOURCE=$(cd -- "$3" && pwd -P)
+OAUTH_POLICY=$4
 QMAKE_COMMAND=${GC_APPIMAGE_QMAKE:-qmake}
 BUILD_JOBS=${GC_BUILD_JOBS:-2}
 SUPPORT="$SOURCE_TREE/src/Resources/linux/AppImagePackagingSupport.sh"
@@ -43,7 +44,8 @@ BUILD_HOME="$BUILD_TREE/.build-home"
 BUILD_TMP="$BUILD_TREE/.build-tmp"
 mkdir -m 0700 -- "$BUILD_HOME" "$BUILD_TMP"
 
-install_reproducible_build_inputs "$INPUT_SOURCE" "$SOURCE_TREE"
+install_reproducible_build_inputs \
+    "$INPUT_SOURCE" "$SOURCE_TREE" "$OAUTH_POLICY"
 
 REVISION=$(run_reproducible_git -C "$SOURCE_TREE" rev-parse --verify HEAD)
 SOURCE_DATE_EPOCH=$(run_reproducible_git -C "$SOURCE_TREE" show -s --format=%ct "$REVISION")

@@ -420,6 +420,119 @@ class BuildInputTests(unittest.TestCase):
             self.assertNotEqual(source_link.returncode, 0)
             self.assertEqual(outside.read_text(encoding="ascii"), "unchanged\n")
 
+    def test_input_installer_applies_oauth_policy_before_copying(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_source = root / "input"
+            (input_source / "src/Core").mkdir(parents=True)
+            (input_source / "qwt").mkdir()
+            (input_source / "src/gcconfig.pri").write_text(
+                "CONFIG += release\n", encoding="ascii"
+            )
+            secrets = input_source / "src/Core/GeneratedSecrets.h"
+            secrets.write_text('#define GC_TEST_SECRET "fixture"\n', encoding="ascii")
+            (input_source / "qwt/qwtconfig.pri").write_text(
+                "QWT_CONFIG += QwtPlot\n", encoding="ascii"
+            )
+
+            def install_inputs(source_tree, policy):
+                (source_tree / "src/Core").mkdir(parents=True, exist_ok=True)
+                (source_tree / "qwt").mkdir(exist_ok=True)
+                return run(
+                    [
+                        "bash", "-c",
+                        'set -euo pipefail; . "$1"; '
+                        'install_reproducible_build_inputs "$2" "$3" "$4"',
+                        "bash", str(SUPPORT), str(input_source),
+                        str(source_tree), policy,
+                    ]
+                )
+
+            public_tree = root / "public"
+            public = install_inputs(public_tree, "unconfigured")
+            self.assertEqual(public.returncode, 0, public.stderr)
+            self.assertFalse((public_tree / "src/Core/GeneratedSecrets.h").exists())
+
+            private_tree = root / "private"
+            private = install_inputs(private_tree, "configured")
+            self.assertEqual(private.returncode, 0, private.stderr)
+            self.assertEqual(
+                (private_tree / "src/Core/GeneratedSecrets.h").read_text(
+                    encoding="ascii"
+                ),
+                secrets.read_text(encoding="ascii"),
+            )
+            self.assertEqual(
+                stat.S_IMODE(
+                    (private_tree / "src/Core/GeneratedSecrets.h").stat().st_mode
+                ),
+                0o600,
+            )
+
+            public_identity = self.identity(public_tree)
+            private_identity = self.identity(private_tree)
+            self.assertEqual(public_identity.returncode, 0, public_identity.stderr)
+            self.assertEqual(private_identity.returncode, 0, private_identity.stderr)
+            secrets.write_text(
+                '#define GC_TEST_SECRET "changed"\n', encoding="ascii"
+            )
+            public_tree_two = root / "public-two"
+            private_tree_two = root / "private-two"
+            self.assertEqual(
+                install_inputs(public_tree_two, "unconfigured").returncode, 0
+            )
+            self.assertEqual(
+                install_inputs(private_tree_two, "configured").returncode, 0
+            )
+            self.assertEqual(
+                public_identity.stdout, self.identity(public_tree_two).stdout
+            )
+            self.assertNotEqual(
+                private_identity.stdout, self.identity(private_tree_two).stdout
+            )
+
+            contaminated_tree = root / "contaminated"
+            (contaminated_tree / "src/Core").mkdir(parents=True)
+            (contaminated_tree / "src/Core/GeneratedSecrets.h").write_text(
+                "stale\n", encoding="ascii"
+            )
+            contaminated = install_inputs(contaminated_tree, "unconfigured")
+            self.assertNotEqual(contaminated.returncode, 0)
+            self.assertFalse((contaminated_tree / "src/gcconfig.pri").exists())
+
+            linked_destination_tree = root / "linked-destination"
+            (linked_destination_tree / "src/Core").mkdir(parents=True)
+            (linked_destination_tree / "src/Core/GeneratedSecrets.h").symlink_to(
+                secrets
+            )
+            linked_destination = install_inputs(
+                linked_destination_tree, "unconfigured"
+            )
+            self.assertNotEqual(linked_destination.returncode, 0)
+            self.assertFalse(
+                (linked_destination_tree / "src/gcconfig.pri").exists()
+            )
+
+            secrets.unlink()
+            missing_tree = root / "missing"
+            missing = install_inputs(missing_tree, "configured")
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertFalse((missing_tree / "src/gcconfig.pri").exists())
+
+            outside = root / "outside-secrets"
+            outside.write_text("outside\n", encoding="ascii")
+            secrets.symlink_to(outside)
+            linked_tree = root / "linked"
+            linked = install_inputs(linked_tree, "configured")
+            self.assertNotEqual(linked.returncode, 0)
+            self.assertFalse((linked_tree / "src/gcconfig.pri").exists())
+
+            invalid_tree = root / "invalid"
+            invalid = install_inputs(invalid_tree, "invalid")
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertFalse((invalid_tree / "src/gcconfig.pri").exists())
+            self.assertFalse((invalid_tree / "qwt/qwtconfig.pri").exists())
+
 
 class PipelineIsolationTests(unittest.TestCase):
     def test_appveyor_inputs_are_external_and_extracted_trees_are_not_cached(self):
@@ -713,6 +826,8 @@ class PipelineIsolationTests(unittest.TestCase):
             package_probe = root / "package-pass"
             build_probe.write_text(
                 "#!/bin/sh\nset -eu\n"
+                "test \"$4\" = configured\n"
+                "test \"$GC_APPIMAGE_OAUTH_POLICY\" = configured\n"
                 "test ! -e \"$1/.reproduction-pass\"\n"
                 "printf build >\"$1/.reproduction-pass\"\n"
                 "mkdir -p \"$1/src/Core\" \"$1/qwt\"\n"
@@ -728,6 +843,7 @@ class PipelineIsolationTests(unittest.TestCase):
             )
             package_probe.write_text(
                 "#!/bin/sh\nset -eu\n"
+                "test \"$GC_APPIMAGE_OAUTH_POLICY\" = configured\n"
                 "test ! -e \"$GC_APPIMAGE_REPOSITORY_ROOT/.reproduction-pass\"\n"
                 "printf package >"
                 "\"$GC_APPIMAGE_REPOSITORY_ROOT/.reproduction-pass\"\n"
@@ -758,6 +874,7 @@ class PipelineIsolationTests(unittest.TestCase):
                     **os.environ,
                     "GC_APPIMAGE_BUILD_PASS_SCRIPT": str(build_probe),
                     "GC_APPIMAGE_PACKAGE_PASS_SCRIPT": str(package_probe),
+                    "GC_APPIMAGE_OAUTH_POLICY": "configured",
                     "GC_BUILD_LOG": str(build_log),
                     "GC_PACKAGE_LOG": str(package_log),
                     "GC_EFFECTIVE_CONFIG": str(config),
@@ -782,6 +899,105 @@ class PipelineIsolationTests(unittest.TestCase):
                 self.assertEqual(package_source, source_tree)
                 self.assertEqual(package_binary, f"{build_tree}/src/GoldenCheetah")
 
+    def test_unconfigured_reproduction_never_copies_generated_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            subprocess.run(["git", "init", "-q", source], check=True)
+            subprocess.run(["git", "-C", source, "config", "user.name", "Test"], check=True)
+            subprocess.run(
+                ["git", "-C", source, "config", "user.email", "test@example.invalid"],
+                check=True,
+            )
+            (source / "src/Core").mkdir(parents=True)
+            (source / "qwt").mkdir()
+            (source / ".gitignore").write_text(
+                "/src/gcconfig.pri\n"
+                "/src/Core/GeneratedSecrets.h\n"
+                "/qwt/qwtconfig.pri\n",
+                encoding="ascii",
+            )
+            (source / "tracked").write_text("source\n", encoding="ascii")
+            (source / "src/Core/fixture").write_text("core\n", encoding="ascii")
+            (source / "qwt/qwtconfig.pri.in").write_text(
+                "QWT_CONFIG += QwtPlot\n", encoding="ascii"
+            )
+            subprocess.run(
+                [
+                    "git", "-C", source, "add", "tracked", ".gitignore",
+                    "src/Core/fixture", "qwt/qwtconfig.pri.in",
+                ],
+                check=True,
+            )
+            subprocess.run(["git", "-C", source, "commit", "-qm", "fixture"], check=True)
+            (source / "src/gcconfig.pri").write_text(
+                "CONFIG += release\n", encoding="ascii"
+            )
+            (source / "src/Core/GeneratedSecrets.h").write_text(
+                '#define GC_TEST_SECRET "must-not-be-copied"\n', encoding="ascii"
+            )
+            (source / "qwt/qwtconfig.pri").write_text(
+                "QWT_CONFIG += QwtPlot\n", encoding="ascii"
+            )
+
+            build_probe = root / "build-pass"
+            build_probe.write_text(
+                "#!/bin/sh\nset -eu\n"
+                "test \"$4\" = unconfigured\n"
+                "test \"$GC_APPIMAGE_OAUTH_POLICY\" = unconfigured\n"
+                "test ! -e \"$1/src/Core/GeneratedSecrets.h\"\n"
+                "test -f \"$1/src/gcconfig.pri\"\n"
+                "test -f \"$1/qwt/qwtconfig.pri\"\n"
+                "mkdir -p \"$2/src\"\n"
+                "printf 'same elf\\n' >\"$2/src/GoldenCheetah\"\n"
+                "chmod 700 \"$2/src/GoldenCheetah\"\n",
+                encoding="ascii",
+            )
+            package_probe = root / "package-pass"
+            package_probe.write_text(
+                "#!/bin/sh\nset -eu\n"
+                "test \"$GC_APPIMAGE_OAUTH_POLICY\" = unconfigured\n"
+                "test ! -e \"$GC_APPIMAGE_REPOSITORY_ROOT/src/Core/GeneratedSecrets.h\"\n"
+                "mkdir -p \"$1\"\n"
+                "printf appimage >\"$1/GoldenCheetah.AppImage\"\n"
+                "chmod 700 \"$1/GoldenCheetah.AppImage\"\n"
+                "printf build >\"$1/build.manifest\"\n"
+                "hash=$(sha256sum \"$1/GoldenCheetah.AppImage\" | cut -d' ' -f1)\n"
+                "printf 'appimage_sha256=%s\\n' \"$hash\" "
+                ">\"$1/GoldenCheetah.AppImage.manifest\"\n"
+                "printf sbom >\"$1/GoldenCheetah.AppImage.sbom.cdx.json\"\n",
+                encoding="ascii",
+            )
+            build_probe.chmod(0o700)
+            package_probe.chmod(0o700)
+            output = root / "output"
+            result = run(
+                [str(REPRODUCE_APPIMAGE), str(source), str(output)],
+                env={
+                    **os.environ,
+                    "GC_APPIMAGE_BUILD_PASS_SCRIPT": str(build_probe),
+                    "GC_APPIMAGE_PACKAGE_PASS_SCRIPT": str(package_probe),
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((output / "GoldenCheetah.AppImage").is_file())
+
+    def test_reproduction_rejects_unknown_policy_before_creating_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            result = run(
+                [
+                    str(REPRODUCE_APPIMAGE),
+                    str(REPOSITORY_ROOT),
+                    str(output),
+                ],
+                env={**os.environ, "GC_APPIMAGE_OAUTH_POLICY": "invalid"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Unknown GC_APPIMAGE_OAUTH_POLICY", result.stderr)
+            self.assertFalse(output.exists())
+
     def test_all_linux_release_entrypoints_use_the_reproduction_driver(self):
         for relative in (
             "appveyor/linux/after_build.sh",
@@ -791,6 +1007,10 @@ class PipelineIsolationTests(unittest.TestCase):
             source = (REPOSITORY_ROOT / relative).read_text(encoding="utf-8")
             self.assertIn("reproduce-appimage.sh", source, relative)
             self.assertNotIn("APPIMAGETOOL_FILE", source, relative)
+        appveyor = (
+            REPOSITORY_ROOT / "appveyor/linux/after_build.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("GC_APPIMAGE_OAUTH_POLICY=unconfigured", appveyor)
         build_pass = (
             REPOSITORY_ROOT / "appveyor/linux/build-appimage-pass.sh"
         ).read_text(encoding="utf-8")
