@@ -236,7 +236,7 @@ def install(candidate: Path) -> None:
                 "https://github.com/kaartine/GoldenCheetah/blob/master/"
                 + BLEND_RELATIVE
             ),
-            "retrievedAt": "2026-09-11",
+            "retrievedAt": "2026-09-13",
             "originalFileName": "WG_RiderBike.blend",
             "originalSha256": blend_hash,
             "generator": "Blender",
@@ -259,7 +259,7 @@ def install(candidate: Path) -> None:
         manifest["technical"].update(measured)
         manifest["technical"]["budgets"].update({
             "maxGlbBytes": 614400,
-            "maxTrianglesLod0": 9000,
+            "maxTrianglesLod0": 18000,
         })
         manifest["processing"]["steps"] = [
             "Open the committed editable Blender source in Blender 4.0.2.",
@@ -273,7 +273,7 @@ def install(candidate: Path) -> None:
             "Render front, rear, side and chase audit views twice with fixed pose, cameras, field of view and lighting.",
             "Require repeated audit output to be byte-identical before installation.",
         ]
-        manifest["review"]["reviewedAt"] = "2026-09-11"
+        manifest["review"]["reviewedAt"] = "2026-09-13"
         manifest["review"]["notes"] = (
             "Approved stylized rider and Pole Voima K2 visual reconstruction. "
             "The bicycle geometry is measured from public product photography "

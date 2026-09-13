@@ -159,9 +159,13 @@ with `GC_ASSET_CPUS`, `GC_ASSET_MEMORY` and `GC_ASSET_MEMORY_SWAP`.
   motion follow the authoritative pedal-cycle value.
 - The crank mesh includes both pedal platforms, so feet, crank arms and pedals
   share one authoritative phase without adding per-pedal draw calls.
-- The complete source asset has 5,144 triangles, eight opaque flat-color
-  materials, no texture payload and no external source. The runtime component
-  adds only a bounded translucent contact-shadow material.
+- The complete source asset uses 7,494 of the 18,000 allowed LOD0 triangles,
+  eight opaque flat-color materials and 527,188 of the allowed 614,400 bytes,
+  with no texture payload or external
+  source. The runtime component adds only a bounded translucent contact-shadow
+  material. A separate LOD1 is deferred until the runtime can select it; adding
+  an unused duplicate would increase package size and draw assets without
+  reducing current rendering work.
 
 Measurement references:
 
@@ -170,7 +174,7 @@ Measurement references:
 - [Frameset front three-quarter view](https://p.vitalmtb.com/photos/products/34298/photos/83742/original_Pole_Voima_gold.png)
 - [Frameset rear three-quarter view](https://p.vitalmtb.com/photos/products/34298/photos/83741/original_Pole_Voima_gold.png)
 - Blender validates topology, applied transforms, dimensions, pivots and the
-  9,000-triangle budget before export. Asset-policy tests additionally reject
+  18,000-triangle budget before export. Asset-policy tests additionally reject
   built-in Quick 3D primitives in the final rider component.
 
 ## Drop contract

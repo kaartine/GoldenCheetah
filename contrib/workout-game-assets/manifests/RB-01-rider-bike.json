@@ -7,9 +7,9 @@
     "provider": "GoldenCheetah",
     "author": "GoldenCheetah contributors",
     "url": "https://github.com/kaartine/GoldenCheetah/blob/master/contrib/workout-game-assets/blender/sources/WG_RiderBike.blend",
-    "retrievedAt": "2026-09-11",
+    "retrievedAt": "2026-09-13",
     "originalFileName": "WG_RiderBike.blend",
-    "originalSha256": "ea0dd4d0aca059b03b18dfcb4b857a0e8bc156225122c3504291d8fd4ddcc282",
+    "originalSha256": "d17c8e93db9e3e7aade1cfb3056ffb3834da7af4282a63734994c9c56b5bbfc3",
     "generator": "Blender",
     "generatorVersion": "4.0.2",
     "promptOrScript": "contrib/workout-game-assets/blender/sources/WG_RiderBike.blend; contrib/workout-game-assets/blender/generate_rider_bike.py"
@@ -35,47 +35,47 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_rider_bike.py",
       "purpose": "source",
-      "sha256": "8d60caf70f02865f470787f0582ac0316685c26d767491b9d98b688013716b93"
+      "sha256": "6b8f3152b97dc0fdec0aedbd984c42fa5a93d5a1540de8c2f88a38075c13ccda"
     },
     {
       "path": "contrib/workout-game-assets/blender/sources/WG_RiderBike.blend",
       "purpose": "source",
-      "sha256": "ea0dd4d0aca059b03b18dfcb4b857a0e8bc156225122c3504291d8fd4ddcc282"
+      "sha256": "d17c8e93db9e3e7aade1cfb3056ffb3834da7af4282a63734994c9c56b5bbfc3"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_rider_bike_audit.py",
       "purpose": "source",
-      "sha256": "ab889b583bd9286c9fa879c6e0a4d5ef47310e53479fcfd3c08dc8d9c1aeff7a"
+      "sha256": "82eea7b3714f535588c7b037fc242a74f8d2abc10542873be0351afc1b93a1bd"
     },
     {
       "path": "contrib/workout-game-assets/generated/WG_RiderBike.glb",
       "purpose": "intermediate",
-      "sha256": "425bf7d0ff2b3c325cc6939d3a4d5c771fcba2b0c0fc86beaf5f7e397e528359"
+      "sha256": "951eb4f7a6b314809f6a79a5cb7f4d8a1039c39c2c606d9e12922e0ffd783665"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-audit.json",
       "purpose": "preview",
-      "sha256": "be939fd0fe8b280d2f5d513b7ae7968b64c3ae1b9a69ba4d513bcd52539142d3"
+      "sha256": "840f7e883a6f4fd4eb7387fed4c47c1970aa27046fb928e0ec11c3ce8a0dc7db"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-front.png",
       "purpose": "preview",
-      "sha256": "1d3f51e8ff4511df5db32c18a139f64a59352d0cb64364f33b4b956e19bf3a25"
+      "sha256": "8bb2bcac0f9999f2672960ddfa3a5ff43f56ef777d61d824b44eac8971376a8c"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-rear.png",
       "purpose": "preview",
-      "sha256": "aecd7710c126ab40a52cfc8dadfe68261ca063f31d0e434b7912712fa0074448"
+      "sha256": "456b34f8b03b51b6629c5523d06bc2d5e57fe4146bd82f6ddfd33faa16cd3bf8"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-side.png",
       "purpose": "preview",
-      "sha256": "776eab45adbb11ec3b8debd2cba7345be10c14d692f53c52415e0b0730109b5b"
+      "sha256": "df0b304002252bbedd6c67acbebb05253dcc8af06e233644c1f5c38fd7d58cf9"
     },
     {
       "path": "contrib/workout-game-assets/audits/RB-01/RB-01-chase.png",
       "purpose": "preview",
-      "sha256": "1416d718116ead4976fbdca96f87875d00133e42a7901f92e57d67c7e4f194b4"
+      "sha256": "b330c23626dce5dcf9870e59bac79ce54cc06a86c5673b9582a40108f56a2eb3"
     },
     {
       "path": "src/Train/qml/WorkoutGameRiderBike.qml",
@@ -100,27 +100,27 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Fork_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "e1a6517e3540796875d5d634b5b5c3bd6dc6648fa311e38a02694fe68d28e8c8"
+      "sha256": "c10dbdc08923c4fa95b433e616d6fff6400d639901daec8834b7c170c4b7d57d"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_FrontWheel_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "327a38d6f471e889b8fdc1ea04a8e94a900a578529aa637426a1cac44f21611e"
+      "sha256": "da37c8faccd398113a543ec63395a3d0bf767e7bbdf233859970343168af25ad"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_HairBeard_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "f5836454bf171d78a909b3fe2e44202a8b29cf7d2e4ab623eed1dd1779052679"
+      "sha256": "30ba97d3ed83fdfe133f8033034aa2ca968219dff1e8fa4460ba193b01df6ac7"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Head_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "5009e744907773928aba62147b19dd7c0db2bc423caf90e6be245b3c6d77d400"
+      "sha256": "ed14edde18fd461d3ecde3155a6e8232becebf7a17e46aa081eeb31b6b5a6f91"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Helmet_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "21a7f86ae46736a3e33b576e41c89756687075f4efd12f7957fb806412c4d8c7"
+      "sha256": "49721870c97f6ba1e5ccd1d2aa4c504b6981428a40c730754423d39424ae8f58"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_HelmetAccent_LOD0_mesh.mesh",
@@ -135,12 +135,12 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Limb_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "5445b2557960832f112656ad523d8560cacee5d6b7eb8d0b58d2f4d6c52e86fa"
+      "sha256": "11bbc5d5d3d5c162a1d84c2975ff1240b93424fa6a18ef53667d4f761ce67c32"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_MainFrame_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "10a5342c372756ebaa1b6b7545764b5782876b2681d6c3fc8c197c2de9900a0c"
+      "sha256": "5453c54d01753d44179fa22fbd80ee5d5fbb9522f66e5063d85ad7c3488fd64e"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_RearShock_LOD0_mesh.mesh",
@@ -150,7 +150,7 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_RearWheel_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "7f081632169c22584d3916e08482ea4cbafaf4110bf243c20a84a572d6707ecb"
+      "sha256": "47364a9fcd7f0fb57138112ef3780ed9181a61493601623156473cb8143aa8ab"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Shadow_LOD0_mesh.mesh",
@@ -160,12 +160,12 @@
     {
       "path": "src/Train/qml/assets/meshes/geo_Swingarm_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "b2ada5512495950a97846e868fb1bbf4a2c624c0e117344a26b4b5b9cea7b23d"
+      "sha256": "204613423590e51f44ffb58a9749ccf9ff87033f6d64533d9feee5e7576c1d72"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_Torso_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "ca145d21e623de9b2d3a19b36ab06da77582bf1d9d37f523bc0b0574998d9ac6"
+      "sha256": "5c954b569d3a6fde70289bc01ceba9b55d0ebdb3f227f84f42aaae81da5a9010"
     },
     {
       "path": "src/Resources/images/workout-game-surface-rider.png",
@@ -175,7 +175,7 @@
     {
       "path": "contrib/workout-game-assets/install_rider_bike_asset.py",
       "purpose": "source",
-      "sha256": "aba8f84e846bf1546069168c952cfd8969ab1d480c26742dafff7fd78eebeeaf"
+      "sha256": "d460916eefd1ca86c2e62b267615eed176c625b9b3f6aa6cd2f6f6e98666f860"
     },
     {
       "path": "contrib/workout-game-assets/rebuild_rider_bike.sh",
@@ -204,8 +204,8 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 360824,
-    "trianglesLod0": 5244,
+    "glbBytes": 527188,
+    "trianglesLod0": 7494,
     "materials": 8,
     "textureBytes": 0,
     "nodes": [
@@ -256,7 +256,7 @@
     },
     "budgets": {
       "maxGlbBytes": 614400,
-      "maxTrianglesLod0": 9000,
+      "maxTrianglesLod0": 18000,
       "maxMaterials": 8,
       "maxTextureBytes": 1024
     }
@@ -267,7 +267,7 @@
     "personReleaseStatus": "not-applicable",
     "propertyReleaseStatus": "not-applicable",
     "reviewer": "GoldenCheetah asset engineering and runtime integration audit",
-    "reviewedAt": "2026-09-11",
+    "reviewedAt": "2026-09-13",
     "notes": "Approved stylized rider and Pole Voima K2 visual reconstruction. The bicycle geometry is measured from public product photography and Pole's published K2 dimensions; no source CAD or photograph pixels are included. The editable Blender source and generated runtime meshes preserve the established axle, crank, steering, pelvis, shadow and camera pivots plus the snapshot-driven wheel, pedal, suspension and rider-pose animation contract. The model uses an open twin-link rear triangle, tapered frame members, detailed cockpit, one-by drivetrain, platform pedals, suspension, logo-free deep-coverage enduro helmet with an extended visor and large black treaded tires. It contains no person likeness, branded tread, logo or source mesh. No endorsement is claimed or implied. Deterministic Blender export, Balsam conversion, packaged-resource loading and fixed-view visual audits are release requirements."
   }
 }

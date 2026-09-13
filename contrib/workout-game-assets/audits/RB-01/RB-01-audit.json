@@ -1,8 +1,9 @@
 {
   "assetId": "RB-01-rider-bike",
-  "assetSha256": "425bf7d0ff2b3c325cc6939d3a4d5c771fcba2b0c0fc86beaf5f7e397e528359",
+  "assetSha256": "951eb4f7a6b314809f6a79a5cb7f4d8a1039c39c2c606d9e12922e0ffd783665",
   "catalog": {
     "heightPixels": 540,
+    "limbJointOverlapMeters": 0.022,
     "pose": "neutral-seated-crank-left-high",
     "verticalFovDegrees": 47.0,
     "wheelbaseScaleMeters": 1.313,
@@ -12,8 +13,8 @@
     {
       "cameraPositionMeters": [
         0.0,
-        1.18,
-        4.5
+        1.16,
+        3.25
       ],
       "cameraTargetMeters": [
         0.0,
@@ -21,14 +22,14 @@
         0.18
       ],
       "path": "RB-01-front.png",
-      "sha256": "1d3f51e8ff4511df5db32c18a139f64a59352d0cb64364f33b4b956e19bf3a25",
+      "sha256": "8bb2bcac0f9999f2672960ddfa3a5ff43f56ef777d61d824b44eac8971376a8c",
       "view": "front"
     },
     {
       "cameraPositionMeters": [
         0.0,
-        1.22,
-        -4.25
+        1.18,
+        -3.15
       ],
       "cameraTargetMeters": [
         0.0,
@@ -36,13 +37,13 @@
         0.08
       ],
       "path": "RB-01-rear.png",
-      "sha256": "aecd7710c126ab40a52cfc8dadfe68261ca063f31d0e434b7912712fa0074448",
+      "sha256": "456b34f8b03b51b6629c5523d06bc2d5e57fe4146bd82f6ddfd33faa16cd3bf8",
       "view": "rear"
     },
     {
       "cameraPositionMeters": [
-        4.35,
-        1.18,
+        3.15,
+        1.14,
         0.18
       ],
       "cameraTargetMeters": [
@@ -51,14 +52,14 @@
         0.18
       ],
       "path": "RB-01-side.png",
-      "sha256": "776eab45adbb11ec3b8debd2cba7345be10c14d692f53c52415e0b0730109b5b",
+      "sha256": "df0b304002252bbedd6c67acbebb05253dcc8af06e233644c1f5c38fd7d58cf9",
       "view": "side"
     },
     {
       "cameraPositionMeters": [
-        2.65,
-        1.86,
-        -4.15
+        1.8,
+        1.6,
+        -2.8
       ],
       "cameraTargetMeters": [
         0.0,
@@ -66,7 +67,7 @@
         0.1
       ],
       "path": "RB-01-chase.png",
-      "sha256": "1416d718116ead4976fbdca96f87875d00133e42a7901f92e57d67c7e4f194b4",
+      "sha256": "b330c23626dce5dcf9870e59bac79ce54cc06a86c5673b9582a40108f56a2eb3",
       "view": "chase"
     }
   ]

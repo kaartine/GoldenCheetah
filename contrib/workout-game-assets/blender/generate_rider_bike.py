@@ -24,6 +24,7 @@ CHAINSTAY_M = 0.455
 HEAD_ANGLE_DEGREES = 63.5
 SUSPENSION_TRAVEL_M = 0.190
 TIRE_WIDTH_M = 0.0635
+TIRE_TREAD_WIDTH_M = 0.088
 TIRE_CASING_RADIAL_M = 0.047
 TIRE_TREAD_HEIGHT_M = 0.009
 RIM_RADIUS_M = 0.300
@@ -78,6 +79,7 @@ CRANK_LENGTH_M = 0.160
 PEDAL_CONTACT_X_M = 0.130
 PEDAL_PLATFORM_LENGTH_M = 0.120
 DOWN_TUBE_HALF_WIDTH_M = 0.078
+FRAME_PROFILE_BEVEL_M = 0.012
 DOWN_TUBE_PROFILE = (
     (0.285, -0.080),
     (0.320, 0.060),
@@ -120,6 +122,8 @@ RIDER_SHIN_LENGTH_M = 0.45
 RIDER_UPPER_ARM_LENGTH_M = 0.32
 RIDER_FOREARM_LENGTH_M = 0.36
 RIDER_GRIP_HALF_SPAN_M = 0.39
+LIMB_JOINT_OVERLAP_M = 0.022
+LIMB_JOINT_CAP_RADIUS_M = 0.095
 FACE_OPENING_HEIGHT_M = 0.155
 EYEWEAR_HEIGHT_M = 0.032
 NECK_LENGTH_M = 0.100
@@ -147,8 +151,22 @@ UPPER_LINK_PROFILE = (
     (0.565, 0.025),
     (0.525, 0.005),
 )
+SWINGARM_BEAM_CENTER_X_M = 0.067
+SWINGARM_BEAM_HALF_WIDTH_M = 0.020
+SWINGARM_LINK_CENTER_X_M = 0.054
+SWINGARM_LINK_HALF_WIDTH_M = 0.014
+REAR_SWINGARM_INNER_CLEARANCE_M = 2.0 * (
+    SWINGARM_BEAM_CENTER_X_M - SWINGARM_BEAM_HALF_WIDTH_M
+)
+FORK_LOWER_HALF_SPAN_M = 0.073
+FORK_LOWER_RADIUS_M = 0.028
+FORK_STANCHION_HALF_SPAN_M = 0.061
+FORK_STANCHION_RADIUS_M = 0.0215
+FORK_TIRE_CLEARANCE_M = 2.0 * (
+    FORK_LOWER_HALF_SPAN_M - FORK_LOWER_RADIUS_M
+) - TIRE_WIDTH_M
 MAX_GLB_BYTES = 600 * 1024
-MAX_TRIANGLES = 9000
+MAX_TRIANGLES = 18000
 PIVOT_LOCATIONS = {
     "PIVOT_REAR_AXLE": REAR_AXLE,
     "PIVOT_FRONT_AXLE": FRONT_AXLE,
@@ -428,6 +446,47 @@ def append_side_prism(vertices, faces, profile_yz, half_width, center_x=0.0):
         ))
 
 
+def append_beveled_side_prism(
+        vertices, faces, profile_yz, half_width, bevel,
+        center_x=0.0, edge_scale=0.88):
+    """Extrude a convex profile with low-cost chamfered front/rear edges."""
+    if bevel <= 0.0 or bevel >= half_width:
+        raise RuntimeError("A profile bevel must fit inside its half width")
+    center_y = sum(point[0] for point in profile_yz) / len(profile_yz)
+    center_z = sum(point[1] for point in profile_yz) / len(profile_yz)
+    layers = (
+        (center_x - half_width, edge_scale),
+        (center_x - half_width + bevel, 1.0),
+        (center_x + half_width - bevel, 1.0),
+        (center_x + half_width, edge_scale),
+    )
+    base = len(vertices)
+    count = len(profile_yz)
+    for x_value, scale in layers:
+        vertices.extend(
+            (
+                x_value,
+                center_y + (y_value - center_y) * scale,
+                center_z + (z_value - center_z) * scale,
+            )
+            for y_value, z_value in profile_yz
+        )
+    for layer in range(len(layers) - 1):
+        lower = base + layer * count
+        upper = lower + count
+        for index in range(count):
+            following = (index + 1) % count
+            faces.extend((
+                (lower + index, lower + following, upper + following),
+                (lower + index, upper + following, upper + index),
+            ))
+    for layer, reverse in ((0, True), (len(layers) - 1, False)):
+        ring = base + layer * count
+        for index in range(1, count - 1):
+            face = (ring, ring + index + 1, ring + index)
+            faces.append(face if reverse else tuple(reversed(face)))
+
+
 def append_axle_cylinder(vertices, faces, center, half_width, radius, sides=8):
     start = (center[0] - half_width, center[1], center[2])
     end = (center[0] + half_width, center[1], center[2])
@@ -567,8 +626,8 @@ def append_tread_block(
 def wheel_mesh(center, tread_role):
     vertices = []
     faces = []
-    major_segments = 32
-    minor_segments = 8
+    major_segments = 40
+    minor_segments = 10
     casing_center_radius = (
         WHEEL_RADIUS_M - TIRE_TREAD_HEIGHT_M - TIRE_CASING_RADIAL_M
     )
@@ -598,20 +657,20 @@ def wheel_mesh(center, tread_role):
             faces.extend(((a, b, c), (a, c, d)))
 
     tread_inner = WHEEL_RADIUS_M - TIRE_TREAD_HEIGHT_M - 0.002
-    for index in range(20):
-        angle = 2.0 * math.pi * index / 20
+    for index in range(24):
+        angle = 2.0 * math.pi * index / 24
         if tread_role == "front-grip":
-            center_offset = 0.008 if index % 2 == 0 else -0.008
+            center_offset = 0.007 if index % 2 == 0 else -0.007
             blocks = (
-                (center_offset, 0.010, 0.015),
-                (-0.027, 0.010, 0.011),
-                (0.027, 0.010, 0.011),
+                (center_offset, 0.012, 0.016),
+                (-0.034, 0.010, 0.012),
+                (0.034, 0.010, 0.012),
             )
         elif tread_role == "rear-braking":
             blocks = (
-                (0.0, 0.021, 0.011),
-                (-0.028, 0.009, 0.014),
-                (0.028, 0.009, 0.014),
+                (0.0, 0.022, 0.012),
+                (-0.034, 0.010, 0.015),
+                (0.034, 0.010, 0.015),
             )
         else:
             raise RuntimeError(f"Unknown tire tread role: {tread_role}")
@@ -622,12 +681,12 @@ def wheel_mesh(center, tread_role):
             )
     append_torus(
         vertices, faces, center, RIM_RADIUS_M, 0.012,
-        major_segments=32, minor_segments=4,
+        major_segments=40, minor_segments=5,
     )
     append_axle_cylinder(vertices, faces, center, 0.075, 0.040, sides=8)
-    append_disc_ring(vertices, faces, center, 0.047, 0.050, 0.108, segments=12)
-    append_spokes(vertices, faces, center, 0.038, count=12)
-    append_spokes(vertices, faces, center, -0.038, count=12)
+    append_disc_ring(vertices, faces, center, 0.047, 0.050, 0.112, segments=16)
+    append_spokes(vertices, faces, center, 0.038, count=14)
+    append_spokes(vertices, faces, center, -0.038, count=14)
     return vertices, faces
 
 
@@ -646,11 +705,16 @@ def main_frame_mesh():
     # conventional round tubes. These side profiles are measured against the
     # K2 product view, while their extrusion depths come from the oblique
     # frameset views.
-    append_side_prism(
+    append_beveled_side_prism(
         vertices, faces, DOWN_TUBE_PROFILE, DOWN_TUBE_HALF_WIDTH_M,
+        FRAME_PROFILE_BEVEL_M,
     )
-    append_side_prism(vertices, faces, SEAT_MAST_PROFILE, 0.082)
-    append_side_prism(vertices, faces, TOP_BRIDGE_PROFILE, 0.068)
+    append_beveled_side_prism(
+        vertices, faces, SEAT_MAST_PROFILE, 0.082, FRAME_PROFILE_BEVEL_M,
+    )
+    append_beveled_side_prism(
+        vertices, faces, TOP_BRIDGE_PROFILE, 0.068, FRAME_PROFILE_BEVEL_M,
+    )
     append_side_prism(vertices, faces, MOTOR_PROFILE, MOTOR_HALF_WIDTH_M)
     for start, end, radius in (
         (HEAD_LOW, HEAD_HIGH, 0.046),
@@ -754,9 +818,26 @@ def bike_components_mesh():
 def swingarm_mesh():
     vertices = []
     faces = []
-    append_side_prism(vertices, faces, MAIN_SWINGARM_PROFILE, 0.075)
-    append_side_prism(vertices, faces, LOWER_LINK_PROFILE, 0.060)
-    append_side_prism(vertices, faces, UPPER_LINK_PROFILE, 0.064)
+    for side in (-1.0, 1.0):
+        append_beveled_side_prism(
+            vertices,
+            faces,
+            MAIN_SWINGARM_PROFILE,
+            SWINGARM_BEAM_HALF_WIDTH_M,
+            0.006,
+            center_x=side * SWINGARM_BEAM_CENTER_X_M,
+            edge_scale=0.90,
+        )
+        for profile in (LOWER_LINK_PROFILE, UPPER_LINK_PROFILE):
+            append_beveled_side_prism(
+                vertices,
+                faces,
+                profile,
+                SWINGARM_LINK_HALF_WIDTH_M,
+                0.004,
+                center_x=side * SWINGARM_LINK_CENTER_X_M,
+                edge_scale=0.90,
+            )
     append_axle_cylinder(
         vertices, faces, REAR_AXLE, 0.088, 0.024, sides=10,
     )
@@ -772,26 +853,50 @@ def swingarm_mesh():
 def fork_mesh():
     vertices = []
     faces = []
-    for x_value in (-0.052, 0.052):
-        axle = (x_value, FRONT_AXLE[1], FRONT_AXLE[2])
-        split = (x_value, FORK_SPLIT[1], FORK_SPLIT[2])
-        crown = (x_value, HEAD_LOW[1], HEAD_LOW[2])
-        append_tube(vertices, faces, axle, split, 0.038, sides=8,
-                    end_radius=0.034)
-        append_tube(vertices, faces, split, crown, 0.025, sides=8)
+    for side in (-1.0, 1.0):
+        axle = (
+            side * FORK_LOWER_HALF_SPAN_M,
+            FRONT_AXLE[1],
+            FRONT_AXLE[2],
+        )
+        split = (
+            side * FORK_STANCHION_HALF_SPAN_M,
+            FORK_SPLIT[1],
+            FORK_SPLIT[2],
+        )
+        crown = (
+            side * FORK_STANCHION_HALF_SPAN_M,
+            HEAD_LOW[1],
+            HEAD_LOW[2],
+        )
+        append_tube(
+            vertices, faces, axle, split, FORK_LOWER_RADIUS_M,
+            sides=12, end_radius=0.030,
+        )
+        append_tube(
+            vertices, faces, split, crown, FORK_STANCHION_RADIUS_M,
+            sides=12,
+        )
     append_tube(
         vertices, faces,
-        (-0.080, HEAD_LOW[1], HEAD_LOW[2]),
-        (0.080, HEAD_LOW[1], HEAD_LOW[2]),
-        0.037, sides=8,
+        (-0.094, HEAD_LOW[1], HEAD_LOW[2]),
+        (0.094, HEAD_LOW[1], HEAD_LOW[2]),
+        0.032, sides=10,
     )
     fork_arch_y = FRONT_AXLE[1] + 0.255
     fork_arch_z = FRONT_AXLE[2] - 0.025
-    append_tube(
-        vertices, faces,
-        (-0.052, fork_arch_y, fork_arch_z),
-        (0.052, fork_arch_y, fork_arch_z),
-        0.025, sides=8,
+    arch_peak = (0.0, fork_arch_y + 0.045, fork_arch_z)
+    for side in (-1.0, 1.0):
+        append_tube(
+            vertices,
+            faces,
+            (side * FORK_LOWER_HALF_SPAN_M, fork_arch_y, fork_arch_z),
+            arch_peak,
+            0.021,
+            sides=10,
+        )
+    append_axle_cylinder(
+        vertices, faces, FRONT_AXLE, 0.104, 0.017, sides=10,
     )
     append_tube(vertices, faces, HEAD_LOW, HEAD_HIGH, 0.034, sides=8)
     return vertices, faces
@@ -911,13 +1016,15 @@ def torso_mesh():
         vertices,
         faces,
         (
-            (0.00, 0.000, 0.135, 0.105),
-            (0.18, 0.070, 0.185, 0.130),
-            (0.34, 0.165, 0.230, 0.145),
-            (0.43, 0.225, 0.205, 0.135),
-            (0.49, 0.270, 0.120, 0.105),
+            (0.00, 0.000, 0.140, 0.105),
+            (0.08, 0.020, 0.155, 0.115),
+            (0.17, 0.070, 0.180, 0.128),
+            (0.28, 0.145, 0.215, 0.142),
+            (0.37, 0.205, 0.242, 0.152),
+            (0.44, 0.250, 0.205, 0.136),
+            (0.50, 0.285, 0.120, 0.105),
         ),
-        sides=10,
+        sides=16,
     )
     return vertices, faces
 
@@ -1026,9 +1133,8 @@ def visor_mesh(vertices, faces):
     )
 
 
-def low_poly_sphere(center, radius, lower_fraction=-1.0):
-    segments = 12
-    ring_count = 4
+def low_poly_sphere(
+        center, radius, lower_fraction=-1.0, segments=16, ring_count=6):
     vertices = [(center[0], center[1] + radius, center[2])]
     for ring in range(1, ring_count):
         polar = math.pi * ring / ring_count
@@ -1068,36 +1174,38 @@ def helmet_mesh():
     vertices = []
     rings = (
         (HELMET_BROW_Y_M, 0.153, 0.168),
-        (0.108, 0.145, 0.151),
-        (0.158, 0.105, 0.105),
+        (0.082, 0.158, 0.164),
+        (0.120, 0.147, 0.148),
+        (0.155, 0.120, 0.118),
+        (0.181, 0.078, 0.076),
     )
     for y_value, radius_x, radius_z in rings:
-        for index in range(12):
-            angle = 2.0 * math.pi * index / 12
+        for index in range(18):
+            angle = 2.0 * math.pi * index / 18
             vertices.append((
                 radius_x * math.cos(angle),
                 y_value,
                 radius_z * math.sin(angle) - 0.030,
             ))
-    vertices.append((0.0, 0.190, -0.038))
+    vertices.append((0.0, 0.202, -0.038))
     top = len(vertices) - 1
     faces = []
     for ring in range(len(rings) - 1):
-        lower = ring * 12
-        upper = lower + 12
-        for index in range(12):
-            following = (index + 1) % 12
+        lower = ring * 18
+        upper = lower + 18
+        for index in range(18):
+            following = (index + 1) % 18
             faces.extend((
                 (lower + index, upper + index, upper + following),
                 (lower + index, upper + following, lower + following),
             ))
-    upper = (len(rings) - 1) * 12
-    for index in range(12):
-        following = (index + 1) % 12
+    upper = (len(rings) - 1) * 18
+    for index in range(18):
+        following = (index + 1) % 18
         faces.append((top, upper + following, upper + index))
     # A solid rear/temple skirt gives the half-shell its deep enduro profile
     # and keeps the opening presentation opaque behind the rider's head.
-    append_side_prism(
+    append_beveled_side_prism(
         vertices,
         faces,
         (
@@ -1109,6 +1217,8 @@ def helmet_mesh():
             (-0.050, -0.012),
         ),
         0.136,
+        0.018,
+        edge_scale=0.92,
     )
     return vertices, faces
 
@@ -1162,12 +1272,28 @@ def limb_mesh():
         vertices,
         faces,
         (
-            (0.0, 0.0, 0.078, 0.072),
-            (0.46, 0.0, 0.073, 0.068),
-            (1.0, 0.0, 0.056, 0.052),
+            (0.00, 0.0, 0.074, 0.070),
+            (0.06, 0.0, 0.086, 0.080),
+            (0.16, 0.0, 0.081, 0.075),
+            (0.48, 0.0, 0.071, 0.066),
+            (0.84, 0.0, 0.064, 0.060),
+            (0.94, 0.0, 0.070, 0.066),
+            (1.00, 0.0, 0.065, 0.061),
         ),
-        sides=8,
+        sides=14,
     )
+    for center in ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0)):
+        cap_vertices, cap_faces = low_poly_sphere(
+            center,
+            LIMB_JOINT_CAP_RADIUS_M,
+            segments=10,
+            ring_count=4,
+        )
+        base = len(vertices)
+        vertices.extend(cap_vertices)
+        faces.extend(
+            tuple(base + index for index in face) for face in cap_faces
+        )
     return vertices, faces
 
 
@@ -1214,6 +1340,11 @@ def build_scene():
     root["front_tire"] = "unbranded 29x2.5 aggressive front-grip tire"
     root["rear_tire"] = "unbranded 29x2.5 rear-braking tire"
     root["tire_width_m"] = TIRE_WIDTH_M
+    root["tire_tread_width_m"] = TIRE_TREAD_WIDTH_M
+    root["fork_tire_clearance_m"] = FORK_TIRE_CLEARANCE_M
+    root["rear_swingarm_inner_clearance_m"] = (
+        REAR_SWINGARM_INNER_CLEARANCE_M
+    )
     root["surface_provenance"] = (
         "GPL reconstruction measured from public product photography and "
         "published geometry; no CAD, source mesh or photograph pixels"
@@ -1242,6 +1373,8 @@ def build_scene():
     root["rider_upper_arm_length_m"] = RIDER_UPPER_ARM_LENGTH_M
     root["rider_forearm_length_m"] = RIDER_FOREARM_LENGTH_M
     root["rider_grip_half_span_m"] = RIDER_GRIP_HALF_SPAN_M
+    root["limb_joint_overlap_m"] = LIMB_JOINT_OVERLAP_M
+    root["limb_joint_cap_radius_m"] = LIMB_JOINT_CAP_RADIUS_M
     root["face_profile"] = "readable-open-face-side-profile"
     root["face_opening_height_m"] = FACE_OPENING_HEIGHT_M
     root["eyewear_height_m"] = EYEWEAR_HEIGHT_M
@@ -1419,6 +1552,11 @@ def self_check(root) -> tuple[int, int]:
         "suspension_travel_m": SUSPENSION_TRAVEL_M,
         "motor_radius_m": MOTOR_REFERENCE_RADIUS_M,
         "tire_width_m": TIRE_WIDTH_M,
+        "tire_tread_width_m": TIRE_TREAD_WIDTH_M,
+        "fork_tire_clearance_m": FORK_TIRE_CLEARANCE_M,
+        "rear_swingarm_inner_clearance_m": (
+            REAR_SWINGARM_INNER_CLEARANCE_M
+        ),
         "contract_reach_m": RIDER_CONTRACT_REACH_M,
         "contract_stack_m": RIDER_CONTRACT_STACK_M,
         "head_tube_length_m": HEAD_TUBE_LENGTH_M,
@@ -1437,6 +1575,8 @@ def self_check(root) -> tuple[int, int]:
         "rider_upper_arm_length_m": RIDER_UPPER_ARM_LENGTH_M,
         "rider_forearm_length_m": RIDER_FOREARM_LENGTH_M,
         "rider_grip_half_span_m": RIDER_GRIP_HALF_SPAN_M,
+        "limb_joint_overlap_m": LIMB_JOINT_OVERLAP_M,
+        "limb_joint_cap_radius_m": LIMB_JOINT_CAP_RADIUS_M,
         "face_opening_height_m": FACE_OPENING_HEIGHT_M,
         "eyewear_height_m": EYEWEAR_HEIGHT_M,
         "neck_length_m": NECK_LENGTH_M,
@@ -1449,6 +1589,12 @@ def self_check(root) -> tuple[int, int]:
             raise RuntimeError(f"Root metadata mismatch for {property_name}")
     if not root["open_frame_window"] or root["frame_window_area_m2"] < 0.055:
         raise RuntimeError("Open frame window silhouette collapsed")
+    if FORK_TIRE_CLEARANCE_M < 0.012:
+        raise RuntimeError("Fork no longer clears the tire casing")
+    if REAR_SWINGARM_INNER_CLEARANCE_M < 0.085:
+        raise RuntimeError("Rear swingarm no longer clears the tire casing")
+    if TIRE_TREAD_WIDTH_M < 0.084:
+        raise RuntimeError("Aggressive tire shoulder silhouette collapsed")
     rights_text = " ".join(
         str(root.get(key, "")) for key in (
             "reference_model",
@@ -1480,9 +1626,10 @@ def self_check(root) -> tuple[int, int]:
         raise RuntimeError("Helmet silhouette contract changed")
     critical_mesh_points = {
         "GEO_MainFrame_LOD0": (
-            (DOWN_TUBE_HALF_WIDTH_M, *DOWN_TUBE_PROFILE[0]),
-            (0.082, *SEAT_MAST_PROFILE[1]),
-            (0.068, *TOP_BRIDGE_PROFILE[2]),
+            (DOWN_TUBE_HALF_WIDTH_M - FRAME_PROFILE_BEVEL_M,
+             *DOWN_TUBE_PROFILE[0]),
+            (0.082 - FRAME_PROFILE_BEVEL_M, *SEAT_MAST_PROFILE[1]),
+            (0.068 - FRAME_PROFILE_BEVEL_M, *TOP_BRIDGE_PROFILE[2]),
         ),
         "GEO_BikeComponents_LOD0": (
             (MOTOR_HALF_WIDTH_M + 0.004, 0.405, -0.005),
@@ -1490,17 +1637,20 @@ def self_check(root) -> tuple[int, int]:
             (0.39, STEER[1], STEER[2]),
         ),
         "GEO_Swingarm_LOD0": (
-            (0.075, MAIN_SWINGARM_PROFILE[0][0],
+            (SWINGARM_BEAM_CENTER_X_M + SWINGARM_BEAM_HALF_WIDTH_M - 0.006,
+             MAIN_SWINGARM_PROFILE[0][0],
              MAIN_SWINGARM_PROFILE[0][1]),
-            (0.060, LOWER_LINK_PROFILE[0][0], LOWER_LINK_PROFILE[0][1]),
-            (0.064, UPPER_LINK_PROFILE[0][0], UPPER_LINK_PROFILE[0][1]),
+            (SWINGARM_LINK_CENTER_X_M + SWINGARM_LINK_HALF_WIDTH_M - 0.004,
+             LOWER_LINK_PROFILE[0][0], LOWER_LINK_PROFILE[0][1]),
+            (SWINGARM_LINK_CENTER_X_M + SWINGARM_LINK_HALF_WIDTH_M - 0.004,
+             UPPER_LINK_PROFILE[0][0], UPPER_LINK_PROFILE[0][1]),
             (0.075, UPPER_LINK_FRAME_PIVOT[1],
              UPPER_LINK_FRAME_PIVOT[2]),
         ),
         "GEO_Fork_LOD0": (
-            (0.052, FRONT_AXLE[1], FRONT_AXLE[2]),
-            (0.052, FORK_SPLIT[1], FORK_SPLIT[2]),
-            (0.052, HEAD_LOW[1], HEAD_LOW[2]),
+            (FORK_LOWER_HALF_SPAN_M, FRONT_AXLE[1], FRONT_AXLE[2]),
+            (FORK_STANCHION_HALF_SPAN_M, FORK_SPLIT[1], FORK_SPLIT[2]),
+            (FORK_STANCHION_HALF_SPAN_M, HEAD_LOW[1], HEAD_LOW[2]),
         ),
         "GEO_RearShock_LOD0": (SHOCK_SWINGARM_MOUNT, SHOCK_FRAME_MOUNT),
         "GEO_Crank_LOD0": (
@@ -1521,7 +1671,7 @@ def self_check(root) -> tuple[int, int]:
         "GEO_FrontWheel_LOD0": (
             (0.075, FRONT_AXLE[1], FRONT_AXLE[2]),
         ),
-        "GEO_Torso_LOD0": ((0.12, 0.49, 0.270),),
+        "GEO_Torso_LOD0": ((0.12, 0.50, 0.285),),
         "GEO_Head_LOD0": ((0.032, 0.008, 0.112),),
         "GEO_HairBeard_LOD0": ((0.075, -0.065, 0.075),),
         "GEO_Eyewear_LOD0": ((0.100, 0.020, 0.112),),

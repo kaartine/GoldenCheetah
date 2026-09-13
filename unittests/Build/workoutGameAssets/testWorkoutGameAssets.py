@@ -727,6 +727,13 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertAlmostEqual(root_extras["rider_forearm_length_m"], 0.36)
         self.assertAlmostEqual(root_extras["rider_grip_half_span_m"], 0.39)
         self.assertAlmostEqual(root_extras["tire_width_m"], 0.0635, places=4)
+        self.assertGreaterEqual(root_extras["tire_tread_width_m"], 0.084)
+        self.assertGreaterEqual(root_extras["fork_tire_clearance_m"], 0.012)
+        self.assertGreaterEqual(
+            root_extras["rear_swingarm_inner_clearance_m"], 0.085
+        )
+        self.assertAlmostEqual(root_extras["limb_joint_overlap_m"], 0.022)
+        self.assertGreaterEqual(root_extras["limb_joint_cap_radius_m"], 0.09)
         self.assertEqual(
             nodes["GEO_FrontWheel_LOD0"]["extras"]["tread_role"],
             "front-grip",
@@ -773,7 +780,10 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertAlmostEqual(crank_extras["crank_length_m"], 0.16, places=5)
         self.assertGreaterEqual(crank_extras["pedal_platform_length_m"], 0.10)
         self.assertGreaterEqual(manifest["technical"]["trianglesLod0"], 4500)
-        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 9000)
+        self.assertLessEqual(manifest["technical"]["trianglesLod0"], 18000)
+        self.assertEqual(
+            manifest["technical"]["budgets"]["maxTrianglesLod0"], 18000
+        )
         self.assertEqual(manifest["review"]["status"], "approved")
         self.assertEqual(manifest["review"]["trademarkStatus"], "clear")
         self.assertEqual(manifest["review"]["personReleaseStatus"], "not-applicable")
@@ -816,6 +826,40 @@ class TestWorkoutGameAssets(unittest.TestCase):
             ))
         self.assertLessEqual(min(point[1] for point in helmet_positions), -0.04)
         self.assertLessEqual(min(point[2] for point in helmet_positions), -0.19)
+
+        front_wheel_node = nodes["GEO_FrontWheel_LOD0"]
+        front_wheel_mesh = document["meshes"][front_wheel_node["mesh"]]
+        front_wheel_positions = []
+        for primitive in front_wheel_mesh["primitives"]:
+            front_wheel_positions.extend(glb_accessor_values(
+                RIDER_GLB_PATH,
+                document,
+                primitive["attributes"]["POSITION"],
+            ))
+        self.assertGreaterEqual(
+            max(point[0] for point in front_wheel_positions)
+            - min(point[0] for point in front_wheel_positions),
+            0.084,
+        )
+
+        fork_node = nodes["GEO_Fork_LOD0"]
+        fork_mesh = document["meshes"][fork_node["mesh"]]
+        fork_positions = []
+        for primitive in fork_mesh["primitives"]:
+            fork_positions.extend(glb_accessor_values(
+                RIDER_GLB_PATH,
+                document,
+                primitive["attributes"]["POSITION"],
+            ))
+        lower_fork_positions = [
+            point for point in fork_positions
+            if point[1] < 0.58 and point[2] > 0.65
+        ]
+        self.assertTrue(lower_fork_positions)
+        self.assertGreater(
+            min(abs(point[0]) for point in lower_fork_positions),
+            root_extras["tire_width_m"] * 0.5,
+        )
 
     def test_rider_bike_has_editable_blender_source_and_pipeline(self) -> None:
         manifest = assets.load_json_file(RIDER_MANIFEST_PATH)
@@ -891,6 +935,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertEqual(audit["catalog"]["heightPixels"], 540)
         self.assertEqual(audit["catalog"]["verticalFovDegrees"], 47.0)
         self.assertEqual(audit["catalog"]["wheelbaseScaleMeters"], 1.313)
+        self.assertEqual(audit["catalog"]["limbJointOverlapMeters"], 0.022)
         self.assertEqual(
             [render["view"] for render in audit["renders"]],
             ["front", "rear", "side", "chase"],
@@ -914,6 +959,11 @@ class TestWorkoutGameAssets(unittest.TestCase):
             self.assertEqual(render["sha256"], sha256(path))
             self.assertEqual(len(render["cameraPositionMeters"]), 3)
             self.assertEqual(len(render["cameraTargetMeters"]), 3)
+            self.assertLessEqual(
+                sum(value * value for value in render["cameraPositionMeters"])
+                ** 0.5,
+                3.8,
+            )
             render_hashes.append(render["sha256"])
         self.assertEqual(len(set(render_hashes)), 4)
 

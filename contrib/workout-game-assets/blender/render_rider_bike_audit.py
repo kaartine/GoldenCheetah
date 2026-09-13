@@ -19,6 +19,7 @@ from mathutils import Vector
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generate_tabletop import canonical_to_blender, make_material
 from generate_rider_bike import (
+    LIMB_JOINT_OVERLAP_M,
     RIDER_FOREARM_LENGTH_M,
     RIDER_GRIP_HALF_SPAN_M,
     RIDER_SHIN_LENGTH_M,
@@ -31,10 +32,10 @@ WIDTH = 960
 HEIGHT = 540
 VERTICAL_FOV_DEGREES = 47.0
 VIEWS = (
-    ("front", (0.0, 1.18, 4.5), (0.0, 0.91, 0.18)),
-    ("rear", (0.0, 1.22, -4.25), (0.0, 0.91, 0.08)),
-    ("side", (4.35, 1.18, 0.18), (0.0, 0.88, 0.18)),
-    ("chase", (2.65, 1.86, -4.15), (0.0, 0.94, 0.10)),
+    ("front", (0.0, 1.16, 3.25), (0.0, 0.91, 0.18)),
+    ("rear", (0.0, 1.18, -3.15), (0.0, 0.91, 0.08)),
+    ("side", (3.15, 1.14, 0.18), (0.0, 0.88, 0.18)),
+    ("chase", (1.80, 1.60, -2.80), (0.0, 0.94, 0.10)),
 )
 
 
@@ -90,9 +91,17 @@ def place_segment(source, name, start, end, thickness, material=None) -> None:
     start_blender = Vector(canonical_to_blender(start))
     end_blender = Vector(canonical_to_blender(end))
     delta = end_blender - start_blender
-    segment.location = start_blender
-    segment.rotation_euler = delta.to_track_quat("Z", "Y").to_euler()
-    segment.scale = (thickness, thickness, delta.length)
+    overlap = min(LIMB_JOINT_OVERLAP_M, delta.length * 0.08)
+    direction = delta.normalized()
+    visual_start = start_blender - direction * overlap
+    visual_end = end_blender + direction * overlap
+    visual_delta = visual_end - visual_start
+    segment.location = visual_start
+    # glTF imports nodes in quaternion mode; switch modes before assigning the
+    # Euler pose or the copied limb silently remains vertical.
+    segment.rotation_mode = "XYZ"
+    segment.rotation_euler = visual_delta.to_track_quat("Z", "Y").to_euler()
+    segment.scale = (thickness, thickness, visual_delta.length)
     if material is not None:
         segment.data.materials.clear()
         segment.data.materials.append(material)
@@ -139,7 +148,7 @@ def assemble_neutral_pose(objects) -> None:
     ):
         place_canonical(objects[name], head_origin)
     for name in ("GEO_Helmet_LOD0", "GEO_HelmetAccent_LOD0"):
-        place_canonical(objects[name], (0.0, 1.695, 0.20))
+        place_canonical(objects[name], head_origin)
 
     left_pedal = (-0.13, 0.5375, 0.0)
     right_pedal = (0.13, 0.2175, 0.0)
@@ -317,6 +326,7 @@ def render(asset_path: Path, output_directory: Path) -> None:
             "verticalFovDegrees": VERTICAL_FOV_DEGREES,
             "pose": "neutral-seated-crank-left-high",
             "wheelbaseScaleMeters": 1.313,
+            "limbJointOverlapMeters": LIMB_JOINT_OVERLAP_M,
         },
         "renders": renders,
     }
