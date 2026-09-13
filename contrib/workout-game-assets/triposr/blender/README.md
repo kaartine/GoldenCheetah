@@ -40,6 +40,16 @@ small silhouette components better than one global decimation pass.
 The result remains a monolithic review mesh. It is not the articulated RB-01
 runtime rig, and its collision file is not trainer or gameplay authority.
 
+After importing and verifying a candidate descriptor, render it against the
+same four fixed rider-bike audit views without copying it into the repository:
+
+```bash
+blender --background --factory-startup \
+  --python contrib/workout-game-assets/triposr/blender/render_candidate_audit.py -- \
+  --candidate-directory /private/candidates/bike-side-001 \
+  --output-dir /private/audits/bike-side-001
+```
+
 Run the Blender smoke test with the pinned 4.0.2 executable:
 
 ```bash

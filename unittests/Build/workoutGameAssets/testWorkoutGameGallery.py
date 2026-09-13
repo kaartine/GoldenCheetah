@@ -87,6 +87,7 @@ class WorkoutGameGalleryTest(unittest.TestCase):
         for path in (
             TOOLS / "gallery_catalog.py",
             TOOLS / "blender/workout_game_asset_gallery.py",
+            TOOLS / "triposr/blender/render_candidate_audit.py",
         ):
             py_compile.compile(str(path), doraise=True)
 
