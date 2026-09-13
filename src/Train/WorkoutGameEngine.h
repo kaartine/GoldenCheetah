@@ -60,6 +60,8 @@ private:
     WorkoutGameRoadCourse roadCourse;
     bool worldClockInitialized = false;
     std::int64_t lastWorldTimeMs = 0;
+    bool riderPedalClockInitialized = false;
+    std::int64_t lastRiderPedalPresentationTimeMs = 0;
     double riderPedalCycles = 0.0;
     std::uint64_t sequence = 0;
     WorkoutGameSimulation simulation;

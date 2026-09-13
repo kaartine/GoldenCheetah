@@ -56,7 +56,8 @@ public:
             double cadenceRpm,
             double powerWatts,
             int virtualGear,
-            std::int64_t elapsedTimeMs);
+            std::int64_t elapsedTimeMs,
+            double reportedSpeedKph = -1.0);
     double progressSpeedKph() const { return currentProgressSpeedKph; }
 
 private:

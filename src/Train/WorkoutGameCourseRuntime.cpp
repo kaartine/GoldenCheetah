@@ -26,6 +26,7 @@ constexpr double StoppingDecelerationKphPerSecond = 14.4;
 constexpr double StoppedCadenceRpm = 3.0;
 constexpr double StoppedPowerWatts = 5.0;
 constexpr double StopSnapSpeedKph = 0.5;
+constexpr double MaximumReportedSpeedKph = 300.0;
 
 double finiteNonNegative(double value)
 {
@@ -198,7 +199,8 @@ double WorkoutGameCourseRuntime::updateProgressSpeedKph(
         double cadenceRpm,
         double powerWatts,
         int virtualGear,
-        std::int64_t elapsedTimeMs)
+        std::int64_t elapsedTimeMs,
+        double reportedSpeedKph)
 {
     if (!configured) {
         currentProgressSpeedKph = 0.0;
@@ -207,23 +209,33 @@ double WorkoutGameCourseRuntime::updateProgressSpeedKph(
 
     const double cadence = finiteNonNegative(cadenceRpm);
     const double power = finiteNonNegative(powerWatts);
-    const bool pedalling = cadence > StoppedCadenceRpm
-            && power > StoppedPowerWatts;
-    const double desiredSpeedKph = pedalling
+    const double reportedSpeed = std::min(
+            finiteNonNegative(reportedSpeedKph), MaximumReportedSpeedKph);
+    const bool producingPower = power > StoppedPowerWatts;
+    const bool measuredPedalling = cadence > StoppedCadenceRpm
+            && producingPower;
+    // Some trainers report wheel speed and power one or two samples before
+    // their estimated cadence becomes available. Start moving from that
+    // authoritative speed instead of presenting a frozen rider, then return
+    // to the virtual drivetrain as soon as cadence is measurable.
+    const bool reportedSpeedFallback = !measuredPedalling
+            && producingPower && reportedSpeed > StopSnapSpeedKph;
+    const bool moving = measuredPedalling || reportedSpeedFallback;
+    const double desiredSpeedKph = measuredPedalling
             ? VirtualDrivetrain(virtualGear).speedKph(
                 cadence, CourseWheelCircumferenceMeters)
-            : 0.0;
+            : reportedSpeedFallback ? reportedSpeed : 0.0;
     const double seconds = double(std::clamp<std::int64_t>(
             elapsedTimeMs, 0, 1000)) / 1000.0;
     const double rate = desiredSpeedKph > currentProgressSpeedKph
             ? ProgressAccelerationKphPerSecond
-            : pedalling ? ProgressDecelerationKphPerSecond
-                        : StoppingDecelerationKphPerSecond;
+            : moving ? ProgressDecelerationKphPerSecond
+                     : StoppingDecelerationKphPerSecond;
     const double maximumStep = rate * seconds;
     currentProgressSpeedKph += std::clamp(
             desiredSpeedKph - currentProgressSpeedKph,
             -maximumStep, maximumStep);
-    if (!pedalling && currentProgressSpeedKph < StopSnapSpeedKph) {
+    if (!moving && currentProgressSpeedKph < StopSnapSpeedKph) {
         currentProgressSpeedKph = 0.0;
     }
     return currentProgressSpeedKph;
