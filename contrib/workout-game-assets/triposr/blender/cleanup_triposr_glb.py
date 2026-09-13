@@ -758,13 +758,32 @@ def export_glb(obj: bpy.types.Object, path: Path) -> None:
         export_format="GLB",
         use_selection=True,
         export_yup=True,
-        export_extras=True,
+        export_extras=False,
         export_cameras=False,
         export_lights=False,
         export_animations=False,
     )
     if not path.is_file() or path.stat().st_size <= 0:
         raise RuntimeError(f"GLB export did not produce {path}")
+
+
+def canonicalize_export(path: Path, *, collision: bool) -> None:
+    try:
+        document, binary = candidate_validator.read_glb(path.read_bytes())
+    except candidate_validator.CandidateError as error:
+        raise RuntimeError(f"cannot validate exported GLB framing: {error}") from error
+    strip_extensions(document)
+    for mesh in document.get("meshes", []):
+        for primitive in mesh.get("primitives", []):
+            if collision:
+                primitive["attributes"] = {
+                    "POSITION": primitive.get("attributes", {}).get("POSITION")
+                }
+                primitive.pop("material", None)
+    if collision:
+        document.pop("materials", None)
+    binary = compact_geometry(document, binary)
+    write_glb(path, document, binary)
 
 
 def sha256(path: Path) -> str:
@@ -830,6 +849,7 @@ def main() -> None:
         for obj, name in zip((lod0, lod1, collision), OUTPUT_NAMES):
             path = output_directory / name
             export_glb(obj, path)
+            canonicalize_export(path, collision=obj is collision)
             outputs[name] = {
                 "bytes": path.stat().st_size,
                 "sha256": sha256(path),

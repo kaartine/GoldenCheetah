@@ -11,6 +11,12 @@ import struct
 import sys
 
 
+TRIPOSR_DIRECTORY = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(TRIPOSR_DIRECTORY))
+
+from triposr_candidate import inspect_glb  # noqa: E402
+
+
 GLB_HEADER = struct.Struct("<4sII")
 CHUNK_HEADER = struct.Struct("<II")
 JSON_CHUNK = 0x4E4F534A
@@ -185,6 +191,31 @@ def main() -> None:
     )
     collision, collision_minimum, collision_maximum = inspect(
         arguments.output_dir / "candidate-collision.glb", "CandidateCollision", 100
+    )
+    common_budgets = {
+        "maxGlbBytes": 64 * 1024 * 1024,
+        "maxMaterials": 1,
+        "maxTextures": 0,
+        "maxTextureBytes": 0,
+    }
+    inspect_glb(
+        (arguments.output_dir / "candidate-lod0.glb").read_bytes(),
+        {**common_budgets, "maxTriangles": 18_000},
+    )
+    inspect_glb(
+        (arguments.output_dir / "candidate-lod1.glb").read_bytes(),
+        {**common_budgets, "maxTriangles": 6_000},
+    )
+    inspect_glb(
+        (arguments.output_dir / "candidate-collision.glb").read_bytes(),
+        {
+            "maxGlbBytes": 4 * 1024 * 1024,
+            "maxTriangles": 100,
+            "maxMaterials": 0,
+            "maxTextures": 0,
+            "maxTextureBytes": 0,
+        },
+        collision=True,
     )
     assert lod1 <= math.floor(lod0 * 0.40)
     assert collision <= 100
