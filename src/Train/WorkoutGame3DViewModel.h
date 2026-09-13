@@ -266,6 +266,7 @@ public:
     double riderY() const { return riderPositionY; }
     double riderZ() const { return riderPositionZ; }
     double groundY() const { return cameraGroundY; }
+    double cameraTerrainY() const { return cameraTerrainPositionY; }
     double riderYaw() const { return riderHeadingDegrees; }
     double riderPitch() const { return riderPitchDegrees; }
     double riderRoll() const { return riderRollDegrees; }
@@ -523,6 +524,7 @@ private:
     double cameraTargetPositionX = 0.0;
     double cameraTargetPositionY = 0.85;
     double cameraTargetPositionZ = 12.0;
+    double cameraTerrainPositionY = 0.0;
     bool cameraPoseInitialized = false;
     double cameraYawRadians = 0.0;
     double cameraYawVelocityRadiansPerSecond = 0.0;

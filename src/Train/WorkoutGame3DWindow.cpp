@@ -210,6 +210,10 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
             "GC_WORKOUT_GAME_DIAGNOSTICS") != 0;
     traceEnabled = qEnvironmentVariableIntValue(
             "GC_WORKOUT_GAME_TRACE") != 0;
+    healthLogEnabled = !qEnvironmentVariableIsSet(
+            "GC_WORKOUT_GAME_HEALTH_LOG")
+            || qEnvironmentVariableIntValue(
+                "GC_WORKOUT_GAME_HEALTH_LOG") != 0;
     setResizeMode(QQuickView::SizeRootObjectToView);
     setColor(QColor(105, 154, 184));
     rootContext()->setContextProperty(
@@ -314,6 +318,8 @@ void WorkoutGame3DWindow::setCourse(
     frameNumber = 0;
     lastTracePublishMs = -1;
     lastFpsPublishMs = -1;
+    lastHealthCheckMs = -1;
+    healthMonitor.reset();
     coldStartCompletePublished = false;
     hasFrame = false;
     gearShiftDiagnostics.reset();
@@ -414,6 +420,8 @@ void WorkoutGame3DWindow::setSessionRunning(bool running)
         frameNumber = 0;
         lastTracePublishMs = -1;
         lastFpsPublishMs = -1;
+        lastHealthCheckMs = -1;
+        healthMonitor.reset();
         pendingPresentationWorkMs = 0.0;
         coldStartCompletePublished = false;
     }
@@ -463,7 +471,65 @@ void WorkoutGame3DWindow::handlePresentedFrame(
     }
     const double presentationWorkMs = pendingPresentationWorkMs;
     pendingPresentationWorkMs = 0.0;
+    updateHealthLog(presentationTimeNs);
     updateDiagnostics(presentationTimeNs, presentationWorkMs);
+}
+
+void WorkoutGame3DWindow::updateHealthLog(
+        std::int64_t presentationTimeNs)
+{
+    if (!healthLogEnabled || !sessionRunning || !hasFrame) return;
+    const std::int64_t monotonicTimeMs = presentationTimeNs / 1000000;
+    constexpr std::int64_t HealthCheckIntervalMs = 250;
+    if (lastHealthCheckMs >= 0
+            && monotonicTimeMs - lastHealthCheckMs
+                < HealthCheckIntervalMs) {
+        return;
+    }
+    lastHealthCheckMs = monotonicTimeMs;
+
+    double fieldOfViewDegrees = 47.0;
+    if (viewModel->riderPoseState() == QStringLiteral("preload")) {
+        fieldOfViewDegrees = 46.35;
+    } else if (viewModel->riderPoseState() == QStringLiteral("air")) {
+        fieldOfViewDegrees = 47.0 + std::min(
+                1.3, 0.6 + viewModel->riderAirHeight() * 0.45);
+    } else if (viewModel->riderPoseState() == QStringLiteral("land")) {
+        fieldOfViewDegrees = 47.0 + viewModel->landingImpact() * 1.1;
+    }
+    fieldOfViewDegrees -= 6.0 * viewModel->cameraPresentationBlend();
+
+    WorkoutGame3DHealthInput input;
+    input.worldReady = presentedFrame.world.ready && viewModel->ready();
+    input.camera = {
+        viewModel->cameraX(), viewModel->cameraY(), viewModel->cameraZ()
+    };
+    input.cameraTarget = {
+        viewModel->cameraTargetX(),
+        viewModel->cameraTargetY(),
+        viewModel->cameraTargetZ()
+    };
+    input.rider = {
+        viewModel->riderX(), viewModel->riderY(), viewModel->riderZ()
+    };
+    input.cameraGroundY = viewModel->cameraTerrainY();
+    input.riderGroundY = viewModel->groundY();
+    input.verticalFieldOfViewDegrees = fieldOfViewDegrees;
+    input.aspectRatio = height() > 0
+            ? double(width()) / double(height()) : 16.0 / 9.0;
+    input.nearClipMeters = 0.15;
+    input.farClipMeters = 650.0;
+    input.visibleTriangles = viewModel->visibleTriangles();
+    const WorkoutGame3DHealthSnapshot snapshot =
+            WorkoutGame3DHealth::evaluate(input);
+    if (!healthMonitor.shouldLog(snapshot, monotonicTimeMs)) return;
+
+    const QString line = healthTraceLine(snapshot, monotonicTimeMs);
+    if (snapshot.healthy()) {
+        qInfo().noquote() << line;
+    } else {
+        qWarning().noquote() << line;
+    }
 }
 
 void WorkoutGame3DWindow::updateDiagnostics(
@@ -710,6 +776,85 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " feature_geometry=" << featureGeometry
            << " lod=resident"
            << " visible_triangles=" << viewModel->visibleTriangles();
+    return result;
+}
+
+QString WorkoutGame3DWindow::healthTraceLine(
+        const WorkoutGame3DHealthSnapshot &snapshot,
+        std::int64_t monotonicTimeMs) const
+{
+    const WorkoutGameRoadTimelineSample sourceTimeline =
+            WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                roadCourse, sourceFrame.simulation.workoutTimeMs);
+    const WorkoutGameRoadTimelineSample renderedTimeline =
+            WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                roadCourse, presentedFrame.simulation.workoutTimeMs);
+    QString featureGeometry = viewModel->terrainName().toLower();
+    featureGeometry.replace(QLatin1Char(' '), QLatin1Char('-'));
+    QString result;
+    QTextStream stream(&result);
+    stream << "workout-game-3d-health"
+           << " status=" << (snapshot.healthy() ? "ok" : "anomaly")
+           << " reasons=" << snapshot.reasonCodes()
+           << " mono_ms=" << monotonicTimeMs
+           << " session_elapsed_ms="
+                << activeSessionClock.elapsed(monotonicTimeMs)
+           << " source_ms=" << sourceFrame.simulation.workoutTimeMs
+           << " render_ms=" << presentedFrame.simulation.workoutTimeMs
+           << " source_road_m=" << sourceTimeline.distanceMeters
+           << " render_road_m=" << renderedTimeline.distanceMeters
+           << " source_section="
+                << (sourceTimeline.ready
+                    ? int(sourceTimeline.sourceSectionIndex) : -1)
+           << " render_section="
+                << (renderedTimeline.ready
+                    ? int(renderedTimeline.sourceSectionIndex) : -1)
+           << " world_ready="
+                << int(presentedFrame.world.ready && viewModel->ready())
+           << " rider_pos="
+                << viewModel->riderX() << ','
+                << viewModel->riderY() << ','
+                << viewModel->riderZ()
+           << " rider_ground_y=" << viewModel->groundY()
+           << " camera_ground_y=" << viewModel->cameraTerrainY()
+           << " rider_ground_clearance_m="
+                << snapshot.riderGroundClearanceMeters
+           << " camera_pos="
+                << viewModel->cameraX() << ','
+                << viewModel->cameraY() << ','
+                << viewModel->cameraZ()
+           << " camera_target="
+                << viewModel->cameraTargetX() << ','
+                << viewModel->cameraTargetY() << ','
+                << viewModel->cameraTargetZ()
+           << " camera_ground_clearance_m="
+                << snapshot.cameraGroundClearanceMeters
+           << " camera_target_distance_m="
+                << snapshot.cameraTargetDistanceMeters
+           << " rider_depth_m=" << snapshot.riderDepthMeters
+           << " rider_ndc="
+                << snapshot.riderHorizontalNdc << ','
+                << snapshot.riderVerticalNdc
+           << " rider_in_frustum=" << int(snapshot.riderInFrustum)
+           << " camera_fov_deg="
+                << snapshot.verticalFieldOfViewDegrees
+           << " viewport_aspect=" << snapshot.aspectRatio
+           << " viewport=" << width() << 'x' << height()
+           << " camera_presentation=" << viewModel->cameraPresentation()
+           << " camera_side_blend="
+                << viewModel->cameraPresentationBlend()
+           << " terrain=" << featureGeometry
+           << " feature_phase="
+                << featurePhaseName(presentedFrame.feature.phase)
+           << " visible_triangles=" << viewModel->visibleTriangles()
+           << " geometry_queue=" << viewModel->geometryQueueDepth()
+           << " tree_instances=" << viewModel->trees().size()
+           << " forest_floor_instances="
+                << viewModel->forestFloorProps().size()
+           << " rider_distance_m=" << viewModel->distanceMeters()
+           << " speed_kph=" << viewModel->speedKph()
+           << " grade_percent=" << viewModel->gradePercent()
+           << " fps=" << frameRateCounter.framesPerSecond();
     return result;
 }
 

@@ -11,6 +11,7 @@
 #define _GC_WorkoutGame3DWindow_h
 
 #include "WorkoutGame3DViewModel.h"
+#include "WorkoutGame3DHealth.h"
 #include "WorkoutGameDiagnostics.h"
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameVisualSmoother.h"
@@ -111,6 +112,10 @@ private:
     void updateDiagnostics(
             std::int64_t presentationTimeNs,
             double presentationWorkMs);
+    void updateHealthLog(std::int64_t presentationTimeNs);
+    QString healthTraceLine(
+            const WorkoutGame3DHealthSnapshot &snapshot,
+            std::int64_t monotonicTimeMs) const;
     void requestRendererPrewarm();
     void finishRendererPrewarm();
     void reportFailure(const QString &message);
@@ -120,6 +125,7 @@ private:
     WorkoutGameFrameRateCounter frameRateCounter;
     WorkoutGameColdStartFrameCapture coldStartFrameCapture;
     WorkoutGameDiagnostics diagnostics;
+    WorkoutGame3DHealthMonitor healthMonitor;
     WorkoutGameDiagnosticsSnapshot currentDiagnostics;
     WorkoutGameDiagnosticsSnapshot publishedDiagnostics;
     WorkoutGameRoadCourse roadCourse;
@@ -143,6 +149,7 @@ private:
     WorkoutGameGearShiftDiagnostics gearShiftDiagnostics;
     std::int64_t lastTracePublishMs = -1;
     std::int64_t lastFpsPublishMs = -1;
+    std::int64_t lastHealthCheckMs = -1;
     double pendingPresentationWorkMs = 0.0;
     bool coldStartCompletePublished = false;
     bool hasFrame = false;
@@ -151,6 +158,7 @@ private:
     bool failureReported = false;
     bool diagnosticsEnabled = false;
     bool traceEnabled = false;
+    bool healthLogEnabled = true;
 };
 
 #endif

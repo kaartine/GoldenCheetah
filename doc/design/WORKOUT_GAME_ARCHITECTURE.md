@@ -416,6 +416,19 @@ shows the same bounded values in a compact bar, while
 presentation counters neither acquire runner locks nor feed back into physics,
 trainer control or recording.
 
+Quick 3D also emits a production-safe `workout-game-3d-health` record without
+requiring a diagnostics flag. It evaluates only four times per second, writes a
+healthy snapshot every ten seconds, and writes a changed anomaly after a
+one-second anti-chatter interval (repeated anomalies every five seconds). The
+record contains camera, target and rider positions, camera and rider terrain
+clearance, rider frustum coordinates, viewport/FOV, course progress, active
+terrain, resident geometry/vegetation counts and realized FPS. Stable reason
+codes identify an unready world, invalid or degenerate camera, camera/rider
+below terrain, rider behind/outside the camera, or missing visible geometry.
+It stores no history and does no framebuffer readback. Set
+`GC_WORKOUT_GAME_HEALTH_LOG=0` only when routine local logging must be
+disabled; the higher-rate HUD and full trace remain opt-in.
+
 The same trace record describes the rendered decision rather than reconstructing
 it afterward: feature phase, route, readiness, action distance and action id
 come from the presented immutable snapshot; camera position and target come

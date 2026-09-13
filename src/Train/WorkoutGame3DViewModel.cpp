@@ -462,6 +462,7 @@ void WorkoutGame3DViewModel::setCourse(
             riderPositionY = initial.visualGroundElevationMeters();
             riderPositionZ = initial.center.zMeters;
             cameraGroundY = riderPositionY;
+            cameraTerrainPositionY = riderPositionY;
             riderHeadingDegrees = std::remainder(
                     initial.center.headingRadians * 180.0 / Pi, 360.0);
             updateCameraPose(0.0, 0.0, 0);
@@ -1163,6 +1164,7 @@ void WorkoutGame3DViewModel::updateCameraPose(
             - cameraRightZ * cameraSideDistanceMeters;
     cameraPositionY = cameraSample.visualGroundElevationMeters()
             + cameraHeightDistanceMeters;
+    cameraTerrainPositionY = cameraSample.visualGroundElevationMeters();
     double corridorGroundY = cameraSample.visualGroundElevationMeters();
     const double corridorEndDistance = std::min(
             std::max(roadCourse.totalLengthMeters,
@@ -1268,6 +1270,8 @@ void WorkoutGame3DViewModel::updateCameraPose(
         cameraPositionX += (sideCameraX - cameraPositionX) * blend;
         cameraPositionY += (sideCameraY - cameraPositionY) * blend;
         cameraPositionZ += (sideCameraZ - cameraPositionZ) * blend;
+        cameraTerrainPositionY +=
+                (sideGroundY - cameraTerrainPositionY) * blend;
         cameraTargetPositionX +=
                 (sideTargetX - cameraTargetPositionX) * blend;
         cameraTargetPositionY +=
@@ -1344,6 +1348,9 @@ void WorkoutGame3DViewModel::updateCameraPose(
     cameraPositionX += (chaseX - cameraPositionX) * blend;
     cameraPositionY += (chaseY - cameraPositionY) * blend;
     cameraPositionZ += (chaseZ - cameraPositionZ) * blend;
+    cameraTerrainPositionY +=
+            (riderSample.visualGroundElevationMeters()
+                - cameraTerrainPositionY) * blend;
     cameraTargetPositionX += (chaseTargetX - cameraTargetPositionX) * blend;
     cameraTargetPositionY += (chaseTargetY - cameraTargetPositionY) * blend;
     cameraTargetPositionZ += (chaseTargetZ - cameraTargetPositionZ) * blend;

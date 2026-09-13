@@ -1086,6 +1086,8 @@ container.
   contacts, camera transform and active asset/LOD identities.
 - [x] `DIA-04` Capture direct snapshots and videos from isolated deterministic
   sessions.
+- [x] `DIA-05` Emit rate-limited production health records for camera/terrain
+  clearance, rider framing, scene readiness and resident geometry.
 - [x] `PERF-01` Stay below 30,000 visible triangles and 50 draw calls initially.
 - [x] `PERF-02` Hold 60 Hz presentation budget on the target Intel GPU without
   increasing Bluetooth, trainer-control or recording latency.

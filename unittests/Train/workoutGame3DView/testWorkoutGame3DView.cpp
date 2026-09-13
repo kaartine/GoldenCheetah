@@ -2476,6 +2476,9 @@ private slots:
             QVERIFY(std::isfinite(viewModel.cameraTargetX()));
             QVERIFY(std::isfinite(viewModel.cameraTargetY()));
             QVERIFY(std::isfinite(viewModel.cameraTargetZ()));
+            QVERIFY(std::isfinite(viewModel.cameraTerrainY()));
+            QVERIFY2(viewModel.cameraY() - viewModel.cameraTerrainY() >= 2.54,
+                     "reported camera terrain clearance became unsafe");
 
             const double cameraDistance = std::max(
                     0.0, distance - viewModel.cameraBackMeters());

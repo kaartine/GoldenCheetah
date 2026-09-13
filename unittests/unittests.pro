@@ -149,6 +149,7 @@ exists(unittests.pri) {
 			   Train/workoutGame3DChunkBuilder \
 			   Train/workoutGame3DFeatureAsset \
 			   Train/workoutGame3DGeometry \
+			   Train/workoutGame3DHealth \
 			   Train/workoutGame3DTerrainProfile \
 			   Train/workoutGame3DView \
 			   Train/workoutGameAudio \
