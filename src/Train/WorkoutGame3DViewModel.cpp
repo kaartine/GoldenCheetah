@@ -49,9 +49,9 @@ constexpr int MaximumVisibleTrees = 18;
 constexpr int MaximumVisibleTreeSlots = MaximumVisibleTrees / 2;
 constexpr double ForestDressingBehindMeters = 14.0;
 constexpr double ForestDressingAheadMeters = 49.0;
-constexpr int MaximumVisibleForestFloorProps = 4;
-constexpr int MaximumVisibleForestVergeClusters = 3;
-constexpr double ForestDressingSpacingMeters = 8.5;
+constexpr int MaximumVisibleForestFloorProps = 8;
+constexpr int MaximumVisibleForestVergeClusters = 6;
+constexpr double ForestDressingSpacingMeters = 4.5;
 constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double ForestDressingCameraClearanceMeters = 1.70;
 constexpr double ForestDressingCorridorBehindMeters = 8.2;
@@ -1925,7 +1925,7 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
         const double side = ((random >> 27) & 1u) == 0u ? -1.0 : 1.0;
         double lateral = side * (
                 sample.center.halfWidthMeters
-                + (cluster ? 2.05 : 2.45)
+                + (cluster ? 2.85 : 3.30)
                 + double(random & 255u) / 1020.0);
         const double rightX = std::cos(sample.center.headingRadians);
         const double rightZ = -std::sin(sample.center.headingRadians);
@@ -1944,6 +1944,9 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
                     roadCourse, std::min(
                         courseEnd,
                         distance + ForestDressingCorridorAheadMeters));
+        const double minimumClearanceSquared =
+                ForestDressingCameraClearanceMeters
+                * ForestDressingCameraClearanceMeters;
         auto position = horizontalPosition(lateral);
         for (int attempt = 0; attempt < 8; ++attempt) {
             if (horizontalDistanceToSegmentSquared(
@@ -1952,8 +1955,7 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
                         corridorStart.center.zMeters,
                         corridorEnd.center.xMeters,
                         corridorEnd.center.zMeters)
-                    >= ForestDressingCameraClearanceMeters
-                            * ForestDressingCameraClearanceMeters) {
+                            >= minimumClearanceSquared) {
                 break;
             }
             lateral += side * 0.45;
@@ -1994,7 +1996,7 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
             prop.insert(QStringLiteral("stableId"),
                         QStringLiteral("verge-%1").arg(slot));
             prop.insert(QStringLiteral("variant"),
-                        int((random >> 20) % 3u));
+                        int((random >> 20) % 6u));
             if (vergeClusters.size()
                     < MaximumVisibleForestVergeClusters) {
                 vergeClusters.push_back(prop);
@@ -2003,7 +2005,7 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
             prop.insert(QStringLiteral("stableId"),
                         QStringLiteral("floor-%1").arg(slot));
             prop.insert(QStringLiteral("variant"),
-                        int((random >> 20) % 8u));
+                        int((random >> 20) % 16u));
             if (floorProps.size()
                     < MaximumVisibleForestFloorProps) {
                 floorProps.push_back(prop);

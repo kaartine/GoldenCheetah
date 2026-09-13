@@ -1090,6 +1090,14 @@ class TestWorkoutGameAssets(unittest.TestCase):
             "GEO_UnderstoryFern_LOD0": 20,
             "GEO_UnderstoryBilberry_LOD0": 40,
             "GEO_UnderstoryHeather_LOD0": 42,
+            "GEO_GranitePair_LOD0": 64,
+            "GEO_UnderstoryShrub_LOD0": 64,
+            "GEO_UnderstoryGrass_LOD0": 24,
+            "GEO_WildflowerPatch_LOD0": 40,
+            "GEO_MushroomCluster_LOD0": 48,
+            "GEO_TwigPile_LOD0": 32,
+            "GEO_PineSapling_LOD0": 32,
+            "GEO_LeafySapling_LOD0": 32,
         }
         nodes = {node["name"]: node for node in document["nodes"]}
         mesh_nodes = {
@@ -1139,13 +1147,21 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "GEO_UnderstoryFern_LOD0": 1,
                 "GEO_UnderstoryBilberry_LOD0": 1,
                 "GEO_UnderstoryHeather_LOD0": 1,
+                "GEO_GranitePair_LOD0": 2,
+                "GEO_UnderstoryShrub_LOD0": 1,
+                "GEO_UnderstoryGrass_LOD0": 1,
+                "GEO_WildflowerPatch_LOD0": 2,
+                "GEO_MushroomCluster_LOD0": 2,
+                "GEO_TwigPile_LOD0": 2,
+                "GEO_PineSapling_LOD0": 2,
+                "GEO_LeafySapling_LOD0": 2,
             }[name]
             self.assertEqual(len(mesh["primitives"]), expected_passes)
             pivot = name.replace("GEO_", "PIVOT_").replace("_LOD0", "_BASE")
             self.assertIn(pivot, nodes)
             self.assertEqual(nodes[pivot].get("translation", [0, 0, 0]), [0, 0, 0])
 
-        self.assertEqual(observed_total, 320)
+        self.assertEqual(observed_total, 656)
         deadwood = nodes["GEO_DeadwoodFallen_LOD0"]["extras"]
         self.assertEqual(deadwood["placement_role"], "scenery-only")
         self.assertEqual(deadwood["collision_role"], "none")
@@ -1282,12 +1298,12 @@ class TestWorkoutGameAssets(unittest.TestCase):
         audit = assets.load_json_file(FOREST_FLOOR_AUDIT_PATH)
         catalog = audit["catalog"]
         self.assertEqual((catalog["widthPixels"], catalog["heightPixels"]),
-                         (960, 540))
+                         (960, 720))
         self.assertEqual(catalog["verticalFovDegrees"], 47.0)
         self.assertEqual(catalog["cameraDistanceMeters"], 3.0)
         self.assertEqual(catalog["trailWidthScaleBarMeters"], 1.36)
-        self.assertEqual((catalog["cellColumns"], catalog["cellRows"]), (4, 2))
-        self.assertEqual(len(catalog["cellOrder"]), 8)
+        self.assertEqual((catalog["cellColumns"], catalog["cellRows"]), (4, 4))
+        self.assertEqual(len(catalog["cellOrder"]), 16)
         self.assertEqual(audit["sourceGlbSha256"], sha256(FOREST_FLOOR_GLB_PATH))
 
         render_hashes = []
@@ -1295,7 +1311,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
             path = FOREST_FLOOR_AUDIT_PATH.parent / render["path"]
             data = path.read_bytes()
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
-            self.assertEqual(struct.unpack(">II", data[16:24]), (960, 540))
+            self.assertEqual(struct.unpack(">II", data[16:24]), (960, 720))
             self.assertEqual(render["sha256"], sha256(path))
             render_hashes.append(render["sha256"])
         self.assertEqual(
@@ -1313,6 +1329,9 @@ class TestWorkoutGameAssets(unittest.TestCase):
             "GEO_VergeGraniteBilberry_LOD0": 104,
             "GEO_VergeStumpFern_LOD0": 144,
             "GEO_VergeDeadwoodHeather_LOD0": 134,
+            "GEO_VergeRockGrass_LOD0": 130,
+            "GEO_VergeShrubFlowers_LOD0": 136,
+            "GEO_VergeSaplingMushroom_LOD0": 112,
         }
         nodes = {node["name"]: node for node in document["nodes"]}
         mesh_nodes = {
@@ -1334,6 +1353,9 @@ class TestWorkoutGameAssets(unittest.TestCase):
             "GEO_VergeGraniteBilberry_LOD0": [58, 46],
             "GEO_VergeStumpFern_LOD0": [29, 37, 8, 70],
             "GEO_VergeDeadwoodHeather_LOD0": [56, 16, 62],
+            "GEO_VergeRockGrass_LOD0": [58, 72],
+            "GEO_VergeShrubFlowers_LOD0": [29, 20, 87],
+            "GEO_VergeSaplingMushroom_LOD0": [40, 24, 48],
         }
         for name, expected in expected_triangles.items():
             node = nodes[name]
@@ -1388,7 +1410,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
             self.assertEqual(nodes[pivot].get("translation", [0, 0, 0]),
                              [0, 0, 0])
 
-        self.assertEqual(observed_total, 382)
+        self.assertEqual(observed_total, 760)
         root = nodes["ROOT_ForestVergeClusters"]["extras"]
         self.assertEqual(root["project_generated"], True)
         self.assertEqual(root["generated_output_license"], "CC0-1.0")
@@ -1434,11 +1456,14 @@ class TestWorkoutGameAssets(unittest.TestCase):
         audit = assets.load_json_file(FOREST_VERGE_AUDIT_PATH)
         catalog = audit["catalog"]
         self.assertEqual((catalog["widthPixels"], catalog["heightPixels"]),
-                         (960, 540))
-        self.assertEqual((catalog["cellColumns"], catalog["cellRows"]), (3, 2))
+                         (960, 720))
+        self.assertEqual((catalog["cellColumns"], catalog["cellRows"]), (3, 4))
         self.assertEqual(
             catalog["rows"],
-            ["before-isolated-prop", "after-verge-cluster"],
+            [
+                "before-isolated-prop-a", "after-verge-cluster-a",
+                "before-isolated-prop-b", "after-verge-cluster-b",
+            ],
         )
         self.assertEqual(catalog["verticalFovDegrees"], 47.0)
         self.assertEqual(catalog["cameraDistanceMeters"], 4.45)
@@ -1455,7 +1480,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
             path = FOREST_VERGE_AUDIT_PATH.parent / render["path"]
             data = path.read_bytes()
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
-            self.assertEqual(struct.unpack(">II", data[16:24]), (960, 540))
+            self.assertEqual(struct.unpack(">II", data[16:24]), (960, 720))
             self.assertEqual(render["sha256"], sha256(path))
             render_hashes.append(render["sha256"])
         self.assertEqual(len(render_hashes), 3)
@@ -1485,14 +1510,14 @@ class TestWorkoutGameAssets(unittest.TestCase):
             for entry in manifest["files"]
             if entry["purpose"] == "runtime"
         ]
-        self.assertEqual(len(runtime_paths), 13)
+        self.assertEqual(len(runtime_paths), 24)
         self.assertLessEqual(
             sum((REPOSITORY / path).stat().st_size for path in runtime_paths),
-            80 * 1024,
+            160 * 1024,
         )
-        # The production resident window selects four floor props and three
+        # The production resident window selects eight floor props and six
         # verge clusters. Keep its worst-case authored mesh cost explicit.
-        self.assertLessEqual(4 * 96 + 3 * 150, 850)
+        self.assertLessEqual(8 * 96 + 6 * 150, 1700)
 
     def test_distant_ridges_are_bounded_socket_free_scenery(self) -> None:
         document, size = assets.read_glb(DISTANT_GLB_PATH)

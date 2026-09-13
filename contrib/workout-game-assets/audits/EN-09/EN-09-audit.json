@@ -4,12 +4,18 @@
     "afterCellOrder": [
       "GEO_VergeGraniteBilberry_LOD0",
       "GEO_VergeStumpFern_LOD0",
-      "GEO_VergeDeadwoodHeather_LOD0"
+      "GEO_VergeDeadwoodHeather_LOD0",
+      "GEO_VergeRockGrass_LOD0",
+      "GEO_VergeShrubFlowers_LOD0",
+      "GEO_VergeSaplingMushroom_LOD0"
     ],
     "beforeCellOrder": [
       "GEO_GraniteLow_LOD0",
       "GEO_StumpRooted_LOD0",
-      "GEO_DeadwoodFallen_LOD0"
+      "GEO_DeadwoodFallen_LOD0",
+      "GEO_GranitePair_LOD0",
+      "GEO_UnderstoryShrub_LOD0",
+      "GEO_PineSapling_LOD0"
     ],
     "cameraDistanceMeters": 4.45,
     "cameraPositionsMeters": [
@@ -35,13 +41,15 @@
       0.0
     ],
     "cellColumns": 3,
-    "cellRows": 2,
-    "heightPixels": 540,
+    "cellRows": 4,
+    "heightPixels": 720,
     "look": "Medium High Contrast",
     "renderEngine": "CYCLES_CPU_12_SAMPLES",
     "rows": [
-      "before-isolated-prop",
-      "after-verge-cluster"
+      "before-isolated-prop-a",
+      "after-verge-cluster-a",
+      "before-isolated-prop-b",
+      "after-verge-cluster-b"
     ],
     "trailWidthScaleBarMeters": 1.36,
     "verticalFovDegrees": 47.0,
@@ -49,25 +57,25 @@
     "widthPixels": 960
   },
   "clusterGlb": "WG_ForestVergeClusters.glb",
-  "clusterGlbSha256": "253580b31cd09804681843efd70d06d0a7c27f780ceae2a07d9134fbfb04b082",
+  "clusterGlbSha256": "ccb935a2e9b239ba40d72f72459b59ebad48bb732b4d69935b661d0789b787cb",
   "format": "goldencheetah-workout-game-asset-audit-1",
   "renders": [
     {
       "path": "EN-09-front.png",
-      "sha256": "6b67963a522cded4476773422d29d4c8f630b77a9c79b9d05bbefbd9bb5ccb7d",
+      "sha256": "750642862bd7d8b33dbedad6734f17c5b87fc2123d67cfe1c3bfc23e56c6d410",
       "view": "front"
     },
     {
       "path": "EN-09-left-three-quarter.png",
-      "sha256": "4df898f0007f0d6500fe9d88551be107a934c308ea2b1e09026e446c9424e5d9",
+      "sha256": "ae779f2dd256082e8917ad06cd989a7e637e32c66a30c470d87a87a5505e7b31",
       "view": "left-three-quarter"
     },
     {
       "path": "EN-09-rear-three-quarter.png",
-      "sha256": "113bd9cfa05789be01228d6cad41b03f6910f2121a3095e12b70bcab7be4e460",
+      "sha256": "1ff33f2b842fda2004e0803f264879f0ac1ed5dcdbbfacc6f7cb28f6a88eb7a6",
       "view": "rear-three-quarter"
     }
   ],
   "sourcePropGlb": "WG_ForestFloorProps.glb",
-  "sourcePropGlbSha256": "52c484a1c3ac4967ff6c63a214cbef12c49a191944c1d9ba5e900f8487b9b93d"
+  "sourcePropGlbSha256": "b89b004f7c98de16c84bc573c3e13064b0ae8bbff966b0e686bada348085daaa"
 }

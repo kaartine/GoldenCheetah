@@ -21,10 +21,18 @@
       "GEO_DeadwoodFallen_LOD0",
       "GEO_UnderstoryFern_LOD0",
       "GEO_UnderstoryBilberry_LOD0",
-      "GEO_UnderstoryHeather_LOD0"
+      "GEO_UnderstoryHeather_LOD0",
+      "GEO_GranitePair_LOD0",
+      "GEO_UnderstoryShrub_LOD0",
+      "GEO_UnderstoryGrass_LOD0",
+      "GEO_WildflowerPatch_LOD0",
+      "GEO_MushroomCluster_LOD0",
+      "GEO_TwigPile_LOD0",
+      "GEO_PineSapling_LOD0",
+      "GEO_LeafySapling_LOD0"
     ],
-    "cellRows": 2,
-    "heightPixels": 540,
+    "cellRows": 4,
+    "heightPixels": 720,
     "look": "Medium High Contrast",
     "renderEngine": "CYCLES_CPU_16_SAMPLES",
     "trailWidthScaleBarMeters": 1.36,
@@ -37,22 +45,22 @@
     {
       "assetRotationDegrees": 0.0,
       "path": "EN-08-front.png",
-      "sha256": "49f2a56da3d4ea4c31cb186776d6d54f0e909b33ddadf322a713ae348f2c3a4e",
+      "sha256": "afa351f07b1b905703380f342506ef98f219db412d5ee9caa47bc1678a947f17",
       "view": "front"
     },
     {
       "assetRotationDegrees": 45.0,
       "path": "EN-08-left-three-quarter.png",
-      "sha256": "343f7313846231188efd92bfb14f6457dd4c3871be1cd03109a9f35f2aafc55d",
+      "sha256": "e71c1c67904c75fda5a416937bb78c76fcfaedc8189e9916c5bc30f82d97c419",
       "view": "left-three-quarter"
     },
     {
       "assetRotationDegrees": 135.0,
       "path": "EN-08-rear-three-quarter.png",
-      "sha256": "c1b0f9a6d7fba51009955bdaf9745d70b28ae3c71f9be97b0dc6cae1f7f62c3d",
+      "sha256": "f888093611a1b425e7e8500691db56af7da5bfa528a9e608f1cce0ae9eca104c",
       "view": "rear-three-quarter"
     }
   ],
   "sourceGlb": "WG_ForestFloorProps.glb",
-  "sourceGlbSha256": "52c484a1c3ac4967ff6c63a214cbef12c49a191944c1d9ba5e900f8487b9b93d"
+  "sourceGlbSha256": "b89b004f7c98de16c84bc573c3e13064b0ae8bbff966b0e686bada348085daaa"
 }

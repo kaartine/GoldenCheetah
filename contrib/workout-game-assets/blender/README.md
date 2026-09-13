@@ -8,50 +8,51 @@ practice hurdle, `generate_drop.py` creates a faceted drop face, and
 `generate_rider_bike.py` creates the articulated low-poly rider and 29er MTB
 mesh set, and `generate_conifer_set.py` creates a low-poly Finnish mixed-forest
 source set with four runtime groves. `generate_forest_floor_props.py` creates
-the eight-variant Finnish forest-floor prop kit, and
+the sixteen-variant Finnish forest-floor prop kit, and
 `generate_distant_ridges.py` creates the bounded distant-terrain ring.
 `generate_gap_jump.py` creates the complete socketed three-line gap-jump
 visual tile.
-`generate_forest_verge_clusters.py` composes three prevalidated trail-edge
+`generate_forest_verge_clusters.py` composes six prevalidated trail-edge
 clusters from the forest-floor source geometry. None of the generators
 downloads or embeds external assets.
 
 ## Forest-verge cluster contract
 
-- Granite with bilberry, stump with fern, and deadwood with heather provide
-  three visibly distinct precomposed trail-edge variants. Their explicit
+- Granite with bilberry, stump with fern, deadwood with heather, rock with
+  grass, shrub with wildflowers, and saplings with mushrooms provide six
+  visibly distinct precomposed trail-edge variants. Their explicit
   transforms contain no random input and generate byte-identically with the
   pinned Blender `4.0.2` image.
 - Every component touches canonical `Y = 0`, starts at least `0.14 m` outside
   the trail-side anchor and has at least `0.025 m` horizontal AABB separation
   from the other components in its cluster. This prevents floating, buried or
   intersecting props before runtime terrain placement.
-- The complete source GLB is 382 triangles, 44,964 bytes, four shared opaque
+- The complete source GLB is 760 triangles, 86,408 bytes, four shared opaque
   materials and zero texture bytes. A variant is at most 150 triangles and
   keeps a named trail-edge pivot at the origin, bounded UV0 and an applied
   transform.
-- These clusters are scenery-only source candidates. They have no collision or
-  physics authority and are not packaged or referenced by runtime QML until a
-  separate placement, target-GPU and motion review accepts the integration.
+- These clusters are scenery-only runtime assets. They have no collision or
+  physics authority and are placed by the terrain-aware resident-window model.
 - Generated geometry and audit images are original project output offered as
   `CC0-1.0`; their Python sources remain GPL-2.0-or-later. EN-08 is the only
   geometry dependency, and no external model, texture, image, scan or AI input
   is used.
-- The EN-09 audit uses matched `960 x 540` before/after catalogs from front and
+- The EN-09 audit uses matched `960 x 720` before/after catalogs from front and
   two three-quarter views. All six cells in a catalog share a 47-degree FOV,
   framing, exposure and 1.36-metre trail-width scale bar.
 
 ## Forest-floor prop contract
 
-- Three 32-triangle granite forms use low, upright and slab-like silhouettes.
-  The rooted stump uses 50 triangles, the low decorative deadwood uses 72, and
-  fern, bilberry and heather-like understory forms use 20, 40 and 42.
+- Sixteen variants cover granite, rooted stump, deadwood, fern, bilberry,
+  heather, dense shrub, grass, wildflowers, mushrooms, twigs and young trees.
+  Every variant remains at or below 96 triangles; the complete kit is 656
+  triangles and 83,352 bytes.
 - Every variant is a separately instancing-ready mesh with an applied
   transform, UV0, a named base pivot at the origin and exact ground contact at
-  canonical `Y = 0`. The complete source kit is 320 triangles and 38,892 bytes.
+  canonical `Y = 0`.
 - Four opaque shared materials cover granite, bark, cut end grain and
-  understory. Rocks and shrubs use one material primitive each; stump and
-  deadwood use two. There is no embedded texture, external URI, animation,
+  understory. Runtime QML assigns restrained species-specific colours without
+  textures. There is no embedded texture, external URI, animation,
   collision or physics authority.
 - The granite material is a cool restrained mid-grey; flat-shaded irregular
   facets distinguish the three rock silhouettes without another material pass.
@@ -65,14 +66,13 @@ downloads or embeds external assets.
   `CC0-1.0` output; the two Python generators remain part of GoldenCheetah's
   GPL source. No external model, texture, image, scan or AI input is used.
 - `render_forest_floor_prop_audit.py` imports the reviewed GLB and renders
-  front, left-three-quarter and rear-three-quarter 960 by 540 catalogs. All
+  front, left-three-quarter and rear-three-quarter 960 by 720 catalogs. All
   cells share a 47-degree vertical FOV, camera, exposure, ground datum and a
   1.36-metre trail-width scale bar. Cell order and hashes are recorded in
   `audits/EN-08/EN-08-audit.json`.
 
-This kit is deliberately not converted with Balsam, added to qrc or referenced
-by world generation yet. Its candidate manifest and renders approve only the
-source/review package, not runtime placement or a release-checklist item.
+The reviewed GLB is converted with Qt Balsam 6.8.3, packaged in qrc and placed
+outside the singletrack and camera corridor by world generation.
 
 ## Distant-ridge contract
 

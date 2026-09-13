@@ -33,6 +33,14 @@ VARIANT_NAMES = (
     "GEO_UnderstoryFern_LOD0",
     "GEO_UnderstoryBilberry_LOD0",
     "GEO_UnderstoryHeather_LOD0",
+    "GEO_GranitePair_LOD0",
+    "GEO_UnderstoryShrub_LOD0",
+    "GEO_UnderstoryGrass_LOD0",
+    "GEO_WildflowerPatch_LOD0",
+    "GEO_MushroomCluster_LOD0",
+    "GEO_TwigPile_LOD0",
+    "GEO_PineSapling_LOD0",
+    "GEO_LeafySapling_LOD0",
 )
 PIVOT_NAMES = tuple(
     name.replace("GEO_", "PIVOT_").replace("_LOD0", "_BASE")
@@ -48,6 +56,14 @@ EXPECTED_TRIANGLES = {
     "GEO_UnderstoryFern_LOD0": 20,
     "GEO_UnderstoryBilberry_LOD0": 40,
     "GEO_UnderstoryHeather_LOD0": 42,
+    "GEO_GranitePair_LOD0": 64,
+    "GEO_UnderstoryShrub_LOD0": 64,
+    "GEO_UnderstoryGrass_LOD0": 24,
+    "GEO_WildflowerPatch_LOD0": 40,
+    "GEO_MushroomCluster_LOD0": 48,
+    "GEO_TwigPile_LOD0": 32,
+    "GEO_PineSapling_LOD0": 32,
+    "GEO_LeafySapling_LOD0": 32,
 }
 EXPECTED_MATERIAL_PASSES = {
     "GEO_GraniteLow_LOD0": 2,
@@ -58,8 +74,16 @@ EXPECTED_MATERIAL_PASSES = {
     "GEO_UnderstoryFern_LOD0": 1,
     "GEO_UnderstoryBilberry_LOD0": 1,
     "GEO_UnderstoryHeather_LOD0": 1,
+    "GEO_GranitePair_LOD0": 2,
+    "GEO_UnderstoryShrub_LOD0": 1,
+    "GEO_UnderstoryGrass_LOD0": 1,
+    "GEO_WildflowerPatch_LOD0": 2,
+    "GEO_MushroomCluster_LOD0": 2,
+    "GEO_TwigPile_LOD0": 2,
+    "GEO_PineSapling_LOD0": 2,
+    "GEO_LeafySapling_LOD0": 2,
 }
-MAXIMUM_TRIANGLES = 480
+MAXIMUM_TRIANGLES = 720
 MAXIMUM_VARIANT_TRIANGLES = 96
 MAXIMUM_WIDTH_METERS = 2.20
 MAXIMUM_DEPTH_METERS = 0.80
@@ -331,7 +355,9 @@ def fern_understory():
     return vertices, faces, material_indices
 
 
-def append_octahedron(vertices, faces, material_indices, center, radii):
+def append_octahedron(
+    vertices, faces, material_indices, center, radii, material_index=0
+):
     center_x, center_y, center_z = center
     radius_x, radius_y, radius_z = radii
     base = len(vertices)
@@ -348,7 +374,7 @@ def append_octahedron(vertices, faces, material_indices, center, radii):
         (3, 4, 0), (3, 1, 4), (3, 5, 1), (3, 0, 5),
     ):
         add_face(faces, material_indices,
-                 tuple(base + index for index in indices))
+                 tuple(base + index for index in indices), material_index)
 
 
 def bilberry_understory():
@@ -392,6 +418,273 @@ def heather_understory():
                         (0, 2, 1), (0, 3, 2)):
             add_face(faces, material_indices,
                      tuple(base + index for index in indices))
+    return vertices, faces, material_indices
+
+
+def append_transformed(
+    target, geometry, translation, yaw_degrees=0.0, scale=1.0,
+    material_mapping=None,
+):
+    source_vertices, source_faces, source_materials = geometry
+    vertices, faces, material_indices = target
+    yaw = math.radians(yaw_degrees)
+    cosine = math.cos(yaw)
+    sine = math.sin(yaw)
+    base = len(vertices)
+    for x_value, y_value, z_value in source_vertices:
+        vertices.append((
+            translation[0] + scale * (
+                cosine * x_value - sine * z_value
+            ),
+            translation[1] + scale * y_value,
+            translation[2] + scale * (
+                sine * x_value + cosine * z_value
+            ),
+        ))
+    faces.extend(tuple(base + vertex for vertex in face)
+                 for face in source_faces)
+    if material_mapping is None:
+        material_indices.extend(source_materials)
+    else:
+        material_indices.extend(
+            material_mapping[index] for index in source_materials
+        )
+
+
+def granite_pair():
+    geometry = ([], [], [])
+    append_transformed(
+        geometry, irregular_rock(0.68, 0.50, 0.28, 0.9, 0.02),
+        (-0.35, 0.0, -0.04), -12.0,
+    )
+    append_transformed(
+        geometry, irregular_rock(0.48, 0.40, 0.38, 2.4, -0.035),
+        (0.35, 0.0, 0.08), 17.0,
+    )
+    return geometry
+
+
+def dense_shrub_understory():
+    vertices = []
+    faces = []
+    material_indices = []
+    clumps = (
+        (-0.28, 0.15, -0.12, 0.18, 0.15, 0.15),
+        (-0.08, 0.20, -0.18, 0.22, 0.20, 0.17),
+        (0.18, 0.17, -0.13, 0.20, 0.17, 0.16),
+        (0.31, 0.13, 0.08, 0.16, 0.13, 0.14),
+        (0.08, 0.23, 0.10, 0.23, 0.23, 0.19),
+        (-0.20, 0.18, 0.12, 0.20, 0.18, 0.17),
+        (-0.01, 0.13, 0.27, 0.17, 0.13, 0.14),
+        (0.26, 0.11, 0.26, 0.14, 0.11, 0.13),
+    )
+    for x_value, y_value, z_value, rx, ry, rz in clumps:
+        append_octahedron(
+            vertices, faces, material_indices,
+            (x_value, y_value, z_value), (rx, ry, rz),
+        )
+    return vertices, faces, material_indices
+
+
+def grass_understory():
+    vertices = []
+    faces = []
+    material_indices = []
+    for blade in range(12):
+        angle = 2.0 * math.pi * blade / 12.0 + 0.21 * (blade % 3)
+        radius = 0.07 + 0.018 * (blade % 4)
+        height = 0.24 + 0.035 * (blade % 5)
+        width = 0.018 + 0.003 * (blade % 2)
+        direction_x = math.cos(angle)
+        direction_z = math.sin(angle)
+        tangent_x = -direction_z
+        tangent_z = direction_x
+        base = len(vertices)
+        vertices.extend((
+            (radius * direction_x - width * tangent_x, 0.0,
+             radius * direction_z - width * tangent_z),
+            (radius * direction_x + width * tangent_x, 0.0,
+             radius * direction_z + width * tangent_z),
+            ((radius + 0.15) * direction_x + width * 0.35 * tangent_x,
+             height * 0.72,
+             (radius + 0.15) * direction_z + width * 0.35 * tangent_z),
+            ((radius + 0.20) * direction_x, height,
+             (radius + 0.20) * direction_z),
+        ))
+        add_face(faces, material_indices, (base, base + 1, base + 2))
+        add_face(faces, material_indices, (base, base + 2, base + 3))
+    return vertices, faces, material_indices
+
+
+def wildflower_patch():
+    vertices = []
+    faces = []
+    material_indices = []
+    flowers = (
+        (-0.22, -0.10, 0.38), (-0.08, 0.14, 0.48),
+        (0.07, -0.04, 0.43), (0.20, 0.15, 0.35),
+        (0.27, -0.12, 0.45),
+    )
+    for index, (x_value, z_value, height) in enumerate(flowers):
+        width = 0.012
+        lean_x = 0.025 * math.sin(index * 1.7)
+        lean_z = 0.022 * math.cos(index * 1.4)
+        base = len(vertices)
+        vertices.extend((
+            (x_value - width, 0.0, z_value),
+            (x_value + width, 0.0, z_value),
+            (x_value + lean_x + width, height, z_value + lean_z),
+            (x_value + lean_x - width, height, z_value + lean_z),
+            (x_value, 0.0, z_value - width),
+            (x_value, 0.0, z_value + width),
+            (x_value + lean_x, height, z_value + lean_z + width),
+            (x_value + lean_x, height, z_value + lean_z - width),
+        ))
+        add_face(faces, material_indices, (base, base + 1, base + 2), 0)
+        add_face(faces, material_indices, (base, base + 2, base + 3), 0)
+        add_face(faces, material_indices, (base + 4, base + 5, base + 6), 0)
+        add_face(faces, material_indices, (base + 4, base + 6, base + 7), 0)
+        center = len(vertices)
+        flower_y = height + 0.006
+        flower_x = x_value + lean_x
+        flower_z = z_value + lean_z
+        radius = 0.070 + 0.006 * (index % 2)
+        vertices.extend((
+            (flower_x, flower_y, flower_z),
+            (flower_x + radius, flower_y, flower_z),
+            (flower_x, flower_y, flower_z + radius),
+            (flower_x - radius, flower_y, flower_z),
+            (flower_x, flower_y, flower_z - radius),
+        ))
+        for first, second in ((1, 2), (2, 3), (3, 4), (4, 1)):
+            add_face(
+                faces, material_indices,
+                (center, center + first, center + second), 1,
+            )
+    return vertices, faces, material_indices
+
+
+def mushroom_cluster():
+    vertices = []
+    faces = []
+    material_indices = []
+    mushrooms = (
+        (-0.16, -0.05, 0.25, 0.09),
+        (0.04, 0.08, 0.34, 0.12),
+        (0.20, -0.10, 0.22, 0.08),
+    )
+    for x_value, z_value, height, radius in mushrooms:
+        lower = len(vertices)
+        for side in range(4):
+            angle = 2.0 * math.pi * side / 4.0 + math.pi / 4.0
+            vertices.append((
+                x_value + radius * 0.28 * math.cos(angle), 0.0,
+                z_value + radius * 0.28 * math.sin(angle),
+            ))
+        upper = len(vertices)
+        for side in range(4):
+            angle = 2.0 * math.pi * side / 4.0 + math.pi / 4.0
+            vertices.append((
+                x_value + radius * 0.20 * math.cos(angle), height * 0.78,
+                z_value + radius * 0.20 * math.sin(angle),
+            ))
+        for side in range(4):
+            following = (side + 1) % 4
+            add_face(faces, material_indices,
+                     (lower + side, upper + side, upper + following), 0)
+            add_face(faces, material_indices,
+                     (lower + side, upper + following, lower + following), 0)
+        append_octahedron(
+            vertices, faces, material_indices,
+            (x_value, height, z_value),
+            (radius, radius * 0.55, radius), 1,
+        )
+    return vertices, faces, material_indices
+
+
+def triangular_twig(length, radius, yaw_degrees, x_offset, z_offset):
+    vertices = []
+    faces = []
+    material_indices = []
+    cosine = math.cos(math.radians(yaw_degrees))
+    sine = math.sin(math.radians(yaw_degrees))
+    for longitudinal in (-0.5 * length, 0.5 * length):
+        for y_value, cross in ((0.0, -radius), (0.0, radius),
+                               (radius * 1.75, 0.0)):
+            vertices.append((
+                x_offset + longitudinal * cosine - cross * sine,
+                y_value,
+                z_offset + longitudinal * sine + cross * cosine,
+            ))
+    for first, second in ((0, 1), (1, 2), (2, 0)):
+        add_face(faces, material_indices,
+                 (first, first + 3, second + 3), 0)
+        add_face(faces, material_indices,
+                 (first, second + 3, second), 0)
+    add_face(faces, material_indices, (0, 2, 1), 1)
+    add_face(faces, material_indices, (3, 4, 5), 1)
+    return vertices, faces, material_indices
+
+
+def twig_pile():
+    geometry = ([], [], [])
+    specs = (
+        (0.78, 0.045, 12.0, -0.12, -0.13),
+        (0.70, 0.040, -18.0, 0.10, -0.03),
+        (0.62, 0.038, 31.0, -0.05, 0.10),
+        (0.54, 0.036, -42.0, 0.14, 0.16),
+    )
+    for spec in specs:
+        append_transformed(geometry, triangular_twig(*spec), (0.0, 0.0, 0.0))
+    return geometry
+
+
+def square_stem(vertices, faces, material_indices, height, half_width):
+    lower = len(vertices)
+    for x_value, z_value in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+        vertices.append((half_width * x_value, 0.0, half_width * z_value))
+    upper = len(vertices)
+    for x_value, z_value in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+        vertices.append((half_width * 0.72 * x_value, height,
+                         half_width * 0.72 * z_value))
+    for side in range(4):
+        following = (side + 1) % 4
+        add_face(faces, material_indices,
+                 (lower + side, upper + side, upper + following), 0)
+        add_face(faces, material_indices,
+                 (lower + side, upper + following, lower + following), 0)
+
+
+def pine_sapling():
+    vertices = []
+    faces = []
+    material_indices = []
+    square_stem(vertices, faces, material_indices, 0.52, 0.035)
+    for center_y, radius_x, radius_y, radius_z in (
+        (0.28, 0.22, 0.17, 0.20),
+        (0.43, 0.17, 0.15, 0.16),
+        (0.57, 0.11, 0.12, 0.10),
+    ):
+        append_octahedron(
+            vertices, faces, material_indices,
+            (0.0, center_y, 0.0), (radius_x, radius_y, radius_z), 1,
+        )
+    return vertices, faces, material_indices
+
+
+def leafy_sapling():
+    vertices = []
+    faces = []
+    material_indices = []
+    square_stem(vertices, faces, material_indices, 0.50, 0.030)
+    for center, radii in (
+        ((-0.10, 0.45, 0.00), (0.16, 0.15, 0.13)),
+        ((0.10, 0.51, -0.03), (0.18, 0.17, 0.15)),
+        ((0.00, 0.56, 0.08), (0.14, 0.12, 0.12)),
+    ):
+        append_octahedron(
+            vertices, faces, material_indices, center, radii, 1
+        )
     return vertices, faces, material_indices
 
 
@@ -502,6 +795,30 @@ def build_scene():
         VARIANT_NAMES[7]: (heather_understory(),
                            (MATERIAL_NAMES[3],),
                            {"silhouette": "heather-upright"}),
+        VARIANT_NAMES[8]: (granite_pair(),
+                           (MATERIAL_NAMES[0], MATERIAL_NAMES[3]),
+                           {"silhouette": "paired-mossy-granite"}),
+        VARIANT_NAMES[9]: (dense_shrub_understory(),
+                           (MATERIAL_NAMES[3],),
+                           {"silhouette": "dense-bilberry-shrub"}),
+        VARIANT_NAMES[10]: (grass_understory(),
+                            (MATERIAL_NAMES[3],),
+                            {"silhouette": "forest-grass-tuft"}),
+        VARIANT_NAMES[11]: (wildflower_patch(),
+                            (MATERIAL_NAMES[3], MATERIAL_NAMES[2]),
+                            {"silhouette": "five-wildflower-patch"}),
+        VARIANT_NAMES[12]: (mushroom_cluster(),
+                            (MATERIAL_NAMES[2], MATERIAL_NAMES[3]),
+                            {"silhouette": "three-mushroom-cluster"}),
+        VARIANT_NAMES[13]: (twig_pile(),
+                            (MATERIAL_NAMES[1], MATERIAL_NAMES[2]),
+                            {"silhouette": "four-twig-pile"}),
+        VARIANT_NAMES[14]: (pine_sapling(),
+                            (MATERIAL_NAMES[1], MATERIAL_NAMES[3]),
+                            {"silhouette": "young-pine-sapling"}),
+        VARIANT_NAMES[15]: (leafy_sapling(),
+                            (MATERIAL_NAMES[1], MATERIAL_NAMES[3]),
+                            {"silhouette": "young-leafy-sapling"}),
     }
     for name, (geometry, slots, properties) in geometries.items():
         create_mesh(root, name, geometry, materials, slots, properties)

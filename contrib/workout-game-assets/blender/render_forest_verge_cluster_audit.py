@@ -22,9 +22,9 @@ from generate_tabletop import canonical_to_blender, make_material
 
 
 CATALOG_WIDTH = 960
-CATALOG_HEIGHT = 540
+CATALOG_HEIGHT = 720
 CELL_COLUMNS = 3
-CELL_ROWS = 2
+CELL_ROWS = 4
 CELL_WIDTH = CATALOG_WIDTH // CELL_COLUMNS
 CELL_HEIGHT = CATALOG_HEIGHT // CELL_ROWS
 VERTICAL_FOV_DEGREES = 47.0
@@ -34,6 +34,9 @@ BEFORE_VARIANTS = (
     "GEO_GraniteLow_LOD0",
     "GEO_StumpRooted_LOD0",
     "GEO_DeadwoodFallen_LOD0",
+    "GEO_GranitePair_LOD0",
+    "GEO_UnderstoryShrub_LOD0",
+    "GEO_PineSapling_LOD0",
 )
 VIEW_CAMERAS = (
     ("front", (1.55, 1.42, -4.45)),
@@ -144,23 +147,30 @@ def render_catalog(
     point_at(camera, CAMERA_TARGET_METERS)
     target_pixels = [0.0] * (CATALOG_WIDTH * CATALOG_HEIGHT * 4)
 
-    for row, inventory in enumerate((BEFORE_VARIANTS, VARIANT_NAMES)):
-        for column, name in enumerate(inventory):
-            for candidate in before_meshes.values():
-                candidate.hide_render = True
-            for candidate in after_meshes.values():
-                candidate.hide_render = True
-            selected = (
-                before_meshes[name] if row == 0 else after_meshes[name]
-            )
-            selected.hide_render = False
-            bpy.context.view_layer.update()
-            cell_path = scratch / f"cell-{row}-{column}.png"
-            scene.render.filepath = str(cell_path)
-            bpy.ops.render.render(write_still=True)
-            cell = bpy.data.images.load(str(cell_path), check_existing=False)
-            copy_cell(target_pixels, cell, column, row)
-            bpy.data.images.remove(cell)
+    for group in range(2):
+        for comparison in range(2):
+            row = group * 2 + comparison
+            inventory = BEFORE_VARIANTS if comparison == 0 else VARIANT_NAMES
+            for column in range(CELL_COLUMNS):
+                name = inventory[group * CELL_COLUMNS + column]
+                for candidate in before_meshes.values():
+                    candidate.hide_render = True
+                for candidate in after_meshes.values():
+                    candidate.hide_render = True
+                selected = (
+                    before_meshes[name]
+                    if comparison == 0 else after_meshes[name]
+                )
+                selected.hide_render = False
+                bpy.context.view_layer.update()
+                cell_path = scratch / f"cell-{row}-{column}.png"
+                scene.render.filepath = str(cell_path)
+                bpy.ops.render.render(write_still=True)
+                cell = bpy.data.images.load(
+                    str(cell_path), check_existing=False
+                )
+                copy_cell(target_pixels, cell, column, row)
+                bpy.data.images.remove(cell)
 
     catalog = bpy.data.images.new(
         f"EN09_{output_path.stem}",
@@ -227,7 +237,10 @@ def render(source_asset, cluster_asset, output_directory):
             "heightPixels": CATALOG_HEIGHT,
             "cellColumns": CELL_COLUMNS,
             "cellRows": CELL_ROWS,
-            "rows": ["before-isolated-prop", "after-verge-cluster"],
+            "rows": [
+                "before-isolated-prop-a", "after-verge-cluster-a",
+                "before-isolated-prop-b", "after-verge-cluster-b",
+            ],
             "beforeCellOrder": list(BEFORE_VARIANTS),
             "afterCellOrder": list(VARIANT_NAMES),
             "verticalFovDegrees": VERTICAL_FOV_DEGREES,

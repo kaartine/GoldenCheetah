@@ -16,11 +16,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generate_forest_floor_props import (
     GRANITE_BASE_COLOR,
     bilberry_understory,
+    dense_shrub_understory,
     fallen_deadwood,
     fern_understory,
+    grass_understory,
+    granite_pair,
     heather_understory,
     irregular_rock,
+    leafy_sapling,
+    mushroom_cluster,
+    pine_sapling,
     rooted_stump,
+    wildflower_patch,
 )
 from generate_tabletop import canonical_to_blender, create_empty, make_material
 
@@ -37,6 +44,9 @@ VARIANT_NAMES = (
     "GEO_VergeGraniteBilberry_LOD0",
     "GEO_VergeStumpFern_LOD0",
     "GEO_VergeDeadwoodHeather_LOD0",
+    "GEO_VergeRockGrass_LOD0",
+    "GEO_VergeShrubFlowers_LOD0",
+    "GEO_VergeSaplingMushroom_LOD0",
 )
 PIVOT_NAMES = tuple(
     name.replace("GEO_", "PIVOT_").replace("_LOD0", "_TRAIL_EDGE")
@@ -46,13 +56,19 @@ EXPECTED_TRIANGLES = {
     "GEO_VergeGraniteBilberry_LOD0": 104,
     "GEO_VergeStumpFern_LOD0": 144,
     "GEO_VergeDeadwoodHeather_LOD0": 134,
+    "GEO_VergeRockGrass_LOD0": 130,
+    "GEO_VergeShrubFlowers_LOD0": 136,
+    "GEO_VergeSaplingMushroom_LOD0": 112,
 }
 EXPECTED_COMPONENTS = {
     "GEO_VergeGraniteBilberry_LOD0": 3,
     "GEO_VergeStumpFern_LOD0": 4,
     "GEO_VergeDeadwoodHeather_LOD0": 3,
+    "GEO_VergeRockGrass_LOD0": 3,
+    "GEO_VergeShrubFlowers_LOD0": 3,
+    "GEO_VergeSaplingMushroom_LOD0": 3,
 }
-MAXIMUM_TRIANGLES = 400
+MAXIMUM_TRIANGLES = 800
 MAXIMUM_VARIANT_TRIANGLES = 150
 MAXIMUM_WIDTH_METERS = 3.20
 MAXIMUM_DEPTH_METERS = 1.50
@@ -181,6 +197,39 @@ def deadwood_heather_cluster():
     ))
 
 
+def rock_grass_cluster():
+    return build_cluster((
+        (granite_pair, (), (0, 3),
+         (0.84, 0.0, -0.28), -6.0, 1.0),
+        (grass_understory, (), (3,),
+         (1.85, 0.0, 0.46), 11.0, 0.90),
+        (heather_understory, (), (3,),
+         (2.55, 0.0, -0.35), -8.0, 0.80),
+    ))
+
+
+def shrub_flower_cluster():
+    return build_cluster((
+        (irregular_rock, (0.78, 0.58, 0.30, 0.4, 0.025), (0, 3),
+         (0.55, 0.0, -0.35), -5.0, 1.0),
+        (dense_shrub_understory, (), (3,),
+         (1.45, 0.0, 0.30), 12.0, 0.88),
+        (wildflower_patch, (), (3, 2),
+         (2.45, 0.0, -0.15), -9.0, 0.92),
+    ))
+
+
+def sapling_mushroom_cluster():
+    return build_cluster((
+        (pine_sapling, (), (1, 3),
+         (0.38, 0.0, -0.30), -8.0, 1.0),
+        (leafy_sapling, (), (1, 3),
+         (0.95, 0.0, 0.34), 10.0, 0.92),
+        (mushroom_cluster, (), (1, 2),
+         (1.55, 0.0, -0.06), -6.0, 0.95),
+    ))
+
+
 def assign_uv0(mesh):
     uv_layer = mesh.uv_layers.new(name="UVMap")
     for polygon in mesh.polygons:
@@ -288,6 +337,9 @@ def build_scene():
         VARIANT_NAMES[0]: granite_bilberry_cluster(),
         VARIANT_NAMES[1]: stump_fern_cluster(),
         VARIANT_NAMES[2]: deadwood_heather_cluster(),
+        VARIANT_NAMES[3]: rock_grass_cluster(),
+        VARIANT_NAMES[4]: shrub_flower_cluster(),
+        VARIANT_NAMES[5]: sapling_mushroom_cluster(),
     }
     for name, geometry in geometries.items():
         create_mesh(root, name, geometry, materials)

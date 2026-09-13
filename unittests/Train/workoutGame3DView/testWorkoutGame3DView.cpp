@@ -1909,8 +1909,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(viewModel->visibleTriangles() > 0, 3000);
         QVERIFY(viewModel->visibleTriangles() < 30000);
         QCOMPARE(viewModel->trees().size(), 18);
-        QCOMPARE(viewModel->forestFloorProps().size(), 4);
-        QCOMPARE(viewModel->forestVergeClusters().size(), 3);
+        QCOMPARE(viewModel->forestFloorProps().size(), 8);
+        QCOMPARE(viewModel->forestVergeClusters().size(), 6);
         QVERIFY(viewModel->geometryQueueDepth() <= 1);
 
         QObject *view = window.rootObject()->findChild<QObject *>(
@@ -2656,9 +2656,9 @@ private slots:
 
         const QVariantList floorProps = viewModel.forestFloorProps();
         const QVariantList vergeClusters = viewModel.forestVergeClusters();
-        QCOMPARE(floorProps.size(), 4);
-        QCOMPARE(vergeClusters.size(), 3);
-        QCOMPARE(floorProps.size() + vergeClusters.size(), 7);
+        QCOMPARE(floorProps.size(), 8);
+        QCOMPARE(vergeClusters.size(), 6);
+        QCOMPARE(floorProps.size() + vergeClusters.size(), 14);
 
         constexpr double RadiansToDegrees =
                 180.0 / 3.14159265358979323846;
@@ -2710,11 +2710,43 @@ private slots:
                     prop.value(QStringLiteral("z")).toDouble(),
                     viewModel.cameraX(), viewModel.cameraZ(),
                     viewModel.cameraTargetX(), viewModel.cameraTargetZ());
+            const WorkoutGameRoadSample idealCamera =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                            road, std::max(
+                                0.0, viewModel.distanceMeters()
+                                        - viewModel.cameraBackMeters()));
+            const WorkoutGameRoadSample idealTarget =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                            road, std::min(
+                                road.visualLengthMeters,
+                                viewModel.distanceMeters()
+                                        + viewModel.cameraLookAheadMeters()));
+            const double idealClearance = horizontalDistanceToSegment(
+                    prop.value(QStringLiteral("x")).toDouble(),
+                    prop.value(QStringLiteral("z")).toDouble(),
+                    idealCamera.center.xMeters, idealCamera.center.zMeters,
+                    idealTarget.center.xMeters, idealTarget.center.zMeters);
+            const QString clearanceMessage = QStringLiteral(
+                    "forest dressing entered the camera/cue corridor: "
+                    "clearance=%1 ideal=%2 distance=%3 lateral=%4 "
+                    "position=(%5,%6) camera=(%7,%8) target=(%9,%10)")
+                    .arg(clearance, 0, 'f', 3)
+                    .arg(idealClearance, 0, 'f', 3)
+                    .arg(distance, 0, 'f', 3)
+                    .arg(lateral, 0, 'f', 3)
+                    .arg(prop.value(QStringLiteral("x")).toDouble(),
+                         0, 'f', 3)
+                    .arg(prop.value(QStringLiteral("z")).toDouble(),
+                         0, 'f', 3)
+                    .arg(viewModel.cameraX(), 0, 'f', 3)
+                    .arg(viewModel.cameraZ(), 0, 'f', 3)
+                    .arg(viewModel.cameraTargetX(), 0, 'f', 3)
+                    .arg(viewModel.cameraTargetZ(), 0, 'f', 3);
             QVERIFY2(clearance >= 1.70,
-                     "forest dressing entered the camera/cue corridor");
+                     qPrintable(clearanceMessage));
         };
-        for (const QVariant &entry : floorProps) verifyPlacement(entry, 7);
-        for (const QVariant &entry : vergeClusters) verifyPlacement(entry, 2);
+        for (const QVariant &entry : floorProps) verifyPlacement(entry, 15);
+        for (const QVariant &entry : vergeClusters) verifyPlacement(entry, 5);
         QVERIFY2(orientationBuckets.size() >= 2,
                  "forest dressing still forms parallel stick-like rows");
     }
@@ -2877,7 +2909,7 @@ private slots:
         QCOMPARE(floorProps.size(), viewModel.forestFloorProps().size());
         QCOMPARE(vergeClusters.size(),
                  viewModel.forestVergeClusters().size());
-        QVERIFY(floorProps.size() + vergeClusters.size() <= 7);
+        QVERIFY(floorProps.size() + vergeClusters.size() <= 14);
         bool foundOpaque = false;
         for (QObject *object : floorProps + vergeClusters) {
             const double relative = object->property(
@@ -6552,9 +6584,9 @@ private slots:
         }
 
         QCOMPARE(window.rootObject()->property(
-                    "loadedFloorProps").toInt(), 8);
+                    "loadedFloorProps").toInt(), 16);
         QCOMPARE(window.rootObject()->property(
-                    "loadedVergeClusters").toInt(), 3);
+                    "loadedVergeClusters").toInt(), 6);
     }
 
     void rendersForestDressingWithoutObscuringTheChaseScene()
@@ -6600,8 +6632,8 @@ private slots:
         const QList<QObject *> vergeClusters =
                 window.rootObject()->findChildren<QObject *>(
                     QStringLiteral("workoutGameForestVergeCluster"));
-        QCOMPARE(floorProps.size(), 4);
-        QCOMPARE(vergeClusters.size(), 3);
+        QCOMPARE(floorProps.size(), 8);
+        QCOMPARE(vergeClusters.size(), 6);
 
         const QImage dressed = window.grabWindow();
         QVERIFY(!dressed.isNull());

@@ -16,15 +16,26 @@ Item {
         { "label": "FERN", "kind": 0, "variant": 5 },
         { "label": "BILBERRY", "kind": 0, "variant": 6 },
         { "label": "HEATHER", "kind": 0, "variant": 7 },
+        { "label": "GRANITE PAIR", "kind": 0, "variant": 8 },
+        { "label": "DENSE SHRUB", "kind": 0, "variant": 9 },
+        { "label": "FOREST GRASS", "kind": 0, "variant": 10 },
+        { "label": "WILDFLOWERS", "kind": 0, "variant": 11 },
+        { "label": "MUSHROOMS", "kind": 0, "variant": 12 },
+        { "label": "TWIG PILE", "kind": 0, "variant": 13 },
+        { "label": "PINE SAPLING", "kind": 0, "variant": 14 },
+        { "label": "LEAFY SAPLING", "kind": 0, "variant": 15 },
         { "label": "GRANITE VERGE", "kind": 1, "variant": 0 },
         { "label": "STUMP VERGE", "kind": 1, "variant": 1 },
-        { "label": "DEADWOOD VERGE", "kind": 1, "variant": 2 }
+        { "label": "DEADWOOD VERGE", "kind": 1, "variant": 2 },
+        { "label": "ROCK + GRASS", "kind": 1, "variant": 3 },
+        { "label": "SHRUB + FLOWERS", "kind": 1, "variant": 4 },
+        { "label": "SAPLING + MUSHROOM", "kind": 1, "variant": 5 }
     ]
 
     Grid {
         anchors.fill: parent
-        columns: 4
-        rows: 3
+        columns: 6
+        rows: 4
 
         Repeater {
             model: root.catalog
@@ -32,8 +43,8 @@ Item {
             delegate: Item {
                 id: cell
                 required property var modelData
-                width: root.width / 4
-                height: root.height / 3
+                width: root.width / 6
+                height: root.height / 4
 
                 View3D {
                     anchors.fill: parent
