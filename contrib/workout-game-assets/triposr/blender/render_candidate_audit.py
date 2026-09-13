@@ -85,7 +85,7 @@ def render(candidate_directory: Path, output_directory: Path) -> None:
     metadata = {
         "candidateId": candidate_id,
         "candidateLod0Sha256": lod0_entry["sha256"],
-        "triangleBudget": descriptor["budgets"]["maxTrianglesLod0"],
+        "triangleBudget": descriptor["validation"]["budgets"]["maxTrianglesLod0"],
         "triangles": descriptor["technical"]["lod0"]["triangles"],
         "renders": renders,
     }
