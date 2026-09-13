@@ -751,6 +751,8 @@ QString WorkoutGame3DWindow::diagnosticsTraceLine() const
            << " watts=" << watts
            << " target_watts=" << targetWatts
            << " cadence=" << cadenceRpm
+           << " pedal_cycles=" << presentedFrame.riderPedalCycles
+           << " pedal_angle=" << viewModel->pedalAngle()
            << " hr=" << heartRate
            << " gear=" << virtualGear
            << " speed_kph=" << presentedFrame.simulation.speedKph

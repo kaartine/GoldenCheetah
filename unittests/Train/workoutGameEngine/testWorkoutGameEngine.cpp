@@ -633,8 +633,55 @@ private slots:
         QVERIFY(road.ready);
         QCOMPARE(after.visual.world.rider.distanceMeters,
                  road.distanceMeters);
-        QVERIFY(after.visual.riderPedalCycles
-                - before.visual.riderPedalCycles < 0.2);
+        const double expectedCycles =
+                input.simulation.cadenceRpm * 20.0 / 60000.0;
+        QVERIFY(std::abs((after.visual.riderPedalCycles
+                          - before.visual.riderPedalCycles)
+                         - expectedCycles) < 1.0e-9);
+    }
+
+    void riderPedallingUsesPresentationTimeInsteadOfWorkoutProgressRate()
+    {
+        WorkoutGameEngine engine;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        QVERIFY(engine.configure(course, 200.0, true));
+        WorkoutGameEngineInput input;
+        input.simulation = WorkoutGameFeatureLab::input(
+                course, 0, WorkoutGameFeatureLabScenario::Pass);
+        input.simulation.cadenceRpm = 60.0;
+
+        const WorkoutGameEngineFrame before = engine.update(input, 1000);
+        input.simulation.workoutTimeMs = 250;
+        const WorkoutGameEngineFrame after = engine.update(input, 2000);
+
+        // One real second at 60 rpm is one full pedal cycle even when the
+        // distance-course workout timeline advances at only quarter speed.
+        QVERIFY(std::abs((after.visual.riderPedalCycles
+                          - before.visual.riderPedalCycles) - 1.0) < 1.0e-9);
+    }
+
+    void riderPedallingDoesNotCatchUpPausedPresentationTime()
+    {
+        WorkoutGameEngine engine;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        QVERIFY(engine.configure(course, 200.0, true));
+        WorkoutGameEngineInput input;
+        input.simulation = WorkoutGameFeatureLab::input(
+                course, 0, WorkoutGameFeatureLabScenario::Pass);
+        input.simulation.cadenceRpm = 60.0;
+
+        const WorkoutGameEngineFrame before = engine.update(input, 1000);
+        input.simulation.paused = true;
+        input.simulation.workoutTimeMs = 250;
+        const WorkoutGameEngineFrame paused = engine.update(input, 5000);
+        QCOMPARE(paused.visual.riderPedalCycles,
+                 before.visual.riderPedalCycles);
+
+        input.simulation.paused = false;
+        input.simulation.workoutTimeMs = 255;
+        const WorkoutGameEngineFrame resumed = engine.update(input, 5020);
+        QVERIFY(std::abs((resumed.visual.riderPedalCycles
+                          - paused.visual.riderPedalCycles) - 0.02) < 1.0e-9);
     }
 
     void nonFiniteTelemetryCannotPoisonPublishedFrame()

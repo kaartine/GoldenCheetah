@@ -64,6 +64,8 @@ void WorkoutGameEngine::reset()
     audioEventJournal.reset();
     worldClockInitialized = false;
     lastWorldTimeMs = 0;
+    riderPedalClockInitialized = false;
+    lastRiderPedalPresentationTimeMs = 0;
     riderPedalCycles = 0.0;
     sequence = 0;
 }
@@ -177,20 +179,30 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
         physicsInput.featureActionId = feature.actionId;
         world = physics.update(physicsInput);
 
-        const double elapsedSeconds = worldClockInitialized
+        const double worldElapsedSeconds = worldClockInitialized
                 && snapshot.workoutTimeMs >= lastWorldTimeMs
                 && !input.paused
                 ? double(snapshot.workoutTimeMs - lastWorldTimeMs) / 1000.0
                 : 0.0;
-        riderPedalCycles += elapsedSeconds
+        const double pedalElapsedSeconds = riderPedalClockInitialized
+                && presentationTimeMs >= lastRiderPedalPresentationTimeMs
+                && !input.paused
+                ? double(presentationTimeMs
+                         - lastRiderPedalPresentationTimeMs) / 1000.0
+                : 0.0;
+        riderPedalCycles += pedalElapsedSeconds
                 * std::max(0.0, input.cadenceRpm) / 60.0;
-        view = camera.update(world, elapsedSeconds);
+        view = camera.update(world, worldElapsedSeconds);
         worldClockInitialized = true;
         lastWorldTimeMs = snapshot.workoutTimeMs;
+        riderPedalClockInitialized = true;
+        lastRiderPedalPresentationTimeMs = presentationTimeMs;
     } else {
         camera.reset();
         worldClockInitialized = false;
         lastWorldTimeMs = input.workoutTimeMs;
+        riderPedalClockInitialized = false;
+        lastRiderPedalPresentationTimeMs = presentationTimeMs;
     }
 
     result.visual = {snapshot, {}, world, view, {}, feature};

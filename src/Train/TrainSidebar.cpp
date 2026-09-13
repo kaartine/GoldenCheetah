@@ -2586,6 +2586,8 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
                 }
             }
 
+            const double deviceReportedSpeedKph = rtData.getSpeed();
+
             // If simulated speed is *not* checked then you get speed reported by
             // trainer which in ergo mode will be dictated by your gear and cadence,
             // and in slope mode is whatever the trainer happens to implement.
@@ -2606,7 +2608,8 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
                         displayCadence,
                         displayPower,
                         virtualDrivetrain.gear(),
-                        200);
+                        200,
+                        deviceReportedSpeedKph);
                 rtData.setSpeed(displaySpeed);
                 distanceTick = displaySpeed / (5 * 3600);
             }

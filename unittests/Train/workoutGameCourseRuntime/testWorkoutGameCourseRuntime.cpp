@@ -351,6 +351,49 @@ private slots:
         QCOMPARE(runtime.progressSpeedKph(), 0.0);
     }
 
+    void reportedTrainerSpeedStartsProgressWhileCadenceCatchesUp()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("runtime.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, sampleDocument(), error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseRuntime runtime;
+        WorkoutGameCourseRuntime comparison;
+        QCOMPARE(runtime.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
+        QCOMPARE(comparison.configure(path),
+                 WorkoutGameCourseRuntimeStatus::Ready);
+
+        const double first = runtime.updateProgressSpeedKph(
+                0.0, 20.0, 6, 200, 10.73);
+        const double comparisonFirst = comparison.updateProgressSpeedKph(
+                0.0, 20.0, 6, 200, 10.73);
+        QVERIFY(first > 0.0);
+        QVERIFY(first <= 10.73);
+        QCOMPARE(first, comparisonFirst);
+
+        const double withCadence = runtime.updateProgressSpeedKph(
+                26.0, 20.0, 6, 200, 100000.0);
+        const double comparisonWithCadence =
+                comparison.updateProgressSpeedKph(
+                    26.0, 20.0, 6, 200, 0.0);
+        QVERIFY(withCadence > 0.0);
+        QCOMPARE(withCadence, comparisonWithCadence);
+
+        runtime.restartProgress();
+        QCOMPARE(runtime.updateProgressSpeedKph(
+                     0.0, 0.0, 6, 200, 10.73), 0.0);
+
+        for (int sample = 0; sample < 100; ++sample) {
+            runtime.updateProgressSpeedKph(
+                    0.0, 20.0, 6, 1000, 100000.0);
+        }
+        QCOMPARE(runtime.progressSpeedKph(), 300.0);
+    }
+
     void rejectsUnavailableOrInvalidGeneratorTargets()
     {
         WorkoutGameCourseRuntime runtime;
