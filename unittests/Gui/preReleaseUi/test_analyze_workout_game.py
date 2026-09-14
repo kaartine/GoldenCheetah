@@ -488,6 +488,34 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         selection.selectChild.assert_called_once_with(3)
         selection.isChildSelected.assert_called_once_with(3)
 
+    def test_select_accessible_item_refreshes_a_stale_item_once(self):
+        stale = mock.Mock()
+        type(stale).parent = mock.PropertyMock(
+            side_effect=RuntimeError("stale")
+        )
+        replacement = mock.Mock()
+        parent = mock.Mock()
+        selection = mock.Mock()
+        replacement.parent = parent
+        replacement.getIndexInParent.return_value = 2
+        parent.querySelection.return_value = selection
+        selection.selectChild.return_value = True
+        selection.isChildSelected.return_value = True
+        driver = object.__new__(UI.UiDriver)
+        driver._accessible_metadata = mock.Mock(
+            return_value=("Data Generator", "table cell", True)
+        )
+        driver.enabled = mock.Mock(return_value=True)
+        driver.refresh_accessible = mock.Mock(return_value=replacement)
+
+        driver.select_accessible_item(stale, timeout=0.01)
+
+        driver.refresh_accessible.assert_called_once_with(
+            stale, "Data Generator", "table cell", True
+        )
+        selection.selectChild.assert_called_once_with(2)
+        selection.isChildSelected.assert_called_once_with(2)
+
     def test_combo_selection_accepts_selected_item_when_name_is_stale(self):
         combo = object()
         item = object()
@@ -805,6 +833,16 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "unknown tests"):
                 UI.selected_ui_tests_from_environment()
+
+        for value, message in (
+            ("view_navigation,", "empty test name"),
+            ("view_navigation,view_navigation", "duplicate test names"),
+        ):
+            with self.subTest(value=value), mock.patch.dict(
+                os.environ, {"GC_UI_TESTS": value}, clear=True
+            ):
+                with self.assertRaisesRegex(ValueError, message):
+                    UI.selected_ui_tests_from_environment()
 
     def test_ui_test_filter_adds_workout_import_dependencies(self):
         for requested in (
