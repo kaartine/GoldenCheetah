@@ -146,9 +146,9 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 83352,
+    "glbBytes": 91624,
     "trianglesLod0": 656,
-    "materials": 4,
+    "materials": 1,
     "textureBytes": 0,
     "nodes": [
       "GEO_DeadwoodFallen_LOD0",
@@ -202,7 +202,7 @@
     "budgets": {
       "maxGlbBytes": 98304,
       "maxTrianglesLod0": 720,
-      "maxMaterials": 4,
+      "maxMaterials": 1,
       "maxTextureBytes": 0
     }
   },

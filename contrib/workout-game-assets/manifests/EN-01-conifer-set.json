@@ -82,7 +82,7 @@
       "Reproduce the GLB byte for byte and validate it with the repository policy.",
       "Convert twice with Qt Balsam 6.8.3 and compare every output byte.",
       "Select two spruce groves, one silver-birch grove or the Scots-pine grove in WorkoutGameConifer.qml while runtime terrain owns placement and base elevation.",
-      "Keep each grove to one trunk and one crown model; the two ground-level saplings are merged into the crown mesh so the 18-tree runtime cap and draw-call contract do not change."
+      "Keep each grove to one trunk and one crown model; the two ground-level saplings are merged into the crown mesh, and render the 36-tree two-depth runtime forest through four stable species instance batches."
     ]
   },
   "technical": {
