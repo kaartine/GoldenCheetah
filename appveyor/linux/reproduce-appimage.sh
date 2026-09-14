@@ -99,9 +99,8 @@ esac
     exit 1
 }
 if [ -e "$OUTPUT_ROOT" ]; then
-    [ -d "$OUTPUT_ROOT" ] && [ ! -L "$OUTPUT_ROOT" ] &&
-        [ -z "$(find -P "$OUTPUT_ROOT" -mindepth 1 -print -quit)" ] || {
-        echo "Reproduction output directory must be empty." >&2
+    [ -d "$OUTPUT_ROOT" ] && [ ! -L "$OUTPUT_ROOT" ] || {
+        echo "Reproduction output path must be a real directory." >&2
         exit 1
     }
 else
@@ -122,10 +121,24 @@ if OUTPUT_CLASSIFICATION=$(classify_local_appimage_output \
     if [ "$OUTPUT_CLASSIFICATION" = managed ]; then
         LOCAL_OUTPUT_LOCK=$(prepare_local_appimage_output_lock "$OUTPUT_ROOT")
         exec {LOCAL_OUTPUT_LOCK_FD}>>"$LOCAL_OUTPUT_LOCK"
-        flock -x "$LOCAL_OUTPUT_LOCK_FD"
+        command -v flock >/dev/null 2>&1 || {
+            echo "flock is required for managed local AppImage output." >&2
+            exit 1
+        }
+        if ! flock -n -x "$LOCAL_OUTPUT_LOCK_FD"; then
+            echo "Another build is using the local AppImage output." >&2
+            exit 1
+        fi
+        local_appimage_output_fresh_claim_valid "$OUTPUT_ROOT" || {
+            echo "Local AppImage output changed while it was being claimed." >&2
+            exit 1
+        }
         LOCAL_OUTPUT_MANAGED=true
         write_local_appimage_output_marker \
             "$SOURCE_ROOT" "$OUTPUT_ROOT" "$REVISION" building
+    elif [ -n "$(find -P "$OUTPUT_ROOT" -mindepth 1 -print -quit)" ]; then
+        echo "Reproduction output directory must be empty." >&2
+        exit 1
     fi
 else
     exit 1

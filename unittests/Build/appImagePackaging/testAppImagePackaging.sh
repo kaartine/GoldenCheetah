@@ -53,6 +53,7 @@ DATA_FILTER_ZONES_PROJECT="$REPO_ROOT/unittests/Core/dataFilterZones/dataFilterZ
 INDEND_PLOT_MARKER_PROJECT="$REPO_ROOT/unittests/Charts/indendPlotMarkerMatrix/indendPlotMarkerMatrix.pro"
 UNITTEST_CONFIG="$REPO_ROOT/unittests/unittests.pri.in"
 CREDENTIAL_SETTINGS_TEST="$REPO_ROOT/unittests/Core/credentialSettings/testCredentialSettings.cpp"
+DEVELOPMENT_WORKFLOW="$REPO_ROOT/DEVELOPMENT-WORKFLOW.md"
 
 fail()
 {
@@ -168,6 +169,12 @@ declare -F write_local_appimage_output_marker >/dev/null ||
     fail "local AppImage output marker writer is missing"
 declare -F prepare_local_appimage_output_lock >/dev/null ||
     fail "local AppImage output lock helper is missing"
+declare -F local_appimage_output_fresh_claim_valid >/dev/null ||
+    fail "local AppImage output fresh-claim validator is missing"
+declare -F local_appimage_output_inventory_valid >/dev/null ||
+    fail "local AppImage output inventory validator is missing"
+declare -F local_appimage_output_mounts_absent >/dev/null ||
+    fail "local AppImage output mountpoint validator is missing"
 declare -F local_appimage_output_build_is_active >/dev/null ||
     fail "local AppImage output activity probe is missing"
 declare -F read_local_appimage_output_marker >/dev/null ||
@@ -234,9 +241,18 @@ declare -F run_linuxdeployqt_with_keychain_probe >/dev/null ||
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
+assert_contains "$DEVELOPMENT_WORKFLOW" 'dedicated, per-owner build-only'
+assert_contains "$DEVELOPMENT_WORKFLOW" 'Never use an athlete'
+assert_contains "$DEVELOPMENT_WORKFLOW" \
+    'library, home directory, `.goldencheetah` data directory'
+assert_contains "$DEVELOPMENT_WORKFLOW" 'install -d -m 0700 "$workspace_root"'
+assert_contains "$DEVELOPMENT_WORKFLOW" 'path, device and inode'
+assert_contains "$DEVELOPMENT_WORKFLOW" 'Deletion is intentionally not'
+
 RETENTION_ROOT="$TEMP_DIR/local-output-retention"
 RETENTION_SOURCE="$RETENTION_ROOT/GoldenCheetah-src"
-mkdir -p "$RETENTION_SOURCE"
+mkdir -m 0700 "$RETENTION_ROOT"
+mkdir -m 0700 "$RETENTION_SOURCE"
 
 create_local_output_fixture()
 {
@@ -245,7 +261,7 @@ create_local_output_fixture()
     local output="$RETENTION_ROOT/GoldenCheetah-output-${revision:0:7}"
     local image_hash
 
-    mkdir "$output"
+    mkdir -m 0700 "$output"
     prepare_local_appimage_output_lock "$output" >/dev/null
     if [ "$state" = valid ]; then
         printf 'image %s\n' "$revision" >"$output/GoldenCheetah.AppImage"
@@ -264,6 +280,21 @@ create_local_output_fixture()
         "$RETENTION_SOURCE" "$output" "$revision" "$state"
     printf '%s\n' "$output"
 }
+
+RETENTION_FRESH="$RETENTION_ROOT/GoldenCheetah-output-f0f0f0f"
+mkdir -m 0700 "$RETENTION_FRESH"
+prepare_local_appimage_output_lock "$RETENTION_FRESH" >/dev/null
+local_appimage_output_fresh_claim_valid "$RETENTION_FRESH" ||
+    fail "a validated lone lock was not accepted as a recoverable fresh claim"
+prepare_local_appimage_output_lock "$RETENTION_FRESH" >/dev/null ||
+    fail "a validated lone lock could not be reopened safely"
+printf 'unexpected\n' >"$RETENTION_FRESH/unexpected"
+if local_appimage_output_fresh_claim_valid "$RETENTION_FRESH"; then
+    fail "a fresh output claim accepted content beyond its lone lock"
+fi
+rm -f -- "$RETENTION_FRESH/unexpected" \
+    "$RETENTION_FRESH/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK"
+rmdir "$RETENTION_FRESH"
 
 RETENTION_OLD_REVISION=1111111111111111111111111111111111111111
 RETENTION_PREVIOUS_REVISION=2222222222222222222222222222222222222222
@@ -299,7 +330,7 @@ RETENTION_ACTIVE=$(create_local_output_fixture \
 exec {RETENTION_ACTIVE_FD}>>"$RETENTION_ACTIVE/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK"
 flock -x "$RETENTION_ACTIVE_FD"
 RETENTION_UNMARKED="$RETENTION_ROOT/GoldenCheetah-output-7777777"
-mkdir "$RETENTION_UNMARKED"
+mkdir -m 0700 "$RETENTION_UNMARKED"
 printf 'user-owned unmarked data\n' >"$RETENTION_UNMARKED/preserve"
 printf 'unrelated sibling data\n' >"$RETENTION_ROOT/preserve.txt"
 
@@ -371,6 +402,108 @@ grep -Fq 'failed after two attempts' "$RETENTION_RETRY_LOG" ||
     fail "retention deleted an invalidly marked directory"
 rm -rf -- "$RETENTION_INVALID" "$RETENTION_ELIGIBLE"
 
+RETENTION_EXTRA_REVISION=dededededededededededededededededededede
+RETENTION_EXTRA=$(create_local_output_fixture "$RETENTION_EXTRA_REVISION" failed)
+printf 'do not delete\n' >"$RETENTION_EXTRA/notes.txt"
+if prune_local_appimage_output_generations "$RETENTION_SOURCE" \
+        "$RETENTION_CURRENT" "$RETENTION_CURRENT_REVISION" >/dev/null 2>&1; then
+    fail "retention accepted an extra file in a marked output"
+fi
+[ -f "$RETENTION_EXTRA/notes.txt" ] || fail "retention deleted an extra file"
+rm "$RETENTION_EXTRA/notes.txt"
+mkdir "$RETENTION_EXTRA/subdirectory"
+if prune_local_appimage_output_generations "$RETENTION_SOURCE" \
+        "$RETENTION_CURRENT" "$RETENTION_CURRENT_REVISION" >/dev/null 2>&1; then
+    fail "retention accepted an extra directory in a marked output"
+fi
+[ -d "$RETENTION_EXTRA/subdirectory" ] || fail "retention deleted an extra directory"
+rmdir "$RETENTION_EXTRA/subdirectory"
+prune_local_appimage_output_generations "$RETENTION_SOURCE" \
+    "$RETENTION_CURRENT" "$RETENTION_CURRENT_REVISION" >/dev/null ||
+    fail "retention could not remove a restored exact inventory"
+
+RETENTION_MOUNT_REVISION=edededededededededededededededededededed
+RETENTION_MOUNT=$(create_local_output_fixture "$RETENTION_MOUNT_REVISION" failed)
+mkdir "$RETENTION_MOUNT/nested-bind"
+MOUNTPOINT_STUB_DIR="$TEMP_DIR/mountpoint-stub"
+MOUNTPOINT_STUB_LOG="$TEMP_DIR/mountpoint-stub.log"
+mkdir "$MOUNTPOINT_STUB_DIR"
+cat >"$MOUNTPOINT_STUB_DIR/mountpoint" <<'EOF'
+#!/bin/sh
+path=
+for argument do path=$argument; done
+printf '%s\n' "$path" >>"$GC_MOUNTPOINT_STUB_LOG"
+[ "$path" != "$GC_MOUNTPOINT_STUB_TARGET" ] || exit 0
+exit 32
+EOF
+chmod 0755 "$MOUNTPOINT_STUB_DIR/mountpoint"
+if PATH="$MOUNTPOINT_STUB_DIR:$PATH" \
+   GC_MOUNTPOINT_STUB_LOG="$MOUNTPOINT_STUB_LOG" \
+   GC_MOUNTPOINT_STUB_TARGET="$RETENTION_MOUNT/nested-bind" \
+        prune_local_appimage_output_generations "$RETENTION_SOURCE" \
+            "$RETENTION_CURRENT" "$RETENTION_CURRENT_REVISION" \
+            >/dev/null 2>&1; then
+    fail "retention accepted a nested mountpoint fixture"
+fi
+# The allowlist must reject the directory before mountpoint inspection can
+# traverse it. An empty log proves the stub was never asked about nested paths.
+[ ! -s "$MOUNTPOINT_STUB_LOG" ] ||
+    fail "retention inspected a nested path before rejecting its inventory"
+[ -d "$RETENTION_MOUNT/nested-bind" ] || fail "retention removed nested data"
+rmdir "$RETENTION_MOUNT/nested-bind"
+if PATH="$MOUNTPOINT_STUB_DIR:$PATH" \
+   GC_MOUNTPOINT_STUB_LOG="$MOUNTPOINT_STUB_LOG" \
+   GC_MOUNTPOINT_STUB_TARGET="$RETENTION_MOUNT" \
+        prune_local_appimage_output_generations "$RETENTION_SOURCE" \
+            "$RETENTION_CURRENT" "$RETENTION_CURRENT_REVISION" \
+            >/dev/null 2>&1; then
+    fail "retention accepted an output-directory mountpoint"
+fi
+grep -Fxq "$RETENTION_MOUNT" "$MOUNTPOINT_STUB_LOG" ||
+    fail "retention did not inspect the output root for a mountpoint"
+rm -f -- "$RETENTION_MOUNT/$GC_LOCAL_APPIMAGE_OUTPUT_MARKER" \
+    "$RETENTION_MOUNT/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK"
+rmdir "$RETENTION_MOUNT"
+
+RETENTION_TRANSIENT_REVISION=efefefefefefefefefefefefefefefefefefefef
+RETENTION_TRANSIENT=$(create_local_output_fixture "$RETENTION_TRANSIENT_REVISION" failed)
+TRANSIENT_STUB_DIR="$TEMP_DIR/transient-mountpoint-stub"
+TRANSIENT_STUB_STATE="$TEMP_DIR/transient-mountpoint.state"
+mkdir "$TRANSIENT_STUB_DIR"
+cat >"$TRANSIENT_STUB_DIR/mountpoint" <<'EOF'
+#!/bin/sh
+if [ ! -e "$GC_TRANSIENT_MOUNTPOINT_STATE" ]; then
+    : >"$GC_TRANSIENT_MOUNTPOINT_STATE"
+    exit 7
+fi
+exit 32
+EOF
+chmod 0755 "$TRANSIENT_STUB_DIR/mountpoint"
+PATH="$TRANSIENT_STUB_DIR:$PATH" \
+GC_TRANSIENT_MOUNTPOINT_STATE="$TRANSIENT_STUB_STATE" \
+    prune_local_appimage_outputs_with_retry "$RETENTION_SOURCE" \
+        "$RETENTION_CURRENT" "$RETENTION_CURRENT_REVISION" >/dev/null 2>&1 ||
+    fail "retention did not recover from a transient first failure"
+[ ! -e "$RETENTION_TRANSIENT" ] || fail "retry left an eligible failed output"
+
+if PATH=/nonexistent prune_local_appimage_output_generations \
+        "$RETENTION_SOURCE" "$RETENTION_CURRENT" \
+        "$RETENTION_CURRENT_REVISION" >/dev/null 2>&1; then
+    fail "retention accepted a missing flock command"
+fi
+MISSING_MOUNTPOINT_DIR="$TEMP_DIR/missing-mountpoint"
+mkdir "$MISSING_MOUNTPOINT_DIR"
+cat >"$MISSING_MOUNTPOINT_DIR/flock" <<'EOF'
+#!/bin/sh
+exit 99
+EOF
+chmod 0755 "$MISSING_MOUNTPOINT_DIR/flock"
+if PATH="$MISSING_MOUNTPOINT_DIR" prune_local_appimage_output_generations \
+        "$RETENTION_SOURCE" "$RETENTION_CURRENT" \
+        "$RETENTION_CURRENT_REVISION" >/dev/null 2>&1; then
+    fail "retention accepted a missing mountpoint command"
+fi
+
 RETENTION_OUTSIDE="$TEMP_DIR/retention-outside"
 RETENTION_OUTSIDE_OUTPUT="$RETENTION_OUTSIDE/GoldenCheetah-output-4444444"
 mkdir -p "$RETENTION_OUTSIDE_OUTPUT"
@@ -410,6 +543,19 @@ if classify_local_appimage_output \
 fi
 chmod 0700 "$RETENTION_ROOT"
 
+chmod 0770 "$RETENTION_ROOT"
+if classify_local_appimage_output "$RETENTION_SOURCE" "$RETENTION_CURRENT" \
+        "$RETENTION_CURRENT" "$RETENTION_CURRENT_REVISION" >/dev/null 2>&1; then
+    fail "retention accepted a group-writable output parent"
+fi
+chmod 0700 "$RETENTION_ROOT"
+chmod 0770 "$RETENTION_CURRENT"
+if classify_local_appimage_output "$RETENTION_SOURCE" "$RETENTION_CURRENT" \
+        "$RETENTION_CURRENT" "$RETENTION_CURRENT_REVISION" >/dev/null 2>&1; then
+    fail "retention accepted a group-writable output directory"
+fi
+chmod 0700 "$RETENTION_CURRENT"
+
 if [ "$(id -u)" -eq 0 ]; then
     RETENTION_FOREIGN_REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     RETENTION_FOREIGN="$RETENTION_ROOT/GoldenCheetah-output-aaaaaaa"
@@ -427,6 +573,8 @@ fi
 
 REPRO_RETENTION_ROOT="$TEMP_DIR/reproduce-retention"
 REPRO_RETENTION_SOURCE="$REPRO_RETENTION_ROOT/GoldenCheetah-src"
+mkdir -m 0700 "$REPRO_RETENTION_ROOT"
+mkdir -m 0700 "$REPRO_RETENTION_SOURCE"
 mkdir -p "$REPRO_RETENTION_SOURCE/src/Core" "$REPRO_RETENTION_SOURCE/qwt"
 printf 'CONFIG += release\n' >"$REPRO_RETENTION_SOURCE/src/gcconfig.pri"
 printf 'fixture\n' >"$REPRO_RETENTION_SOURCE/src/Core/.retention-fixture"
@@ -439,6 +587,7 @@ git -C "$REPRO_RETENTION_SOURCE" add .
 git -C "$REPRO_RETENTION_SOURCE" commit -qm initial
 REPRO_FAKE_BUILD="$TEMP_DIR/fake-appimage-build-pass.sh"
 REPRO_FAIL_BUILD="$TEMP_DIR/failing-appimage-build-pass.sh"
+REPRO_SLOW_BUILD="$TEMP_DIR/slow-appimage-build-pass.sh"
 REPRO_FAKE_PACKAGE="$TEMP_DIR/fake-appimage-package-pass.sh"
 cat >"$REPRO_FAKE_BUILD" <<'EOF'
 #!/bin/sh
@@ -450,6 +599,13 @@ EOF
 cat >"$REPRO_FAIL_BUILD" <<'EOF'
 #!/bin/sh
 exit 23
+EOF
+cat >"$REPRO_SLOW_BUILD" <<'EOF'
+#!/bin/sh
+set -eu
+: >"$GC_RETENTION_BUILD_READY"
+while [ ! -e "$GC_RETENTION_BUILD_GATE" ]; do sleep 0.05; done
+exec "$GC_RETENTION_REAL_BUILD" "$@"
 EOF
 cat >"$REPRO_FAKE_PACKAGE" <<'EOF'
 #!/bin/sh
@@ -467,11 +623,12 @@ printf 'source_revision=%s\n' "$revision" >"$1/build.manifest"
 printf '{"revision":"%s"}\n' "$revision" \
     >"$1/GoldenCheetah.AppImage.sbom.cdx.json"
 EOF
-chmod 0755 "$REPRO_FAKE_BUILD" "$REPRO_FAIL_BUILD" "$REPRO_FAKE_PACKAGE"
+chmod 0755 "$REPRO_FAKE_BUILD" "$REPRO_FAIL_BUILD" \
+    "$REPRO_SLOW_BUILD" "$REPRO_FAKE_PACKAGE"
 
 REPRO_RETENTION_REVISION_ONE=$(git -C "$REPRO_RETENTION_SOURCE" rev-parse HEAD)
 REPRO_RETENTION_OUTPUT_ONE="$REPRO_RETENTION_ROOT/GoldenCheetah-output-${REPRO_RETENTION_REVISION_ONE:0:7}"
-mkdir "$REPRO_RETENTION_OUTPUT_ONE"
+mkdir -m 0700 "$REPRO_RETENTION_OUTPUT_ONE"
 GC_APPIMAGE_BUILD_PASS_SCRIPT="$REPRO_FAKE_BUILD" \
 GC_APPIMAGE_PACKAGE_PASS_SCRIPT="$REPRO_FAKE_PACKAGE" \
     "$CI_REPRODUCE" "$REPRO_RETENTION_SOURCE" \
@@ -486,7 +643,7 @@ git -C "$REPRO_RETENTION_SOURCE" add revision.txt
 git -C "$REPRO_RETENTION_SOURCE" commit -qm second
 REPRO_RETENTION_REVISION_TWO=$(git -C "$REPRO_RETENTION_SOURCE" rev-parse HEAD)
 REPRO_RETENTION_OUTPUT_TWO="$REPRO_RETENTION_ROOT/GoldenCheetah-output-${REPRO_RETENTION_REVISION_TWO:0:7}"
-mkdir "$REPRO_RETENTION_OUTPUT_TWO"
+mkdir -m 0700 "$REPRO_RETENTION_OUTPUT_TWO"
 if GC_APPIMAGE_BUILD_PASS_SCRIPT="$REPRO_FAIL_BUILD" \
    GC_APPIMAGE_PACKAGE_PASS_SCRIPT="$REPRO_FAKE_PACKAGE" \
         "$CI_REPRODUCE" "$REPRO_RETENTION_SOURCE" \
@@ -503,7 +660,7 @@ git -C "$REPRO_RETENTION_SOURCE" add revision.txt
 git -C "$REPRO_RETENTION_SOURCE" commit -qm third
 REPRO_RETENTION_REVISION_THREE=$(git -C "$REPRO_RETENTION_SOURCE" rev-parse HEAD)
 REPRO_RETENTION_OUTPUT_THREE="$REPRO_RETENTION_ROOT/GoldenCheetah-output-${REPRO_RETENTION_REVISION_THREE:0:7}"
-mkdir "$REPRO_RETENTION_OUTPUT_THREE"
+mkdir -m 0700 "$REPRO_RETENTION_OUTPUT_THREE"
 GC_APPIMAGE_BUILD_PASS_SCRIPT="$REPRO_FAKE_BUILD" \
 GC_APPIMAGE_PACKAGE_PASS_SCRIPT="$REPRO_FAKE_PACKAGE" \
     "$CI_REPRODUCE" "$REPRO_RETENTION_SOURCE" \
@@ -514,6 +671,61 @@ GC_APPIMAGE_PACKAGE_PASS_SCRIPT="$REPRO_FAKE_PACKAGE" \
     fail "retention removed the previous reproduced output"
 [ ! -e "$REPRO_RETENTION_OUTPUT_TWO" ] ||
     fail "retention kept a marked failed reproduced output"
+
+printf 'fourth\n' >>"$REPRO_RETENTION_SOURCE/revision.txt"
+git -C "$REPRO_RETENTION_SOURCE" add revision.txt
+git -C "$REPRO_RETENTION_SOURCE" commit -qm fourth
+REPRO_RETENTION_REVISION_FOUR=$(git -C "$REPRO_RETENTION_SOURCE" rev-parse HEAD)
+REPRO_RETENTION_OUTPUT_FOUR="$REPRO_RETENTION_ROOT/GoldenCheetah-output-${REPRO_RETENTION_REVISION_FOUR:0:7}"
+REPRO_RETENTION_READY="$TEMP_DIR/reproduce-retention.ready"
+REPRO_RETENTION_GATE="$TEMP_DIR/reproduce-retention.gate"
+mkdir -m 0700 "$REPRO_RETENTION_OUTPUT_FOUR"
+GC_RETENTION_BUILD_READY="$REPRO_RETENTION_READY" \
+GC_RETENTION_BUILD_GATE="$REPRO_RETENTION_GATE" \
+GC_RETENTION_REAL_BUILD="$REPRO_FAKE_BUILD" \
+GC_APPIMAGE_BUILD_PASS_SCRIPT="$REPRO_SLOW_BUILD" \
+GC_APPIMAGE_PACKAGE_PASS_SCRIPT="$REPRO_FAKE_PACKAGE" \
+    "$CI_REPRODUCE" "$REPRO_RETENTION_SOURCE" \
+        "$REPRO_RETENTION_OUTPUT_FOUR" >/dev/null 2>&1 &
+REPRO_RETENTION_PID=$!
+for _ in $(seq 1 100); do
+    [ ! -e "$REPRO_RETENTION_READY" ] || break
+    kill -0 "$REPRO_RETENTION_PID" 2>/dev/null ||
+        fail "first same-output reproduction exited before holding its lock"
+    sleep 0.05
+done
+[ -e "$REPRO_RETENTION_READY" ] || fail "first build did not reach its gate"
+if timeout 5 env GC_APPIMAGE_BUILD_PASS_SCRIPT="$REPRO_FAKE_BUILD" \
+        GC_APPIMAGE_PACKAGE_PASS_SCRIPT="$REPRO_FAKE_PACKAGE" \
+        "$CI_REPRODUCE" "$REPRO_RETENTION_SOURCE" \
+            "$REPRO_RETENTION_OUTPUT_FOUR" >/dev/null 2>&1; then
+    fail "a second concurrent build reused the same managed output"
+else
+    REPRO_SECOND_STATUS=$?
+    [ "$REPRO_SECOND_STATUS" -ne 124 ] ||
+        fail "a second same-output build waited instead of failing promptly"
+fi
+touch "$REPRO_RETENTION_GATE"
+wait "$REPRO_RETENTION_PID" || fail "the lock-owning build did not complete"
+read -r REPRO_STATE _ _ < <(read_local_appimage_output_marker \
+    "$REPRO_RETENTION_SOURCE" "$REPRO_RETENTION_OUTPUT_FOUR")
+[ "$REPRO_STATE" = valid ] || fail "the lock-owning build was overwritten"
+
+printf 'fifth\n' >>"$REPRO_RETENTION_SOURCE/revision.txt"
+git -C "$REPRO_RETENTION_SOURCE" add revision.txt
+git -C "$REPRO_RETENTION_SOURCE" commit -qm fifth
+REPRO_RETENTION_REVISION_FIVE=$(git -C "$REPRO_RETENTION_SOURCE" rev-parse HEAD)
+REPRO_RETENTION_OUTPUT_FIVE="$REPRO_RETENTION_ROOT/GoldenCheetah-output-${REPRO_RETENTION_REVISION_FIVE:0:7}"
+mkdir -m 0700 "$REPRO_RETENTION_OUTPUT_FIVE"
+prepare_local_appimage_output_lock "$REPRO_RETENTION_OUTPUT_FIVE" >/dev/null
+GC_APPIMAGE_BUILD_PASS_SCRIPT="$REPRO_FAKE_BUILD" \
+GC_APPIMAGE_PACKAGE_PASS_SCRIPT="$REPRO_FAKE_PACKAGE" \
+    "$CI_REPRODUCE" "$REPRO_RETENTION_SOURCE" \
+        "$REPRO_RETENTION_OUTPUT_FIVE" >/dev/null ||
+    fail "reproduction did not recover a validated lone output lock"
+read -r REPRO_STATE _ _ < <(read_local_appimage_output_marker \
+    "$REPRO_RETENTION_SOURCE" "$REPRO_RETENTION_OUTPUT_FIVE")
+[ "$REPRO_STATE" = valid ] || fail "lone-lock recovery was not valid"
 
 REPRO_ARBITRARY_OUTPUT="$REPRO_RETENTION_ROOT/manual-output"
 mkdir "$REPRO_ARBITRARY_OUTPUT"

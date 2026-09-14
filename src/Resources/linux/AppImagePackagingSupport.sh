@@ -2004,7 +2004,7 @@ classify_local_appimage_output()
     local revision=$4
     local output_name output_suffix source_parent output_parent logical_output
     local source_uid source_gid parent_uid parent_gid output_uid output_gid
-    local parent_mode runner_uid
+    local parent_mode output_mode runner_uid
 
     [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {
         echo "Cannot classify a local AppImage output without a full revision." >&2
@@ -2068,8 +2068,13 @@ classify_local_appimage_output()
         return 1
     fi
     parent_mode=$(stat -Lc '%a' -- "$output_parent") || return
-    if [ $((8#$parent_mode & 8#002)) -ne 0 ]; then
-        echo "Local AppImage retention parent is writable by other users." >&2
+    if [ $((8#$parent_mode & 8#022)) -ne 0 ]; then
+        echo "Local AppImage retention parent is group- or world-writable." >&2
+        return 1
+    fi
+    output_mode=$(stat -Lc '%a' -- "$output_root") || return
+    if [ $((8#$output_mode & 8#022)) -ne 0 ]; then
+        echo "Local AppImage retention output is group- or world-writable." >&2
         return 1
     fi
 
@@ -2191,8 +2196,91 @@ prepare_local_appimage_output_lock()
         echo "Local AppImage output lock has an unsafe owner: $lock" >&2
         return 1
     fi
-    chmod 0600 -- "$lock" || return
+    [ "$(stat -Lc '%a' -- "$lock")" = 600 ] || {
+        echo "Existing local AppImage output lock has an unsafe mode: $lock" >&2
+        return 1
+    }
     printf '%s\n' "$lock"
+)
+
+local_appimage_output_fresh_claim_valid()
+(
+    [ "$#" -eq 1 ] || return 2
+    local output_root=$1
+    local lock="$output_root/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK"
+    local entry count=0 inventory_list=
+
+    [ -d "$output_root" ] && [ ! -L "$output_root" ] &&
+        [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
+    inventory_list=$(mktemp) || return
+    trap 'rm -f -- "$inventory_list"' EXIT
+    find -P "$output_root" -mindepth 1 -maxdepth 1 -print0 \
+        >"$inventory_list" || return
+    while IFS= read -r -d '' entry; do
+        count=$((count + 1))
+        [ "$entry" = "$lock" ] || {
+            echo "Fresh local AppImage output contains unexpected data: $entry" >&2
+            return 1
+        }
+    done <"$inventory_list"
+    [ "$count" -eq 1 ]
+)
+
+local_appimage_output_inventory_valid()
+(
+    [ "$#" -eq 1 ] || return 2
+    local output_root=$1
+    local entry name output_owner output_mode inventory_list=
+    local marker_seen=false lock_seen=false
+
+    [ -d "$output_root" ] && [ ! -L "$output_root" ] || return 1
+    output_owner=$(stat -Lc '%u:%g' -- "$output_root") || return
+    output_mode=$(stat -Lc '%a' -- "$output_root") || return
+    [ $((8#$output_mode & 8#022)) -eq 0 ] || return 1
+    inventory_list=$(mktemp) || return
+    trap 'rm -f -- "$inventory_list"' EXIT
+    find -P "$output_root" -mindepth 1 -maxdepth 1 -print0 \
+        >"$inventory_list" || return
+    while IFS= read -r -d '' entry; do
+        name=$(basename -- "$entry") || return
+        case "$name" in
+        "$GC_LOCAL_APPIMAGE_OUTPUT_MARKER") marker_seen=true ;;
+        "$GC_LOCAL_APPIMAGE_OUTPUT_LOCK") lock_seen=true ;;
+        GoldenCheetah.AppImage|GoldenCheetah.AppImage.manifest|\
+        GoldenCheetah.AppImage.sbom.cdx.json|build.manifest) ;;
+        *)
+            echo "Unexpected local AppImage output content: $entry" >&2
+            return 1
+            ;;
+        esac
+        [ -f "$entry" ] && [ ! -L "$entry" ] &&
+            [ "$(stat -Lc '%u:%g' -- "$entry")" = "$output_owner" ] || return 1
+    done <"$inventory_list"
+    [ "$marker_seen" = true ] && [ "$lock_seen" = true ]
+)
+
+local_appimage_output_mounts_absent()
+(
+    [ "$#" -eq 1 ] || return 2
+    local output_root=$1
+    local path status path_list=
+
+    command -v mountpoint >/dev/null 2>&1 || return 1
+    [ -d "$output_root" ] && [ ! -L "$output_root" ] || return 1
+    path_list=$(mktemp) || return
+    trap 'rm -f -- "$path_list"' EXIT
+    # Inventory validation runs first and permits no child directories. Thus
+    # maxdepth 1 covers the whole allowed tree without traversing a mount.
+    find -P "$output_root" -maxdepth 1 -print0 >"$path_list" || return
+    while IFS= read -r -d '' path; do
+        if mountpoint -q -- "$path"; then
+            echo "Local AppImage output contains a mountpoint: $path" >&2
+            return 1
+        else
+            status=$?
+            [ "$status" -eq 32 ] || return 1
+        fi
+    done <"$path_list"
 )
 
 local_appimage_output_build_is_active()
@@ -2364,9 +2452,19 @@ prune_local_appimage_output_generations()
     local entry name marker_info state timestamp marker_revision effective_state status
     local appimage_hash manifest_hash sbom_hash build_manifest_hash
     local current_seen=false previous= previous_timestamp=0 previous_name=
-    local index retained=0 removed=0 lock_fd
-    local -a entries states timestamps revisions effective_states marker_infos
+    local index retained=0 removed=0 lock_fd candidate_fd lock_path
+    local identity lock_identity fd_identity entry_mode entry_index
+    local -a entries states timestamps revisions effective_states marker_infos identities
+    local -a delete_indices delete_fds lock_identities
 
+    command -v flock >/dev/null 2>&1 || {
+        echo "flock is required for local AppImage retention." >&2
+        return 1
+    }
+    command -v mountpoint >/dev/null 2>&1 || {
+        echo "mountpoint is required for local AppImage retention." >&2
+        return 1
+    }
     classification=$(classify_local_appimage_output \
         "$source_root" "$current_output" "$current_output" "$revision") || return
     [ "$classification" = managed ] || return 0
@@ -2391,20 +2489,26 @@ prune_local_appimage_output_generations()
             echo "Unsafe revision-specific AppImage output entry: $entry" >&2
             return 1
         fi
+        identity=$(stat -Lc '%d:%i:%u:%g:%a' -- "$entry") || return
         if [ "$(stat -Lc '%u:%g' -- "$entry")" != "$source_uid:$source_gid" ]; then
             echo "Revision-specific AppImage output has an unsafe owner: $entry" >&2
             return 1
         fi
-        if [ "$(stat -Lc '%d' -- "$entry")" != "$parent_device" ] ||
-           { command -v mountpoint >/dev/null 2>&1 &&
-             mountpoint -q -- "$entry"; }; then
+        if [ "$(stat -Lc '%d' -- "$entry")" != "$parent_device" ]; then
             echo "Revision-specific AppImage output is a filesystem boundary: $entry" >&2
+            return 1
+        fi
+        entry_mode=$(stat -Lc '%a' -- "$entry") || return
+        if [ $((8#$entry_mode & 8#022)) -ne 0 ]; then
+            echo "Revision-specific AppImage output has an unsafe mode: $entry" >&2
             return 1
         fi
         if [ ! -e "$entry/$GC_LOCAL_APPIMAGE_OUTPUT_MARKER" ] &&
            [ ! -L "$entry/$GC_LOCAL_APPIMAGE_OUTPUT_MARKER" ]; then
             continue
         fi
+        local_appimage_output_inventory_valid "$entry" || return
+        local_appimage_output_mounts_absent "$entry" || return
         marker_info=$(read_local_appimage_output_marker \
             "$source_root" "$entry") || {
             echo "Invalid local AppImage output marker: $entry" >&2
@@ -2436,6 +2540,7 @@ prune_local_appimage_output_generations()
         revisions+=("$marker_revision")
         effective_states+=("$effective_state")
         marker_infos+=("$marker_info")
+        identities+=("$identity")
         if [ "$entry" = "$current_output" ]; then
             [ "$state" = valid ] && [ "$effective_state" = valid ] || {
                 echo "Current local AppImage output is not a valid completed build." >&2
@@ -2465,34 +2570,67 @@ prune_local_appimage_output_generations()
         fi
     done
 
+    # Acquire every deletion lock before removing anything. A build that became
+    # active makes the whole pass fail closed without a partial prune.
     for index in "${!entries[@]}"; do
         entry=${entries[$index]}
-        state=${states[$index]}
-        timestamp=${timestamps[$index]}
-        marker_revision=${revisions[$index]}
         if [ "$entry" = "$current_output" ] || [ "$entry" = "$previous" ] ||
            [ "${effective_states[$index]}" = building ]; then
             retained=$((retained + 1))
             continue
         fi
+        lock_path="$entry/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK"
+        lock_identity=$(stat -Lc '%d:%i:%u:%g:%a' -- "$lock_path") || return
+        exec {candidate_fd}<"$lock_path" || return
+        if flock -n -E 75 -x "$candidate_fd"; then
+            :
+        else
+            status=$?
+            exec {candidate_fd}>&-
+            [ "$status" -eq 75 ] &&
+                echo "Local AppImage output became active: $entry" >&2
+            return 1
+        fi
+        fd_identity=$(stat -Lc '%d:%i:%u:%g:%a' \
+            -- "/proc/self/fd/$candidate_fd") || return
+        [ "$fd_identity" = "$lock_identity" ] || return 1
+        delete_indices+=("$index")
+        delete_fds+=("$candidate_fd")
+        lock_identities+=("$lock_identity")
+    done
+
+    for index in "${!delete_indices[@]}"; do
+        entry_index=${delete_indices[$index]}
+        entry=${entries[$entry_index]}
+        candidate_fd=${delete_fds[$index]}
+        lock_identity=${lock_identities[$index]}
+        lock_path="$entry/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK"
+
+        [ "$(stat -Lc '%d:%i:%u:%g:%a' -- "$entry")" = \
+            "${identities[$entry_index]}" ] || return 1
+        [ "$(stat -Lc '%d:%i:%u:%g:%a' -- "$lock_path")" = \
+            "$lock_identity" ] || return 1
+        fd_identity=$(stat -Lc '%d:%i:%u:%g:%a' \
+            -- "/proc/self/fd/$candidate_fd") || return
+        [ "$fd_identity" = "$lock_identity" ] || return 1
+        local_appimage_output_inventory_valid "$entry" || return
+        local_appimage_output_mounts_absent "$entry" || return
         marker_info=$(read_local_appimage_output_marker \
             "$source_root" "$entry") || return
-        [ "$marker_info" = "${marker_infos[$index]}" ] || {
+        [ "$marker_info" = "${marker_infos[$entry_index]}" ] || {
             echo "Local AppImage output changed during retention: $entry" >&2
             return 1
         }
         [ "$(dirname -- "$entry")" = "$parent" ] &&
             [ -d "$entry" ] && [ ! -L "$entry" ] || return 1
-        if [ "$state" = building ]; then
-            if local_appimage_output_build_is_active "$entry"; then
-                echo "Local AppImage output became active during retention: $entry" >&2
-                return 1
-            else
-                status=$?
-                [ "$status" -eq 3 ] || return 1
-            fi
-        fi
-        rm -rf --one-file-system -- "$entry" || return
+        rm -f -- \
+            "$entry/GoldenCheetah.AppImage" \
+            "$entry/GoldenCheetah.AppImage.manifest" \
+            "$entry/GoldenCheetah.AppImage.sbom.cdx.json" \
+            "$entry/build.manifest" \
+            "$entry/$GC_LOCAL_APPIMAGE_OUTPUT_MARKER" \
+            "$entry/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK" || return
+        rmdir -- "$entry" || return
         [ ! -e "$entry" ] && [ ! -L "$entry" ] || return 1
         removed=$((removed + 1))
     done
