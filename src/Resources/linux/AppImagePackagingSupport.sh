@@ -1988,6 +1988,538 @@ compare_appimage_reproduction()
     printf 'Reproduced AppImage SHA-256: %s\n' "$first_hash"
 }
 
+GC_LOCAL_APPIMAGE_OUTPUT_MARKER=.goldencheetah-appimage-output
+GC_LOCAL_APPIMAGE_OUTPUT_LOCK=.goldencheetah-appimage-output.lock
+
+classify_local_appimage_output()
+{
+    if [ "$#" -ne 4 ]; then
+        echo "Usage: classify_local_appimage_output SOURCE_ROOT OUTPUT_ROOT OUTPUT_REQUEST REVISION" >&2
+        return 2
+    fi
+
+    local source_root=$1
+    local output_root=$2
+    local output_request=$3
+    local revision=$4
+    local output_name output_suffix source_parent output_parent logical_output
+    local source_uid source_gid parent_uid parent_gid output_uid output_gid
+    local parent_mode runner_uid
+
+    [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {
+        echo "Cannot classify a local AppImage output without a full revision." >&2
+        return 1
+    }
+    output_name=$(basename -- "$output_root") || return
+    if [[ ! "$output_name" =~ ^GoldenCheetah-output-([0-9a-f]{7,40})$ ]]; then
+        printf '%s\n' unmanaged
+        return 0
+    fi
+    output_suffix=${BASH_REMATCH[1]}
+    if [[ "$revision" != "$output_suffix"* ]]; then
+        echo "Revision-specific AppImage output name does not match HEAD: $output_name" >&2
+        return 1
+    fi
+
+    [ -d "$source_root" ] && [ ! -L "$source_root" ] &&
+        [ -d "$output_root" ] && [ ! -L "$output_root" ] || {
+        echo "Local AppImage retention requires real source and output directories." >&2
+        return 1
+    }
+    case "$source_root$output_root$output_request" in
+    *$'\n'*)
+        echo "Local AppImage retention paths must not contain newlines." >&2
+        return 1
+        ;;
+    esac
+    source_root=$(cd -- "$source_root" && pwd -P) || return
+    output_root=$(cd -- "$output_root" && pwd -P) || return
+    source_parent=$(dirname -- "$source_root") || return
+    output_parent=$(dirname -- "$output_root") || return
+    if [ "$source_parent" != "$output_parent" ]; then
+        printf '%s\n' unmanaged
+        return 0
+    fi
+
+    logical_output=$(realpath -ms -- "$output_request") || return
+    if [ "$logical_output" != "$output_root" ]; then
+        echo "Refusing local AppImage retention through a symlinked path." >&2
+        return 1
+    fi
+    [ -d "$output_parent" ] && [ ! -L "$output_parent" ] || {
+        echo "Local AppImage retention parent is unsafe: $output_parent" >&2
+        return 1
+    }
+
+    source_uid=$(stat -Lc '%u' -- "$source_root") || return
+    source_gid=$(stat -Lc '%g' -- "$source_root") || return
+    parent_uid=$(stat -Lc '%u' -- "$output_parent") || return
+    parent_gid=$(stat -Lc '%g' -- "$output_parent") || return
+    output_uid=$(stat -Lc '%u' -- "$output_root") || return
+    output_gid=$(stat -Lc '%g' -- "$output_root") || return
+    if [ "$source_uid:$source_gid" != "$parent_uid:$parent_gid" ] ||
+       [ "$source_uid:$source_gid" != "$output_uid:$output_gid" ]; then
+        echo "Local AppImage retention source, parent and output owners differ." >&2
+        return 1
+    fi
+    runner_uid=$(id -u) || return
+    if [ "$runner_uid" -ne 0 ] && [ "$runner_uid" != "$source_uid" ]; then
+        echo "Local AppImage retention is not running as the workspace owner." >&2
+        return 1
+    fi
+    parent_mode=$(stat -Lc '%a' -- "$output_parent") || return
+    if [ $((8#$parent_mode & 8#002)) -ne 0 ]; then
+        echo "Local AppImage retention parent is writable by other users." >&2
+        return 1
+    fi
+
+    printf '%s\n' managed
+}
+
+write_local_appimage_output_marker()
+(
+    if [ "$#" -ne 4 ]; then
+        echo "Usage: write_local_appimage_output_marker SOURCE_ROOT OUTPUT_ROOT REVISION STATE" >&2
+        return 2
+    fi
+
+    local source_root=$1
+    local output_root=$2
+    local revision=$3
+    local state=$4
+    local marker="$output_root/$GC_LOCAL_APPIMAGE_OUTPUT_MARKER"
+    local temporary= timestamp source_identity output_uid output_gid
+    local appimage_hash=- manifest_hash=- sbom_hash=- build_manifest_hash=-
+
+    [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || return 1
+    case "$state" in building|valid|failed) ;; *) return 1 ;; esac
+    [ -d "$source_root" ] && [ ! -L "$source_root" ] &&
+        [ -d "$output_root" ] && [ ! -L "$output_root" ] || return 1
+    source_root=$(cd -- "$source_root" && pwd -P) || return
+    output_root=$(cd -- "$output_root" && pwd -P) || return
+    case "$source_root$output_root" in *$'\n'*) return 1 ;; esac
+    if [ -L "$marker" ] || { [ -e "$marker" ] && [ ! -f "$marker" ]; }; then
+        echo "Unsafe local AppImage output marker: $marker" >&2
+        return 1
+    fi
+
+    timestamp=$(date +%s%N) || return
+    [[ "$timestamp" =~ ^[1-9][0-9]{17,18}$ ]] || return 1
+    source_identity=$(stat -Lc '%d:%i:%u:%g' -- "$source_root") || return
+    output_uid=$(stat -Lc '%u' -- "$output_root") || return
+    output_gid=$(stat -Lc '%g' -- "$output_root") || return
+    if [ "$state" = valid ]; then
+        local_appimage_output_artifacts_valid "$output_root" "$revision" ||
+            return 1
+        appimage_hash=$(sha256sum "$output_root/GoldenCheetah.AppImage" |
+            cut -d ' ' -f 1) || return
+        manifest_hash=$(sha256sum \
+            "$output_root/GoldenCheetah.AppImage.manifest" |
+            cut -d ' ' -f 1) || return
+        sbom_hash=$(sha256sum \
+            "$output_root/GoldenCheetah.AppImage.sbom.cdx.json" |
+            cut -d ' ' -f 1) || return
+        build_manifest_hash=$(sha256sum "$output_root/build.manifest" |
+            cut -d ' ' -f 1) || return
+    fi
+    temporary=$(mktemp "$output_root/.appimage-output-marker.tmp.XXXXXX") || return
+    trap 'rm -f -- "$temporary"' EXIT
+    (umask 077; printf '%s\n' \
+        'goldencheetah_appimage_output=1' \
+        "source_root=$source_root" \
+        "source_identity=$source_identity" \
+        "revision=$revision" \
+        "state=$state" \
+        "updated_at_ns=$timestamp" \
+        "appimage_sha256=$appimage_hash" \
+        "manifest_sha256=$manifest_hash" \
+        "sbom_sha256=$sbom_hash" \
+        "build_manifest_sha256=$build_manifest_hash" >"$temporary") || return
+    chmod 0600 -- "$temporary" || return
+    if [ "$(stat -Lc '%u:%g' -- "$temporary")" != "$output_uid:$output_gid" ]; then
+        [ "$(id -u)" -eq 0 ] || return 1
+        chown "$output_uid:$output_gid" -- "$temporary" || return
+    fi
+    mv -Tf -- "$temporary" "$marker" || return
+    temporary=
+)
+
+prepare_local_appimage_output_lock()
+(
+    if [ "$#" -ne 1 ]; then
+        echo "Usage: prepare_local_appimage_output_lock OUTPUT_ROOT" >&2
+        return 2
+    fi
+
+    local output_root=$1
+    local lock="$output_root/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK"
+    local output_uid output_gid lock_uid lock_gid temporary=
+
+    cleanup_local_output_lock()
+    {
+        [ -z "$temporary" ] || rm -f -- "$temporary"
+    }
+    trap cleanup_local_output_lock EXIT
+
+    [ -d "$output_root" ] && [ ! -L "$output_root" ] || return 1
+    if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
+        echo "Unsafe local AppImage output lock: $lock" >&2
+        return 1
+    fi
+    output_uid=$(stat -Lc '%u' -- "$output_root") || return
+    output_gid=$(stat -Lc '%g' -- "$output_root") || return
+    if [ ! -e "$lock" ]; then
+        temporary=$(mktemp "$output_root/.appimage-output-lock.tmp.XXXXXX") ||
+            return
+        chmod 0600 -- "$temporary" || return
+        if [ "$(stat -Lc '%u:%g' -- "$temporary")" != \
+             "$output_uid:$output_gid" ]; then
+            [ "$(id -u)" -eq 0 ] || return 1
+            chown "$output_uid:$output_gid" -- "$temporary" || return
+        fi
+        if ln -- "$temporary" "$lock" 2>/dev/null; then
+            rm -f -- "$temporary" || return
+            temporary=
+        else
+            [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
+        fi
+    fi
+    [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
+    lock_uid=$(stat -Lc '%u' -- "$lock") || return
+    lock_gid=$(stat -Lc '%g' -- "$lock") || return
+    if [ "$lock_uid:$lock_gid" != "$output_uid:$output_gid" ]; then
+        echo "Local AppImage output lock has an unsafe owner: $lock" >&2
+        return 1
+    fi
+    chmod 0600 -- "$lock" || return
+    printf '%s\n' "$lock"
+)
+
+local_appimage_output_build_is_active()
+(
+    if [ "$#" -ne 1 ]; then
+        echo "Usage: local_appimage_output_build_is_active OUTPUT_ROOT" >&2
+        return 2
+    fi
+
+    local output_root=$1
+    local lock="$output_root/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK"
+    local output_uid output_gid lock_uid lock_gid status lock_fd
+
+    [ -d "$output_root" ] && [ ! -L "$output_root" ] &&
+        [ -f "$lock" ] && [ ! -L "$lock" ] || {
+        echo "Missing or unsafe local AppImage output lock: $lock" >&2
+        return 1
+    }
+    output_uid=$(stat -Lc '%u' -- "$output_root") || return
+    output_gid=$(stat -Lc '%g' -- "$output_root") || return
+    lock_uid=$(stat -Lc '%u' -- "$lock") || return
+    lock_gid=$(stat -Lc '%g' -- "$lock") || return
+    [ "$lock_uid:$lock_gid" = "$output_uid:$output_gid" ] &&
+        [ "$(stat -Lc '%a' -- "$lock")" = 600 ] || {
+        echo "Unsafe local AppImage output lock metadata: $lock" >&2
+        return 1
+    }
+    exec {lock_fd}>>"$lock" || return
+    if flock -n -E 75 "$lock_fd"; then
+        exec {lock_fd}>&-
+        return 3
+    else
+        status=$?
+    fi
+    exec {lock_fd}>&-
+    [ "$status" -eq 75 ] && return 0
+    return 1
+)
+
+read_local_appimage_output_marker()
+(
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: read_local_appimage_output_marker SOURCE_ROOT OUTPUT_ROOT" >&2
+        return 2
+    fi
+
+    local source_root=$1
+    local output_root=$2
+    local marker="$output_root/$GC_LOCAL_APPIMAGE_OUTPUT_MARKER"
+    local lock="$output_root/$GC_LOCAL_APPIMAGE_OUTPUT_LOCK"
+    local source_identity output_name output_suffix marker_uid marker_gid
+    local output_uid output_gid
+    local -a lines
+
+    [ -d "$source_root" ] && [ ! -L "$source_root" ] &&
+        [ -d "$output_root" ] && [ ! -L "$output_root" ] &&
+        [ -f "$marker" ] && [ ! -L "$marker" ] &&
+        [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
+    source_root=$(cd -- "$source_root" && pwd -P) || return
+    output_root=$(cd -- "$output_root" && pwd -P) || return
+    output_name=$(basename -- "$output_root") || return
+    [[ "$output_name" =~ ^GoldenCheetah-output-([0-9a-f]{7,40})$ ]] || return 1
+    output_suffix=${BASH_REMATCH[1]}
+    source_identity=$(stat -Lc '%d:%i:%u:%g' -- "$source_root") || return
+    output_uid=$(stat -Lc '%u' -- "$output_root") || return
+    output_gid=$(stat -Lc '%g' -- "$output_root") || return
+    marker_uid=$(stat -Lc '%u' -- "$marker") || return
+    marker_gid=$(stat -Lc '%g' -- "$marker") || return
+    [ "$marker_uid:$marker_gid" = "$output_uid:$output_gid" ] &&
+        [ "$(stat -Lc '%a' -- "$marker")" = 600 ] &&
+        [ "$(stat -Lc '%u:%g' -- "$lock")" = "$output_uid:$output_gid" ] &&
+        [ "$(stat -Lc '%a' -- "$lock")" = 600 ] || return 1
+    mapfile -t lines <"$marker" || return
+    [ "${#lines[@]}" -eq 10 ] || return 1
+    [ "${lines[0]}" = goldencheetah_appimage_output=1 ] || return 1
+    [ "${lines[1]}" = "source_root=$source_root" ] || return 1
+    [ "${lines[2]}" = "source_identity=$source_identity" ] || return 1
+    [[ "${lines[3]}" =~ ^revision=([0-9a-f]{40})$ ]] || return 1
+    local revision=${BASH_REMATCH[1]}
+    [[ "$revision" = "$output_suffix"* ]] || return 1
+    [[ "${lines[4]}" =~ ^state=(building|valid|failed)$ ]] || return 1
+    local state=${BASH_REMATCH[1]}
+    [[ "${lines[5]}" =~ ^updated_at_ns=([1-9][0-9]{17,18})$ ]] || return 1
+    local timestamp=${BASH_REMATCH[1]}
+    local appimage_hash manifest_hash sbom_hash build_manifest_hash
+    appimage_hash=${lines[6]#appimage_sha256=}
+    manifest_hash=${lines[7]#manifest_sha256=}
+    sbom_hash=${lines[8]#sbom_sha256=}
+    build_manifest_hash=${lines[9]#build_manifest_sha256=}
+    [ "${lines[6]}" = "appimage_sha256=$appimage_hash" ] &&
+        [ "${lines[7]}" = "manifest_sha256=$manifest_hash" ] &&
+        [ "${lines[8]}" = "sbom_sha256=$sbom_hash" ] &&
+        [ "${lines[9]}" = "build_manifest_sha256=$build_manifest_hash" ] ||
+        return 1
+    if [ "$state" = valid ]; then
+        [[ "$appimage_hash" =~ ^[0-9a-f]{64}$ ]] &&
+            [[ "$manifest_hash" =~ ^[0-9a-f]{64}$ ]] &&
+            [[ "$sbom_hash" =~ ^[0-9a-f]{64}$ ]] &&
+            [[ "$build_manifest_hash" =~ ^[0-9a-f]{64}$ ]] || return 1
+    else
+        [ "$appimage_hash $manifest_hash $sbom_hash $build_manifest_hash" = \
+            "- - - -" ] || return 1
+    fi
+    printf '%s %s %s %s %s %s %s\n' \
+        "$state" "$timestamp" "$revision" "$appimage_hash" \
+        "$manifest_hash" "$sbom_hash" "$build_manifest_hash"
+)
+
+local_appimage_output_artifacts_valid()
+(
+    if [ "$#" -ne 2 ] && [ "$#" -ne 6 ]; then
+        echo "Usage: local_appimage_output_artifacts_valid OUTPUT_ROOT REVISION [APPIMAGE_SHA256 MANIFEST_SHA256 SBOM_SHA256 BUILD_MANIFEST_SHA256]" >&2
+        return 2
+    fi
+
+    local output_root=$1
+    local revision=$2
+    local image="$output_root/GoldenCheetah.AppImage"
+    local manifest="$output_root/GoldenCheetah.AppImage.manifest"
+    local sbom="$output_root/GoldenCheetah.AppImage.sbom.cdx.json"
+    local build_manifest="$output_root/build.manifest"
+    local marker_appimage_hash=${3:-}
+    local marker_manifest_hash=${4:-}
+    local marker_sbom_hash=${5:-}
+    local marker_build_manifest_hash=${6:-}
+    local expected_hash actual_hash relative path
+
+    [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || return 1
+    [ -d "$output_root" ] && [ ! -L "$output_root" ] || return 1
+    for relative in \
+        GoldenCheetah.AppImage \
+        GoldenCheetah.AppImage.manifest \
+        GoldenCheetah.AppImage.sbom.cdx.json \
+        build.manifest; do
+        path="$output_root/$relative"
+        [ -s "$path" ] && [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    done
+    [ -x "$image" ] || return 1
+    [ "$(sed -n 's/^source_revision=//p' "$build_manifest")" = "$revision" ] ||
+        return 1
+    [ "$(sed -n 's/^source_revision=//p' "$manifest")" = "$revision" ] ||
+        return 1
+    expected_hash=$(sed -n 's/^appimage_sha256=//p' "$manifest") || return
+    [[ "$expected_hash" =~ ^[0-9a-f]{64}$ ]] || return 1
+    actual_hash=$(sha256sum "$image" | cut -d ' ' -f 1) || return
+    [ "$actual_hash" = "$expected_hash" ] || return 1
+    if [ -n "$marker_appimage_hash" ]; then
+        [ "$actual_hash" = "$marker_appimage_hash" ] &&
+            [ "$(sha256sum "$manifest" | cut -d ' ' -f 1)" = \
+                "$marker_manifest_hash" ] &&
+            [ "$(sha256sum "$sbom" | cut -d ' ' -f 1)" = \
+                "$marker_sbom_hash" ] &&
+            [ "$(sha256sum "$build_manifest" | cut -d ' ' -f 1)" = \
+                "$marker_build_manifest_hash" ] || return 1
+    fi
+)
+
+prune_local_appimage_output_generations()
+(
+    if [ "$#" -ne 3 ]; then
+        echo "Usage: prune_local_appimage_output_generations SOURCE_ROOT CURRENT_OUTPUT REVISION" >&2
+        return 2
+    fi
+
+    local source_root=$1
+    local current_output=$2
+    local revision=$3
+    local classification parent source_uid source_gid parent_device candidate_list=
+    local entry name marker_info state timestamp marker_revision effective_state status
+    local appimage_hash manifest_hash sbom_hash build_manifest_hash
+    local current_seen=false previous= previous_timestamp=0 previous_name=
+    local index retained=0 removed=0 lock_fd
+    local -a entries states timestamps revisions effective_states marker_infos
+
+    classification=$(classify_local_appimage_output \
+        "$source_root" "$current_output" "$current_output" "$revision") || return
+    [ "$classification" = managed ] || return 0
+    source_root=$(cd -- "$source_root" && pwd -P) || return
+    current_output=$(cd -- "$current_output" && pwd -P) || return
+    parent=$(dirname -- "$current_output") || return
+    source_uid=$(stat -Lc '%u' -- "$source_root") || return
+    source_gid=$(stat -Lc '%g' -- "$source_root") || return
+    parent_device=$(stat -Lc '%d' -- "$parent") || return
+
+    exec {lock_fd}<"$parent" || return
+    flock -x "$lock_fd" || return
+    candidate_list=$(mktemp) || return
+    trap 'rm -f -- "$candidate_list"' EXIT
+    find -P "$parent" -mindepth 1 -maxdepth 1 -print0 >"$candidate_list" ||
+        return
+
+    while IFS= read -r -d '' entry; do
+        name=$(basename -- "$entry") || return
+        [[ "$name" =~ ^GoldenCheetah-output-[0-9a-f]{7,40}$ ]] || continue
+        if [ -L "$entry" ] || [ ! -d "$entry" ]; then
+            echo "Unsafe revision-specific AppImage output entry: $entry" >&2
+            return 1
+        fi
+        if [ "$(stat -Lc '%u:%g' -- "$entry")" != "$source_uid:$source_gid" ]; then
+            echo "Revision-specific AppImage output has an unsafe owner: $entry" >&2
+            return 1
+        fi
+        if [ "$(stat -Lc '%d' -- "$entry")" != "$parent_device" ] ||
+           { command -v mountpoint >/dev/null 2>&1 &&
+             mountpoint -q -- "$entry"; }; then
+            echo "Revision-specific AppImage output is a filesystem boundary: $entry" >&2
+            return 1
+        fi
+        if [ ! -e "$entry/$GC_LOCAL_APPIMAGE_OUTPUT_MARKER" ] &&
+           [ ! -L "$entry/$GC_LOCAL_APPIMAGE_OUTPUT_MARKER" ]; then
+            continue
+        fi
+        marker_info=$(read_local_appimage_output_marker \
+            "$source_root" "$entry") || {
+            echo "Invalid local AppImage output marker: $entry" >&2
+            return 1
+        }
+        read -r state timestamp marker_revision appimage_hash manifest_hash \
+            sbom_hash build_manifest_hash <<<"$marker_info"
+        effective_state=$state
+        if [ "$state" = building ]; then
+            if local_appimage_output_build_is_active "$entry"; then
+                effective_state=building
+            else
+                status=$?
+                if [ "$status" -eq 3 ]; then
+                    effective_state=failed
+                else
+                    return 1
+                fi
+            fi
+        elif [ "$state" = valid ] &&
+           ! local_appimage_output_artifacts_valid \
+                "$entry" "$marker_revision" "$appimage_hash" \
+                "$manifest_hash" "$sbom_hash" "$build_manifest_hash"; then
+            effective_state=failed
+        fi
+        entries+=("$entry")
+        states+=("$state")
+        timestamps+=("$timestamp")
+        revisions+=("$marker_revision")
+        effective_states+=("$effective_state")
+        marker_infos+=("$marker_info")
+        if [ "$entry" = "$current_output" ]; then
+            [ "$state" = valid ] && [ "$effective_state" = valid ] || {
+                echo "Current local AppImage output is not a valid completed build." >&2
+                return 1
+            }
+            current_seen=true
+        fi
+    done <"$candidate_list"
+    [ "$current_seen" = true ] || {
+        echo "Current local AppImage output is not tool-owned." >&2
+        return 1
+    }
+
+    for index in "${!entries[@]}"; do
+        entry=${entries[$index]}
+        [ "$entry" != "$current_output" ] || continue
+        [ "${effective_states[$index]}" = valid ] || continue
+        timestamp=${timestamps[$index]}
+        name=$(basename -- "$entry") || return
+        if [ -z "$previous" ] ||
+           ((10#$timestamp > 10#$previous_timestamp)) ||
+           { [ "$timestamp" = "$previous_timestamp" ] &&
+             [[ "$name" > "$previous_name" ]]; }; then
+            previous=$entry
+            previous_timestamp=$timestamp
+            previous_name=$name
+        fi
+    done
+
+    for index in "${!entries[@]}"; do
+        entry=${entries[$index]}
+        state=${states[$index]}
+        timestamp=${timestamps[$index]}
+        marker_revision=${revisions[$index]}
+        if [ "$entry" = "$current_output" ] || [ "$entry" = "$previous" ] ||
+           [ "${effective_states[$index]}" = building ]; then
+            retained=$((retained + 1))
+            continue
+        fi
+        marker_info=$(read_local_appimage_output_marker \
+            "$source_root" "$entry") || return
+        [ "$marker_info" = "${marker_infos[$index]}" ] || {
+            echo "Local AppImage output changed during retention: $entry" >&2
+            return 1
+        }
+        [ "$(dirname -- "$entry")" = "$parent" ] &&
+            [ -d "$entry" ] && [ ! -L "$entry" ] || return 1
+        if [ "$state" = building ]; then
+            if local_appimage_output_build_is_active "$entry"; then
+                echo "Local AppImage output became active during retention: $entry" >&2
+                return 1
+            else
+                status=$?
+                [ "$status" -eq 3 ] || return 1
+            fi
+        fi
+        rm -rf --one-file-system -- "$entry" || return
+        [ ! -e "$entry" ] && [ ! -L "$entry" ] || return 1
+        removed=$((removed + 1))
+    done
+    sync -f "$parent" || return
+    printf 'Local AppImage output retention: retained=%d removed=%d\n' \
+        "$retained" "$removed"
+)
+
+prune_local_appimage_outputs_with_retry()
+{
+    if [ "$#" -ne 3 ]; then
+        echo "Usage: prune_local_appimage_outputs_with_retry SOURCE_ROOT CURRENT_OUTPUT REVISION" >&2
+        return 2
+    fi
+    local attempt
+
+    for attempt in 1 2; do
+        if prune_local_appimage_output_generations "$@"; then
+            return 0
+        fi
+        [ "$attempt" -eq 2 ] ||
+            echo "Retrying local AppImage output retention once." >&2
+    done
+    echo "Local AppImage output retention failed after two attempts; the new valid output was preserved." >&2
+    return 1
+}
+
 create_appimage_build_manifest()
 {
     local source_root=$1

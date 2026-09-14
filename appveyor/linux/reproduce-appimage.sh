@@ -8,6 +8,7 @@ fi
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 SOURCE_ROOT=$(cd -- "$1" && pwd -P)
+OUTPUT_REQUEST=$2
 OUTPUT_ROOT=$2
 BUILD_PASS=${GC_APPIMAGE_BUILD_PASS_SCRIPT:-$SCRIPT_DIR/build-appimage-pass.sh}
 PACKAGE_PASS=${GC_APPIMAGE_PACKAGE_PASS_SCRIPT:-$SCRIPT_DIR/package-appimage-pass.sh}
@@ -15,6 +16,10 @@ SUPPORT="$SCRIPT_DIR/../../src/Resources/linux/AppImagePackagingSupport.sh"
 OAUTH_POLICY=${GC_APPIMAGE_OAUTH_POLICY:-unconfigured}
 WORK_ROOT=
 ACTIVE_SOURCE=
+LOCAL_OUTPUT_MANAGED=false
+LOCAL_OUTPUT_COMPLETE=false
+LOCAL_OUTPUT_LOCK=
+LOCAL_OUTPUT_LOCK_FD=
 
 cleanup_reproduction_worktrees()
 {
@@ -26,6 +31,24 @@ cleanup_reproduction_worktrees()
     if [ -n "$WORK_ROOT" ]; then
         rm -rf -- "$WORK_ROOT"
     fi
+}
+
+finish_reproduction()
+{
+    local status=$?
+
+    trap - EXIT
+    set +e
+    cleanup_reproduction_worktrees
+    if [ "$LOCAL_OUTPUT_MANAGED" = true ] &&
+       [ "$LOCAL_OUTPUT_COMPLETE" != true ]; then
+        if ! write_local_appimage_output_marker \
+                "$SOURCE_ROOT" "$OUTPUT_ROOT" "$REVISION" failed; then
+            echo "Failed to mark the local AppImage output as failed." >&2
+            [ "$status" -ne 0 ] || status=1
+        fi
+    fi
+    exit "$status"
 }
 
 create_reproduction_source()
@@ -48,7 +71,6 @@ remove_reproduction_source()
         "$ACTIVE_SOURCE"
     ACTIVE_SOURCE=
 }
-trap cleanup_reproduction_worktrees EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -57,6 +79,8 @@ trap 'exit 143' TERM
 
 # shellcheck source=/dev/null
 . "$SUPPORT"
+
+trap finish_reproduction EXIT
 
 case "$OAUTH_POLICY" in
 configured|unconfigured) ;;
@@ -90,6 +114,20 @@ REVISION=$(run_reproducible_git -C "$SOURCE_ROOT" rev-parse --verify HEAD)
 if [ -n "$(run_reproducible_git -C "$SOURCE_ROOT" status --porcelain=v1 \
     --untracked-files=normal --ignore-submodules=none)" ]; then
     echo "Reproducible AppImage builds require a clean source worktree." >&2
+    exit 1
+fi
+
+if OUTPUT_CLASSIFICATION=$(classify_local_appimage_output \
+        "$SOURCE_ROOT" "$OUTPUT_ROOT" "$OUTPUT_REQUEST" "$REVISION"); then
+    if [ "$OUTPUT_CLASSIFICATION" = managed ]; then
+        LOCAL_OUTPUT_LOCK=$(prepare_local_appimage_output_lock "$OUTPUT_ROOT")
+        exec {LOCAL_OUTPUT_LOCK_FD}>>"$LOCAL_OUTPUT_LOCK"
+        flock -x "$LOCAL_OUTPUT_LOCK_FD"
+        LOCAL_OUTPUT_MANAGED=true
+        write_local_appimage_output_marker \
+            "$SOURCE_ROOT" "$OUTPUT_ROOT" "$REVISION" building
+    fi
+else
     exit 1
 fi
 
@@ -142,3 +180,15 @@ install -m 0644 "$WORK_ROOT/package-one/GoldenCheetah.AppImage.sbom.cdx.json" \
     "$OUTPUT_ROOT/GoldenCheetah.AppImage.sbom.cdx.json"
 install -m 0600 "$WORK_ROOT/package-one/build.manifest" \
     "$OUTPUT_ROOT/build.manifest"
+
+if [ "$LOCAL_OUTPUT_MANAGED" = true ]; then
+    local_appimage_output_artifacts_valid "$OUTPUT_ROOT" "$REVISION" || {
+        echo "Completed local AppImage output failed retention validation." >&2
+        exit 1
+    }
+    write_local_appimage_output_marker \
+        "$SOURCE_ROOT" "$OUTPUT_ROOT" "$REVISION" valid
+    LOCAL_OUTPUT_COMPLETE=true
+    prune_local_appimage_outputs_with_retry \
+        "$SOURCE_ROOT" "$OUTPUT_ROOT" "$REVISION"
+fi
