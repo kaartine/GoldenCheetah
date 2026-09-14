@@ -125,6 +125,9 @@ isolated; prefer a dedicated test login for that hardware gate.
   output for inspection; do not treat that run as fully successful until the
   unsafe entry or filesystem problem has been resolved and retention rerun by
   a later build.
+- Retention performs a lightweight identity and digest check; it does not
+  replace the full AppImage package, SBOM and runtime verification required
+  before publishing a release.
 - Keep the newest verified release, its previous rollback release and the
   reports needed for review. The AppImage promotion store prunes older inactive
   generations after a successful promotion.
