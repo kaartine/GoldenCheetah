@@ -79,17 +79,21 @@ isolated; prefer a dedicated test login for that hardware gate.
 
 - Give every build and test run a task- or revision-specific output directory.
   Do not reuse another developer's active build directory.
-- For automatic local retention, use a source checkout and revision-named output
-  as siblings under one real workspace directory. Mount that common parent into
-  the release container so the retention step can see only those sibling
-  generations:
+- For automatic local retention, create a dedicated, per-owner build-only
+  workspace (mode `0700`). It must contain only the GoldenCheetah checkout and
+  its revision-named `GoldenCheetah-output-*` directories. Never use an athlete
+  library, home directory, `.goldencheetah` data directory, or a parent that
+  contains any other user data. Mount only this build-only workspace into the
+  release container:
 
   ```bash
-  workspace_root=/path/to/goldencheetah-workspace
+  workspace_root=/path/to/build-only/goldencheetah-appimage
+  install -d -m 0700 "$workspace_root"
   source_root="$workspace_root/GoldenCheetah-src"
+  # Clone or move a clean checkout into "$source_root" before continuing.
   revision=$(git -C "$source_root" rev-parse --short=7 HEAD)
   output_root="$workspace_root/GoldenCheetah-output-$revision"
-  mkdir "$output_root"
+  mkdir -m 0700 "$output_root"
   docker run --rm --cpus=12 \
     -e GC_BUILD_JOBS=12 \
     -e GC_APPIMAGE_OAUTH_POLICY=unconfigured \
@@ -108,11 +112,19 @@ isolated; prefer a dedicated test login for that hardware gate.
   outputs outside the source checkout's parent, unsafe links and foreign-owned
   entries are never adopted for deletion. Legacy unmarked outputs therefore
   require an explicit, path-by-path manual decision.
+- The ownership marker binds each managed output to the checkout's canonical
+  path, device and inode. Moving the checkout, changing the container mount
+  path, or replacing the checkout makes existing generations ineligible for
+  automatic retention; inspect and handle those paths manually.
 - Local retention validates the complete candidate set before deleting any
-  entry and retries once. If both attempts fail, the build command exits
-  nonzero while preserving the newly completed valid output for inspection;
-  do not treat that run as fully successful until the unsafe entry or
-  filesystem problem has been resolved and retention rerun by a later build.
+  entry, accepts only its marker, lock and four named release artifacts, rejects
+  nested mountpoints, and retries once. Deletion is intentionally not
+  transactional: an I/O error can leave a partially emptied marked directory,
+  which later runs fail closed on rather than adopting. If both attempts fail,
+  the build command exits nonzero while preserving the newly completed valid
+  output for inspection; do not treat that run as fully successful until the
+  unsafe entry or filesystem problem has been resolved and retention rerun by
+  a later build.
 - Keep the newest verified release, its previous rollback release and the
   reports needed for review. The AppImage promotion store prunes older inactive
   generations after a successful promotion.
