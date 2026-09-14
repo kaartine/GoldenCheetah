@@ -1246,6 +1246,42 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
         self.assertGreaterEqual(len(failures), 4)
 
+    def test_continuity_only_summary_keeps_non_timing_safety_gates(self):
+        samples = [
+            {
+                "frame_ms": 250,
+                "fps": 4,
+                "p95_frame_ms": 260,
+                "max_frame_ms": 300,
+                "render_road_m": distance,
+                "backwards": 0,
+                "skipped_ticks": 0,
+                "target_watts": 220,
+                "unexpected_airborne_frames": 0,
+                "lateral_m": 0,
+            }
+            for distance in range(8)
+        ]
+        summary = ANALYZER.analyze(samples)
+
+        self.assertTrue(ANALYZER.validate(
+            summary, 8, 25.0, 45.0, 150.0, 1.0, 4, 190.0, 0, 1.0,
+        ))
+        self.assertEqual(
+            ANALYZER.validate(
+                summary,
+                8, 25.0, 45.0, 150.0, 1.0, 4, 190.0, 0, 1.0,
+                enforce_frame_budget=False,
+            ),
+            [],
+        )
+        summary["backward_frames"] = 1
+        self.assertTrue(ANALYZER.validate(
+            summary,
+            8, 25.0, 45.0, 150.0, 1.0, 4, 190.0, 0, 1.0,
+            enforce_frame_budget=False,
+        ))
+
     def test_parses_trace_fields_from_qt_log_prefix(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "app.log"

@@ -1299,20 +1299,27 @@ def validate(
     minimum_target_watts: float,
     maximum_unexpected_airborne_frames: int,
     maximum_lateral_step_m: float,
+    enforce_frame_budget: bool = True,
 ) -> list[str]:
     failures = []
     if summary["samples"] < minimum_samples:
         failures.append(f"only {summary['samples']} trace samples")
-    if summary["median_fps"] < minimum_fps:
+    if enforce_frame_budget and summary["median_fps"] < minimum_fps:
         failures.append(
             f"median FPS {summary['median_fps']:.1f} is below {minimum_fps:.1f}"
         )
-    if summary["reported_p95_frame_ms"] > maximum_p95_ms:
+    if (
+        enforce_frame_budget
+        and summary["reported_p95_frame_ms"] > maximum_p95_ms
+    ):
         failures.append(
             "reported p95 frame interval "
             f"{summary['reported_p95_frame_ms']:.1f} ms exceeds {maximum_p95_ms:.1f} ms"
         )
-    if summary["reported_max_frame_ms"] > maximum_stall_ms:
+    if (
+        enforce_frame_budget
+        and summary["reported_max_frame_ms"] > maximum_stall_ms
+    ):
         failures.append(
             "reported maximum frame interval "
             f"{summary['reported_max_frame_ms']:.1f} ms exceeds {maximum_stall_ms:.1f} ms"
@@ -1458,6 +1465,7 @@ def main() -> int:
         args.minimum_target_watts,
         args.maximum_unexpected_airborne_frames,
         args.maximum_lateral_step_m,
+        enforce_frame_budget=not args.cold_start_continuity_only,
     )
     if args.require_cold_start_continuity:
         cold_start = analyze_cold_start(
