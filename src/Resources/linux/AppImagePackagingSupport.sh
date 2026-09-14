@@ -2448,7 +2448,8 @@ prune_local_appimage_output_generations()
     local source_root=$1
     local current_output=$2
     local revision=$3
-    local classification parent source_uid source_gid parent_device candidate_list=
+    local classification parent source_uid source_gid parent_device parent_identity
+    local candidate_list=
     local entry name marker_info state timestamp marker_revision effective_state status
     local appimage_hash manifest_hash sbom_hash build_manifest_hash
     local current_seen=false previous= previous_timestamp=0 previous_name=
@@ -2474,6 +2475,7 @@ prune_local_appimage_output_generations()
     source_uid=$(stat -Lc '%u' -- "$source_root") || return
     source_gid=$(stat -Lc '%g' -- "$source_root") || return
     parent_device=$(stat -Lc '%d' -- "$parent") || return
+    parent_identity=$(stat -Lc '%d:%i:%u:%g:%a' -- "$parent") || return
 
     exec {lock_fd}<"$parent" || return
     flock -x "$lock_fd" || return
@@ -2623,6 +2625,8 @@ prune_local_appimage_output_generations()
         }
         [ "$(dirname -- "$entry")" = "$parent" ] &&
             [ -d "$entry" ] && [ ! -L "$entry" ] || return 1
+        [ "$(stat -Lc '%d:%i:%u:%g:%a' -- "$parent")" = \
+            "$parent_identity" ] || return 1
         rm -f -- \
             "$entry/GoldenCheetah.AppImage" \
             "$entry/GoldenCheetah.AppImage.manifest" \

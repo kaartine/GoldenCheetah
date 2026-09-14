@@ -248,6 +248,8 @@ assert_contains "$DEVELOPMENT_WORKFLOW" \
 assert_contains "$DEVELOPMENT_WORKFLOW" 'install -d -m 0700 "$workspace_root"'
 assert_contains "$DEVELOPMENT_WORKFLOW" 'path, device and inode'
 assert_contains "$DEVELOPMENT_WORKFLOW" 'Deletion is intentionally not'
+assert_contains "$DEVELOPMENT_WORKFLOW" \
+    'Retention performs a lightweight identity and digest check'
 
 RETENTION_ROOT="$TEMP_DIR/local-output-retention"
 RETENTION_SOURCE="$RETENTION_ROOT/GoldenCheetah-src"
