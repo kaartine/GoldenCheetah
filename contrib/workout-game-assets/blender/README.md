@@ -108,6 +108,10 @@ outside the singletrack and camera corridor by world generation.
 - Blender checks the node inventory, finite triangle topology, applied
   transforms, nonnegative base height, camera-clearance radius and 560-triangle
   source-set budget before export.
+- `render_mixed_forest_audit.py` records the exact before/after GLB filenames,
+  species order, view/state inventory, cameras and image dimensions. Git
+  identifies the project-authored input and render bytes without a second
+  digest inventory.
 
 ## Rider-bike contract
 

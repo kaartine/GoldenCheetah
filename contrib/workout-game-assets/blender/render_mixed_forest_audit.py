@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -42,10 +41,6 @@ VIEW_CAMERAS = (
     ("left-three-quarter", (-8.13, 2.9, -8.13)),
     ("rear-three-quarter", (-8.13, 2.9, 8.13)),
 )
-
-
-def sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def point_at(obj, canonical_target):
@@ -166,12 +161,10 @@ def render(before_asset, after_asset, output_directory):
         after_asset, AFTER_VARIANTS, output_directory, "after"
     )
     metadata = {
-        "format": "goldencheetah-workout-game-asset-audit-1",
+        "format": "goldencheetah-workout-game-asset-audit-2",
         "assetId": "EN-01-conifer-set",
         "beforeGlb": before_asset.name,
-        "beforeGlbSha256": sha256(before_asset),
         "afterGlb": after_asset.name,
-        "afterGlbSha256": sha256(after_asset),
         "catalog": {
             "widthPixels": CATALOG_WIDTH,
             "heightPixels": CATALOG_HEIGHT,
@@ -193,7 +186,6 @@ def render(before_asset, after_asset, output_directory):
                 "state": state,
                 "view": view_name,
                 "path": path.name,
-                "sha256": sha256(path),
             }
             for state, paths in (("before", before_paths), ("after", after_paths))
             for (view_name, _), path in zip(VIEW_CAMERAS, paths)
