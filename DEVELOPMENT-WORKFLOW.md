@@ -79,6 +79,40 @@ isolated; prefer a dedicated test login for that hardware gate.
 
 - Give every build and test run a task- or revision-specific output directory.
   Do not reuse another developer's active build directory.
+- For automatic local retention, use a source checkout and revision-named output
+  as siblings under one real workspace directory. Mount that common parent into
+  the release container so the retention step can see only those sibling
+  generations:
+
+  ```bash
+  workspace_root=/path/to/goldencheetah-workspace
+  source_root="$workspace_root/GoldenCheetah-src"
+  revision=$(git -C "$source_root" rev-parse --short=7 HEAD)
+  output_root="$workspace_root/GoldenCheetah-output-$revision"
+  mkdir "$output_root"
+  docker run --rm --cpus=12 \
+    -e GC_BUILD_JOBS=12 \
+    -e GC_APPIMAGE_OAUTH_POLICY=unconfigured \
+    -v "$workspace_root:/workspace" \
+    goldencheetah-release-jammy:20260801 \
+    /workspace/GoldenCheetah-src/appveyor/linux/reproduce-appimage.sh \
+    /workspace/GoldenCheetah-src \
+    "/workspace/GoldenCheetah-output-$revision"
+  ```
+
+  After a successful reproducible build, the driver retains that build and the
+  newest previous valid tool-owned build. It also removes older tool-owned
+  valid builds, marked failures, and interrupted `building` generations whose
+  per-output process lock is no longer held. A concurrently running build holds
+  its lock and is never pruned. Directories without the exact ownership marker,
+  outputs outside the source checkout's parent, unsafe links and foreign-owned
+  entries are never adopted for deletion. Legacy unmarked outputs therefore
+  require an explicit, path-by-path manual decision.
+- Local retention validates the complete candidate set before deleting any
+  entry and retries once. If both attempts fail, the build command exits
+  nonzero while preserving the newly completed valid output for inspection;
+  do not treat that run as fully successful until the unsafe entry or
+  filesystem problem has been resolved and retention rerun by a later build.
 - Keep the newest verified release, its previous rollback release and the
   reports needed for review. The AppImage promotion store prunes older inactive
   generations after a successful promotion.
