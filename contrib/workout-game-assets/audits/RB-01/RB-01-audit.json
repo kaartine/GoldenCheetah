@@ -1,6 +1,5 @@
 {
   "assetId": "RB-01-rider-bike",
-  "assetSha256": "951eb4f7a6b314809f6a79a5cb7f4d8a1039c39c2c606d9e12922e0ffd783665",
   "catalog": {
     "heightPixels": 540,
     "limbJointOverlapMeters": 0.022,
@@ -9,6 +8,7 @@
     "wheelbaseScaleMeters": 1.313,
     "widthPixels": 960
   },
+  "format": "goldencheetah-workout-game-asset-audit-2",
   "renders": [
     {
       "cameraPositionMeters": [
@@ -22,7 +22,6 @@
         0.18
       ],
       "path": "RB-01-front.png",
-      "sha256": "8bb2bcac0f9999f2672960ddfa3a5ff43f56ef777d61d824b44eac8971376a8c",
       "view": "front"
     },
     {
@@ -37,7 +36,6 @@
         0.08
       ],
       "path": "RB-01-rear.png",
-      "sha256": "456b34f8b03b51b6629c5523d06bc2d5e57fe4146bd82f6ddfd33faa16cd3bf8",
       "view": "rear"
     },
     {
@@ -52,7 +50,6 @@
         0.18
       ],
       "path": "RB-01-side.png",
-      "sha256": "df0b304002252bbedd6c67acbebb05253dcc8af06e233644c1f5c38fd7d58cf9",
       "view": "side"
     },
     {
@@ -67,8 +64,8 @@
         0.1
       ],
       "path": "RB-01-chase.png",
-      "sha256": "b330c23626dce5dcf9870e59bac79ce54cc06a86c5673b9582a40108f56a2eb3",
       "view": "chase"
     }
-  ]
+  ],
+  "sourceGlb": "WG_RiderBike.glb"
 }

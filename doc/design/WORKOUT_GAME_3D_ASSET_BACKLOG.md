@@ -21,8 +21,9 @@ feature set is readable and stable.
 An external asset is not accepted until its manifest records the exact source
 URL, author, license and version, attribution text, original file hash, allowed
 modifications, redistribution terms, source format, conversion steps, output
-hash, triangle count, texture memory, and reviewer. Missing or unclear rights
-mean rejection.
+inventory, structural budgets, triangle count, texture memory, and reviewer.
+Git identifies committed generated outputs; missing or unclear rights mean
+rejection.
 
 Preferred sources are, in order:
 

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -36,10 +35,6 @@ VIEW_ROTATIONS = (
     ("left-three-quarter", 45.0),
     ("rear-three-quarter", 135.0),
 )
-
-
-def sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def point_camera(camera, canonical_target):
@@ -183,10 +178,9 @@ def render(asset_path, output_directory):
             render_paths.append(output_path)
 
     metadata = {
-        "format": "goldencheetah-workout-game-asset-audit-1",
+        "format": "goldencheetah-workout-game-asset-audit-2",
         "assetId": "EN-08-forest-floor-props",
         "sourceGlb": asset_path.name,
-        "sourceGlbSha256": sha256(asset_path),
         "catalog": {
             "widthPixels": CATALOG_WIDTH,
             "heightPixels": CATALOG_HEIGHT,
@@ -207,7 +201,6 @@ def render(asset_path, output_directory):
                 "view": view_name,
                 "assetRotationDegrees": rotation,
                 "path": path.name,
-                "sha256": sha256(path),
             }
             for (view_name, rotation), path in zip(VIEW_ROTATIONS, render_paths)
         ],

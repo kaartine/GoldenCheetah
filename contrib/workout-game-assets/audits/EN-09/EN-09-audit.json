@@ -57,25 +57,20 @@
     "widthPixels": 960
   },
   "clusterGlb": "WG_ForestVergeClusters.glb",
-  "clusterGlbSha256": "eb24acb0148b18f2b87e7f87b4254c5abd9e078bbbada8bfc16d1444587afb6f",
-  "format": "goldencheetah-workout-game-asset-audit-1",
+  "format": "goldencheetah-workout-game-asset-audit-2",
   "renders": [
     {
       "path": "EN-09-front.png",
-      "sha256": "2c7116308d7f57adff3c56262b9e3defc3948a6a3ab808714df932a706e64a03",
       "view": "front"
     },
     {
       "path": "EN-09-left-three-quarter.png",
-      "sha256": "3f011cf2cf5865c073f26b6a87f997f9165c466b499438360febc3a33044e5c0",
       "view": "left-three-quarter"
     },
     {
       "path": "EN-09-rear-three-quarter.png",
-      "sha256": "e5fa90aa2882c378c9ac9e26e1583b4f8a5c52426c3620a97fbdf5c97fcd14db",
       "view": "rear-three-quarter"
     }
   ],
-  "sourcePropGlb": "WG_ForestFloorProps.glb",
-  "sourcePropGlbSha256": "2a9ca9bfd23694267f3659ce620eb4186890d088916429bd7a556653824e54bf"
+  "sourcePropGlb": "WG_ForestFloorProps.glb"
 }

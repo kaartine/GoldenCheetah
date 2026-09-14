@@ -40,27 +40,23 @@
     "viewTransform": "Standard",
     "widthPixels": 960
   },
-  "format": "goldencheetah-workout-game-asset-audit-1",
+  "format": "goldencheetah-workout-game-asset-audit-2",
   "renders": [
     {
       "assetRotationDegrees": 0.0,
       "path": "EN-08-front.png",
-      "sha256": "b3845dd6569a61e72bf7aa5ce64c7f85ef4b2a3ae780050e4a7c93f327952e92",
       "view": "front"
     },
     {
       "assetRotationDegrees": 45.0,
       "path": "EN-08-left-three-quarter.png",
-      "sha256": "1e094c8b0b43dee482df0bb1bfc774cbcf685dd29c880dab3f71207f5a0858a2",
       "view": "left-three-quarter"
     },
     {
       "assetRotationDegrees": 135.0,
       "path": "EN-08-rear-three-quarter.png",
-      "sha256": "415165dcc4434ca656a9ffcb1362c67740dcbc361b48196c721d696763e368e1",
       "view": "rear-three-quarter"
     }
   ],
-  "sourceGlb": "WG_ForestFloorProps.glb",
-  "sourceGlbSha256": "2a9ca9bfd23694267f3659ce620eb4186890d088916429bd7a556653824e54bf"
+  "sourceGlb": "WG_ForestFloorProps.glb"
 }

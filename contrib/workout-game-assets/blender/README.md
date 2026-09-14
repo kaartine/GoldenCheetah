@@ -68,8 +68,9 @@ downloads or embeds external assets.
 - `render_forest_floor_prop_audit.py` imports the reviewed GLB and renders
   front, left-three-quarter and rear-three-quarter 960 by 720 catalogs. All
   cells share a 47-degree vertical FOV, camera, exposure, ground datum and a
-  1.36-metre trail-width scale bar. Cell order and hashes are recorded in
-  `audits/EN-08/EN-08-audit.json`.
+  1.36-metre trail-width scale bar. The audit records the source filename,
+  exact view inventory, cell order, camera and scale metadata; Git identifies
+  the committed GLB and render bytes.
 
 The reviewed GLB is converted with Qt Balsam 6.8.3, packaged in qrc and placed
 outside the singletrack and camera corridor by world generation.
@@ -219,8 +220,9 @@ Measurement references:
   project output with no external or AI-generated asset input.
 - `render_gap_jump_audit.py` imports the reviewed GLB and renders a fixed
   47-degree-FOV chase view, overhead plan and one side anatomy view per line.
-  Their hashes and camera transforms are anchored in
-  `audits/FT-12/FT-12-audit.json`.
+  Their filenames, view inventory, image dimensions and camera transforms are
+  anchored in `audits/FT-12/FT-12-audit.json`; Git identifies the committed
+  GLB and render bytes.
 
 ## Bunny-hop contract
 

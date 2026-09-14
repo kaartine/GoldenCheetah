@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import math
 from pathlib import Path
 import shutil
+import struct
 import sys
 from typing import Any
 
@@ -60,10 +61,30 @@ AUDIT_NAMES = (
     "RB-01-side.png",
     "RB-01-chase.png",
 )
+AUDIT_FORMAT = "goldencheetah-workout-game-asset-audit-2"
+AUDIT_VIEWS = ("front", "rear", "side", "chase")
+AUDIT_WIDTH = 960
+AUDIT_HEIGHT = 540
 
 
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def numeric_vector(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 3
+        and all(
+            isinstance(component, (int, float))
+            and not isinstance(component, bool)
+            and math.isfinite(float(component))
+            for component in value
+        )
+    )
+
+
+def png_dimensions(path: Path) -> tuple[int, int]:
+    data = path.read_bytes()
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise RuntimeError(f"candidate audit render is not a PNG: {path.name}")
+    return struct.unpack(">II", data[16:24])
 
 
 def mesh_file_name(node_name: str) -> str:
@@ -157,16 +178,51 @@ def verify_candidate(candidate: Path) -> tuple[dict[str, Any], int]:
         if not (audit_directory / name).is_file():
             raise RuntimeError(f"candidate audit output is missing: {name}")
     audit = assets.load_json_file(audit_directory / AUDIT_NAMES[0])
-    if audit.get("assetId") != ASSET_ID or audit.get("assetSha256") != sha256(glb):
+    if set(audit) != {"format", "assetId", "sourceGlb", "catalog", "renders"}:
+        raise RuntimeError("candidate audit metadata schema changed")
+    if (
+        audit["format"] != AUDIT_FORMAT
+        or audit["assetId"] != ASSET_ID
+        or audit["sourceGlb"] != GLB_NAME
+    ):
         raise RuntimeError("candidate audit does not describe the candidate GLB")
-    for render in audit.get("renders", []):
-        render_path = audit_directory / render["path"]
-        if sha256(render_path) != render.get("sha256"):
-            raise RuntimeError(f"candidate audit hash mismatch: {render_path.name}")
-    if {render.get("path") for render in audit.get("renders", [])} != set(
-        AUDIT_NAMES[1:]
+    catalog = audit["catalog"]
+    if (
+        not isinstance(catalog, dict)
+        or set(catalog) != {
+            "widthPixels", "heightPixels", "verticalFovDegrees", "pose",
+            "wheelbaseScaleMeters", "limbJointOverlapMeters",
+        }
+        or catalog.get("widthPixels") != AUDIT_WIDTH
+        or catalog.get("heightPixels") != AUDIT_HEIGHT
+        or catalog.get("verticalFovDegrees") != 47.0
+        or catalog.get("pose") != "neutral-seated-crank-left-high"
+        or catalog.get("wheelbaseScaleMeters") != 1.313
+        or catalog.get("limbJointOverlapMeters") != 0.022
+    ):
+        raise RuntimeError("candidate audit catalog contract changed")
+    renders = audit["renders"]
+    if (
+        not isinstance(renders, list)
+        or any(not isinstance(render, dict) for render in renders)
+        or [render.get("view") for render in renders] != list(AUDIT_VIEWS)
+        or [render.get("path") for render in renders] != list(AUDIT_NAMES[1:])
     ):
         raise RuntimeError("candidate audit view inventory changed")
+    for render in renders:
+        if set(render) != {
+            "view", "path", "cameraPositionMeters", "cameraTargetMeters"
+        }:
+            raise RuntimeError("candidate audit render schema changed")
+        if not numeric_vector(render["cameraPositionMeters"]) or not numeric_vector(
+            render["cameraTargetMeters"]
+        ):
+            raise RuntimeError("candidate audit camera vector is invalid")
+        render_path = audit_directory / render["path"]
+        if png_dimensions(render_path) != (AUDIT_WIDTH, AUDIT_HEIGHT):
+            raise RuntimeError(
+                f"candidate audit render dimensions changed: {render_path.name}"
+            )
     return document, glb_size
 
 
@@ -175,7 +231,7 @@ def update_file_entry(
 ) -> None:
     entries = {entry["path"]: entry for entry in manifest["files"]}
     if relative not in entries:
-        entry = {"path": relative, "purpose": purpose, "sha256": ""}
+        entry = {"path": relative, "purpose": purpose}
         if relative == BLEND_RELATIVE:
             generator_index = next(
                 index
@@ -187,7 +243,76 @@ def update_file_entry(
             manifest["files"].append(entry)
         entries[relative] = entry
     entries[relative]["purpose"] = purpose
-    entries[relative]["sha256"] = sha256(REPOSITORY / relative)
+    entries[relative].pop("sha256", None)
+
+
+def update_manifest(
+    manifest: dict[str, Any], document: dict[str, Any], glb_size: int
+) -> dict[str, Any]:
+    """Apply measured rider metadata without duplicating Git file identity."""
+    manifest["displayName"] = "Arcade Rider And Pole Voima K2"
+    manifest["license"]["reviewNotes"] = (
+        "Project-authored deterministic geometry reconstructing the Pole "
+        "Voima K2 from published dimensions and public product views. No "
+        "external model, CAD, texture, logo, face scan, portrait or "
+        "photograph pixels are embedded."
+    )
+    manifest["source"].update({
+        "url": (
+            "https://github.com/kaartine/GoldenCheetah/blob/master/"
+            + BLEND_RELATIVE
+        ),
+        "retrievedAt": "2026-09-13",
+        "originalFileName": "WG_RiderBike.blend",
+        "generator": "Blender",
+        "generatorVersion": "4.0.2",
+        "promptOrScript": f"{BLEND_RELATIVE}; {GENERATOR_RELATIVE}",
+    })
+    manifest["source"].pop("originalSha256", None)
+
+    update_file_entry(manifest, GENERATOR_RELATIVE, "source")
+    update_file_entry(manifest, BLEND_RELATIVE, "source")
+    update_file_entry(manifest, INSTALLER_RELATIVE, "source")
+    update_file_entry(manifest, PIPELINE_RELATIVE, "source")
+    for entry in manifest["files"]:
+        entry.pop("sha256", None)
+
+    measured = technical_metadata(document, glb_size)
+    manifest["technical"].update(measured)
+    manifest["technical"]["budgets"].update({
+        "maxGlbBytes": 614400,
+        "maxTrianglesLod0": 18000,
+    })
+    manifest["processing"]["steps"] = [
+        "Open the committed editable Blender source in Blender 4.0.2.",
+        "Run generate_rider_bike.py in source mode with dimension, pivot, topology, rights-metadata and budget checks.",
+        "Export glTF 2.0 GLB with opaque materials, extras and no cameras, lights, textures or animations.",
+        "Export the source twice and require byte-identical GLB output.",
+        "Validate the GLB structure, metadata, transforms, bounds and budgets with the repository asset policy.",
+        "Convert the candidate twice with Qt Balsam 6.8.3 and compare every generated output byte.",
+        "Require the exact 17-mesh runtime inventory used by the existing animation pivots.",
+        "Package the converted meshes and shared rider surface texture in workout-game-assets.qrc.",
+        "Render front, rear, side and chase audit views twice with fixed pose, cameras, field of view and lighting.",
+        "Require repeated audit output to be byte-identical before installation.",
+    ]
+    manifest["review"]["reviewedAt"] = "2026-09-13"
+    manifest["review"]["notes"] = (
+        "Approved stylized rider and Pole Voima K2 visual reconstruction. "
+        "The bicycle geometry is measured from public product photography "
+        "and Pole's published K2 dimensions; no source CAD or photograph "
+        "pixels are included. The editable Blender source and generated "
+        "runtime meshes preserve the established axle, crank, steering, "
+        "pelvis, shadow and camera pivots plus the snapshot-driven wheel, "
+        "pedal, suspension and rider-pose animation contract. The model uses "
+        "an open twin-link rear triangle, tapered frame members, detailed "
+        "cockpit, one-by drivetrain, platform pedals, suspension, logo-free "
+        "deep-coverage enduro helmet with an extended visor and large black "
+        "treaded tires. It contains no person likeness, branded tread, logo "
+        "or source mesh. No endorsement is claimed or implied. Deterministic "
+        "Blender export, Balsam conversion, packaged-resource loading and "
+        "fixed-view visual audits are release requirements."
+    )
+    return measured
 
 
 def install(candidate: Path) -> None:
@@ -197,13 +322,6 @@ def install(candidate: Path) -> None:
         / "contrib/workout-game-assets/manifests/RB-01-rider-bike.json"
     )
     manifest = assets.load_json_file(manifest_path)
-    manifest["displayName"] = "Arcade Rider And Pole Voima K2"
-    manifest["license"]["reviewNotes"] = (
-        "Project-authored deterministic geometry reconstructing the Pole "
-        "Voima K2 from published dimensions and public product views. No "
-        "external model, CAD, texture, logo, face scan, portrait or "
-        "photograph pixels are embedded."
-    )
 
     destinations: list[tuple[Path, Path]] = [
         (candidate / GLB_NAME, REPOSITORY / GENERATED_RELATIVE),
@@ -230,68 +348,7 @@ def install(candidate: Path) -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
 
-        blend_hash = sha256(REPOSITORY / BLEND_RELATIVE)
-        manifest["source"].update({
-            "url": (
-                "https://github.com/kaartine/GoldenCheetah/blob/master/"
-                + BLEND_RELATIVE
-            ),
-            "retrievedAt": "2026-09-13",
-            "originalFileName": "WG_RiderBike.blend",
-            "originalSha256": blend_hash,
-            "generator": "Blender",
-            "generatorVersion": "4.0.2",
-            "promptOrScript": (
-                f"{BLEND_RELATIVE}; {GENERATOR_RELATIVE}"
-            ),
-        })
-
-        update_file_entry(manifest, GENERATOR_RELATIVE, "source")
-        update_file_entry(manifest, BLEND_RELATIVE, "source")
-        update_file_entry(manifest, INSTALLER_RELATIVE, "source")
-        update_file_entry(manifest, PIPELINE_RELATIVE, "source")
-        for entry in manifest["files"]:
-            path = REPOSITORY / entry["path"]
-            if path.is_file():
-                entry["sha256"] = sha256(path)
-
-        measured = technical_metadata(document, glb_size)
-        manifest["technical"].update(measured)
-        manifest["technical"]["budgets"].update({
-            "maxGlbBytes": 614400,
-            "maxTrianglesLod0": 18000,
-        })
-        manifest["processing"]["steps"] = [
-            "Open the committed editable Blender source in Blender 4.0.2.",
-            "Run generate_rider_bike.py in source mode with dimension, pivot, topology, rights-metadata and budget checks.",
-            "Export glTF 2.0 GLB with opaque materials, extras and no cameras, lights, textures or animations.",
-            "Export the source twice and require byte-identical GLB output.",
-            "Validate the GLB structure, metadata, transforms, bounds and budgets with the repository asset policy.",
-            "Convert the candidate twice with Qt Balsam 6.8.3 and compare every generated output byte.",
-            "Require the exact 17-mesh runtime inventory used by the existing animation pivots.",
-            "Package the converted meshes and shared rider surface texture in workout-game-assets.qrc.",
-            "Render front, rear, side and chase audit views twice with fixed pose, cameras, field of view and lighting.",
-            "Require repeated audit output to be byte-identical before installation.",
-        ]
-        manifest["review"]["reviewedAt"] = "2026-09-13"
-        manifest["review"]["notes"] = (
-            "Approved stylized rider and Pole Voima K2 visual reconstruction. "
-            "The bicycle geometry is measured from public product photography "
-            "and Pole's published K2 dimensions; no source CAD or photograph "
-            "pixels are included. The editable Blender source and generated "
-            "runtime meshes "
-            "preserve the established axle, crank, steering, pelvis, shadow "
-            "and camera pivots plus the snapshot-driven wheel, pedal, "
-            "suspension and rider-pose animation contract. The model uses an "
-            "open twin-link rear triangle, tapered frame members, detailed "
-            "cockpit, one-by drivetrain, platform pedals, suspension, "
-            "logo-free deep-coverage enduro helmet with an extended visor "
-            "and large black treaded tires. It contains no "
-            "person likeness, branded tread, logo or source mesh. No "
-            "endorsement is claimed or implied. Deterministic Blender export, "
-            "Balsam conversion, packaged-resource loading and fixed-view "
-            "visual audits are release requirements."
-        )
+        measured = update_manifest(manifest, document, glb_size)
 
         manifest_path.write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"

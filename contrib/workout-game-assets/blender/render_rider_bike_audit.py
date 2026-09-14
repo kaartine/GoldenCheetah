@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -37,10 +36,6 @@ VIEWS = (
     ("side", (3.15, 1.14, 0.18), (0.0, 0.88, 0.18)),
     ("chase", (1.80, 1.60, -2.80), (0.0, 0.94, 0.10)),
 )
-
-
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def normalize_png(path: Path) -> None:
@@ -312,14 +307,14 @@ def render(asset_path: Path, output_directory: Path) -> None:
         renders.append({
             "view": view,
             "path": path.name,
-            "sha256": sha256(path),
             "cameraPositionMeters": list(position),
             "cameraTargetMeters": list(target),
         })
 
     metadata = {
+        "format": "goldencheetah-workout-game-asset-audit-2",
         "assetId": "RB-01-rider-bike",
-        "assetSha256": sha256(asset_path),
+        "sourceGlb": asset_path.name,
         "catalog": {
             "widthPixels": WIDTH,
             "heightPixels": HEIGHT,
