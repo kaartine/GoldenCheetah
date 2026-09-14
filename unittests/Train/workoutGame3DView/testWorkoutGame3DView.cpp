@@ -15,6 +15,7 @@
 #include "WorkoutGame3DWindow.h"
 #include "WorkoutGameDistancePlayback.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameForestComposition.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
@@ -750,6 +751,40 @@ class TestWorkoutGame3DView : public QObject
     Q_OBJECT
 
 private slots:
+    void forestCompositionUsesStableBiomeZonesAndBoundedLayers()
+    {
+        constexpr std::uint32_t Seed = 0x456789abu;
+        for (int zone = 0; zone < 6; ++zone) {
+            const double start = zone
+                    * WorkoutGameForestComposition::BiomeLengthMeters;
+            const WorkoutGameForestBiome biome =
+                    WorkoutGameForestComposition::biomeAt(
+                        Seed, start + 0.1);
+            QCOMPARE(WorkoutGameForestComposition::biomeAt(
+                         Seed, start + 44.9), biome);
+        }
+
+        for (int slot = 0; slot < 40; ++slot) {
+            const double distance = (slot + 0.5) * 4.5;
+            const WorkoutGameForestSlotPlan plan =
+                    WorkoutGameForestComposition::plan(
+                        Seed, slot, distance);
+            QCOMPARE(WorkoutGameForestComposition::plan(
+                         Seed, slot, distance).clusterVariant,
+                     plan.clusterVariant);
+            QVERIFY(plan.clusterSide == -1 || plan.clusterSide == 1);
+            QVERIFY(plan.clusterVariant >= 0 && plan.clusterVariant <= 5);
+            QVERIFY(plan.floorVariant >= 0 && plan.floorVariant <= 15);
+            QVERIFY(plan.clusterScale >= 1.15);
+            QVERIFY(plan.clusterScale <= 1.60);
+            QVERIFY(plan.floorScale >= 0.95);
+            QVERIFY(plan.floorScale <= 1.40);
+            QVERIFY(plan.clusterEdgeOffsetMeters >= 0.14);
+            QVERIFY(plan.clusterEdgeOffsetMeters <= 0.50);
+            QVERIFY(plan.floorEdgeOffsetMeters >= 1.70);
+        }
+    }
+
     void activeSessionClockExcludesPausedTimeAndDoesNotResetOnResume()
     {
         WorkoutGameActiveSessionClock clock;
@@ -2656,16 +2691,21 @@ private slots:
 
         const QVariantList floorProps = viewModel.forestFloorProps();
         const QVariantList vergeClusters = viewModel.forestVergeClusters();
-        QCOMPARE(floorProps.size(), 8);
-        QCOMPARE(vergeClusters.size(), 6);
-        QCOMPARE(floorProps.size() + vergeClusters.size(), 14);
+        QCOMPARE(floorProps.size(), 14);
+        QCOMPARE(vergeClusters.size(), 14);
+        QCOMPARE(floorProps.size() + vergeClusters.size(), 28);
+
+        QHash<qint64, QSet<int>> sidesByDistance;
+        QHash<qint64, int> biomeByDistance;
 
         constexpr double RadiansToDegrees =
                 180.0 / 3.14159265358979323846;
         QSet<int> orientationBuckets;
         const auto verifyPlacement = [
-                &road, &viewModel, &orientationBuckets, RadiansToDegrees](
-                const QVariant &entry, int maximumVariant) {
+                &road, &viewModel, &orientationBuckets, &sidesByDistance,
+                &biomeByDistance, RadiansToDegrees](
+                const QVariant &entry, int maximumVariant,
+                bool cameraCorridorProtected) {
             const QVariantMap prop = entry.toMap();
             const double distance = prop.value(
                     QStringLiteral("distance")).toDouble();
@@ -2676,7 +2716,17 @@ private slots:
                             road, distance);
             QVERIFY(sample.ready);
             QVERIFY(std::abs(lateral)
-                    >= sample.center.halfWidthMeters + 1.70);
+                    >= sample.center.halfWidthMeters + 0.14);
+            const qint64 distanceKey = qRound64(distance * 1000.0);
+            sidesByDistance[distanceKey].insert(lateral < 0.0 ? -1 : 1);
+            const int biome = prop.value(QStringLiteral("biome")).toInt();
+            QVERIFY(biome >= 0);
+            QVERIFY(biome <= 2);
+            if (biomeByDistance.contains(distanceKey)) {
+                QCOMPARE(biomeByDistance.value(distanceKey), biome);
+            } else {
+                biomeByDistance.insert(distanceKey, biome);
+            }
             const WorkoutGame3DTerrainProfileSnapshot terrain =
                     WorkoutGame3DTerrainProfile::build(
                             sample, distance, road.seed);
@@ -2696,8 +2746,8 @@ private slots:
             orientationBuckets.insert(int(std::round(orientationOffset)));
             QVERIFY(std::isfinite(
                     prop.value(QStringLiteral("terrainRoll")).toDouble()));
-            QVERIFY(prop.value(QStringLiteral("scale")).toDouble() >= 0.72);
-            QVERIFY(prop.value(QStringLiteral("scale")).toDouble() <= 1.08);
+            QVERIFY(prop.value(QStringLiteral("scale")).toDouble() >= 0.95);
+            QVERIFY(prop.value(QStringLiteral("scale")).toDouble() <= 1.60);
             const int variant = prop.value(
                     QStringLiteral("variant")).toInt();
             QVERIFY(variant >= 0);
@@ -2742,11 +2792,21 @@ private slots:
                     .arg(viewModel.cameraZ(), 0, 'f', 3)
                     .arg(viewModel.cameraTargetX(), 0, 'f', 3)
                     .arg(viewModel.cameraTargetZ(), 0, 'f', 3);
-            QVERIFY2(clearance >= 1.70,
-                     qPrintable(clearanceMessage));
+            if (cameraCorridorProtected) {
+                QVERIFY2(idealClearance >= 1.70,
+                         qPrintable(clearanceMessage));
+            }
         };
-        for (const QVariant &entry : floorProps) verifyPlacement(entry, 15);
-        for (const QVariant &entry : vergeClusters) verifyPlacement(entry, 5);
+        for (const QVariant &entry : floorProps) {
+            verifyPlacement(entry, 15, true);
+        }
+        for (const QVariant &entry : vergeClusters) {
+            verifyPlacement(entry, 5, false);
+        }
+        QCOMPARE(sidesByDistance.size(), 14);
+        for (const QSet<int> &sides : sidesByDistance) {
+            QCOMPARE(sides, QSet<int>({-1, 1}));
+        }
         QVERIFY2(orientationBuckets.size() >= 2,
                  "forest dressing still forms parallel stick-like rows");
     }
@@ -2909,7 +2969,7 @@ private slots:
         QCOMPARE(floorProps.size(), viewModel.forestFloorProps().size());
         QCOMPARE(vergeClusters.size(),
                  viewModel.forestVergeClusters().size());
-        QVERIFY(floorProps.size() + vergeClusters.size() <= 14);
+        QVERIFY(floorProps.size() + vergeClusters.size() <= 28);
         bool foundOpaque = false;
         for (QObject *object : floorProps + vergeClusters) {
             const double relative = object->property(
@@ -2936,6 +2996,30 @@ private slots:
         QCOMPARE(edgeOpacity(-10.0), 1.0);
         QCOMPARE(edgeOpacity(36.0), 1.0);
         QCOMPARE(edgeOpacity(44.0), 0.0);
+
+        const auto cameraOpacity = [&window](double x, double z) {
+            QVariant result;
+            const bool invoked = QMetaObject::invokeMethod(
+                    window.rootObject(), "dressingCameraOpacity",
+                    Q_RETURN_ARG(QVariant, result),
+                    Q_ARG(QVariant, QVariant(x)),
+                    Q_ARG(QVariant, QVariant(z)));
+            return invoked ? result.toDouble() : -1.0;
+        };
+        QCOMPARE(cameraOpacity(viewModel.cameraX(), viewModel.cameraZ()),
+                 0.0);
+        const double cameraDirectionX = viewModel.cameraTargetX()
+                - viewModel.cameraX();
+        const double cameraDirectionZ = viewModel.cameraTargetZ()
+                - viewModel.cameraZ();
+        const double cameraDirectionLength = std::hypot(
+                cameraDirectionX, cameraDirectionZ);
+        QVERIFY(cameraDirectionLength > 0.0);
+        const double outsideX = viewModel.cameraX()
+                - 2.0 * cameraDirectionZ / cameraDirectionLength;
+        const double outsideZ = viewModel.cameraZ()
+                + 2.0 * cameraDirectionX / cameraDirectionLength;
+        QCOMPARE(cameraOpacity(outsideX, outsideZ), 1.0);
     }
 
     void forestDressingOnlyChangesAtTransparentResidentEdges()
@@ -2948,18 +3032,17 @@ private slots:
         viewModel.setCourse(course, FtpWatts);
 
         const auto placements = [&viewModel]() {
-            QHash<qint64, QVariantMap> result;
+            QHash<QString, QVariantMap> result;
             for (const QVariant &entry : viewModel.forestFloorProps()
                     + viewModel.forestVergeClusters()) {
                 const QVariantMap prop = entry.toMap();
-                result.insert(qRound64(
-                        prop.value(QStringLiteral("distance")).toDouble()
-                            * 1000.0), prop);
+                result.insert(prop.value(
+                        QStringLiteral("stableId")).toString(), prop);
             }
             return result;
         };
 
-        QHash<qint64, QVariantMap> previous;
+        QHash<QString, QVariantMap> previous;
         double previousDistance = 0.0;
         for (int step = 0; step <= 120; ++step) {
             const double distance = 20.0 + 0.5 * step;
@@ -2967,7 +3050,7 @@ private slots:
             frame.simulation.workoutTimeMs = 5000 + step * 50;
             frame.presentationTimeMs = frame.simulation.workoutTimeMs;
             viewModel.setFrame(frame, 225.0, 225.0, 88, 150, 7);
-            const QHash<qint64, QVariantMap> current = placements();
+            const QHash<QString, QVariantMap> current = placements();
             if (!previous.isEmpty()) {
                 for (auto item = current.cbegin(); item != current.cend(); ++item) {
                     if (!previous.contains(item.key())) {
@@ -6632,8 +6715,8 @@ private slots:
         const QList<QObject *> vergeClusters =
                 window.rootObject()->findChildren<QObject *>(
                     QStringLiteral("workoutGameForestVergeCluster"));
-        QCOMPARE(floorProps.size(), 8);
-        QCOMPARE(vergeClusters.size(), 6);
+        QCOMPARE(floorProps.size(), 14);
+        QCOMPARE(vergeClusters.size(), 14);
 
         const QImage dressed = window.grabWindow();
         QVERIFY(!dressed.isNull());

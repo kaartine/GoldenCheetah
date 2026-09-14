@@ -45,7 +45,7 @@
     {
       "path": "src/Train/qml/WorkoutGameForestFloorProp.qml",
       "purpose": "runtime",
-      "sha256": "e282bc7ada4c026e30cff9e3dd014cdf159476eba69e38b7e2df08ed87c9c4f0"
+      "sha256": "3220675f0daa9c53c6b8411605f537003bbc43f0408c2d8c3ca583dbd9e3ad7c"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_DeadwoodFallen_LOD0_mesh.mesh",

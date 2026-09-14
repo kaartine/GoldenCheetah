@@ -92,7 +92,8 @@ Item {
                                     ? "qrc:/qml/WorkoutGameForestFloorProp.qml"
                                     : "qrc:/qml/WorkoutGameForestVergeCluster.qml"
                             setSource(sourceUrl, {
-                                "variant": cell.modelData.variant
+                                "variant": cell.modelData.variant,
+                                "biome": 0
                             })
                         }
                         onLoaded: {

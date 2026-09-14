@@ -98,6 +98,11 @@ Item {
         return Math.min(behind, ahead)
     }
 
+    function dressingCameraOpacity(x, z) {
+        return Math.max(0, Math.min(1,
+            (distanceToCameraCorridor(x, z) - 0.55) / 0.9))
+    }
+
     View3D {
         id: gameView
         objectName: "workoutGame3DView"
@@ -383,6 +388,7 @@ Item {
             delegate: WorkoutGameForestFloorProp {
                 required property var modelData
                 variant: modelData.variant
+                biome: modelData.biome
                 readonly property string vegetationId: modelData.stableId
                 readonly property real relativeDistance:
                     modelData.distance - workoutGame3D.distanceMeters
@@ -393,7 +399,9 @@ Item {
                     modelData.mirror ? -modelData.scale : modelData.scale,
                     modelData.scale,
                     modelData.scale)
-                opacity: root.dressingEdgeOpacity(relativeDistance)
+                opacity: Math.min(root.dressingEdgeOpacity(relativeDistance),
+                                  root.dressingCameraOpacity(
+                                      modelData.x, modelData.z))
             }
         }
 
@@ -402,6 +410,7 @@ Item {
             delegate: WorkoutGameForestVergeCluster {
                 required property var modelData
                 variant: modelData.variant
+                biome: modelData.biome
                 readonly property string vegetationId: modelData.stableId
                 readonly property real relativeDistance:
                     modelData.distance - workoutGame3D.distanceMeters
@@ -412,7 +421,9 @@ Item {
                     modelData.mirror ? -modelData.scale : modelData.scale,
                     modelData.scale,
                     modelData.scale)
-                opacity: root.dressingEdgeOpacity(relativeDistance)
+                opacity: Math.min(root.dressingEdgeOpacity(relativeDistance),
+                                  root.dressingCameraOpacity(
+                                      modelData.x, modelData.z))
             }
         }
 

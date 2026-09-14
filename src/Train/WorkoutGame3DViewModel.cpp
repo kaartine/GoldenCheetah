@@ -15,6 +15,7 @@
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGameFeatureChallenge.h"
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameForestComposition.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
 #include "WorkoutGameRiderAnimation.h"
@@ -49,8 +50,7 @@ constexpr int MaximumVisibleTrees = 18;
 constexpr int MaximumVisibleTreeSlots = MaximumVisibleTrees / 2;
 constexpr double ForestDressingBehindMeters = 14.0;
 constexpr double ForestDressingAheadMeters = 49.0;
-constexpr int MaximumVisibleForestFloorProps = 8;
-constexpr int MaximumVisibleForestVergeClusters = 6;
+constexpr int MaximumVisibleForestDressingSlots = 14;
 constexpr double ForestDressingSpacingMeters = 4.5;
 constexpr double TreeCrownRadiusMeters = 1.35;
 constexpr double ForestDressingCameraClearanceMeters = 1.70;
@@ -1891,8 +1891,7 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
                     + 1.0e-9));
     lastSlot = std::min(
             lastSlot,
-            firstSlot + MaximumVisibleForestFloorProps
-                    + MaximumVisibleForestVergeClusters - 1);
+            firstSlot + MaximumVisibleForestDressingSlots - 1);
     if (firstSlot == forestDressingFirstSlot
             && lastSlot == forestDressingLastSlot) {
         return;
@@ -1916,25 +1915,9 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
                         sample, distance, roadCourse.seed);
         if (!terrain.ready) continue;
 
-        const std::uint32_t random = mix(
-                roadCourse.seed
-                ^ std::uint32_t((slot + 1) * 0x27d4eb2du));
-        const int cycleSlot = slot % 7;
-        const bool cluster = cycleSlot == 1
-                || cycleSlot == 3 || cycleSlot == 5;
-        const double side = ((random >> 27) & 1u) == 0u ? -1.0 : 1.0;
-        double lateral = side * (
-                sample.center.halfWidthMeters
-                + (cluster ? 2.85 : 3.30)
-                + double(random & 255u) / 1020.0);
-        const double rightX = std::cos(sample.center.headingRadians);
-        const double rightZ = -std::sin(sample.center.headingRadians);
-        auto horizontalPosition = [&sample, rightX, rightZ](
-                double offset) {
-            return std::pair<double, double>(
-                    sample.center.xMeters + offset * rightX,
-                    sample.center.zMeters + offset * rightZ);
-        };
+        const WorkoutGameForestSlotPlan plan =
+                WorkoutGameForestComposition::plan(
+                    roadCourse.seed, slot, distance);
         const WorkoutGameRoadSample corridorStart =
                 WorkoutGameRoadCourseBuilder::sampleVisual(
                     roadCourse, std::max(
@@ -1947,69 +1930,75 @@ void WorkoutGame3DViewModel::rebuildForestDressing(double distanceMeters)
         const double minimumClearanceSquared =
                 ForestDressingCameraClearanceMeters
                 * ForestDressingCameraClearanceMeters;
-        auto position = horizontalPosition(lateral);
-        for (int attempt = 0; attempt < 8; ++attempt) {
-            if (horizontalDistanceToSegmentSquared(
-                        position.first, position.second,
-                        corridorStart.center.xMeters,
-                        corridorStart.center.zMeters,
-                        corridorEnd.center.xMeters,
-                        corridorEnd.center.zMeters)
-                            >= minimumClearanceSquared) {
-                break;
+        const double rightX = std::cos(sample.center.headingRadians);
+        const double rightZ = -std::sin(sample.center.headingRadians);
+        for (const int side : {-1, 1}) {
+            const bool cluster = side == plan.clusterSide;
+            double lateral = side * (
+                    sample.center.halfWidthMeters
+                    + (cluster ? plan.clusterEdgeOffsetMeters
+                               : plan.floorEdgeOffsetMeters));
+            auto horizontalPosition = [&sample, rightX, rightZ](
+                    double offset) {
+                return std::pair<double, double>(
+                        sample.center.xMeters + offset * rightX,
+                        sample.center.zMeters + offset * rightZ);
+            };
+            auto position = horizontalPosition(lateral);
+            if (!cluster) {
+                for (int attempt = 0; attempt < 8; ++attempt) {
+                    if (horizontalDistanceToSegmentSquared(
+                                position.first, position.second,
+                                corridorStart.center.xMeters,
+                                corridorStart.center.zMeters,
+                                corridorEnd.center.xMeters,
+                                corridorEnd.center.zMeters)
+                                    >= minimumClearanceSquared) {
+                        break;
+                    }
+                    lateral += side * 0.45;
+                    position = horizontalPosition(lateral);
+                }
             }
-            lateral += side * 0.45;
-            position = horizontalPosition(lateral);
-        }
 
-        const double halfSlopeSampleMeters = 0.25;
-        const double innerElevation =
-                WorkoutGame3DTerrainProfile::elevationAtLateral(
-                        terrain, lateral - side * halfSlopeSampleMeters);
-        const double outerElevation =
-                WorkoutGame3DTerrainProfile::elevationAtLateral(
-                        terrain, lateral + side * halfSlopeSampleMeters);
-        QVariantMap prop;
-        prop.insert(QStringLiteral("x"), position.first);
-        prop.insert(QStringLiteral("y"),
+            const double halfSlopeSampleMeters = 0.25;
+            const double innerElevation =
                     WorkoutGame3DTerrainProfile::elevationAtLateral(
-                            terrain, lateral));
-        prop.insert(QStringLiteral("z"), position.second);
-        prop.insert(QStringLiteral("distance"), distance);
-        prop.insert(QStringLiteral("lateral"), lateral);
-        const double orientationOffset =
-                (double((random >> 10) & 255u) / 255.0 - 0.5) * 50.0;
-        prop.insert(QStringLiteral("yaw"),
-                    sample.center.headingRadians * 180.0 / Pi
-                            + orientationOffset);
-        prop.insert(QStringLiteral("pitch"),
-                    -std::atan(sample.baseGradePercent / 100.0)
-                            * 180.0 / Pi);
-        prop.insert(QStringLiteral("terrainRoll"),
-                    side * std::atan2(
-                            outerElevation - innerElevation,
-                            2.0 * halfSlopeSampleMeters) * 180.0 / Pi);
-        prop.insert(QStringLiteral("scale"),
-                    0.72 + double((random >> 8) & 255u) / 708.0);
-        prop.insert(QStringLiteral("mirror"), side < 0.0);
-        if (cluster) {
+                            terrain, lateral - side * halfSlopeSampleMeters);
+            const double outerElevation =
+                    WorkoutGame3DTerrainProfile::elevationAtLateral(
+                            terrain, lateral + side * halfSlopeSampleMeters);
+            QVariantMap prop;
+            prop.insert(QStringLiteral("x"), position.first);
+            prop.insert(QStringLiteral("y"),
+                        WorkoutGame3DTerrainProfile::elevationAtLateral(
+                                terrain, lateral));
+            prop.insert(QStringLiteral("z"), position.second);
+            prop.insert(QStringLiteral("distance"), distance);
+            prop.insert(QStringLiteral("lateral"), lateral);
+            prop.insert(QStringLiteral("yaw"),
+                        sample.center.headingRadians * 180.0 / Pi
+                                + (cluster ? plan.clusterYawOffsetDegrees
+                                           : plan.floorYawOffsetDegrees));
+            prop.insert(QStringLiteral("pitch"),
+                        -std::atan(sample.baseGradePercent / 100.0)
+                                * 180.0 / Pi);
+            prop.insert(QStringLiteral("terrainRoll"),
+                        side * std::atan2(
+                                outerElevation - innerElevation,
+                                2.0 * halfSlopeSampleMeters) * 180.0 / Pi);
+            prop.insert(QStringLiteral("scale"),
+                        cluster ? plan.clusterScale : plan.floorScale);
+            prop.insert(QStringLiteral("mirror"), side < 0);
+            prop.insert(QStringLiteral("biome"), int(plan.biome));
             prop.insert(QStringLiteral("stableId"),
-                        QStringLiteral("verge-%1").arg(slot));
+                        QStringLiteral("%1-%2-%3")
+                            .arg(cluster ? QStringLiteral("verge")
+                                         : QStringLiteral("floor"))
+                            .arg(slot).arg(side));
             prop.insert(QStringLiteral("variant"),
-                        int((random >> 20) % 6u));
-            if (vergeClusters.size()
-                    < MaximumVisibleForestVergeClusters) {
-                vergeClusters.push_back(prop);
-            }
-        } else {
-            prop.insert(QStringLiteral("stableId"),
-                        QStringLiteral("floor-%1").arg(slot));
-            prop.insert(QStringLiteral("variant"),
-                        int((random >> 20) % 16u));
-            if (floorProps.size()
-                    < MaximumVisibleForestFloorProps) {
-                floorProps.push_back(prop);
-            }
+                        cluster ? plan.clusterVariant : plan.floorVariant);
+            (cluster ? vergeClusters : floorProps).push_back(prop);
         }
     }
     visibleForestFloorProps = floorProps;

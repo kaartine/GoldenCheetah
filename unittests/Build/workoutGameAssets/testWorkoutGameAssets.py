@@ -1291,7 +1291,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         runtime_qml = (
             REPOSITORY / "src/Train/qml/WorkoutGameForestFloorProp.qml"
         ).read_text(encoding="utf-8")
-        for color in ("#52636b", "#4e8135", "#45a34b", "#296b4a", "#87567f"):
+        for color in ("#52636b", "#66813b", "#3f9148", "#245f42", "#87567f"):
             self.assertIn(color, runtime_qml)
 
     def test_forest_floor_audits_use_fixed_camera_scale_and_distinct_angles(self) -> None:
@@ -1443,7 +1443,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("WorkoutGameForestFloorProp", production_qml)
         self.assertIn("WorkoutGameForestVergeCluster", production_qml)
-        for color in ("#52636b", "#45a34b", "#296b4a", "#87567f"):
+        for color in ("#52636b", "#3f9148", "#245f42", "#87567f"):
             self.assertIn(color, runtime_qml)
         qrc = (
             REPOSITORY / "src/Resources/workout-game-assets.qrc"
@@ -1515,9 +1515,9 @@ class TestWorkoutGameAssets(unittest.TestCase):
             sum((REPOSITORY / path).stat().st_size for path in runtime_paths),
             160 * 1024,
         )
-        # The production resident window selects eight floor props and six
-        # verge clusters. Keep its worst-case authored mesh cost explicit.
-        self.assertLessEqual(8 * 96 + 6 * 150, 1700)
+        # Each resident slot selects one floor prop and one verge cluster.
+        # Keep the bilateral forest's worst-case authored mesh cost explicit.
+        self.assertLessEqual(14 * 96 + 14 * 150, 3500)
 
     def test_distant_ridges_are_bounded_socket_free_scenery(self) -> None:
         document, size = assets.read_glb(DISTANT_GLB_PATH)

@@ -5,6 +5,7 @@ Node {
     id: root
     objectName: "workoutGameForestFloorProp"
     required property int variant
+    required property int biome
 
     PrincipledMaterial {
         id: graniteMaterial
@@ -26,19 +27,20 @@ Node {
     }
     PrincipledMaterial {
         id: mossMaterial
-        baseColor: "#4e8135"
+        baseColor: root.biome === 0 ? "#66813b"
+                   : root.biome === 1 ? "#3f7438" : "#587743"
         roughness: 1
         cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: fernMaterial
-        baseColor: "#45a34b"
+        baseColor: root.biome === 1 ? "#3f9148" : "#559345"
         roughness: 1
         cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: bilberryMaterial
-        baseColor: "#296b4a"
+        baseColor: root.biome === 1 ? "#245f42" : "#376b43"
         roughness: 1
         cullMode: Material.NoCulling
     }

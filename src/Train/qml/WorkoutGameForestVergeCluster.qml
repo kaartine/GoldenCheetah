@@ -5,6 +5,7 @@ Node {
     id: root
     objectName: "workoutGameForestVergeCluster"
     required property int variant
+    required property int biome
 
     PrincipledMaterial {
         id: graniteMaterial
@@ -26,13 +27,13 @@ Node {
     }
     PrincipledMaterial {
         id: bilberryMaterial
-        baseColor: "#296b4a"
+        baseColor: root.biome === 1 ? "#245f42" : "#376b43"
         roughness: 1
         cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: fernMaterial
-        baseColor: "#45a34b"
+        baseColor: root.biome === 1 ? "#3f9148" : "#559345"
         roughness: 1
         cullMode: Material.NoCulling
     }
@@ -44,7 +45,7 @@ Node {
     }
     PrincipledMaterial {
         id: shrubMaterial
-        baseColor: "#326747"
+        baseColor: root.biome === 1 ? "#295e3f" : "#426d3d"
         roughness: 1
         cullMode: Material.NoCulling
     }

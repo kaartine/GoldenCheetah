@@ -13,6 +13,7 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGame3DHealth.cpp \
            ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
            ../../../src/Train/WorkoutGame3DViewModel.cpp \
+           ../../../src/Train/WorkoutGameForestComposition.cpp \
            ../../../src/Train/WorkoutGame3DWindow.cpp \
            ../../../src/Train/WorkoutGameCourseCrsExporter.cpp \
            ../../../src/Train/WorkoutGameCourseDocument.cpp \
@@ -48,6 +49,7 @@ HEADERS += ../../../src/Train/WorkoutGame3DChunkBuilder.h \
            ../../../src/Train/WorkoutGame3DFeatureAsset.h \
            ../../../src/Train/WorkoutGame3DTerrainProfile.h \
            ../../../src/Train/WorkoutGame3DViewModel.h \
+           ../../../src/Train/WorkoutGameForestComposition.h \
            ../../../src/Train/WorkoutGame3DWindow.h \
            ../../../src/Train/WorkoutGameCourseCrsExporter.h \
            ../../../src/Train/WorkoutGameCourseDocument.h \
