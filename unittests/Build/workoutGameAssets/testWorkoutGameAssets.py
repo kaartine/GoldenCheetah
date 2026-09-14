@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import ast
 import copy
 import json
 import math
@@ -1177,6 +1178,44 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertNotIn("import time", generator)
         self.assertIn("RUNTIME_VARIANT_PAIRS", generator)
         self.assertIn("does not touch its terrain anchor", generator)
+
+    def test_project_authored_audit_generators_emit_structural_metadata(self) -> None:
+        generators = (
+            "render_mixed_forest_audit.py",
+            "render_forest_floor_prop_audit.py",
+            "render_forest_verge_cluster_audit.py",
+            "render_gap_jump_audit.py",
+            "render_rider_bike_audit.py",
+        )
+        for name in generators:
+            with self.subTest(generator=name):
+                source = (
+                    REPOSITORY / "contrib/workout-game-assets/blender" / name
+                ).read_text(encoding="utf-8")
+                strings = {
+                    node.value.lower()
+                    for node in ast.walk(ast.parse(source))
+                    if isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                }
+                self.assertIn(
+                    "goldencheetah-workout-game-asset-audit-2", strings
+                )
+                self.assertTrue(
+                    {"format", "assetid", "catalog", "renders", "view", "path"}
+                    <= strings
+                )
+                self.assertFalse(
+                    any(
+                        marker in value
+                        for value in strings
+                        for marker in ("sha256", "checksum", "digest")
+                    ),
+                    sorted(strings),
+                )
+                self.assertNotIn("import hashlib", source)
+                if name == "render_mixed_forest_audit.py":
+                    self.assertTrue({"beforeglb", "afterglb", "state"} <= strings)
 
     def test_forest_floor_props_are_grounded_atlas_ready_and_runtime_approved(self) -> None:
         document, size = assets.read_glb(FOREST_FLOOR_GLB_PATH)
