@@ -110,9 +110,9 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 86408,
+    "glbBytes": 95608,
     "trianglesLod0": 760,
-    "materials": 4,
+    "materials": 1,
     "textureBytes": 0,
     "nodes": [
       "GEO_VergeDeadwoodHeather_LOD0",
@@ -146,7 +146,7 @@
     "budgets": {
       "maxGlbBytes": 98304,
       "maxTrianglesLod0": 800,
-      "maxMaterials": 4,
+      "maxMaterials": 1,
       "maxTextureBytes": 0
     }
   },
