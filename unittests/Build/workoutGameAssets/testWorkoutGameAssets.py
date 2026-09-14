@@ -892,11 +892,10 @@ class TestWorkoutGameAssets(unittest.TestCase):
         )
         self.assertIn(source_relative, manifest_files)
         self.assertEqual(manifest_files[source_relative]["purpose"], "source")
-        self.assertEqual(
-            manifest_files[source_relative]["sha256"], sha256(RIDER_BLEND_PATH)
-        )
+        self.assertEqual(set(manifest_files[source_relative]), {"path", "purpose"})
+        self.assertEqual(manifest["source"]["kind"], "project-authored")
         self.assertEqual(manifest["source"]["originalFileName"], "WG_RiderBike.blend")
-        self.assertEqual(manifest["source"]["originalSha256"], sha256(RIDER_BLEND_PATH))
+        self.assertNotIn("originalSha256", manifest["source"])
         for relative in (
             "contrib/workout-game-assets/install_rider_bike_asset.py",
             "contrib/workout-game-assets/rebuild_rider_bike.sh",
@@ -905,7 +904,7 @@ class TestWorkoutGameAssets(unittest.TestCase):
             self.assertTrue(path.is_file())
             self.assertIn(relative, manifest_files)
             self.assertEqual(manifest_files[relative]["purpose"], "source")
-            self.assertEqual(manifest_files[relative]["sha256"], sha256(path))
+            self.assertEqual(set(manifest_files[relative]), {"path", "purpose"})
         self.assertTrue(
             (REPOSITORY / "contrib/workout-game-assets/rebuild_rider_bike.sh")
             .stat().st_mode & 0o100
