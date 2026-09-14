@@ -93,7 +93,8 @@ Item {
                                     : "qrc:/qml/WorkoutGameForestVergeCluster.qml"
                             setSource(sourceUrl, {
                                 "variant": cell.modelData.variant,
-                                "biome": 0
+                                "biome": 0,
+                                "instanceTable": null
                             })
                         }
                         onLoaded: {

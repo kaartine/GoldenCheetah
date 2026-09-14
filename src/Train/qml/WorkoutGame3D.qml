@@ -351,79 +351,36 @@ Item {
         }
 
         Repeater3D {
-            model: workoutGame3D.treeRenderModel
-            delegate: Node {
+            model: workoutGame3D.treeInstanceRenderModel
+            delegate: WorkoutGameConifer {
                 required property var modelData
                 objectName: "workoutGameTree"
-                readonly property string vegetationId: modelData.stableId
-                readonly property real relativeDistance:
-                    modelData.distance - workoutGame3D.distanceMeters
-                readonly property real targetOpacity:
-                    Math.min(root.treeEdgeOpacity(relativeDistance),
-                             root.treeCameraOpacity(modelData.x, modelData.z,
-                                                    modelData.crownRadius))
-                property real presentedOpacity: 0
-                position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
-                scale: Qt.vector3d(modelData.scale, modelData.scale, modelData.scale)
-                opacity: presentedOpacity
-
-                Component.onCompleted: presentedOpacity = targetOpacity
-                onTargetOpacityChanged: presentedOpacity = targetOpacity
-
-                Behavior on presentedOpacity {
-                    NumberAnimation {
-                        duration: 320
-                        easing.type: Easing.OutCubic
-                    }
-                }
-
-                WorkoutGameConifer {
-                    variant: modelData.variant
-                }
+                variant: modelData.variant
+                instanceTable: modelData.instanceTable
             }
         }
 
         Repeater3D {
-            model: workoutGame3D.forestFloorRenderModel
+            model: workoutGame3D.forestFloorInstanceRenderModel
             delegate: WorkoutGameForestFloorProp {
                 required property var modelData
                 variant: modelData.variant
-                biome: modelData.biome
-                readonly property string vegetationId: modelData.stableId
-                readonly property real relativeDistance:
-                    modelData.distance - workoutGame3D.distanceMeters
-                position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
-                eulerRotation: Qt.vector3d(
-                    modelData.pitch, modelData.yaw, modelData.terrainRoll)
-                scale: Qt.vector3d(
-                    modelData.mirror ? -modelData.scale : modelData.scale,
-                    modelData.scale,
-                    modelData.scale)
-                opacity: Math.min(root.dressingEdgeOpacity(relativeDistance),
-                                  root.dressingCameraOpacity(
-                                      modelData.x, modelData.z))
+                biome: variant === 4 || variant === 7 || variant === 10
+                       || variant === 14 ? 0
+                       : variant === 0 || variant === 1 || variant === 2
+                         || variant === 8 || variant === 13 ? 2 : 1
+                instanceTable: modelData.instanceTable
             }
         }
 
         Repeater3D {
-            model: workoutGame3D.forestVergeRenderModel
+            model: workoutGame3D.forestVergeInstanceRenderModel
             delegate: WorkoutGameForestVergeCluster {
                 required property var modelData
                 variant: modelData.variant
-                biome: modelData.biome
-                readonly property string vegetationId: modelData.stableId
-                readonly property real relativeDistance:
-                    modelData.distance - workoutGame3D.distanceMeters
-                position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
-                eulerRotation: Qt.vector3d(
-                    modelData.pitch, modelData.yaw, modelData.terrainRoll)
-                scale: Qt.vector3d(
-                    modelData.mirror ? -modelData.scale : modelData.scale,
-                    modelData.scale,
-                    modelData.scale)
-                opacity: Math.min(root.dressingEdgeOpacity(relativeDistance),
-                                  root.dressingCameraOpacity(
-                                      modelData.x, modelData.z))
+                biome: variant === 2 || variant === 5 ? 0
+                       : variant === 3 ? 2 : 1
+                instanceTable: modelData.instanceTable
             }
         }
 

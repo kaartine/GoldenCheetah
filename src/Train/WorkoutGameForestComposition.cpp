@@ -50,19 +50,27 @@ WorkoutGameForestSlotPlan WorkoutGameForestComposition::plan(
     result.biome = biomeAt(courseSeed, distanceMeters);
     result.clusterSide = (random & 1u) == 0u ? -1 : 1;
 
-    static constexpr int ClusterVariants[3][3] = {
-        {2, 3, 5}, // heather, deadwood and saplings on dry pine ground
-        {0, 1, 4}, // bilberry, fern and shrubs in moist spruce forest
-        {0, 3, 1}  // granite-led groups in rocky mixed forest
+    const int zone = std::max(0, int(std::floor(
+            std::max(0.0, distanceMeters) / BiomeLengthMeters)));
+    const int palette = (zone / 4) % 5;
+    // Each 180 m chapter rotates the catalog while neighboring biomes share
+    // anchor variants. A resident window therefore stays at nine or fewer
+    // GPU batches without making a long ride visually repetitive.
+    static constexpr int ClusterVariants[3][5][2] = {
+        {{0, 2}, {0, 3}, {0, 5}, {0, 2}, {0, 3}},
+        {{0, 1}, {0, 4}, {0, 1}, {0, 4}, {0, 1}},
+        {{0, 3}, {0, 1}, {0, 3}, {0, 1}, {0, 3}}
     };
-    static constexpr int FloorVariants[3][6] = {
-        {4, 7, 10, 13, 14, 6},
-        {3, 5, 6, 9, 12, 15},
-        {0, 1, 2, 3, 8, 13}
+    static constexpr int FloorVariants[3][5][3] = {
+        {{3, 6, 4}, {3, 6, 7}, {3, 6, 10}, {3, 6, 14}, {3, 6, 13}},
+        {{3, 6, 5}, {3, 6, 9}, {3, 6, 12}, {3, 6, 15}, {3, 6, 11}},
+        {{3, 6, 0}, {3, 6, 1}, {3, 6, 2}, {3, 6, 8}, {3, 6, 13}}
     };
     const int biomeIndex = static_cast<int>(result.biome);
-    result.clusterVariant = ClusterVariants[biomeIndex][(random >> 5) % 3u];
-    result.floorVariant = FloorVariants[biomeIndex][(random >> 12) % 6u];
+    result.clusterVariant =
+            ClusterVariants[biomeIndex][palette][(random >> 5) % 2u];
+    result.floorVariant =
+            FloorVariants[biomeIndex][palette][(random >> 12) % 3u];
     result.clusterScale = 1.15 + 0.45 * unitByte(random, 16);
     result.floorScale = 0.95 + 0.45 * unitByte(random, 8);
     result.clusterEdgeOffsetMeters = 0.16 + 0.34 * unitByte(random, 24);

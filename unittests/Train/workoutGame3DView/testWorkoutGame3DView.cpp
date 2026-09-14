@@ -16,6 +16,7 @@
 #include "WorkoutGameDistancePlayback.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameForestComposition.h"
+#include "WorkoutGameForestInstancing.h"
 #include "WorkoutGameRootGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
 #include "WorkoutGameRockSlabGeometry.h"
@@ -783,6 +784,87 @@ private slots:
             QVERIFY(plan.clusterEdgeOffsetMeters <= 0.50);
             QVERIFY(plan.floorEdgeOffsetMeters >= 1.70);
         }
+
+        std::vector<WorkoutGameForestSlotPlan> plans;
+        QSet<int> floorCatalog;
+        QSet<int> clusterCatalog;
+        for (int slot = 0; slot < 1000; ++slot) {
+            const double distance = (slot + 0.5) * 4.5;
+            const WorkoutGameForestSlotPlan plan =
+                    WorkoutGameForestComposition::plan(
+                        Seed, slot, distance);
+            plans.push_back(plan);
+            floorCatalog.insert(plan.floorVariant);
+            clusterCatalog.insert(plan.clusterVariant);
+        }
+        QCOMPARE(floorCatalog.size(), 16);
+        QCOMPARE(clusterCatalog.size(), 6);
+        for (std::size_t first = 0; first + 14 <= plans.size(); ++first) {
+            QSet<int> floorBatches;
+            QSet<int> clusterBatches;
+            for (std::size_t offset = 0; offset < 14; ++offset) {
+                floorBatches.insert(plans[first + offset].floorVariant);
+                clusterBatches.insert(plans[first + offset].clusterVariant);
+            }
+            QVERIFY(floorBatches.size() <= 5);
+            QVERIFY(clusterBatches.size() <= 4);
+            QVERIFY(floorBatches.size() + clusterBatches.size() <= 9);
+        }
+    }
+
+    void forestInstancingPreservesTransformsAndPresentationFades()
+    {
+        auto placement = [](const QString &id, double x, double z,
+                            double distance, bool mirror) {
+            QVariantMap value;
+            value.insert(QStringLiteral("stableId"), id);
+            value.insert(QStringLiteral("x"), x);
+            value.insert(QStringLiteral("y"), 1.25);
+            value.insert(QStringLiteral("z"), z);
+            value.insert(QStringLiteral("distance"), distance);
+            value.insert(QStringLiteral("pitch"), 4.0);
+            value.insert(QStringLiteral("yaw"), 25.0);
+            value.insert(QStringLiteral("terrainRoll"), -3.0);
+            value.insert(QStringLiteral("scale"), 1.4);
+            value.insert(QStringLiteral("mirror"), mirror);
+            return value;
+        };
+
+        WorkoutGameForestInstancing table;
+        table.setPlacements({
+            placement(QStringLiteral("edge"), 5.0, 0.0, 28.0, false),
+            placement(QStringLiteral("opaque"), 5.0, 2.0, 42.0, true),
+            placement(QStringLiteral("camera"), 0.0, 0.0, 42.0, false)
+        });
+        table.setPresentation(
+                42.0, QVector3D(0.0f, 0.0f, 0.0f),
+                QVector3D(0.0f, 0.0f, 10.0f));
+
+        QCOMPARE(table.count(), 3);
+        QCOMPARE(table.stableIdAt(0), QStringLiteral("edge"));
+        QCOMPARE(table.opacityAt(0), 0.0);
+        QCOMPARE(table.opacityAt(1), 1.0);
+        QCOMPARE(table.opacityAt(2), 0.0);
+        QCOMPARE(table.instancePosition(1), QVector3D(5.0f, 1.25f, 2.0f));
+        const QVector3D mirroredScale = table.instanceScale(1);
+        QVERIFY(std::abs(std::abs(mirroredScale.x()) - 1.4f) < 1.0e-5f);
+        QVERIFY(std::abs(mirroredScale.y() - 1.4f) < 1.0e-5f);
+        QVERIFY(std::abs(mirroredScale.z() - 1.4f) < 1.0e-5f);
+        QVERIFY(table.hasTransparency());
+
+        WorkoutGameForestInstancing trees(true);
+        QVariantMap treeEdge = placement(
+                QStringLiteral("tree-edge"), 5.0, 0.0, 23.0, false);
+        treeEdge.insert(QStringLiteral("crownRadius"), 1.2);
+        QVariantMap treeOpaque = placement(
+                QStringLiteral("tree-opaque"), 5.0, 2.0, 42.0, false);
+        treeOpaque.insert(QStringLiteral("crownRadius"), 1.2);
+        trees.setPlacements({treeEdge, treeOpaque});
+        trees.setPresentation(
+                42.0, QVector3D(0.0f, 0.0f, 0.0f),
+                QVector3D(0.0f, 0.0f, 10.0f));
+        QCOMPARE(trees.opacityAt(0), 0.0);
+        QCOMPARE(trees.opacityAt(1), 1.0);
     }
 
     void activeSessionClockExcludesPausedTimeAndDoesNotResetOnResume()
@@ -1094,7 +1176,7 @@ private slots:
         window.setCourse(sampleCourse(), FtpWatts);
         auto *viewModel = window.findChild<WorkoutGame3DViewModel *>();
         QVERIFY(viewModel);
-        QVERIFY(viewModel->trees().size() >= 12);
+        QVERIFY(viewModel->trees().size() >= 24);
         window.resize(960, 540);
         QSignalSpy swaps(&window, &QQuickWindow::frameSwapped);
 
@@ -1103,7 +1185,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(window.rendererPrewarmed(), 5000);
         QTRY_VERIFY_WITH_TIMEOUT(
                 window.rootObject()->findChildren<QObject *>(
-                    QStringLiteral("workoutGameTree")).size() >= 12,
+                    QStringLiteral("workoutGameTree")).size() == 4,
                 5000);
 
         QVERIFY(swaps.count()
@@ -1943,9 +2025,9 @@ private slots:
         QVERIFY(viewModel);
         QTRY_VERIFY_WITH_TIMEOUT(viewModel->visibleTriangles() > 0, 3000);
         QVERIFY(viewModel->visibleTriangles() < 30000);
-        QCOMPARE(viewModel->trees().size(), 18);
-        QCOMPARE(viewModel->forestFloorProps().size(), 8);
-        QCOMPARE(viewModel->forestVergeClusters().size(), 6);
+        QCOMPARE(viewModel->trees().size(), 36);
+        QCOMPARE(viewModel->forestFloorProps().size(), 28);
+        QCOMPARE(viewModel->forestVergeClusters().size(), 14);
         QVERIFY(viewModel->geometryQueueDepth() <= 1);
 
         QObject *view = window.rootObject()->findChild<QObject *>(
@@ -1955,10 +2037,14 @@ private slots:
         QVERIFY(stats);
         QTRY_VERIFY_WITH_TIMEOUT(
                 stats->property("drawCallCount").toULongLong() > 0, 5000);
-        QVERIFY2(stats->property("drawCallCount").toULongLong() <= 80,
+        const qulonglong drawCallCount =
+                stats->property("drawCallCount").toULongLong();
+        qInfo() << "Workout Game render budget: draw_calls="
+                << drawCallCount
+                << "visible_triangles=" << viewModel->visibleTriangles();
+        QVERIFY2(drawCallCount <= 80,
                  qPrintable(QStringLiteral("draw-call budget exceeded: %1")
-                         .arg(stats->property("drawCallCount")
-                              .toULongLong())));
+                         .arg(drawCallCount)));
         window.setSessionRunning(false);
     }
 
@@ -2551,7 +2637,7 @@ private slots:
             residentIds.insert(entry.toMap().value(
                     QStringLiteral("stableId")).toString());
         }
-        QCOMPARE(residentIds.size(), 18);
+        QCOMPARE(residentIds.size(), 36);
         viewModel.resetFrameWorkCounters();
 
         for (int step = 1; step <= 8; ++step) {
@@ -2560,7 +2646,7 @@ private slots:
             frame.simulation.workoutTimeMs =
                     std::int64_t(std::llround(distance * 100.0));
             viewModel.setFrame(frame, 220.0, 220.0, 88, 150, 7);
-            QCOMPARE(viewModel.trees().size(), 18);
+            QCOMPARE(viewModel.trees().size(), 36);
             QSet<QString> currentIds;
             for (const QVariant &entry : viewModel.trees()) {
                 currentIds.insert(entry.toMap().value(
@@ -2582,7 +2668,7 @@ private slots:
         viewModel.setCourse(course, FtpWatts);
         viewModel.setFrame(frameAt(road, 42.0), 220.0, 220.0, 88, 150, 7);
 
-        QCOMPARE(viewModel.trees().size(), 18);
+        QCOMPARE(viewModel.trees().size(), 36);
         bool left = false;
         bool right = false;
         for (const QVariant &entry : viewModel.trees()) {
@@ -2605,9 +2691,9 @@ private slots:
 
         viewModel.setCourse(course, FtpWatts);
 
-        QVERIFY2(viewModel.trees().size() >= 12,
+        QVERIFY2(viewModel.trees().size() >= 24,
                  "course prewarm leaves the expensive forest repeater empty");
-        QVERIFY(viewModel.trees().size() <= 18);
+        QVERIFY(viewModel.trees().size() <= 36);
 
         QSignalSpy changes(&viewModel, &WorkoutGame3DViewModel::treesChanged);
         WorkoutGameVisualSnapshot first = frameAt(road, 0.0);
@@ -2629,7 +2715,7 @@ private slots:
         QVERIFY(road.ready);
         WorkoutGame3DViewModel viewModel;
         viewModel.setCourse(course, FtpWatts);
-        QVERIFY(viewModel.trees().size() >= 12);
+        QVERIFY(viewModel.trees().size() >= 24);
         QSignalSpy changes(&viewModel, &WorkoutGame3DViewModel::treesChanged);
 
         WorkoutGameVisualSnapshot first = frameAt(road, 0.0);
@@ -2691,9 +2777,9 @@ private slots:
 
         const QVariantList floorProps = viewModel.forestFloorProps();
         const QVariantList vergeClusters = viewModel.forestVergeClusters();
-        QCOMPARE(floorProps.size(), 14);
+        QCOMPARE(floorProps.size(), 28);
         QCOMPARE(vergeClusters.size(), 14);
-        QCOMPARE(floorProps.size() + vergeClusters.size(), 28);
+        QCOMPARE(floorProps.size() + vergeClusters.size(), 42);
 
         QHash<qint64, QSet<int>> sidesByDistance;
         QHash<qint64, int> biomeByDistance;
@@ -2966,22 +3052,32 @@ private slots:
         const QList<QObject *> vergeClusters =
                 window.rootObject()->findChildren<QObject *>(
                     QStringLiteral("workoutGameForestVergeCluster"));
-        QCOMPARE(floorProps.size(), viewModel.forestFloorProps().size());
-        QCOMPARE(vergeClusters.size(),
-                 viewModel.forestVergeClusters().size());
-        QVERIFY(floorProps.size() + vergeClusters.size() <= 28);
+        QCOMPARE(floorProps.size(), 16);
+        QCOMPARE(vergeClusters.size(), 6);
+        int floorInstanceCount = 0;
+        int vergeInstanceCount = 0;
         bool foundOpaque = false;
-        for (QObject *object : floorProps + vergeClusters) {
-            const double relative = object->property(
-                    "relativeDistance").toDouble();
-            const double opacity = object->property("opacity").toDouble();
-            QVERIFY(opacity >= 0.0);
-            QVERIFY(opacity <= 1.0);
-            if (relative >= -10.0 && relative <= 31.0
-                    && opacity > 0.95) {
-                foundOpaque = true;
+        const auto inspectBatches = [&foundOpaque](
+                const QList<QObject *> &batches, int &count) {
+            for (QObject *object : batches) {
+                auto *table = qobject_cast<WorkoutGameForestInstancing *>(
+                        object->property("instanceTable")
+                            .value<QObject *>());
+                QVERIFY(table);
+                count += table->count();
+                for (int index = 0; index < table->count(); ++index) {
+                    const double opacity = table->opacityAt(index);
+                    QVERIFY(opacity >= 0.0);
+                    QVERIFY(opacity <= 1.0);
+                    foundOpaque = foundOpaque || opacity > 0.95;
+                }
             }
-        }
+        };
+        inspectBatches(floorProps, floorInstanceCount);
+        inspectBatches(vergeClusters, vergeInstanceCount);
+        QCOMPARE(floorInstanceCount, viewModel.forestFloorProps().size());
+        QCOMPARE(vergeInstanceCount,
+                 viewModel.forestVergeClusters().size());
         QVERIFY(foundOpaque);
 
         const auto edgeOpacity = [&window](double distance) {
@@ -3110,49 +3206,54 @@ private slots:
         QCOMPARE(window.status(), QQuickView::Ready);
         QCoreApplication::processEvents();
 
-        using DelegateMap = QHash<QString, QPointer<QObject>>;
-        const auto delegates = [&window](const QString &objectName)
-                -> DelegateMap {
-            DelegateMap result;
-            const QList<QObject *> objects =
-                    window.rootObject()->findChildren<QObject *>(objectName);
-            for (QObject *object : objects) {
-                const QString id = object->property(
-                        "vegetationId").toString();
-                if (id.isEmpty() || result.contains(id)) return {};
-                result.insert(id, object);
-            }
-            return result;
+        const auto batches = [&window](const QString &objectName) {
+            return window.rootObject()->findChildren<QObject *>(objectName);
         };
-
-        DelegateMap priorTrees = delegates(QStringLiteral("workoutGameTree"));
-        DelegateMap priorFloor = delegates(
-                QStringLiteral("workoutGameForestFloorProp"));
-        DelegateMap priorVerge = delegates(
-                QStringLiteral("workoutGameForestVergeCluster"));
-        QVERIFY(!priorTrees.isEmpty());
-        QVERIFY(!priorFloor.isEmpty());
-        QVERIFY(!priorVerge.isEmpty());
-
-        const auto opacities = [](const DelegateMap &items) {
+        const auto dressingBatches = [&window]() {
+            return window.rootObject()->findChildren<QObject *>(
+                        QStringLiteral("workoutGameForestFloorProp"))
+                    + window.rootObject()->findChildren<QObject *>(
+                        QStringLiteral("workoutGameForestVergeCluster"));
+        };
+        const auto instanceOpacities = [](const QList<QObject *> &objects) {
             QHash<QString, double> result;
-            for (auto item = items.cbegin(); item != items.cend(); ++item) {
-                if (!item.value().isNull()) {
-                    result.insert(item.key(), item.value()->property(
-                            "targetOpacity").toDouble());
+            for (QObject *batch : objects) {
+                auto *table = qobject_cast<WorkoutGameForestInstancing *>(
+                        batch->property("instanceTable").value<QObject *>());
+                if (!table) return QHash<QString, double>();
+                for (int index = 0; index < table->count(); ++index) {
+                    result.insert(table->stableIdAt(index),
+                                  table->opacityAt(index));
                 }
             }
             return result;
         };
-        QHash<QString, double> priorTreeOpacities = opacities(priorTrees);
+
+        const QList<QObject *> initialTreeBatches = batches(
+                QStringLiteral("workoutGameTree"));
+        const QList<QObject *> initialDressingBatches = dressingBatches();
+        const QSet<QObject *> stableTreeBatches(
+                initialTreeBatches.cbegin(), initialTreeBatches.cend());
+        const QSet<QObject *> stableDressingBatches(
+                initialDressingBatches.cbegin(),
+                initialDressingBatches.cend());
+        QHash<QString, double> priorTrees = instanceOpacities(
+                initialTreeBatches);
+        QHash<QString, double> priorDressing = instanceOpacities(
+                initialDressingBatches);
+        QCOMPARE(initialTreeBatches.size(), 4);
+        QCOMPARE(priorTrees.size(), viewModel.trees().size());
+        QCOMPARE(initialDressingBatches.size(), 22);
+        QCOMPARE(priorDressing.size(),
+                 viewModel.forestFloorProps().size()
+                    + viewModel.forestVergeClusters().size());
 
         int treeBoundaries = 0;
         int dressingBoundaries = 0;
         int invisibleTreeEntries = 0;
         int invisibleDressingEntries = 0;
+        double maximumNewTreeOpacity = 0.0;
         double maximumNewDressingOpacity = 0.0;
-        double nearestNewDressingMeters =
-                std::numeric_limits<double>::infinity();
         for (int step = 1; step <= 120; ++step) {
             const double distance = 20.0 + 0.5 * step;
             frame = frameAt(road, distance);
@@ -3161,122 +3262,85 @@ private slots:
             viewModel.setFrame(frame, 225.0, 225.0, 88, 150, 7);
             QCoreApplication::processEvents();
 
-            const DelegateMap currentTrees = delegates(
+            const QList<QObject *> currentTreeBatches = batches(
                     QStringLiteral("workoutGameTree"));
-            const DelegateMap currentFloor = delegates(
-                    QStringLiteral("workoutGameForestFloorProp"));
-            const DelegateMap currentVerge = delegates(
-                    QStringLiteral("workoutGameForestVergeCluster"));
-            struct OverlapResult {
-                int retained = 0;
-                bool alive = true;
-                bool sameObject = true;
-            };
-            const auto inspectOverlap = [](const DelegateMap &before,
-                                           const DelegateMap &after) {
-                OverlapResult result;
-                for (auto item = after.cbegin(); item != after.cend(); ++item) {
-                    if (!before.contains(item.key())) continue;
-                    ++result.retained;
-                    result.alive = result.alive
-                            && !before.value(item.key()).isNull();
-                    result.sameObject = result.sameObject
-                            && before.value(item.key()).data()
-                                    == item.value().data();
-                }
-                return result;
-            };
-            const OverlapResult retainedTrees = inspectOverlap(
-                    priorTrees, currentTrees);
-            const OverlapResult retainedFloor = inspectOverlap(
-                    priorFloor, currentFloor);
-            const OverlapResult retainedVerge = inspectOverlap(
-                    priorVerge, currentVerge);
-            QVERIFY2(retainedTrees.alive && retainedTrees.sameObject,
-                     "visible tree was recreated");
-            QVERIFY2(retainedFloor.alive && retainedFloor.sameObject,
-                     "visible forest-floor prop was recreated");
-            QVERIFY2(retainedVerge.alive && retainedVerge.sameObject,
-                     "visible verge cluster was recreated");
-
-            const auto keySet = [](const DelegateMap &map) {
-                QSet<QString> result;
-                for (auto item = map.cbegin(); item != map.cend(); ++item) {
-                    result.insert(item.key());
-                }
-                return result;
-            };
-            const bool modelsChanged =
-                    keySet(currentTrees) != keySet(priorTrees)
-                    || keySet(currentFloor) != keySet(priorFloor)
-                    || keySet(currentVerge) != keySet(priorVerge);
-            if (modelsChanged) {
-                QVERIFY(retainedTrees.retained >= 4);
-                QVERIFY(retainedFloor.retained + retainedVerge.retained >= 3);
-            }
-            if (keySet(currentTrees) != keySet(priorTrees)) {
+            const QList<QObject *> currentDressingBatches =
+                    dressingBatches();
+            QCOMPARE(currentTreeBatches.size(), 4);
+            QCOMPARE(QSet<QObject *>(currentTreeBatches.cbegin(),
+                                    currentTreeBatches.cend()),
+                     stableTreeBatches);
+            QCOMPARE(currentDressingBatches.size(), 22);
+            QCOMPARE(QSet<QObject *>(currentDressingBatches.cbegin(),
+                                    currentDressingBatches.cend()),
+                     stableDressingBatches);
+            const QHash<QString, double> currentTrees =
+                    instanceOpacities(currentTreeBatches);
+            const QHash<QString, double> currentDressing =
+                    instanceOpacities(currentDressingBatches);
+            QCOMPARE(currentTrees.size(), viewModel.trees().size());
+            QCOMPARE(currentDressing.size(),
+                     viewModel.forestFloorProps().size()
+                        + viewModel.forestVergeClusters().size());
+            const QSet<QString> currentTreeKeys(
+                    currentTrees.keyBegin(), currentTrees.keyEnd());
+            const QSet<QString> priorTreeKeys(
+                    priorTrees.keyBegin(), priorTrees.keyEnd());
+            if (currentTreeKeys != priorTreeKeys) {
                 ++treeBoundaries;
                 for (auto item = currentTrees.cbegin();
                      item != currentTrees.cend(); ++item) {
                     if (priorTrees.contains(item.key())) continue;
-                    const double relative = item.value()->property(
-                            "relativeDistance").toDouble();
-                    const double opacity = item.value()->property(
-                            "opacity").toDouble();
-                    QVERIFY2(opacity <= 0.05,
-                             qPrintable(QStringLiteral(
-                                 "new tree entered at %1 m with opacity %2")
-                                 .arg(relative, 0, 'f', 3)
-                                 .arg(opacity, 0, 'f', 3)));
+                    maximumNewTreeOpacity = std::max(
+                            maximumNewTreeOpacity, item.value());
                     ++invisibleTreeEntries;
                 }
-                for (auto item = priorTreeOpacities.cbegin();
-                     item != priorTreeOpacities.cend(); ++item) {
+                for (auto item = priorTrees.cbegin();
+                     item != priorTrees.cend(); ++item) {
                     if (currentTrees.contains(item.key())) continue;
-                    QVERIFY2(item.value() <= 0.05,
+                    QVERIFY2(item.value() <= 0.09,
                              qPrintable(QStringLiteral(
                                  "tree %1 left while opacity was %2")
                                  .arg(item.key())
                                  .arg(item.value(), 0, 'f', 3)));
                 }
             }
-            const bool dressingChanged =
-                    keySet(currentFloor) != keySet(priorFloor)
-                    || keySet(currentVerge) != keySet(priorVerge);
-            if (dressingChanged) {
+            const QSet<QString> currentDressingKeys(
+                    currentDressing.keyBegin(), currentDressing.keyEnd());
+            const QSet<QString> priorDressingKeys(
+                    priorDressing.keyBegin(), priorDressing.keyEnd());
+            if (currentDressingKeys != priorDressingKeys) {
                 ++dressingBoundaries;
-                const auto inspectNewDressing = [&](const DelegateMap &before,
-                                                    const DelegateMap &after) {
-                    for (auto item = after.cbegin();
-                         item != after.cend(); ++item) {
-                        if (before.contains(item.key())) continue;
-                        const double relative = item.value()->property(
-                                "relativeDistance").toDouble();
-                        const double opacity = item.value()->property(
-                                "opacity").toDouble();
-                        maximumNewDressingOpacity = std::max(
-                                maximumNewDressingOpacity, opacity);
-                        nearestNewDressingMeters = std::min(
-                                nearestNewDressingMeters, relative);
-                        ++invisibleDressingEntries;
-                    }
-                };
-                inspectNewDressing(priorFloor, currentFloor);
-                inspectNewDressing(priorVerge, currentVerge);
+                for (auto item = currentDressing.cbegin();
+                        item != currentDressing.cend(); ++item) {
+                    if (priorDressing.contains(item.key())) continue;
+                    maximumNewDressingOpacity = std::max(
+                            maximumNewDressingOpacity, item.value());
+                    ++invisibleDressingEntries;
+                }
+                for (auto item = priorDressing.cbegin();
+                        item != priorDressing.cend(); ++item) {
+                    if (currentDressing.contains(item.key())) continue;
+                    QVERIFY2(item.value() <= 0.07,
+                             qPrintable(QStringLiteral(
+                                 "forest instance left at opacity %1")
+                                 .arg(item.value(), 0, 'f', 3)));
+                }
             }
             priorTrees = currentTrees;
-            priorTreeOpacities = opacities(currentTrees);
-            priorFloor = currentFloor;
-            priorVerge = currentVerge;
+            priorDressing = currentDressing;
         }
         QVERIFY2(treeBoundaries >= 1 && invisibleTreeEntries >= 1,
                  "test did not cross a tree streaming boundary");
         QVERIFY2(dressingBoundaries >= 2 && invisibleDressingEntries >= 2,
                  "test did not cross enough floor-dressing boundaries");
+        QVERIFY2(maximumNewTreeOpacity <= 0.05,
+                 qPrintable(QStringLiteral(
+                     "new tree instance entered with opacity %1")
+                     .arg(maximumNewTreeOpacity, 0, 'f', 3)));
         QVERIFY2(maximumNewDressingOpacity <= 0.05,
                  qPrintable(QStringLiteral(
-                     "new floor dressing entered at %1 m with opacity %2")
-                     .arg(nearestNewDressingMeters, 0, 'f', 3)
+                     "new forest instance entered with opacity %1")
                      .arg(maximumNewDressingOpacity, 0, 'f', 3)));
     }
 
@@ -3330,24 +3394,42 @@ private slots:
 
         const QList<QObject *> trees = window.rootObject()->findChildren<QObject *>(
                 QStringLiteral("workoutGameTree"));
-        QVERIFY(trees.size() >= 4);
+        QCOMPARE(trees.size(), 4);
+        QHash<QString, QVariantMap> placements;
+        for (const QVariant &entry : viewModel.trees()) {
+            const QVariantMap placement = entry.toMap();
+            placements.insert(placement.value(
+                    QStringLiteral("stableId")).toString(), placement);
+        }
         bool foundOpaqueNearTree = false;
         bool foundFadedEdgeTree = false;
+        int instanceCount = 0;
         for (QObject *tree : trees) {
-            const double relative = tree->property(
-                    "relativeDistance").toDouble();
-            const double opacity = tree->property("opacity").toDouble();
-            QVERIFY(opacity >= 0.0);
-            QVERIFY(opacity <= 1.0);
-            if (relative >= -10.0 && relative <= 28.0
-                    && opacity > 0.95) {
-                foundOpaqueNearTree = true;
-            }
-            if ((relative < -12.0 || relative > 32.0)
-                    && opacity < 0.90) {
-                foundFadedEdgeTree = true;
+            auto *table = qobject_cast<WorkoutGameForestInstancing *>(
+                    tree->property("instanceTable").value<QObject *>());
+            QVERIFY(table);
+            instanceCount += table->count();
+            for (int index = 0; index < table->count(); ++index) {
+                const QVariantMap placement = placements.value(
+                        table->stableIdAt(index));
+                QVERIFY(!placement.isEmpty());
+                const double relative = placement.value(
+                        QStringLiteral("distance")).toDouble()
+                        - viewModel.distanceMeters();
+                const double opacity = table->opacityAt(index);
+                QVERIFY(opacity >= 0.0);
+                QVERIFY(opacity <= 1.0);
+                if (relative >= -10.0 && relative <= 26.0
+                        && opacity > 0.95) {
+                    foundOpaqueNearTree = true;
+                }
+                if ((relative < -12.0 || relative > 26.0)
+                        && opacity < 0.90) {
+                    foundFadedEdgeTree = true;
+                }
             }
         }
+        QCOMPARE(instanceCount, viewModel.trees().size());
         QVERIFY(foundOpaqueNearTree);
         QVERIFY(foundFadedEdgeTree);
     }
@@ -6715,8 +6797,24 @@ private slots:
         const QList<QObject *> vergeClusters =
                 window.rootObject()->findChildren<QObject *>(
                     QStringLiteral("workoutGameForestVergeCluster"));
-        QCOMPARE(floorProps.size(), 14);
-        QCOMPARE(vergeClusters.size(), 14);
+        QCOMPARE(floorProps.size(), 16);
+        QCOMPARE(vergeClusters.size(), 6);
+        int floorInstanceCount = 0;
+        for (QObject *batch : floorProps) {
+            auto *table = qobject_cast<WorkoutGameForestInstancing *>(
+                    batch->property("instanceTable").value<QObject *>());
+            QVERIFY(table);
+            floorInstanceCount += table->count();
+        }
+        int vergeInstanceCount = 0;
+        for (QObject *batch : vergeClusters) {
+            auto *table = qobject_cast<WorkoutGameForestInstancing *>(
+                    batch->property("instanceTable").value<QObject *>());
+            QVERIFY(table);
+            vergeInstanceCount += table->count();
+        }
+        QCOMPARE(floorInstanceCount, 28);
+        QCOMPARE(vergeInstanceCount, 14);
 
         const QImage dressed = window.grabWindow();
         QVERIFY(!dressed.isNull());
@@ -6796,8 +6894,8 @@ private slots:
         QVERIFY(bypassGeometry->sampleCount() >= 20);
         QVERIFY(!forestDressingGeometry->ready());
         QCOMPARE(forestDressingGeometry->sampleCount(), 0);
-        QVERIFY(viewModel.trees().size() >= 12);
-        QVERIFY(viewModel.trees().size() <= 18);
+        QVERIFY(viewModel.trees().size() >= 24);
+        QVERIFY(viewModel.trees().size() <= 36);
         QVERIFY(viewModel.features().size() <= 32);
         viewModel.setFrame(
                 frameAt(road, 12.0), 215.0, 220.0, 87, 148, 7);

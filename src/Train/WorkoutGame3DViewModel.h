@@ -29,6 +29,8 @@
 #include <limits>
 #include <vector>
 
+class WorkoutGameForestInstancing;
+
 class WorkoutGame3DStableListModel final : public QAbstractListModel
 {
 public:
@@ -176,10 +178,16 @@ class WorkoutGame3DViewModel : public QObject
     Q_PROPERTY(QVariantList forestVergeClusters READ forestVergeClusters
                NOTIFY forestDressingChanged)
     Q_PROPERTY(QAbstractItemModel *treeRenderModel READ treeRenderModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel *treeInstanceRenderModel
+               READ treeInstanceRenderModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel *forestFloorRenderModel
                READ forestFloorRenderModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel *forestVergeRenderModel
                READ forestVergeRenderModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel *forestFloorInstanceRenderModel
+               READ forestFloorInstanceRenderModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel *forestVergeInstanceRenderModel
+               READ forestVergeInstanceRenderModel CONSTANT)
     Q_PROPERTY(QString cameraComposition READ cameraComposition CONSTANT)
     Q_PROPERTY(QString cameraPresentation READ cameraPresentation
                NOTIFY sceneChanged)
@@ -367,8 +375,20 @@ public:
         return visibleForestVergeClusters;
     }
     QAbstractItemModel *treeRenderModel() { return &treeItems; }
+    QAbstractItemModel *treeInstanceRenderModel()
+    {
+        return &treeInstanceBatchItems;
+    }
     QAbstractItemModel *forestFloorRenderModel() { return &forestFloorItems; }
     QAbstractItemModel *forestVergeRenderModel() { return &forestVergeItems; }
+    QAbstractItemModel *forestFloorInstanceRenderModel()
+    {
+        return &forestFloorInstanceBatchItems;
+    }
+    QAbstractItemModel *forestVergeInstanceRenderModel()
+    {
+        return &forestVergeInstanceBatchItems;
+    }
     QString cameraComposition() const { return currentCameraComposition; }
     QString cameraPresentation() const;
     double cameraPresentationBlend() const
@@ -420,7 +440,10 @@ private:
     void scheduleReadyFloorChunk();
     void updateVisibleTriangleCount();
     void rebuildTrees(double distanceMeters);
+    void rebuildTreeInstanceBatches();
     void rebuildForestDressing(double distanceMeters);
+    void rebuildForestInstanceBatches();
+    void updateForestInstancePresentation(double distanceMeters);
     void rebuildPowerProfile(const WorkoutGameCourse &course);
     void updateCameraPose(double distanceMeters, double lateralMeters,
                           std::int64_t workoutTimeMs);
@@ -451,8 +474,17 @@ private:
     QVariantList visibleForestFloorProps;
     QVariantList visibleForestVergeClusters;
     WorkoutGame3DStableListModel treeItems;
+    WorkoutGame3DStableListModel treeInstanceBatchItems;
     WorkoutGame3DStableListModel forestFloorItems;
     WorkoutGame3DStableListModel forestVergeItems;
+    WorkoutGame3DStableListModel forestFloorInstanceBatchItems;
+    WorkoutGame3DStableListModel forestVergeInstanceBatchItems;
+    std::array<std::unique_ptr<WorkoutGameForestInstancing>, 4>
+            treeInstanceTables;
+    std::array<std::unique_ptr<WorkoutGameForestInstancing>, 16>
+            forestFloorInstanceTables;
+    std::array<std::unique_ptr<WorkoutGameForestInstancing>, 6>
+            forestVergeInstanceTables;
     int forestDressingFirstSlot = std::numeric_limits<int>::min();
     int forestDressingLastSlot = std::numeric_limits<int>::min();
     bool sceneReady = false;

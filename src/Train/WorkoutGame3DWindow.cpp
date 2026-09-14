@@ -851,6 +851,8 @@ QString WorkoutGame3DWindow::healthTraceLine(
            << " tree_instances=" << viewModel->trees().size()
            << " forest_floor_instances="
                 << viewModel->forestFloorProps().size()
+           << " forest_verge_instances="
+                << viewModel->forestVergeClusters().size()
            << " rider_distance_m=" << viewModel->distanceMeters()
            << " speed_kph=" << viewModel->speedKph()
            << " grade_percent=" << viewModel->gradePercent()

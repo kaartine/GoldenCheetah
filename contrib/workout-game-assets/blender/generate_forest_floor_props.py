@@ -24,6 +24,8 @@ MATERIAL_NAMES = (
     "MAT_ForestEndGrain",
     "MAT_ForestUnderstory",
 )
+VERTEX_COLOR_MATERIAL_NAME = "MAT_ForestVertexColor"
+VERTEX_COLOR_ATTRIBUTE_NAME = "ForestColor"
 VARIANT_NAMES = (
     "GEO_GraniteLow_LOD0",
     "GEO_GraniteUpright_LOD0",
@@ -66,22 +68,22 @@ EXPECTED_TRIANGLES = {
     "GEO_LeafySapling_LOD0": 32,
 }
 EXPECTED_MATERIAL_PASSES = {
-    "GEO_GraniteLow_LOD0": 2,
-    "GEO_GraniteUpright_LOD0": 2,
-    "GEO_GraniteSlab_LOD0": 2,
-    "GEO_StumpRooted_LOD0": 3,
-    "GEO_DeadwoodFallen_LOD0": 2,
+    "GEO_GraniteLow_LOD0": 1,
+    "GEO_GraniteUpright_LOD0": 1,
+    "GEO_GraniteSlab_LOD0": 1,
+    "GEO_StumpRooted_LOD0": 1,
+    "GEO_DeadwoodFallen_LOD0": 1,
     "GEO_UnderstoryFern_LOD0": 1,
     "GEO_UnderstoryBilberry_LOD0": 1,
     "GEO_UnderstoryHeather_LOD0": 1,
-    "GEO_GranitePair_LOD0": 2,
+    "GEO_GranitePair_LOD0": 1,
     "GEO_UnderstoryShrub_LOD0": 1,
     "GEO_UnderstoryGrass_LOD0": 1,
-    "GEO_WildflowerPatch_LOD0": 2,
-    "GEO_MushroomCluster_LOD0": 2,
-    "GEO_TwigPile_LOD0": 2,
-    "GEO_PineSapling_LOD0": 2,
-    "GEO_LeafySapling_LOD0": 2,
+    "GEO_WildflowerPatch_LOD0": 1,
+    "GEO_MushroomCluster_LOD0": 1,
+    "GEO_TwigPile_LOD0": 1,
+    "GEO_PineSapling_LOD0": 1,
+    "GEO_LeafySapling_LOD0": 1,
 }
 MAXIMUM_TRIANGLES = 720
 MAXIMUM_VARIANT_TRIANGLES = 96
@@ -94,7 +96,58 @@ DEADWOOD_BRANCH_STUB_COUNT = 2
 DEADWOOD_LENGTH_METERS = 1.08
 DEADWOOD_MINIMUM_TRUNK_DIAMETER_METERS = 0.26
 GRANITE_BASE_COLOR = (0.30, 0.36, 0.39, 1.0)
+RUNTIME_PALETTES = {
+    "GEO_GraniteLow_LOD0": ("#52636b", "#587743"),
+    "GEO_GraniteUpright_LOD0": ("#52636b", "#587743"),
+    "GEO_GraniteSlab_LOD0": ("#52636b", "#587743"),
+    "GEO_StumpRooted_LOD0": ("#6b3d1f", "#d18b3f", "#587743"),
+    "GEO_DeadwoodFallen_LOD0": ("#6b3d1f", "#d18b3f"),
+    "GEO_UnderstoryFern_LOD0": ("#3f9148",),
+    "GEO_UnderstoryBilberry_LOD0": ("#245f42",),
+    "GEO_UnderstoryHeather_LOD0": ("#87567f",),
+    "GEO_GranitePair_LOD0": ("#52636b", "#587743"),
+    "GEO_UnderstoryShrub_LOD0": ("#326747",),
+    "GEO_UnderstoryGrass_LOD0": ("#5e913d",),
+    "GEO_WildflowerPatch_LOD0": ("#5e913d", "#d7a4d9"),
+    "GEO_MushroomCluster_LOD0": ("#d9c7a5", "#b84d3f"),
+    "GEO_TwigPile_LOD0": ("#6b3d1f", "#d18b3f"),
+    "GEO_PineSapling_LOD0": ("#6b3d1f", "#24583a"),
+    "GEO_LeafySapling_LOD0": ("#6b3d1f", "#4a7f3d"),
+}
 EPSILON = 1.0e-7
+
+
+def color_from_hex(value):
+    return tuple(int(value[index:index + 2], 16) / 255.0
+                 for index in (1, 3, 5)) + (1.0,)
+
+
+def make_vertex_color_material():
+    material = make_material(
+        VERTEX_COLOR_MATERIAL_NAME, (1.0, 1.0, 1.0, 1.0)
+    )
+    shader = material.node_tree.nodes.get(
+        f"SHADER_{VERTEX_COLOR_MATERIAL_NAME}"
+    )
+    vertex_color = material.node_tree.nodes.new("ShaderNodeVertexColor")
+    vertex_color.layer_name = VERTEX_COLOR_ATTRIBUTE_NAME
+    material.node_tree.links.new(
+        vertex_color.outputs["Color"], shader.inputs["Base Color"]
+    )
+    return material
+
+
+def apply_runtime_vertex_colors(mesh, material_indices, palette):
+    if not material_indices or max(material_indices) >= len(palette):
+        raise RuntimeError(f"{mesh.name} has no runtime color for a face")
+    attribute = mesh.color_attributes.new(
+        name=VERTEX_COLOR_ATTRIBUTE_NAME, type="BYTE_COLOR", domain="CORNER"
+    )
+    colors = tuple(color_from_hex(value) for value in palette)
+    for polygon, material_index in zip(mesh.polygons, material_indices):
+        for loop_index in polygon.loop_indices:
+            attribute.data[loop_index].color = colors[material_index]
+        polygon.material_index = 0
 
 
 def add_face(faces, material_indices, vertices, material_index=0):
@@ -710,14 +763,13 @@ def create_mesh(root, name, geometry, materials, material_slots, properties):
     vertices, faces, material_indices = geometry
     mesh = bpy.data.meshes.new(name=name)
     mesh.from_pydata([canonical_to_blender(point) for point in vertices], [], faces)
-    for material_name in material_slots:
-        mesh.materials.append(materials[material_name])
+    mesh.materials.append(materials[VERTEX_COLOR_MATERIAL_NAME])
     mesh.update(calc_edges=True)
     if mesh.validate(verbose=True, clean_customdata=False):
         raise RuntimeError(f"Blender repaired generated geometry in {name}")
     assign_uv0(mesh)
+    apply_runtime_vertex_colors(mesh, material_indices, RUNTIME_PALETTES[name])
     for polygon, material_index in zip(mesh.polygons, material_indices):
-        polygon.material_index = material_index
         polygon.use_smooth = (
             name == "GEO_DeadwoodFallen_LOD0" and material_index == 0
         )
@@ -728,6 +780,10 @@ def create_mesh(root, name, geometry, materials, material_slots, properties):
     result["instance_ready"] = True
     result["ground_contact_y_m"] = 0.0
     result["atlas_uv0"] = True
+    result["vertex_color_batch"] = True
+    result["source_material_triangle_counts"] = [
+        material_indices.count(index) for index in range(len(material_slots))
+    ]
     for key, value in properties.items():
         result[key] = value
     return result
@@ -752,14 +808,7 @@ def build_scene():
     root["atlas_ready"] = True
 
     materials = {
-        MATERIAL_NAMES[0]: make_material(MATERIAL_NAMES[0],
-                                         GRANITE_BASE_COLOR),
-        MATERIAL_NAMES[1]: make_material(MATERIAL_NAMES[1],
-                                         (0.36, 0.19, 0.075, 1.0)),
-        MATERIAL_NAMES[2]: make_material(MATERIAL_NAMES[2],
-                                         (0.67, 0.40, 0.14, 1.0)),
-        MATERIAL_NAMES[3]: make_material(MATERIAL_NAMES[3],
-                                         (0.23, 0.48, 0.13, 1.0)),
+        VERTEX_COLOR_MATERIAL_NAME: make_vertex_color_material(),
     }
     geometries = {
         VARIANT_NAMES[0]: (irregular_rock(0.78, 0.58, 0.30, 0.4, 0.025),
@@ -860,6 +909,8 @@ def self_check(root):
             raise RuntimeError(f"{name} is not atlas/instancing ready")
         if len(obj.data.materials) != EXPECTED_MATERIAL_PASSES[name]:
             raise RuntimeError(f"{name} material-pass contract changed")
+        if VERTEX_COLOR_ATTRIBUTE_NAME not in obj.data.color_attributes:
+            raise RuntimeError(f"{name} has no runtime vertex colors")
         if any(polygon.loop_total != 3 or polygon.area <= EPSILON
                for polygon in obj.data.polygons):
             raise RuntimeError(f"{name} has invalid triangles")
@@ -909,22 +960,21 @@ def self_check(root):
     deadwood = objects["GEO_DeadwoodFallen_LOD0"]
     if len(deadwood.data.vertices) != 42:
         raise RuntimeError("Decorative deadwood structure changed")
-    deadwood_material_counts = [
-        sum(polygon.material_index == index for polygon in deadwood.data.polygons)
-        for index in range(2)
-    ]
+    deadwood_material_counts = list(
+        deadwood["source_material_triangle_counts"]
+    )
     if deadwood_material_counts != [56, 16]:
         raise RuntimeError("Decorative deadwood material topology changed")
     if deadwood.get("cross_section_sides") not in {6, 7, 8} \
             or deadwood.get("branch_stub_count") != 2:
         raise RuntimeError("Decorative deadwood organic silhouette changed")
-    granite = bpy.data.materials[MATERIAL_NAMES[0]].diffuse_color
+    granite = color_from_hex(RUNTIME_PALETTES["GEO_GraniteLow_LOD0"][0])
     granite_luminance = (
         0.2126 * granite[0] + 0.7152 * granite[1] + 0.0722 * granite[2]
     )
     if not 0.28 <= granite_luminance <= 0.40 or granite[2] - granite[0] < 0.06:
         raise RuntimeError("Granite is outside the cool readable-grey contract")
-    if len({material.name for material in bpy.data.materials}) != 4:
+    if len({material.name for material in bpy.data.materials}) != 1:
         raise RuntimeError("Forest-floor shared material inventory changed")
     if total_triangles > MAXIMUM_TRIANGLES:
         raise RuntimeError(

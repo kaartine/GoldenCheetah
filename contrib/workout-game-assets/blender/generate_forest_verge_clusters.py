@@ -14,7 +14,9 @@ import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generate_forest_floor_props import (
-    GRANITE_BASE_COLOR,
+    VERTEX_COLOR_ATTRIBUTE_NAME,
+    VERTEX_COLOR_MATERIAL_NAME,
+    apply_runtime_vertex_colors,
     bilberry_understory,
     dense_shrub_understory,
     fallen_deadwood,
@@ -25,11 +27,12 @@ from generate_forest_floor_props import (
     irregular_rock,
     leafy_sapling,
     mushroom_cluster,
+    make_vertex_color_material,
     pine_sapling,
     rooted_stump,
     wildflower_patch,
 )
-from generate_tabletop import canonical_to_blender, create_empty, make_material
+from generate_tabletop import canonical_to_blender, create_empty
 
 
 ASSET_ID = "EN-09-forest-verge-clusters"
@@ -67,6 +70,26 @@ EXPECTED_COMPONENTS = {
     "GEO_VergeRockGrass_LOD0": 3,
     "GEO_VergeShrubFlowers_LOD0": 3,
     "GEO_VergeSaplingMushroom_LOD0": 3,
+}
+RUNTIME_PALETTES = {
+    "GEO_VergeGraniteBilberry_LOD0": (
+        "#52636b", "#52636b", "#52636b", "#245f42"
+    ),
+    "GEO_VergeStumpFern_LOD0": (
+        "#52636b", "#6b3d1f", "#d18b3f", "#3f9148"
+    ),
+    "GEO_VergeDeadwoodHeather_LOD0": (
+        "#6b3d1f", "#6b3d1f", "#d18b3f", "#87567f"
+    ),
+    "GEO_VergeRockGrass_LOD0": (
+        "#52636b", "#52636b", "#52636b", "#5e913d"
+    ),
+    "GEO_VergeShrubFlowers_LOD0": (
+        "#52636b", "#52636b", "#d7a4d9", "#326747"
+    ),
+    "GEO_VergeSaplingMushroom_LOD0": (
+        "#6b3d1f", "#6b3d1f", "#d18b3f", "#315f3b"
+    ),
 }
 MAXIMUM_TRIANGLES = 800
 MAXIMUM_VARIANT_TRIANGLES = 150
@@ -277,14 +300,13 @@ def create_mesh(root, name, geometry, materials):
     mesh.from_pydata(
         [canonical_to_blender(point) for point in vertices], [], faces
     )
-    for material_name in MATERIAL_NAMES:
-        mesh.materials.append(materials[material_name])
+    mesh.materials.append(materials[VERTEX_COLOR_MATERIAL_NAME])
     mesh.update(calc_edges=True)
     if mesh.validate(verbose=True, clean_customdata=False):
         raise RuntimeError(f"Blender repaired generated geometry in {name}")
     assign_uv0(mesh)
-    for polygon, material_index in zip(mesh.polygons, material_indices):
-        polygon.material_index = material_index
+    apply_runtime_vertex_colors(mesh, material_indices, RUNTIME_PALETTES[name])
+    for polygon in mesh.polygons:
         polygon.use_smooth = False
     result = bpy.data.objects.new(name=name, object_data=mesh)
     bpy.context.collection.objects.link(result)
@@ -294,6 +316,10 @@ def create_mesh(root, name, geometry, materials):
     result["placement_role"] = "scenery-only"
     result["instance_ready"] = True
     result["atlas_uv0"] = True
+    result["vertex_color_batch"] = True
+    result["source_material_triangle_counts"] = [
+        material_indices.count(index) for index in range(len(MATERIAL_NAMES))
+    ]
     result["ground_contact_y_m"] = 0.0
     result["trail_edge_clearance_m"] = MINIMUM_TRAIL_CLEARANCE_METERS
     result["component_count"] = EXPECTED_COMPONENTS[name]
@@ -320,18 +346,7 @@ def build_scene():
     root["placement_anchor"] = "trail-edge"
 
     materials = {
-        MATERIAL_NAMES[0]: make_material(
-            MATERIAL_NAMES[0], GRANITE_BASE_COLOR
-        ),
-        MATERIAL_NAMES[1]: make_material(
-            MATERIAL_NAMES[1], (0.36, 0.19, 0.075, 1.0)
-        ),
-        MATERIAL_NAMES[2]: make_material(
-            MATERIAL_NAMES[2], (0.67, 0.40, 0.14, 1.0)
-        ),
-        MATERIAL_NAMES[3]: make_material(
-            MATERIAL_NAMES[3], (0.23, 0.48, 0.13, 1.0)
-        ),
+        VERTEX_COLOR_MATERIAL_NAME: make_vertex_color_material(),
     }
     geometries = {
         VARIANT_NAMES[0]: granite_bilberry_cluster(),
@@ -392,6 +407,9 @@ def self_check(root):
             raise RuntimeError(f"{name} claims gameplay authority")
         if not obj.data.uv_layers or obj.get("instance_ready") is not True:
             raise RuntimeError(f"{name} is not atlas/instance ready")
+        if len(obj.data.materials) != 1 \
+                or VERTEX_COLOR_ATTRIBUTE_NAME not in obj.data.color_attributes:
+            raise RuntimeError(f"{name} is not a single vertex-color batch")
         validate_uv0(obj.data)
         minimum, maximum = canonical_bounds(obj)
         if abs(minimum[1]) > EPSILON or maximum[1] \
@@ -411,7 +429,7 @@ def self_check(root):
                for polygon in obj.data.polygons):
             raise RuntimeError(f"{name} has invalid triangles")
         used_materials = {polygon.material_index for polygon in obj.data.polygons}
-        if not used_materials.issubset(set(range(len(MATERIAL_NAMES)))):
+        if used_materials != {0}:
             raise RuntimeError(f"{name} has an invalid material slot")
         total_triangles += count
 

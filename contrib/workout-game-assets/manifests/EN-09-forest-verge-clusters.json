@@ -22,7 +22,11 @@
     "redistributionAllowed": true,
     "decision": "allow",
     "policyVersion": "2026-08-25",
-    "distributionScopes": ["source", "screenshots-video", "appimage"],
+    "distributionScopes": [
+      "source",
+      "screenshots-video",
+      "appimage"
+    ],
     "conditions": [],
     "reviewNotes": "The generated cluster geometry and audit images are offered as CC0-1.0 project-generated output. The generator and audit scripts remain part of the GPL-2.0-or-later GoldenCheetah source tree. All geometry is deterministically composed from the original project-authored EN-08 source functions. No external model, texture, image, scan or AI-generated input is used."
   },
@@ -30,12 +34,12 @@
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_verge_clusters.py",
       "purpose": "source",
-      "sha256": "ecd6b4898bfa9e63efe6063fd43d068ae9b08729fa745773d8f87520c8d3ab89"
+      "sha256": "ad16ba3dfb414f87f433db25d5c3361f50d6c82b4a0d4912faddb497f5bba9c1"
     },
     {
       "path": "contrib/workout-game-assets/blender/generate_forest_floor_props.py",
       "purpose": "source",
-      "sha256": "e181f9027b29caa66f264ce07b11070654214cb0cdd1441bfc9e18eaf5af825a"
+      "sha256": "c8df898b0cdc6c3a5ede4e6cd573b070891febdb24bd30589f18997886eaee3a"
     },
     {
       "path": "contrib/workout-game-assets/blender/render_forest_verge_cluster_audit.py",
@@ -45,62 +49,62 @@
     {
       "path": "contrib/workout-game-assets/generated/WG_ForestVergeClusters.glb",
       "purpose": "intermediate",
-      "sha256": "ccb935a2e9b239ba40d72f72459b59ebad48bb732b4d69935b661d0789b787cb"
+      "sha256": "eb24acb0148b18f2b87e7f87b4254c5abd9e078bbbada8bfc16d1444587afb6f"
     },
     {
       "path": "src/Train/qml/WorkoutGameForestVergeCluster.qml",
       "purpose": "runtime",
-      "sha256": "276730c6d311e5f396e8664db1e8d56e98be08d31452b438f193159c61949874"
+      "sha256": "e0378b5f1deaf049410d35e1d4c7298b867d2a1b38524747fab8f986d8103951"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeDeadwoodHeather_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "795c82c412042a684befc5ee0fefd0fecbb6f92d0ef375f75a31c2ed8929bd80"
+      "sha256": "f02369c5af569291293b6105fab0608269dee6e82a41ad3ce81bbf36fa188f29"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeGraniteBilberry_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "ec036fbe32318eb4cc468785442093fce2e5dcb809c3670e7442c0e1cd3fe6d9"
+      "sha256": "fdb02c9a81536dce84580310ca15bd6ff8bed6dd50ea968de783f3ca9ce40c40"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeRockGrass_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "5fa9a03878f6377fba0a0b726f511b09db05707832068a31917df819091fcb19"
+      "sha256": "985ba0bec7b3617952f99877846c928ac7640892af344d9f1bc00acf91413927"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeSaplingMushroom_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "c436fe19acebeab1cb17ae4a63d54d744fb75657aa7882692e1b4f48d589ada1"
+      "sha256": "afc2df25f06c3e32a78ad8ef2ef75cea9b61049b6f851ff8c89c7bdae1a490b1"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeShrubFlowers_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "8cff78d05f6f3d8717454704d641f7a885797ea47220aec7927832841277c206"
+      "sha256": "8aacc67bd25ae3345dfa77d8b22e416e6557272e8c498e6c7dca5fed5824b7de"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeStumpFern_LOD0_mesh.mesh",
       "purpose": "runtime",
-      "sha256": "cd831efc9ed7c6437ab7c39b227ef5fc23ede76dcd2dd2be8cb3605f1d2d4b58"
+      "sha256": "4603a3298ea503bfd15f55d758040498a0201b2b5d0f2aff2a80847911a72b3b"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-audit.json",
       "purpose": "reference",
-      "sha256": "50513f7f3bc461b787054afdab2ffcbc97364d8d7e40a546b3de50adbb95a7cb"
+      "sha256": "c546a606bde31447355c22438eff710ee36bfc847c29dae906d5c3efc9c24f1d"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-front.png",
       "purpose": "preview",
-      "sha256": "750642862bd7d8b33dbedad6734f17c5b87fc2123d67cfe1c3bfc23e56c6d410"
+      "sha256": "2c7116308d7f57adff3c56262b9e3defc3948a6a3ab808714df932a706e64a03"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-left-three-quarter.png",
       "purpose": "preview",
-      "sha256": "ae779f2dd256082e8917ad06cd989a7e637e32c66a30c470d87a87a5505e7b31"
+      "sha256": "3f011cf2cf5865c073f26b6a87f997f9165c466b499438360febc3a33044e5c0"
     },
     {
       "path": "contrib/workout-game-assets/audits/EN-09/EN-09-rear-three-quarter.png",
       "purpose": "preview",
-      "sha256": "1ff33f2b842fda2004e0803f264879f0ac1ed5dcdbbfacc6f7cb28f6a88eb7a6"
+      "sha256": "e5fa90aa2882c378c9ac9e26e1583b4f8a5c52426c3620a97fbdf5c97fcd14db"
     }
   ],
   "processing": {
@@ -122,9 +126,9 @@
     "unitMeters": 1.0,
     "upAxis": "+Y",
     "forwardAxis": "+Z",
-    "glbBytes": 86408,
+    "glbBytes": 95608,
     "trianglesLod0": 760,
-    "materials": 4,
+    "materials": 1,
     "textureBytes": 0,
     "nodes": [
       "GEO_VergeDeadwoodHeather_LOD0",
@@ -144,13 +148,21 @@
     "animations": [],
     "allowedExtensions": [],
     "boundsMeters": {
-      "minimum": [0.14966584742069244, 0.0, -0.6654537916183472],
-      "maximum": [3.0506062507629395, 0.6899999976158142, 0.8102887868881226]
+      "minimum": [
+        0.14966584742069244,
+        0.0,
+        -0.6654537916183472
+      ],
+      "maximum": [
+        3.0506062507629395,
+        0.6899999976158142,
+        0.8102887868881226
+      ]
     },
     "budgets": {
       "maxGlbBytes": 98304,
       "maxTrianglesLod0": 800,
-      "maxMaterials": 4,
+      "maxMaterials": 1,
       "maxTextureBytes": 0
     }
   },
