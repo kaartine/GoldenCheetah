@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -29,10 +28,6 @@ VIEWS = (
     ("side-medium", (-12.0, 3.7, 13.8), (0.0, 0.20, 13.8)),
     ("side-long", (13.5, 4.2, 14.4), (2.3, 0.24, 14.4)),
 )
-
-
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def point_at(obj, canonical_target) -> None:
@@ -133,14 +128,12 @@ def render(asset_path: Path, output_directory: Path) -> None:
             "cameraPositionMeters": list(position),
             "cameraTargetMeters": list(target),
             "path": output_path.name,
-            "sha256": sha256(output_path),
         })
 
     metadata = {
-        "format": "goldencheetah-workout-game-asset-audit-1",
+        "format": "goldencheetah-workout-game-asset-audit-2",
         "assetId": "FT-12-gap-jump-three-line",
         "sourceGlb": asset_path.name,
-        "sourceGlbSha256": sha256(asset_path),
         "catalog": {
             "widthPixels": WIDTH,
             "heightPixels": HEIGHT,

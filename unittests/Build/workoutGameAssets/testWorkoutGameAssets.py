@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import copy
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -18,6 +17,7 @@ ASSET_TOOLS = REPOSITORY / "contrib" / "workout-game-assets"
 sys.path.insert(0, str(ASSET_TOOLS))
 
 import validate_assets as assets  # noqa: E402
+import install_rider_bike_asset as rider_installer  # noqa: E402
 
 
 SCHEMA_PATH = REPOSITORY / "doc/design/workout_game_asset_manifest.schema.json"
@@ -138,8 +138,13 @@ SURFACE_TILE_NAMES = (
 )
 
 
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def digest_keys(value: object) -> list[str]:
+    if isinstance(value, dict):
+        found = [key for key in value if "sha256" in key.lower()]
+        return found + [key for child in value.values() for key in digest_keys(child)]
+    if isinstance(value, list):
+        return [key for child in value for key in digest_keys(child)]
+    return []
 
 
 def glb_accessor_values(path: Path, document: dict, accessor_index: int) -> list:
@@ -609,30 +614,47 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertLessEqual(manifest["technical"]["trianglesLod0"], 3600)
         self.assertLessEqual(manifest["technical"]["materials"], 3)
 
-    def test_gap_jump_audit_is_content_anchored(self) -> None:
+    def test_gap_jump_audit_is_structurally_anchored(self) -> None:
         audit = assets.load_json_file(GAP_JUMP_AUDIT_PATH)
         self.assertEqual(
-            audit["format"], "goldencheetah-workout-game-asset-audit-1"
+            set(audit), {"format", "assetId", "sourceGlb", "catalog", "renders"}
+        )
+        self.assertEqual(
+            audit["format"], "goldencheetah-workout-game-asset-audit-2"
         )
         self.assertEqual(audit["assetId"], "FT-12-gap-jump-three-line")
-        self.assertEqual(audit["sourceGlbSha256"], sha256(GAP_JUMP_GLB_PATH))
+        self.assertEqual(audit["sourceGlb"], GAP_JUMP_GLB_PATH.name)
+        self.assertEqual(digest_keys(audit), [])
         self.assertEqual(audit["catalog"]["verticalFovDegrees"], 47.0)
         self.assertEqual(
             [render["view"] for render in audit["renders"]],
             ["chase", "overhead", "side-short", "side-medium", "side-long"],
         )
-        render_hashes = []
+        self.assertEqual(
+            [render["path"] for render in audit["renders"]],
+            [
+                "FT-12-chase.png",
+                "FT-12-overhead.png",
+                "FT-12-side-short.png",
+                "FT-12-side-medium.png",
+                "FT-12-side-long.png",
+            ],
+        )
+        render_payloads = []
         for render in audit["renders"]:
+            self.assertEqual(
+                set(render),
+                {"view", "path", "cameraPositionMeters", "cameraTargetMeters"},
+            )
             path = GAP_JUMP_AUDIT_PATH.parent / render["path"]
             self.assertTrue(path.is_file())
             data = path.read_bytes()
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(struct.unpack(">II", data[16:24]), (960, 540))
-            self.assertEqual(render["sha256"], sha256(path))
             self.assertEqual(len(render["cameraPositionMeters"]), 3)
             self.assertEqual(len(render["cameraTargetMeters"]), 3)
-            render_hashes.append(render["sha256"])
-        self.assertEqual(len(set(render_hashes)), 5)
+            render_payloads.append(data)
+        self.assertEqual(len(set(render_payloads)), 5)
 
     def test_rider_bike_has_29er_dimensions_named_pivots_and_no_primitives(self) -> None:
         document, size = assets.read_glb(RIDER_GLB_PATH)
@@ -910,6 +932,57 @@ class TestWorkoutGameAssets(unittest.TestCase):
             .stat().st_mode & 0o100
         )
 
+    def test_rider_installer_emits_hashless_schema_valid_manifest(self) -> None:
+        manifest = assets.load_json_file(RIDER_MANIFEST_PATH)
+        document, size = assets.read_glb(RIDER_GLB_PATH)
+        schema = assets.load_json_file(SCHEMA_PATH)
+
+        manifest["source"]["originalSha256"] = "0" * 64
+        for entry in manifest["files"]:
+            entry["sha256"] = "0" * 64
+        measured = rider_installer.update_manifest(manifest, document, size)
+
+        assets.validate_against_schema(manifest, schema)
+        self.assertEqual(measured, rider_installer.technical_metadata(document, size))
+        self.assertNotIn("originalSha256", manifest["source"])
+        self.assertEqual(digest_keys(manifest), [])
+        for entry in manifest["files"]:
+            self.assertEqual(set(entry), {"path", "purpose"})
+
+    def test_rider_installer_uses_structural_audit_evidence(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gc-rider-installer-") as temporary:
+            candidate = Path(temporary)
+            shutil.copy2(RIDER_GLB_PATH, candidate / rider_installer.GLB_NAME)
+            audit_directory = candidate / "audit"
+            audit_directory.mkdir()
+            for name in rider_installer.AUDIT_NAMES:
+                shutil.copy2(RIDER_AUDIT_PATH.parent / name, audit_directory / name)
+            mesh_directory = candidate / "balsam" / "meshes"
+            mesh_directory.mkdir(parents=True)
+            for node_name in rider_installer.EXPECTED_MESH_NODES:
+                name = rider_installer.mesh_file_name(node_name)
+                shutil.copy2(
+                    REPOSITORY / "src/Train/qml/assets/meshes" / name,
+                    mesh_directory / name,
+                )
+
+            document, size = rider_installer.verify_candidate(candidate)
+            self.assertEqual(size, RIDER_GLB_PATH.stat().st_size)
+            self.assertEqual(
+                {
+                    node["name"] for node in document["nodes"]
+                    if node.get("mesh") is not None
+                },
+                rider_installer.EXPECTED_MESH_NODES,
+            )
+
+            audit_path = audit_directory / rider_installer.AUDIT_NAMES[0]
+            audit = assets.load_json_file(audit_path)
+            audit["renders"][0]["sha256"] = "0" * 64
+            audit_path.write_text(json.dumps(audit), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "render schema changed"):
+                rider_installer.verify_candidate(candidate)
+
     def test_rider_bike_runtime_package_matches_authored_candidate(self) -> None:
         document, _ = assets.read_glb(RIDER_GLB_PATH)
         manifest = assets.load_json_file(RIDER_MANIFEST_PATH)
@@ -941,8 +1014,15 @@ class TestWorkoutGameAssets(unittest.TestCase):
 
     def test_rider_bike_audit_has_fixed_front_rear_side_and_chase_views(self) -> None:
         audit = assets.load_json_file(RIDER_AUDIT_PATH)
+        self.assertEqual(
+            set(audit), {"format", "assetId", "sourceGlb", "catalog", "renders"}
+        )
+        self.assertEqual(
+            audit["format"], "goldencheetah-workout-game-asset-audit-2"
+        )
         self.assertEqual(audit["assetId"], "RB-01-rider-bike")
-        self.assertEqual(audit["assetSha256"], sha256(RIDER_GLB_PATH))
+        self.assertEqual(audit["sourceGlb"], RIDER_GLB_PATH.name)
+        self.assertEqual(digest_keys(audit), [])
         self.assertEqual(audit["catalog"]["widthPixels"], 960)
         self.assertEqual(audit["catalog"]["heightPixels"], 540)
         self.assertEqual(audit["catalog"]["verticalFovDegrees"], 47.0)
@@ -952,8 +1032,19 @@ class TestWorkoutGameAssets(unittest.TestCase):
             [render["view"] for render in audit["renders"]],
             ["front", "rear", "side", "chase"],
         )
-        render_hashes = []
+        self.assertEqual(
+            [render["path"] for render in audit["renders"]],
+            [
+                "RB-01-front.png", "RB-01-rear.png", "RB-01-side.png",
+                "RB-01-chase.png",
+            ],
+        )
+        render_payloads = []
         for render in audit["renders"]:
+            self.assertEqual(
+                set(render),
+                {"view", "path", "cameraPositionMeters", "cameraTargetMeters"},
+            )
             path = RIDER_AUDIT_PATH.parent / render["path"]
             self.assertTrue(path.is_file())
             data = path.read_bytes()
@@ -968,7 +1059,6 @@ class TestWorkoutGameAssets(unittest.TestCase):
             self.assertNotIn(b"tEXt", chunk_types)
             self.assertEqual(chunk_types[-1], b"IEND")
             self.assertEqual(offset, len(data))
-            self.assertEqual(render["sha256"], sha256(path))
             self.assertEqual(len(render["cameraPositionMeters"]), 3)
             self.assertEqual(len(render["cameraTargetMeters"]), 3)
             self.assertLessEqual(
@@ -976,8 +1066,8 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 ** 0.5,
                 3.8,
             )
-            render_hashes.append(render["sha256"])
-        self.assertEqual(len(set(render_hashes)), 4)
+            render_payloads.append(data)
+        self.assertEqual(len(set(render_payloads)), 4)
 
     def test_conifer_set_has_varied_bounded_project_authored_silhouettes(self) -> None:
         document, size = assets.read_glb(CONIFER_GLB_PATH)
@@ -1277,6 +1367,15 @@ class TestWorkoutGameAssets(unittest.TestCase):
 
     def test_forest_floor_audits_use_fixed_camera_scale_and_distinct_angles(self) -> None:
         audit = assets.load_json_file(FOREST_FLOOR_AUDIT_PATH)
+        self.assertEqual(
+            set(audit), {"format", "assetId", "sourceGlb", "catalog", "renders"}
+        )
+        self.assertEqual(
+            audit["format"], "goldencheetah-workout-game-asset-audit-2"
+        )
+        self.assertEqual(audit["assetId"], "EN-08-forest-floor-props")
+        self.assertEqual(audit["sourceGlb"], FOREST_FLOOR_GLB_PATH.name)
+        self.assertEqual(digest_keys(audit), [])
         catalog = audit["catalog"]
         self.assertEqual((catalog["widthPixels"], catalog["heightPixels"]),
                          (960, 720))
@@ -1285,21 +1384,26 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertEqual(catalog["trailWidthScaleBarMeters"], 1.36)
         self.assertEqual((catalog["cellColumns"], catalog["cellRows"]), (4, 4))
         self.assertEqual(len(catalog["cellOrder"]), 16)
-        self.assertEqual(audit["sourceGlbSha256"], sha256(FOREST_FLOOR_GLB_PATH))
-
-        render_hashes = []
+        self.assertEqual(
+            [render["path"] for render in audit["renders"]],
+            [
+                "EN-08-front.png", "EN-08-left-three-quarter.png",
+                "EN-08-rear-three-quarter.png",
+            ],
+        )
+        render_payloads = []
         for render in audit["renders"]:
+            self.assertEqual(set(render), {"view", "path", "assetRotationDegrees"})
             path = FOREST_FLOOR_AUDIT_PATH.parent / render["path"]
             data = path.read_bytes()
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(struct.unpack(">II", data[16:24]), (960, 720))
-            self.assertEqual(render["sha256"], sha256(path))
-            render_hashes.append(render["sha256"])
+            render_payloads.append(data)
         self.assertEqual(
             [render["assetRotationDegrees"] for render in audit["renders"]],
             [0.0, 45.0, 135.0],
         )
-        self.assertEqual(len(set(render_hashes)), 3)
+        self.assertEqual(len(set(render_payloads)), 3)
 
     def test_forest_verge_clusters_are_grounded_separated_and_runtime_approved(self) -> None:
         document, size = assets.read_glb(FOREST_VERGE_GLB_PATH)
@@ -1429,6 +1533,20 @@ class TestWorkoutGameAssets(unittest.TestCase):
 
     def test_forest_verge_audits_are_matched_before_after_catalogs(self) -> None:
         audit = assets.load_json_file(FOREST_VERGE_AUDIT_PATH)
+        self.assertEqual(
+            set(audit),
+            {
+                "format", "assetId", "sourcePropGlb", "clusterGlb", "catalog",
+                "renders",
+            },
+        )
+        self.assertEqual(
+            audit["format"], "goldencheetah-workout-game-asset-audit-2"
+        )
+        self.assertEqual(audit["assetId"], "EN-09-forest-verge-clusters")
+        self.assertEqual(audit["clusterGlb"], FOREST_VERGE_GLB_PATH.name)
+        self.assertEqual(audit["sourcePropGlb"], FOREST_FLOOR_GLB_PATH.name)
+        self.assertEqual(digest_keys(audit), [])
         catalog = audit["catalog"]
         self.assertEqual((catalog["widthPixels"], catalog["heightPixels"]),
                          (960, 720))
@@ -1444,22 +1562,22 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertEqual(catalog["cameraDistanceMeters"], 4.45)
         self.assertEqual(catalog["trailWidthScaleBarMeters"], 1.36)
         self.assertEqual(
-            audit["clusterGlbSha256"], sha256(FOREST_VERGE_GLB_PATH)
+            [render["path"] for render in audit["renders"]],
+            [
+                "EN-09-front.png", "EN-09-left-three-quarter.png",
+                "EN-09-rear-three-quarter.png",
+            ],
         )
-        self.assertEqual(
-            audit["sourcePropGlbSha256"], sha256(FOREST_FLOOR_GLB_PATH)
-        )
-
-        render_hashes = []
+        render_payloads = []
         for render in audit["renders"]:
+            self.assertEqual(set(render), {"view", "path"})
             path = FOREST_VERGE_AUDIT_PATH.parent / render["path"]
             data = path.read_bytes()
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(struct.unpack(">II", data[16:24]), (960, 720))
-            self.assertEqual(render["sha256"], sha256(path))
-            render_hashes.append(render["sha256"])
-        self.assertEqual(len(render_hashes), 3)
-        self.assertEqual(len(set(render_hashes)), 3)
+            render_payloads.append(data)
+        self.assertEqual(len(render_payloads), 3)
+        self.assertEqual(len(set(render_payloads)), 3)
 
     def test_forest_verge_generator_is_explicit_and_dependency_is_manifested(self) -> None:
         generator = (

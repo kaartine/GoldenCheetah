@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -43,10 +42,6 @@ VIEW_CAMERAS = (
     ("left-three-quarter", (-1.60, 1.42, -3.15)),
     ("rear-three-quarter", (-1.60, 1.42, 3.15)),
 )
-
-
-def sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def point_at(obj, canonical_target):
@@ -226,12 +221,10 @@ def render(source_asset, cluster_asset, output_directory):
             render_paths.append(output_path)
 
     metadata = {
-        "format": "goldencheetah-workout-game-asset-audit-1",
+        "format": "goldencheetah-workout-game-asset-audit-2",
         "assetId": "EN-09-forest-verge-clusters",
         "sourcePropGlb": source_asset.name,
-        "sourcePropGlbSha256": sha256(source_asset),
         "clusterGlb": cluster_asset.name,
-        "clusterGlbSha256": sha256(cluster_asset),
         "catalog": {
             "widthPixels": CATALOG_WIDTH,
             "heightPixels": CATALOG_HEIGHT,
@@ -258,7 +251,6 @@ def render(source_asset, cluster_asset, output_directory):
             {
                 "view": view_name,
                 "path": path.name,
-                "sha256": sha256(path),
             }
             for (view_name, _), path in zip(VIEW_CAMERAS, render_paths)
         ],
