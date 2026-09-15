@@ -54,7 +54,7 @@
     {
       "path": "src/Train/qml/WorkoutGameForestVergeCluster.qml",
       "purpose": "runtime",
-      "sha256": "e0378b5f1deaf049410d35e1d4c7298b867d2a1b38524747fab8f986d8103951"
+      "sha256": "e50f97fbd0d5b401db3e3dc6f5b44e22946134a74d31a9edd8f2605f4211d276"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_VergeDeadwoodHeather_LOD0_mesh.mesh",

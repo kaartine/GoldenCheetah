@@ -20,8 +20,16 @@ class WorkoutGameForestInstancing : public QQuick3DInstancing
     Q_OBJECT
 
 public:
+    enum class RenderPass
+    {
+        Combined,
+        Opaque,
+        Fading
+    };
+
     explicit WorkoutGameForestInstancing(
             bool treePresentation = false,
+            RenderPass renderPass = RenderPass::Combined,
             QQuick3DObject *parent = nullptr);
 
     void setPlacements(const QVariantList &placements);
@@ -29,7 +37,7 @@ public:
                          const QVector3D &cameraPosition,
                          const QVector3D &cameraTarget);
 
-    int count() const { return currentPlacements.size(); }
+    int count() const { return renderedPlacementIndices.size(); }
     QString stableIdAt(int index) const;
     double opacityAt(int index) const;
 
@@ -45,12 +53,14 @@ private:
 
     QVariantList currentPlacements;
     QVector<double> currentOpacities;
+    QVector<int> renderedPlacementIndices;
     QByteArray currentBuffer;
     double currentRiderDistanceMeters = 0.0;
     QVector3D currentCameraPosition;
     QVector3D currentCameraTarget = QVector3D(0.0f, 0.0f, 1.0f);
     bool presentationReady = false;
     bool treePresentation = false;
+    RenderPass renderPass = RenderPass::Combined;
 };
 
 #endif

@@ -46,7 +46,7 @@
     {
       "path": "src/Train/qml/WorkoutGameConifer.qml",
       "purpose": "runtime",
-      "sha256": "1fe5af3734014e396dad63a2d44d138e2d77f62e3b0458b78990cd7a3ed4be61"
+      "sha256": "9ee6c3aaeeef6f16c8604c872e809214a83d576fd49053e830b2862bb1ccd2bb"
     },
     {
       "path": "src/Train/qml/assets/meshes/geo_BirchCrown_LOD0_mesh.mesh",

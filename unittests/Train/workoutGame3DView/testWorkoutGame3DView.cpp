@@ -867,6 +867,66 @@ private slots:
         QCOMPARE(trees.opacityAt(1), 1.0);
     }
 
+    void forestInstancingSeparatesOpaqueAndFadingPasses()
+    {
+        const auto placement = [](const QString &id, double distance) {
+            QVariantMap value;
+            value.insert(QStringLiteral("stableId"), id);
+            value.insert(QStringLiteral("x"), 5.0);
+            value.insert(QStringLiteral("y"), 0.0);
+            value.insert(QStringLiteral("z"), distance);
+            value.insert(QStringLiteral("distance"), distance);
+            value.insert(QStringLiteral("scale"), 1.0);
+            return value;
+        };
+        const QVariantList placements = {
+            placement(QStringLiteral("opaque"), 42.0),
+            placement(QStringLiteral("fading"), 84.0),
+            placement(QStringLiteral("hidden"), 28.0)
+        };
+        WorkoutGameForestInstancing opaque(
+                false, WorkoutGameForestInstancing::RenderPass::Opaque);
+        WorkoutGameForestInstancing fading(
+                false, WorkoutGameForestInstancing::RenderPass::Fading);
+        opaque.setPlacements(placements);
+        fading.setPlacements(placements);
+        const QVector3D camera(0.0f, 0.0f, 0.0f);
+        const QVector3D target(0.0f, 0.0f, 10.0f);
+        opaque.setPresentation(42.0, camera, target);
+        fading.setPresentation(42.0, camera, target);
+
+        QCOMPARE(opaque.count(), 1);
+        QCOMPARE(opaque.stableIdAt(0), QStringLiteral("opaque"));
+        QCOMPARE(opaque.opacityAt(0), 1.0);
+        QVERIFY(!opaque.hasTransparency());
+        QCOMPARE(fading.count(), 2);
+        QCOMPARE(fading.stableIdAt(0), QStringLiteral("fading"));
+        QVERIFY(fading.opacityAt(0) > 0.0);
+        QVERIFY(fading.opacityAt(0) < 1.0);
+        QCOMPARE(fading.stableIdAt(1), QStringLiteral("hidden"));
+        QCOMPARE(fading.opacityAt(1), 0.0);
+        QVERIFY(fading.hasTransparency());
+
+        WorkoutGameForestInstancing transitioningOpaque(
+                false, WorkoutGameForestInstancing::RenderPass::Opaque);
+        WorkoutGameForestInstancing transitioningFade(
+                false, WorkoutGameForestInstancing::RenderPass::Fading);
+        const QVariantList transitionPlacement = {
+            placement(QStringLiteral("transition"), 84.0)
+        };
+        transitioningOpaque.setPlacements(transitionPlacement);
+        transitioningFade.setPlacements(transitionPlacement);
+        transitioningOpaque.setPresentation(47.92, camera, target);
+        transitioningFade.setPresentation(47.92, camera, target);
+        QCOMPARE(transitioningOpaque.count(), 0);
+        QCOMPARE(transitioningFade.count(), 1);
+
+        transitioningOpaque.setPresentation(48.0, camera, target);
+        transitioningFade.setPresentation(48.0, camera, target);
+        QCOMPARE(transitioningOpaque.count(), 1);
+        QCOMPARE(transitioningFade.count(), 0);
+    }
+
     void activeSessionClockExcludesPausedTimeAndDoesNotResetOnResume()
     {
         WorkoutGameActiveSessionClock clock;
@@ -2537,6 +2597,11 @@ private slots:
         QCOMPARE(presentation.update({5000, 180.0, 85.0, false, false})
                          .sideBlend,
                  0.0);
+        const auto correctedTimeline = presentation.update(
+                {4900, 180.0, 85.0, false, false});
+        QCOMPARE(correctedTimeline.mode,
+                 WorkoutGame3DCameraPresentationMode::Chase);
+        QCOMPARE(correctedTimeline.sideBlend, 0.0);
 
         QCOMPARE(presentation.update({5100, 0.0, 0.0, false, false})
                          .sideBlend,
@@ -3052,18 +3117,26 @@ private slots:
         const QList<QObject *> vergeClusters =
                 window.rootObject()->findChildren<QObject *>(
                     QStringLiteral("workoutGameForestVergeCluster"));
-        QCOMPARE(floorProps.size(), 16);
-        QCOMPARE(vergeClusters.size(), 6);
+        QCOMPARE(floorProps.size(), 32);
+        QCOMPARE(vergeClusters.size(), 12);
         int floorInstanceCount = 0;
         int vergeInstanceCount = 0;
         bool foundOpaque = false;
-        const auto inspectBatches = [&foundOpaque](
+        bool foundOpaqueBatch = false;
+        bool foundFadingBatch = false;
+        const auto inspectBatches = [
+                &foundOpaque, &foundOpaqueBatch, &foundFadingBatch](
                 const QList<QObject *> &batches, int &count) {
             for (QObject *object : batches) {
                 auto *table = qobject_cast<WorkoutGameForestInstancing *>(
                         object->property("instanceTable")
                             .value<QObject *>());
                 QVERIFY(table);
+                const bool transparent =
+                        object->property("transparent").toBool();
+                QCOMPARE(table->hasTransparency(), transparent);
+                foundFadingBatch = foundFadingBatch || transparent;
+                foundOpaqueBatch = foundOpaqueBatch || !transparent;
                 count += table->count();
                 for (int index = 0; index < table->count(); ++index) {
                     const double opacity = table->opacityAt(index);
@@ -3079,6 +3152,8 @@ private slots:
         QCOMPARE(vergeInstanceCount,
                  viewModel.forestVergeClusters().size());
         QVERIFY(foundOpaque);
+        QVERIFY(foundOpaqueBatch);
+        QVERIFY(foundFadingBatch);
 
         const auto edgeOpacity = [&window](double distance) {
             QVariant result;
@@ -3241,9 +3316,9 @@ private slots:
                 initialTreeBatches);
         QHash<QString, double> priorDressing = instanceOpacities(
                 initialDressingBatches);
-        QCOMPARE(initialTreeBatches.size(), 4);
+        QCOMPARE(initialTreeBatches.size(), 8);
         QCOMPARE(priorTrees.size(), viewModel.trees().size());
-        QCOMPARE(initialDressingBatches.size(), 22);
+        QCOMPARE(initialDressingBatches.size(), 44);
         QCOMPARE(priorDressing.size(),
                  viewModel.forestFloorProps().size()
                     + viewModel.forestVergeClusters().size());
@@ -3266,11 +3341,11 @@ private slots:
                     QStringLiteral("workoutGameTree"));
             const QList<QObject *> currentDressingBatches =
                     dressingBatches();
-            QCOMPARE(currentTreeBatches.size(), 4);
+            QCOMPARE(currentTreeBatches.size(), 8);
             QCOMPARE(QSet<QObject *>(currentTreeBatches.cbegin(),
                                     currentTreeBatches.cend()),
                      stableTreeBatches);
-            QCOMPARE(currentDressingBatches.size(), 22);
+            QCOMPARE(currentDressingBatches.size(), 44);
             QCOMPARE(QSet<QObject *>(currentDressingBatches.cbegin(),
                                     currentDressingBatches.cend()),
                      stableDressingBatches);
@@ -3394,7 +3469,7 @@ private slots:
 
         const QList<QObject *> trees = window.rootObject()->findChildren<QObject *>(
                 QStringLiteral("workoutGameTree"));
-        QCOMPARE(trees.size(), 4);
+        QCOMPARE(trees.size(), 8);
         QHash<QString, QVariantMap> placements;
         for (const QVariant &entry : viewModel.trees()) {
             const QVariantMap placement = entry.toMap();
@@ -6722,6 +6797,129 @@ private slots:
         QCOMPARE(birchCrown.size(), qint64(6944));
     }
 
+    void opaqueForestPixelsOccludeRearInstanceBatches()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const auto placement = [](const QString &id, double z, double scale,
+                                  double crownRadius) {
+            QVariantMap value;
+            value.insert(QStringLiteral("stableId"), id);
+            value.insert(QStringLiteral("x"), 0.0);
+            value.insert(QStringLiteral("y"), 0.0);
+            value.insert(QStringLiteral("z"), z);
+            value.insert(QStringLiteral("distance"), z);
+            value.insert(QStringLiteral("pitch"), 0.0);
+            value.insert(QStringLiteral("yaw"), 0.0);
+            value.insert(QStringLiteral("terrainRoll"), 0.0);
+            value.insert(QStringLiteral("scale"), scale);
+            value.insert(QStringLiteral("mirror"), false);
+            value.insert(QStringLiteral("crownRadius"), crownRadius);
+            return value;
+        };
+
+        QVariantMap frontTree = placement(
+                QStringLiteral("front-tree"), 0.0, 1.15, 1.2);
+        QVariantMap treeSortAnchor = placement(
+                QStringLiteral("tree-sort-anchor"), 40.0, 1.15, 1.2);
+        treeSortAnchor.insert(QStringLiteral("x"), 60.0);
+        WorkoutGameForestInstancing treeInstances(
+                true, WorkoutGameForestInstancing::RenderPass::Opaque);
+        treeInstances.setPlacements({frontTree, treeSortAnchor});
+
+        QVariantMap rearRock = placement(
+                QStringLiteral("rear-rock"), 5.0, 10.0, 0.0);
+        QVariantMap rockSortAnchor = placement(
+                QStringLiteral("rock-sort-anchor"), -5.0, 1.0, 0.0);
+        rockSortAnchor.insert(QStringLiteral("x"), 30.0);
+        WorkoutGameForestInstancing rockInstances(
+                false, WorkoutGameForestInstancing::RenderPass::Opaque);
+        rockInstances.setPlacements({rearRock, rockSortAnchor});
+        const QVector3D presentationCamera(100.0f, 2.7f, -10.0f);
+        const QVector3D presentationTarget(100.0f, 2.2f, 0.0f);
+        treeInstances.setPresentation(
+                -26.0, presentationCamera, presentationTarget);
+        rockInstances.setPresentation(
+                -26.0, presentationCamera, presentationTarget);
+        QCOMPARE(treeInstances.opacityAt(0), 1.0);
+        QCOMPARE(rockInstances.opacityAt(0), 1.0);
+
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("treeInstances"), &treeInstances);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("rockInstances"), &rockInstances);
+        window.setSource(QUrl(QStringLiteral(
+                "qrc:/qml/assets/ForestDepthOrderingHarness.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTest::qWait(500);
+
+        const QImage treeOnly = window.grabWindow();
+        QVERIFY(!treeOnly.isNull());
+        QVERIFY(coniferAssetPixels(treeOnly, treeOnly.rect()) > 1000);
+        QVERIFY(window.rootObject()->setProperty("showRearRock", true));
+        QTest::qWait(300);
+        const QImage withRearRock = window.grabWindow();
+        QVERIFY(!withRearRock.isNull());
+        QVERIFY(changedPixels(treeOnly, withRearRock) > 50);
+        const QString auditDirectory = qEnvironmentVariable(
+                "GC_WORKOUT_GAME_DEPTH_AUDIT_DIR");
+        if (!auditDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(auditDirectory));
+            QVERIFY(treeOnly.save(QDir(auditDirectory).filePath(
+                    QStringLiteral("tree-only.png"))));
+            QVERIFY(withRearRock.save(QDir(auditDirectory).filePath(
+                    QStringLiteral("rear-rock.png"))));
+        }
+
+        int coveredTreePixels = 0;
+        const auto isTreePixel = [](const QColor &pixel) {
+            const bool foliage = pixel.green() > pixel.red() + 4
+                    && pixel.green() > pixel.blue() + 4
+                    && pixel.green() <= 125;
+            const bool bark = pixel.red() > pixel.green() + 15
+                    && pixel.green() > pixel.blue() + 8
+                    && pixel.red() <= 180;
+            return foliage || bark;
+        };
+        for (int y = 0; y < treeOnly.height(); ++y) {
+            for (int x = 0; x < treeOnly.width(); ++x) {
+                const QColor before(treeOnly.pixel(x, y));
+                const QColor after(withRearRock.pixel(x, y));
+                if (!isTreePixel(before)) continue;
+                bool interior = x > 0 && y > 0
+                        && x + 1 < treeOnly.width()
+                        && y + 1 < treeOnly.height();
+                for (int neighborY = y - 1; interior && neighborY <= y + 1;
+                        ++neighborY) {
+                    for (int neighborX = x - 1;
+                            neighborX <= x + 1; ++neighborX) {
+                        if (!isTreePixel(QColor(
+                                treeOnly.pixel(neighborX, neighborY)))) {
+                            interior = false;
+                            break;
+                        }
+                    }
+                }
+                if (!interior) continue;
+                if (std::abs(before.red() - after.red())
+                        + std::abs(before.green() - after.green())
+                        + std::abs(before.blue() - after.blue()) > 35) {
+                    ++coveredTreePixels;
+                }
+            }
+        }
+        QVERIFY2(coveredTreePixels <= 8,
+                 qPrintable(QStringLiteral(
+                     "rear rock overpainted %1 opaque tree pixels")
+                     .arg(coveredTreePixels)));
+    }
+
     void rendersPackagedForestDressingCatalog()
     {
         if (!hasInteractiveGraphicsPlatform()) {
@@ -6797,8 +6995,8 @@ private slots:
         const QList<QObject *> vergeClusters =
                 window.rootObject()->findChildren<QObject *>(
                     QStringLiteral("workoutGameForestVergeCluster"));
-        QCOMPARE(floorProps.size(), 16);
-        QCOMPARE(vergeClusters.size(), 6);
+        QCOMPARE(floorProps.size(), 32);
+        QCOMPARE(vergeClusters.size(), 12);
         int floorInstanceCount = 0;
         for (QObject *batch : floorProps) {
             auto *table = qobject_cast<WorkoutGameForestInstancing *>(

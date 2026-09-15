@@ -7,11 +7,13 @@ Node {
     required property int variant
     required property int biome
     property var instanceTable: null
+    property bool transparent: false
 
     PrincipledMaterial {
         id: vertexColorMaterial
         baseColor: "white"
-        alphaMode: PrincipledMaterial.Blend
+        alphaMode: root.transparent
+                   ? PrincipledMaterial.Blend : PrincipledMaterial.Opaque
         vertexColorsEnabled: true
         roughness: 1
         cullMode: Material.NoCulling

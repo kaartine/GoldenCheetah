@@ -19,6 +19,7 @@
 namespace {
 
 constexpr double MinimumVisibleOpacityChange = 0.025;
+constexpr double OpaqueOpacity = 0.999;
 
 double finiteOrZero(double value)
 {
@@ -28,12 +29,15 @@ double finiteOrZero(double value)
 }
 
 WorkoutGameForestInstancing::WorkoutGameForestInstancing(
-        bool treePresentation, QQuick3DObject *parent) :
+        bool treePresentation, RenderPass renderPass,
+        QQuick3DObject *parent) :
     QQuick3DInstancing(parent),
-    treePresentation(treePresentation)
+    treePresentation(treePresentation),
+    renderPass(renderPass)
 {
-    setHasTransparency(true);
-    setDepthSortingEnabled(true);
+    const bool transparent = renderPass != RenderPass::Opaque;
+    setHasTransparency(transparent);
+    setDepthSortingEnabled(transparent);
 }
 
 void WorkoutGameForestInstancing::setPlacements(
@@ -65,20 +69,21 @@ void WorkoutGameForestInstancing::setPresentation(
 
 QString WorkoutGameForestInstancing::stableIdAt(int index) const
 {
-    if (index < 0 || index >= currentPlacements.size()) return {};
-    return currentPlacements.at(index).toMap().value(
+    if (index < 0 || index >= renderedPlacementIndices.size()) return {};
+    return currentPlacements.at(renderedPlacementIndices.at(index))
+            .toMap().value(
             QStringLiteral("stableId")).toString();
 }
 
 double WorkoutGameForestInstancing::opacityAt(int index) const
 {
-    return index >= 0 && index < currentOpacities.size()
-            ? currentOpacities.at(index) : 0.0;
+    return index >= 0 && index < renderedPlacementIndices.size()
+            ? currentOpacities.at(renderedPlacementIndices.at(index)) : 0.0;
 }
 
 QByteArray WorkoutGameForestInstancing::getInstanceBuffer(int *instanceCount)
 {
-    if (instanceCount) *instanceCount = currentPlacements.size();
+    if (instanceCount) *instanceCount = renderedPlacementIndices.size();
     return currentBuffer;
 }
 
@@ -146,18 +151,36 @@ void WorkoutGameForestInstancing::rebuildBuffer(bool forceUpdate)
     bool opacityChanged = currentOpacities.size() != nextOpacities.size();
     for (int index = 0; !opacityChanged && index < nextOpacities.size();
             ++index) {
-        opacityChanged = std::abs(
-                currentOpacities.at(index) - nextOpacities.at(index))
-                > MinimumVisibleOpacityChange;
+        const double currentOpacity = currentOpacities.at(index);
+        const double nextOpacity = nextOpacities.at(index);
+        opacityChanged = std::abs(currentOpacity - nextOpacity)
+                        > MinimumVisibleOpacityChange
+                || (currentOpacity >= OpaqueOpacity)
+                        != (nextOpacity >= OpaqueOpacity);
     }
     if (!forceUpdate && !opacityChanged) return;
     currentOpacities = nextOpacities;
-    currentBuffer.resize(
-            currentPlacements.size() * int(sizeof(InstanceTableEntry)));
-
+    renderedPlacementIndices.clear();
+    renderedPlacementIndices.reserve(currentPlacements.size());
     for (int index = 0; index < currentPlacements.size(); ++index) {
-        const QVariantMap placement = currentPlacements.at(index).toMap();
         const double opacity = currentOpacities.at(index);
+        const bool include = renderPass == RenderPass::Combined
+                || (renderPass == RenderPass::Opaque
+                    && opacity >= OpaqueOpacity)
+                || (renderPass == RenderPass::Fading
+                    && opacity < OpaqueOpacity);
+        if (include) renderedPlacementIndices.push_back(index);
+    }
+    currentBuffer.resize(
+            renderedPlacementIndices.size() * int(sizeof(InstanceTableEntry)));
+
+    for (int outputIndex = 0;
+            outputIndex < renderedPlacementIndices.size(); ++outputIndex) {
+        const int placementIndex = renderedPlacementIndices.at(outputIndex);
+        const QVariantMap placement =
+                currentPlacements.at(placementIndex).toMap();
+        const double opacity = renderPass == RenderPass::Opaque
+                ? 1.0 : currentOpacities.at(placementIndex);
 
         const double scale = placement.value(
                 QStringLiteral("scale"), 1.0).toDouble();
@@ -179,7 +202,7 @@ void WorkoutGameForestInstancing::rebuildBuffer(bool forceUpdate)
                 QColor::fromRgbF(1.0, 1.0, 1.0, opacity));
         std::memcpy(
                 currentBuffer.data()
-                    + index * int(sizeof(InstanceTableEntry)),
+                    + outputIndex * int(sizeof(InstanceTableEntry)),
                 &entry, sizeof(InstanceTableEntry));
     }
     markDirty();

@@ -51,8 +51,10 @@ WorkoutGame3DCameraPresentationSnapshot
 WorkoutGame3DCameraPresentation::update(
         const WorkoutGame3DCameraPresentationInput &input)
 {
-    const std::int64_t now = std::max<std::int64_t>(0, input.workoutTimeMs);
-    if (!initialized || now < lastWorkoutTimeMs) begin(now);
+    const std::int64_t requestedNow =
+            std::max<std::int64_t>(0, input.workoutTimeMs);
+    if (!initialized) begin(requestedNow);
+    const std::int64_t now = std::max(lastWorkoutTimeMs, requestedNow);
     lastWorkoutTimeMs = now;
 
     if (input.featureCritical || input.airborne) openingCancelled = true;

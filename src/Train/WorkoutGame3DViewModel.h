@@ -483,10 +483,16 @@ private:
     WorkoutGame3DStableListModel forestVergeInstanceBatchItems;
     std::array<std::unique_ptr<WorkoutGameForestInstancing>, 4>
             treeInstanceTables;
+    std::array<std::unique_ptr<WorkoutGameForestInstancing>, 4>
+            fadingTreeInstanceTables;
     std::array<std::unique_ptr<WorkoutGameForestInstancing>, 16>
             forestFloorInstanceTables;
+    std::array<std::unique_ptr<WorkoutGameForestInstancing>, 16>
+            fadingForestFloorInstanceTables;
     std::array<std::unique_ptr<WorkoutGameForestInstancing>, 6>
             forestVergeInstanceTables;
+    std::array<std::unique_ptr<WorkoutGameForestInstancing>, 6>
+            fadingForestVergeInstanceTables;
     int forestDressingFirstSlot = std::numeric_limits<int>::min();
     int forestDressingLastSlot = std::numeric_limits<int>::min();
     bool sceneReady = false;

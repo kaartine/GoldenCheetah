@@ -357,6 +357,7 @@ Item {
                 objectName: "workoutGameTree"
                 variant: modelData.variant
                 instanceTable: modelData.instanceTable
+                transparent: modelData.transparent
             }
         }
 
@@ -370,6 +371,7 @@ Item {
                        : variant === 0 || variant === 1 || variant === 2
                          || variant === 8 || variant === 13 ? 2 : 1
                 instanceTable: modelData.instanceTable
+                transparent: modelData.transparent
             }
         }
 
@@ -381,6 +383,7 @@ Item {
                 biome: variant === 2 || variant === 5 ? 0
                        : variant === 3 ? 2 : 1
                 instanceTable: modelData.instanceTable
+                transparent: modelData.transparent
             }
         }
 

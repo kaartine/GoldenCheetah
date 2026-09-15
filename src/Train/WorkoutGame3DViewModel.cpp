@@ -372,14 +372,27 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     for (std::size_t variant = 0;
             variant < treeInstanceTables.size(); ++variant) {
         treeInstanceTables[variant] =
-                std::make_unique<WorkoutGameForestInstancing>(true);
-        QVariantMap batch;
-        batch.insert(QStringLiteral("stableId"),
-                     QStringLiteral("tree-batch-%1").arg(variant));
-        batch.insert(QStringLiteral("variant"), int(variant));
-        batch.insert(QStringLiteral("instanceTable"), QVariant::fromValue(
-                static_cast<QObject *>(treeInstanceTables[variant].get())));
-        treeBatches.push_back(batch);
+                std::make_unique<WorkoutGameForestInstancing>(
+                    true, WorkoutGameForestInstancing::RenderPass::Opaque);
+        fadingTreeInstanceTables[variant] =
+                std::make_unique<WorkoutGameForestInstancing>(
+                    true, WorkoutGameForestInstancing::RenderPass::Fading);
+        for (const bool transparent : {false, true}) {
+            QVariantMap batch;
+            batch.insert(QStringLiteral("stableId"),
+                         QStringLiteral("tree-%1-batch-%2")
+                            .arg(transparent ? QStringLiteral("fading")
+                                             : QStringLiteral("opaque"))
+                            .arg(variant));
+            batch.insert(QStringLiteral("variant"), int(variant));
+            batch.insert(QStringLiteral("transparent"), transparent);
+            WorkoutGameForestInstancing *table = transparent
+                    ? fadingTreeInstanceTables[variant].get()
+                    : treeInstanceTables[variant].get();
+            batch.insert(QStringLiteral("instanceTable"),
+                         QVariant::fromValue(static_cast<QObject *>(table)));
+            treeBatches.push_back(batch);
+        }
     }
     treeInstanceBatchItems.sync(treeBatches);
 
@@ -387,15 +400,27 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     for (std::size_t variant = 0;
             variant < forestFloorInstanceTables.size(); ++variant) {
         forestFloorInstanceTables[variant] =
-                std::make_unique<WorkoutGameForestInstancing>();
-        QVariantMap batch;
-        batch.insert(QStringLiteral("stableId"),
-                     QStringLiteral("forest-floor-batch-%1").arg(variant));
-        batch.insert(QStringLiteral("variant"), int(variant));
-        batch.insert(QStringLiteral("instanceTable"), QVariant::fromValue(
-                static_cast<QObject *>(
-                    forestFloorInstanceTables[variant].get())));
-        floorBatches.push_back(batch);
+                std::make_unique<WorkoutGameForestInstancing>(
+                    false, WorkoutGameForestInstancing::RenderPass::Opaque);
+        fadingForestFloorInstanceTables[variant] =
+                std::make_unique<WorkoutGameForestInstancing>(
+                    false, WorkoutGameForestInstancing::RenderPass::Fading);
+        for (const bool transparent : {false, true}) {
+            QVariantMap batch;
+            batch.insert(QStringLiteral("stableId"),
+                         QStringLiteral("forest-floor-%1-batch-%2")
+                            .arg(transparent ? QStringLiteral("fading")
+                                             : QStringLiteral("opaque"))
+                            .arg(variant));
+            batch.insert(QStringLiteral("variant"), int(variant));
+            batch.insert(QStringLiteral("transparent"), transparent);
+            WorkoutGameForestInstancing *table = transparent
+                    ? fadingForestFloorInstanceTables[variant].get()
+                    : forestFloorInstanceTables[variant].get();
+            batch.insert(QStringLiteral("instanceTable"),
+                         QVariant::fromValue(static_cast<QObject *>(table)));
+            floorBatches.push_back(batch);
+        }
     }
     forestFloorInstanceBatchItems.sync(floorBatches);
 
@@ -403,15 +428,27 @@ WorkoutGame3DViewModel::WorkoutGame3DViewModel(QObject *parent) :
     for (std::size_t variant = 0;
             variant < forestVergeInstanceTables.size(); ++variant) {
         forestVergeInstanceTables[variant] =
-                std::make_unique<WorkoutGameForestInstancing>();
-        QVariantMap batch;
-        batch.insert(QStringLiteral("stableId"),
-                     QStringLiteral("forest-verge-batch-%1").arg(variant));
-        batch.insert(QStringLiteral("variant"), int(variant));
-        batch.insert(QStringLiteral("instanceTable"), QVariant::fromValue(
-                static_cast<QObject *>(
-                    forestVergeInstanceTables[variant].get())));
-        vergeBatches.push_back(batch);
+                std::make_unique<WorkoutGameForestInstancing>(
+                    false, WorkoutGameForestInstancing::RenderPass::Opaque);
+        fadingForestVergeInstanceTables[variant] =
+                std::make_unique<WorkoutGameForestInstancing>(
+                    false, WorkoutGameForestInstancing::RenderPass::Fading);
+        for (const bool transparent : {false, true}) {
+            QVariantMap batch;
+            batch.insert(QStringLiteral("stableId"),
+                         QStringLiteral("forest-verge-%1-batch-%2")
+                            .arg(transparent ? QStringLiteral("fading")
+                                             : QStringLiteral("opaque"))
+                            .arg(variant));
+            batch.insert(QStringLiteral("variant"), int(variant));
+            batch.insert(QStringLiteral("transparent"), transparent);
+            WorkoutGameForestInstancing *table = transparent
+                    ? fadingForestVergeInstanceTables[variant].get()
+                    : forestVergeInstanceTables[variant].get();
+            batch.insert(QStringLiteral("instanceTable"),
+                         QVariant::fromValue(static_cast<QObject *>(table)));
+            vergeBatches.push_back(batch);
+        }
     }
     forestVergeInstanceBatchItems.sync(vergeBatches);
     chunkBuilder.setCompletionCallback(
@@ -1966,6 +2003,7 @@ void WorkoutGame3DViewModel::rebuildTreeInstanceBatches()
     }
     for (std::size_t variant = 0; variant < placements.size(); ++variant) {
         treeInstanceTables[variant]->setPlacements(placements[variant]);
+        fadingTreeInstanceTables[variant]->setPlacements(placements[variant]);
     }
 }
 
@@ -2144,9 +2182,13 @@ void WorkoutGame3DViewModel::rebuildForestInstanceBatches()
     for (std::size_t variant = 0; variant < floorPlacements.size(); ++variant) {
         forestFloorInstanceTables[variant]->setPlacements(
                 floorPlacements[variant]);
+        fadingForestFloorInstanceTables[variant]->setPlacements(
+                floorPlacements[variant]);
     }
     for (std::size_t variant = 0; variant < vergePlacements.size(); ++variant) {
         forestVergeInstanceTables[variant]->setPlacements(
+                vergePlacements[variant]);
+        fadingForestVergeInstanceTables[variant]->setPlacements(
                 vergePlacements[variant]);
     }
 }
@@ -2165,11 +2207,23 @@ void WorkoutGame3DViewModel::updateForestInstancePresentation(
         table->setPresentation(distanceMeters, cameraPosition, cameraTarget);
     }
     for (const std::unique_ptr<WorkoutGameForestInstancing> &table
+            : fadingTreeInstanceTables) {
+        table->setPresentation(distanceMeters, cameraPosition, cameraTarget);
+    }
+    for (const std::unique_ptr<WorkoutGameForestInstancing> &table
             : forestFloorInstanceTables) {
         table->setPresentation(distanceMeters, cameraPosition, cameraTarget);
     }
     for (const std::unique_ptr<WorkoutGameForestInstancing> &table
+            : fadingForestFloorInstanceTables) {
+        table->setPresentation(distanceMeters, cameraPosition, cameraTarget);
+    }
+    for (const std::unique_ptr<WorkoutGameForestInstancing> &table
             : forestVergeInstanceTables) {
+        table->setPresentation(distanceMeters, cameraPosition, cameraTarget);
+    }
+    for (const std::unique_ptr<WorkoutGameForestInstancing> &table
+            : fadingForestVergeInstanceTables) {
         table->setPresentation(distanceMeters, cameraPosition, cameraTarget);
     }
 }
