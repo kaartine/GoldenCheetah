@@ -7728,6 +7728,131 @@ the active remediation goal. They remain documented for later prioritization;
 - Verification: All 13 APT tests pass, including a no-cache networked build of
   the actual `apt-snapshot-bootstrap` stage.
 
+## September 2026 Architecture Review Remediation
+
+These findings were re-reviewed after the broad local architecture review.
+Their severity reflects demonstrated product or security impact, not only the
+size of the affected dependency graph. Each finding must retain its own RED
+regression or measurable baseline before implementation and its own verified
+commit before the next finding begins.
+
+### ARCH-001: CloudDB charts cross the content-to-code trust boundary
+
+- Status: IN_PROGRESS
+- Severity: HIGH
+- Code: `src/Cloud/CloudDBChart.cpp`, `src/Gui/MainWindow.cpp`,
+  `src/Gui/Perspective.cpp`, `src/Charts/PythonChart.cpp`, and
+  `src/Charts/RChart.cpp`
+- Impact: A community chart definition can configure a Python or R chart whose
+  script executes inside the GoldenCheetah process with the user's file and
+  network privileges when the imported chart becomes visible.
+- Regression test: Pass parsed untrusted chart properties through the actual
+  CloudDB import policy and require malformed definitions, executable chart
+  types, and script-bearing property sets to fail closed while ordinary chart
+  definitions remain importable.
+- Fix direction: Quarantine executable CloudDB chart definitions. A preview or
+  consent dialog alone must never authorize them; re-enablement requires a
+  separately reviewed sandbox or authenticated curation design.
+
+### ARCH-002: All primary source modules form one include cycle
+
+- Status: OPEN
+- Severity: MEDIUM
+- Code: `src/src.pro` and cross-module includes below `src`
+- Impact: The current directory boundaries do not provide enforceable
+  dependency direction or isolated change impact.
+- Prerequisite work item: Check in a deterministic, conservative dependency
+  analyzer plus an explicitly reviewed target-direction baseline. Resolve
+  ambiguous same-named headers before using its output as a blocking gate.
+- Fix direction: First prohibit new forbidden edges, then remove cycles one
+  vertical seam at a time; do not attempt a directory-wide rewrite.
+
+### ARCH-003: Context and global registries hide ownership and lifetimes
+
+- Status: OPEN
+- Severity: MEDIUM
+- Code: `src/Core/Context.h`, `src/Core/Context.cpp`,
+  `src/Core/Settings.h`, and interpreter globals
+- Impact: Consumers can acquire broad mutable application state without an
+  explicit lifetime, thread, or ownership contract.
+- Prerequisite work item: Inventory `Context`, `GlobalContext`, `appsettings`,
+  Python, and R global consumers by lifetime and thread. Select one bounded
+  vertical use case whose behavior and teardown can be covered before moving
+  ownership.
+- Fix direction: Extend the existing `AthleteSession` and `TrainingSession`
+  seams incrementally and keep compatibility adapters until callers migrate.
+
+### ARCH-004: Local API path components bypass the anchored filesystem boundary
+
+- Status: OPEN
+- Severity: MEDIUM
+- Code: `src/Core/APIWebService.cpp` and
+  `contrib/httpserver/httprequest.cpp`
+- Impact: URL-decoded athlete and activity components are concatenated into
+  paths. Encoded Windows separators are especially risky because routing
+  splits only on `/`, while Windows accepts `\\` as a filesystem separator.
+- Regression test: Exercise raw and encoded dot, slash, backslash, NUL,
+  double-decoding, symlink, hardlink, and overlong components through the
+  request parser and API routing on every supported platform.
+- Fix direction: Validate one decoded path component at a time and resolve it
+  through the common anchored filesystem boundary before opening data.
+
+### ARCH-005: The build does not enforce component boundaries
+
+- Status: OPEN
+- Severity: MEDIUM
+- Code: `build.pro`, `src/src.pro`, and per-test `.pro` files
+- Impact: One application target and shared include search paths allow every
+  source module to depend on every other module without a build-time failure.
+- Prerequisite work item: Complete ARCH-002's target graph and identify the
+  first source set that builds without GUI, Cloud, Train, or global Context
+  dependencies. Measure build and artifact parity before changing generators.
+- Fix direction: Add small target-scoped libraries or object targets along the
+  approved dependency direction. A build-system migration is not itself the
+  architectural fix.
+
+### ARCH-006: Large active hotspots concentrate change risk
+
+- Status: OPEN
+- Severity: LOW
+- Code: large and active files identified by the architecture report
+- Impact: Size plus active churn can increase review cost and regression risk,
+  but line count alone does not prove poor cohesion or justify a split.
+- Prerequisite work item: Select a hotspot only when an actual change is
+  planned, record its behavioral coverage and coupling, and identify a cohesive
+  policy, state machine, I/O adapter, or Qt coordinator seam.
+- Fix direction: Extract only behavior-protected seams that reduce a measured
+  dependency or public surface; never use a line-count gate.
+
+### ARCH-007: Product architecture and security governance are incomplete
+
+- Status: OPEN
+- Severity: MEDIUM
+- Code: repository documentation and security policy
+- Impact: Maintainers lack one current product-level view of responsibilities,
+  trust boundaries, and accepted decisions, while reporters lack a tracked
+  vulnerability disclosure policy.
+- Prerequisite work item: Confirm a real private vulnerability contact and its
+  owner before publishing `SECURITY.md`; never add a placeholder or public
+  address that cannot receive reports.
+- Fix direction: Publish the verified security contact separately from a
+  concise current/target architecture overview and narrowly scoped ADRs.
+
+### ARCH-008: Continuous dependency and static-analysis evidence is incomplete
+
+- Status: OPEN
+- Severity: MEDIUM
+- Code: dependency manifests, vendored sources, and CI workflows
+- Impact: Current SBOM and immutable-action controls do not demonstrate
+  vulnerability coverage for every platform dependency or general changed C++
+  code.
+- Prerequisite work item: Inventory dependency sources, owners, update paths,
+  supported versions, existing server-side scanning, and acceptable false
+  positive handling before selecting a scanner or making a blocking gate.
+- Fix direction: Begin with reproducible advisory output and a reviewed
+  baseline, then block only high-confidence new findings. Keep suppressions
+  local, owned, justified, and expiring.
+
 ## Verification Baseline
 
 The complete containerized release matrix through `MEM-024`, `THREAD-018`, and
