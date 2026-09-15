@@ -11,6 +11,7 @@
 #define _GC_WorkoutGame3DViewModel_h
 
 #include "WorkoutGame3DChunkBuilder.h"
+#include "WorkoutGame3DCameraComfort.h"
 #include "WorkoutGame3DCameraPresentation.h"
 #include "WorkoutGame3DGeometry.h"
 #include "WorkoutGameDiagnostics.h"
@@ -411,6 +412,7 @@ public:
     double cameraTargetX() const { return cameraTargetPositionX; }
     double cameraTargetY() const { return cameraTargetPositionY; }
     double cameraTargetZ() const { return cameraTargetPositionZ; }
+    double cameraComfortOffset() const { return cameraComfortOffsetMeters; }
 
 signals:
     void sceneChanged();
@@ -545,6 +547,8 @@ private:
     QString currentCameraComposition = QStringLiteral("medium-centre");
     WorkoutGame3DCameraPresentation cameraPresentationController;
     WorkoutGame3DCameraPresentationSnapshot cameraPresentationSnapshot;
+    WorkoutGame3DCameraComfort cameraComfortController;
+    double cameraComfortOffsetMeters = 0.0;
     double cameraBackDistanceMeters = 7.6;
     double cameraSideDistanceMeters = 0.0;
     double cameraHeightDistanceMeters = 3.4;

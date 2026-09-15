@@ -474,6 +474,15 @@ bucket. Per-frame work therefore changes only rider pose and suspension-derived
 torso pump; it does not rebuild root geometry or touch trainer and recording
 owners.
 
+The Quick 3D chase camera applies root-bed motion through
+`WorkoutGame3DCameraComfort`. The camera support trajectory removes the tyre's
+short root-surface offset while retaining the authored course elevation, then
+adds a filtered main-line bump capped at 22 mm and 0.18 m/s. This prevents the
+camera from climbing the same roots several metres behind the rider while
+preserving a small impact cue at the rider. Repeated workout timestamps do not
+change the camera pose; the next advancing snapshot re-evaluates terrain
+clearance before allowing smoothing.
+
 Rock gardens follow the same ownership boundary through
 `WorkoutGameRockGardenGeometry`. It owns a 14-metre socketed tile, the widened
 same-tread safe line, burial and twelve deterministic stone caps. Road, Box2D,

@@ -5096,7 +5096,7 @@ private slots:
         QCOMPARE(reloadedSuccess->property("opacity").toDouble(), 0.0);
     }
 
-    void rootsUseFilteredSuspensionMotionWithoutCameraVibration()
+    void rootsKeepSuspensionMotionOutOfTheCameraController()
     {
         const WorkoutGameCourse course = catalogCourse(
                 WorkoutGameTerrainKind::Roots);

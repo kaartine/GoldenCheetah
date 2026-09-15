@@ -7,6 +7,7 @@ INCLUDEPATH += ../../../src/Train
 
 SOURCES += testWorkoutGame3DCameraContinuity.cpp \
            ../../../src/Train/WorkoutGame3DChunkBuilder.cpp \
+           ../../../src/Train/WorkoutGame3DCameraComfort.cpp \
            ../../../src/Train/WorkoutGame3DCameraPresentation.cpp \
            ../../../src/Train/WorkoutGame3DFeatureAsset.cpp \
            ../../../src/Train/WorkoutGame3DGeometry.cpp \
@@ -27,6 +28,8 @@ SOURCES += testWorkoutGame3DCameraContinuity.cpp \
            ../../../src/Train/WorkoutGameGapJumpSelector.cpp \
            ../../../src/Train/WorkoutGameFeatureHud.cpp \
            ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
+           ../../../src/Train/WorkoutGameForestComposition.cpp \
+           ../../../src/Train/WorkoutGameForestInstancing.cpp \
            ../../../src/Train/WorkoutGameSimulation.cpp \
            ../../../src/Train/WorkoutGameTerrainTransition.cpp \
            ../../../src/Train/TrainerTargetCoordinator.cpp \
@@ -34,11 +37,14 @@ SOURCES += testWorkoutGame3DCameraContinuity.cpp \
            ../../../src/Train/WorkoutGameWorld.cpp
 
 HEADERS += ../../../src/Train/WorkoutGame3DChunkBuilder.h \
+           ../../../src/Train/WorkoutGame3DCameraComfort.h \
            ../../../src/Train/WorkoutGame3DCameraPresentation.h \
            ../../../src/Train/WorkoutGame3DFeatureAsset.h \
            ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGame3DTerrainProfile.h \
            ../../../src/Train/WorkoutGame3DViewModel.h
+HEADERS += ../../../src/Train/WorkoutGameForestComposition.h \
+           ../../../src/Train/WorkoutGameForestInstancing.h
 
 BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)
 include($$BOX2D_ROOT/box2d.pri)

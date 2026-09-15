@@ -490,6 +490,8 @@ void WorkoutGame3DViewModel::setCourse(
     riderBankRollActive = false;
     lastRiderPoseTimeMs = -1;
     cameraPresentationController.reset();
+    cameraComfortController.reset();
+    cameraComfortOffsetMeters = 0.0;
     cameraPresentationSnapshot = {
         WorkoutGame3DCameraPresentationMode::OpeningSide, 1.0
     };
@@ -653,6 +655,12 @@ void WorkoutGame3DViewModel::setFrame(
         double(currentCadenceRpm),
         featureCritical,
         frame.world.rider.airborne
+    });
+    cameraComfortOffsetMeters = cameraComfortController.update({
+        frame.simulation.workoutTimeMs,
+        sample.terrain,
+        frame.feature.route == WorkoutGameRoute::MainLine,
+        sample.surfaceOffsetMeters
     });
     updateCameraPose(
             distanceMeters, lateral, frame.simulation.workoutTimeMs);
@@ -1213,10 +1221,12 @@ void WorkoutGame3DViewModel::updateCameraPose(
     cameraPositionZ = cameraSample.center.zMeters
             - cameraForwardZ * missingBehind
             - cameraRightZ * cameraSideDistanceMeters;
-    cameraPositionY = cameraSample.visualGroundElevationMeters()
-            + cameraHeightDistanceMeters;
+    const double cameraSupportY =
+            WorkoutGame3DCameraComfort::supportElevationMeters(cameraSample);
+    cameraPositionY = cameraSupportY + cameraHeightDistanceMeters
+            + cameraComfortOffsetMeters;
     cameraTerrainPositionY = cameraSample.visualGroundElevationMeters();
-    double corridorGroundY = cameraSample.visualGroundElevationMeters();
+    double corridorGroundY = cameraSupportY;
     const double corridorEndDistance = std::min(
             std::max(roadCourse.totalLengthMeters,
                      roadCourse.visualLengthMeters),
@@ -1232,11 +1242,12 @@ void WorkoutGame3DViewModel::updateCameraPose(
         if (corridorSample.ready) {
             corridorGroundY = std::max(
                     corridorGroundY,
-                    corridorSample.visualGroundElevationMeters());
+                    WorkoutGame3DCameraComfort::supportElevationMeters(
+                        corridorSample));
         }
     }
     minimumCameraTerrainY = std::max(
-            cameraSample.visualGroundElevationMeters() + 2.80,
+            cameraSupportY + 2.80,
             cameraGroundY + 1.50);
     minimumCameraPositionY = std::max(
             minimumCameraTerrainY,
@@ -1254,8 +1265,10 @@ void WorkoutGame3DViewModel::updateCameraPose(
             + targetForwardX * missingAhead;
     cameraTargetPositionZ = targetSample.center.zMeters
             + targetForwardZ * missingAhead;
-    cameraTargetPositionY = targetSample.visualGroundElevationMeters()
-            + cameraTargetHeightDistanceMeters;
+    cameraTargetPositionY =
+            WorkoutGame3DCameraComfort::supportElevationMeters(targetSample)
+            + cameraTargetHeightDistanceMeters
+            + cameraComfortOffsetMeters * 0.35;
     constexpr int SightLineSamples = 12;
     constexpr double SightLineClearanceMeters = 0.45;
     for (int index = 1; index < SightLineSamples; ++index) {
@@ -1267,7 +1280,8 @@ void WorkoutGame3DViewModel::updateCameraPose(
                         + (targetDistance - cameraDistance) * progress);
         if (!sightSample.ready) continue;
         const double requiredCameraY =
-                (sightSample.visualGroundElevationMeters()
+                (WorkoutGame3DCameraComfort::supportElevationMeters(
+                    sightSample)
                     + SightLineClearanceMeters
                     - progress * cameraTargetPositionY)
                 / (1.0 - progress);

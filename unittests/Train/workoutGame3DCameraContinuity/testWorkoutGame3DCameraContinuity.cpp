@@ -57,6 +57,25 @@ WorkoutGameCourse cameraMotionCourse()
     return course;
 }
 
+WorkoutGameCourse rootBedCameraCourse()
+{
+    WorkoutGameCourse course;
+    course.status = WorkoutGameCourseStatus::Ready;
+    course.seed = 0x600d5u;
+    course.durationMs = 60000;
+    WorkoutGameSection roots;
+    roots.feature = WorkoutGameFeature::Trail;
+    roots.terrain = WorkoutGameTerrainKind::Roots;
+    roots.durationMs = course.durationMs;
+    roots.targetWatts = 210.0;
+    roots.gradePercent = 0.0;
+    roots.lengthMeters = 80.0;
+    roots.difficulty = 1.0;
+    roots.challengeCount = 1;
+    course.sections.push_back(roots);
+    return course;
+}
+
 WorkoutGameVisualSnapshot frameAt(
         const WorkoutGameRoadCourse &road,
         double distanceMeters,
@@ -203,6 +222,154 @@ private slots:
                  "rider left the vertical camera safe area");
     }
 
+    void rootsKeepChaseCameraComfortable_data()
+    {
+        QTest::addColumn<int>("frameRate");
+        QTest::newRow("30-fps") << 30;
+        QTest::newRow("60-fps") << 60;
+    }
+
+    void rootSurfaceDoesNotBecomeCameraSupport()
+    {
+        WorkoutGameRoadSample sample;
+        sample.ready = true;
+        sample.terrain = WorkoutGameTerrainKind::Roots;
+        sample.center.elevationMeters = 1.25;
+        sample.surfaceOffsetMeters = 0.12;
+        QCOMPARE(WorkoutGame3DCameraComfort::supportElevationMeters(sample),
+                 1.13);
+
+        sample.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        QCOMPARE(WorkoutGame3DCameraComfort::supportElevationMeters(sample),
+                 1.25);
+    }
+
+    void rootCameraTextureIsSmallAndRateLimited_data()
+    {
+        QTest::addColumn<int>("frameRate");
+        QTest::newRow("30-fps") << 30;
+        QTest::newRow("60-fps") << 60;
+    }
+
+    void rootCameraTextureIsSmallAndRateLimited()
+    {
+        QFETCH(int, frameRate);
+        WorkoutGame3DCameraComfort comfort;
+        comfort.reset();
+        comfort.update({0, WorkoutGameTerrainKind::Roots, true, 0.0});
+        double previous = 0.0;
+        double peak = 0.0;
+        double maximumSpeed = 0.0;
+        const int frameCount = frameRate;
+        std::int64_t previousTimeMs = 0;
+        for (int index = 1; index <= frameCount; ++index) {
+            const std::int64_t timeMs = std::int64_t(std::llround(
+                    double(index) * 1000.0 / frameRate));
+            const double timeSeconds = double(timeMs) / 1000.0;
+            const double rootHeight = timeSeconds >= 0.20
+                    && timeSeconds <= 0.55 ? 0.13 : 0.0;
+            const double current = comfort.update({
+                timeMs, WorkoutGameTerrainKind::Roots, true, rootHeight
+            });
+            const double elapsedSeconds =
+                    double(timeMs - previousTimeMs) / 1000.0;
+            peak = std::max(peak, current);
+            maximumSpeed = std::max(
+                    maximumSpeed,
+                    std::abs(current - previous) / elapsedSeconds);
+            previous = current;
+            previousTimeMs = timeMs;
+        }
+
+        QVERIFY(peak >= 0.010);
+        QVERIFY(peak <= WorkoutGame3DCameraComfort::MaximumRootBumpMeters);
+        QVERIFY(maximumSpeed
+                <= WorkoutGame3DCameraComfort
+                    ::MaximumVerticalSpeedMetersPerSecond + 1.0e-9);
+
+        const double bypass = comfort.update({
+            1100, WorkoutGameTerrainKind::Roots, false, 0.13
+        });
+        QVERIFY(bypass < previous);
+    }
+
+    void rootsKeepChaseCameraComfortable()
+    {
+        QFETCH(int, frameRate);
+        const WorkoutGameCourse course = rootBedCameraCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        const auto roots = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.terrain == WorkoutGameTerrainKind::Roots
+                            && piece.challenge.enabled;
+                });
+        QVERIFY(roots != road.pieces.end());
+
+        WorkoutGame3DViewModel model;
+        model.setCourse(course, FtpWatts);
+        model.setFrame(frameAt(road, 1.0, 0, 20.0),
+                       210.0, 210.0, 82, 145, 6);
+        model.setFrame(frameAt(road, 1.0, 5000, 20.0),
+                       210.0, 210.0, 82, 145, 6);
+
+        const double start = std::max(
+                2.0, roots->challenge.obstacleDistanceMeters - 3.0);
+        const double end = std::min(
+                road.totalLengthMeters - 2.0,
+                roots->challenge.obstacleDistanceMeters + 12.0);
+        constexpr double SpeedMetersPerSecond = 20.0 / 3.6;
+        const int frameCount = int(std::ceil(
+                (end - start) / SpeedMetersPerSecond * frameRate));
+        double maximumCameraLift = 0.0;
+        double maximumVerticalSpeed = 0.0;
+        double maximumComfortOffset = 0.0;
+        double previousY = model.cameraY();
+        for (int index = 0; index <= frameCount; ++index) {
+            const double progress = frameCount > 0
+                    ? double(index) / frameCount : 1.0;
+            const double distance = start + (end - start) * progress;
+            const std::int64_t timeMs = 5100 + std::int64_t(std::llround(
+                    (distance - start) / SpeedMetersPerSecond * 1000.0));
+            WorkoutGameVisualSnapshot frame =
+                    frameAt(road, distance, timeMs, 20.0);
+            frame.feature.route = WorkoutGameRoute::MainLine;
+            model.setFrame(frame, 210.0, 210.0, 82, 145, 6);
+
+            const double baseCameraDistance = std::max(
+                    0.0, distance - model.cameraBackMeters());
+            const WorkoutGameRoadSample cameraRoad =
+                    WorkoutGameRoadCourseBuilder::sampleVisual(
+                        road, baseCameraDistance);
+            QVERIFY(cameraRoad.ready);
+            const double smoothGround = cameraRoad.visualGroundElevationMeters()
+                    - (cameraRoad.terrain == WorkoutGameTerrainKind::Roots
+                        ? cameraRoad.surfaceOffsetMeters : 0.0);
+            maximumCameraLift = std::max(
+                    maximumCameraLift,
+                    model.cameraY()
+                        - (smoothGround + model.cameraHeightMeters()));
+            maximumComfortOffset = std::max(
+                    maximumComfortOffset, model.cameraComfortOffset());
+            if (index > 0) {
+                maximumVerticalSpeed = std::max(
+                        maximumVerticalSpeed,
+                        std::abs(model.cameraY() - previousY) * frameRate);
+            }
+            previousY = model.cameraY();
+        }
+
+        qInfo("root bed %d FPS: camera lift %.3f m, vertical %.3f m/s, "
+              "texture %.3f m", frameRate, maximumCameraLift,
+              maximumVerticalSpeed, maximumComfortOffset);
+        QVERIFY2(maximumCameraLift <= 0.035,
+                 "roots lifted the chase camera too far");
+        QVERIFY(maximumComfortOffset
+                <= WorkoutGame3DCameraComfort::MaximumRootBumpMeters);
+    }
+
     void sparseSideToChaseUpdateKeepsRiderInSafeArea()
     {
         const WorkoutGameCourse course = cameraMotionCourse();
@@ -303,7 +470,7 @@ private slots:
                  "camera smoothing overrode the terrain exclusion height");
     }
 
-    void terrainClearanceSurvivesRepeatedWorkoutTimestamp()
+    void terrainClearanceAppliesOnTheNextAdvancingTimestamp()
     {
         WorkoutGameCourse course;
         course.status = WorkoutGameCourseStatus::Ready;
@@ -335,13 +502,19 @@ private slots:
                 WorkoutGameRoadCourseBuilder::sample(
                     road, riderDistanceMeters);
         QVERIFY(rider.ready);
+        const double previousCameraY = model.cameraY();
         model.setFrame(
                 frameAt(road, riderDistanceMeters, repeatedTimeMs, 18.0),
+                280.0, 280.0, 72, 155, 5);
+        QCOMPARE(model.cameraY(), previousCameraY);
+
+        model.setFrame(
+                frameAt(road, riderDistanceMeters, repeatedTimeMs + 1, 18.0),
                 280.0, 280.0, 72, 155, 5);
 
         QVERIFY2(model.cameraY() >= rider.visualGroundElevationMeters()
                     + 1.50 - 1.0e-6,
-                 "a repeated timestamp restored the camera below terrain");
+                 "the next camera tick did not restore terrain clearance");
     }
 };
 

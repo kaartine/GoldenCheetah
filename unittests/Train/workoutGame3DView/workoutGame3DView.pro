@@ -3,10 +3,11 @@ CONFIG += testcase console c++17
 TEMPLATE = app
 TARGET = testWorkoutGame3DView
 
-INCLUDEPATH += ../../../src/Train
+INCLUDEPATH += ../../../src/Train ../../../src
 
 SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGame3DChunkBuilder.cpp \
+           ../../../src/Train/WorkoutGame3DCameraComfort.cpp \
            ../../../src/Train/WorkoutGame3DCameraPresentation.cpp \
            ../../../src/Train/WorkoutGame3DFeatureAsset.cpp \
            ../../../src/Train/WorkoutGame3DGeometry.cpp \
@@ -41,6 +42,7 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGameWorld.cpp
 
 HEADERS += ../../../src/Train/WorkoutGame3DChunkBuilder.h \
+           ../../../src/Train/WorkoutGame3DCameraComfort.h \
            ../../../src/Train/WorkoutGame3DCameraPresentation.h \
            ../../../src/Train/WorkoutGame3DGeometry.h \
            ../../../src/Train/WorkoutGame3DHealth.h \
