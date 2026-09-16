@@ -710,7 +710,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                 "Workout game 3D canvas\n",
             )
 
-    def test_preset_smoke_ride_records_motion_and_discards_recording(self):
+    def test_preset_smoke_preserves_standard_erg_and_discards_recording(self):
         with tempfile.TemporaryDirectory() as directory:
             recording = Path(directory) / "recording.csv"
             recording.write_text("secs,watts\n0,190\n", encoding="ascii")
@@ -730,12 +730,9 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                 workflow.run_smoke_and_discard("balanced")
 
             workflow.open_game.assert_called_once_with(
-                workout_ride_expected=True
+                workout_ride_expected=False
             )
-            self.assertEqual(
-                driver.send_key.call_args_list,
-                [mock.call("w"), mock.call("s")],
-            )
+            driver.send_key.assert_not_called()
             workflow.start.assert_called_once_with("04-mtb-course-balanced-first")
             driver.wait_file_growth.assert_called_once_with(
                 recording, recording.stat().st_size
