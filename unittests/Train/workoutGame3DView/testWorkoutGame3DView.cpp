@@ -51,6 +51,7 @@
 #include <QSet>
 #include <QSignalSpy>
 #include <QSGRendererInterface>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QTest>
 #include <QThread>
@@ -7243,6 +7244,70 @@ private slots:
                 2000);
         window->setSessionRunning(false);
         window.reset();
+    }
+
+    void productionWindowCapturesBoundedDiagnosticFrames()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        ScopedEnvironmentVariable captureDirectoryGuard(
+                "GC_WORKOUT_GAME_CAPTURE_DIR");
+        ScopedEnvironmentVariable captureIntervalGuard(
+                "GC_WORKOUT_GAME_CAPTURE_MS");
+        ScopedEnvironmentVariable captureFramesGuard(
+                "GC_WORKOUT_GAME_CAPTURE_FRAMES");
+        QTemporaryDir captures;
+        QVERIFY(captures.isValid());
+        qputenv("GC_WORKOUT_GAME_CAPTURE_DIR",
+                captures.path().toLocal8Bit());
+        qputenv("GC_WORKOUT_GAME_CAPTURE_MS", "50");
+        qputenv("GC_WORKOUT_GAME_CAPTURE_FRAMES", "3");
+
+        const WorkoutGameCourse course = sampleCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+
+        WorkoutGame3DWindow window(true);
+        QVERIFY(window.rendererAvailable());
+        window.resize(960, 540);
+        window.setCourse(course, FtpWatts);
+        window.setFrame(
+                frameAt(road, 18.0), 225.0, 220.0, 88, 149, 8);
+        window.setSessionRunning(true);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                !QDir(captures.path()).entryList(
+                        {QStringLiteral("frame-*.png")},
+                        QDir::Files, QDir::Name).isEmpty(),
+                5000);
+        const QString firstFrame = QDir(captures.path()).entryList(
+                {QStringLiteral("frame-*.png")},
+                QDir::Files, QDir::Name).front();
+        window.setFrame(
+                frameAt(road, 28.0), 245.0, 235.0, 92, 153, 9);
+        QTRY_COMPARE_WITH_TIMEOUT(
+                QDir(captures.path()).entryList(
+                        {QStringLiteral("frame-*.png")},
+                        QDir::Files, QDir::Name).size(),
+                3, 5000);
+        QTest::qWait(200);
+
+        const QStringList frames = QDir(captures.path()).entryList(
+                {QStringLiteral("frame-*.png")}, QDir::Files, QDir::Name);
+        QCOMPARE(frames.size(), 3);
+        for (const QString &frame : frames) {
+            const QImage image(QDir(captures.path()).filePath(frame));
+            QVERIFY2(!image.isNull(), qPrintable(frame));
+            QCOMPARE(image.size(), QSize(960, 540));
+        }
+        const QImage firstImage(
+                QDir(captures.path()).filePath(firstFrame));
+        const QImage lastImage(
+                QDir(captures.path()).filePath(frames.back()));
+        QVERIFY(changedPixels(firstImage, lastImage) > 900);
     }
 
     void exportsEveryFeatureAtTheLegacyViewpoint()

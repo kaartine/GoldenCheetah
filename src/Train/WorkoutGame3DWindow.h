@@ -20,6 +20,8 @@
 
 #include <atomic>
 
+class QTimer;
+
 class WorkoutGameActiveSessionClock
 {
 public:
@@ -118,6 +120,8 @@ private:
             std::int64_t monotonicTimeMs) const;
     void requestRendererPrewarm();
     void finishRendererPrewarm();
+    void configureDiagnosticCapture();
+    void captureDiagnosticFrame();
     void reportFailure(const QString &message);
 
     WorkoutGame3DViewModel *viewModel;
@@ -151,6 +155,10 @@ private:
     std::int64_t lastFpsPublishMs = -1;
     std::int64_t lastHealthCheckMs = -1;
     double pendingPresentationWorkMs = 0.0;
+    QString captureDirectory;
+    QTimer *captureTimer = nullptr;
+    std::uint64_t captureFrameNumber = 0;
+    std::uint64_t captureFrameLimit = 0;
     bool coldStartCompletePublished = false;
     bool hasFrame = false;
     bool hasPresentedVisualState = false;

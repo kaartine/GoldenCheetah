@@ -10,7 +10,10 @@
 #include "WorkoutGame3DWindow.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QEvent>
+#include <QFileInfo>
+#include <QImage>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQuickItem>
@@ -18,6 +21,7 @@
 #include <QStringList>
 #include <QSurfaceFormat>
 #include <QTextStream>
+#include <QTimer>
 #include <QUrl>
 
 #include <chrono>
@@ -256,6 +260,7 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
     if (rendererEnabled) {
         setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
     }
+    configureDiagnosticCapture();
 }
 
 WorkoutGame3DWindow::~WorkoutGame3DWindow()
@@ -642,6 +647,57 @@ void WorkoutGame3DWindow::finishRendererPrewarm()
     if (!prewarmPending.exchange(false, std::memory_order_acq_rel)) return;
     if (rootObject()) rootObject()->setProperty("rendererPrewarming", false);
     prewarmCompleted.store(true, std::memory_order_release);
+}
+
+void WorkoutGame3DWindow::configureDiagnosticCapture()
+{
+    captureDirectory = QString::fromLocal8Bit(
+            qgetenv("GC_WORKOUT_GAME_CAPTURE_DIR")).trimmed();
+    if (captureDirectory.isEmpty()) return;
+    if (!QDir().mkpath(captureDirectory)
+            || !QFileInfo(captureDirectory).isDir()) {
+        qWarning().noquote()
+                << "Workout Game capture directory is unavailable:"
+                << captureDirectory;
+        captureDirectory.clear();
+        return;
+    }
+
+    bool intervalOk = false;
+    int intervalMs = QString::fromLocal8Bit(
+            qgetenv("GC_WORKOUT_GAME_CAPTURE_MS"))
+            .toInt(&intervalOk);
+    intervalMs = intervalOk ? std::clamp(intervalMs, 50, 5000) : 100;
+    bool frameLimitOk = false;
+    int frameLimit = QString::fromLocal8Bit(
+            qgetenv("GC_WORKOUT_GAME_CAPTURE_FRAMES"))
+            .toInt(&frameLimitOk);
+    frameLimit = frameLimitOk ? std::clamp(frameLimit, 1, 10000) : 300;
+    captureFrameLimit = std::uint64_t(frameLimit);
+
+    captureTimer = new QTimer(this);
+    captureTimer->setInterval(intervalMs);
+    connect(captureTimer, &QTimer::timeout,
+            this, &WorkoutGame3DWindow::captureDiagnosticFrame);
+    captureTimer->start();
+}
+
+void WorkoutGame3DWindow::captureDiagnosticFrame()
+{
+    if (!captureTimer || captureFrameNumber >= captureFrameLimit) {
+        if (captureTimer) captureTimer->stop();
+        return;
+    }
+    if (!isVisible() || !sessionRunning) return;
+
+    const QImage frame = grabWindow();
+    if (frame.isNull()) return;
+    const QString fileName = QStringLiteral("frame-%1.png").arg(
+            ++captureFrameNumber, 6, 10, QLatin1Char('0'));
+    if (!frame.save(QDir(captureDirectory).filePath(fileName))) {
+        qWarning() << "Workout Game capture failed:" << fileName;
+    }
+    if (captureFrameNumber >= captureFrameLimit) captureTimer->stop();
 }
 
 QString WorkoutGame3DWindow::diagnosticsTraceLine() const
