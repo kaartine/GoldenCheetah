@@ -34,6 +34,7 @@ enum class PlannedTrainerTargetMode
 struct WorkoutRideTargetInput
 {
     bool enabled = false;
+    bool preserveWorkoutPrescription = false;
     double workoutWatts = 0.0;
     double cadenceRpm = 0.0;
     double relativeGearRatio = 1.0;
@@ -64,7 +65,7 @@ public:
             const TrainerControlCapabilities &capabilities);
     static bool shouldAutoEnableForWorkoutGame(
             bool gameVisible,
-            bool powerControlledMtbCourse,
+            bool generatedMtbCourse,
             bool alreadyEnabled,
             const WorkoutRideModeAvailability &availability);
 };

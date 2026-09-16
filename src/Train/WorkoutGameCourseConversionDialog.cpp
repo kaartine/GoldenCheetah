@@ -124,8 +124,8 @@ QString presetDescriptionText(WorkoutGameCoursePreset preset)
         return QObject::tr(
             "Ride first uses technical terrain on about 9 of 10 eligible sections "
             "and can add rock slabs, tabletops, and gap jumps. The trainer follows "
-            "course slope while prescribed targets remain visible as guidance and "
-            "interval times stay unchanged.");
+            "the original prescribed power profile while course slope remains in "
+            "the game physics and interval times stay unchanged.");
     }
     return {};
 }
@@ -224,9 +224,9 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     layout->addWidget(heading);
 
     QLabel *prescriptionGuarantee = new QLabel(tr(
-            "All presets preserve the workout structure and interval timing. "
-            "Workout first uses the original ERG targets, Balanced adds limited "
-            "terrain variation, and Ride first uses course slope."), this);
+            "All presets preserve the workout structure and interval timing and use "
+            "prescribed ERG targets when the trainer supports them. Terrain variation "
+            "and course slope shape the visual road and game physics."), this);
     prescriptionGuarantee->setObjectName(
             QStringLiteral("prescriptionGuaranteeLabel"));
     prescriptionGuarantee->setWordWrap(true);

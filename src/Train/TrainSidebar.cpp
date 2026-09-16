@@ -1249,7 +1249,8 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
 
     const bool ergWorkout = context->currentErgFile()
             && (mode == ErgFileFormat::erg || mode == ErgFileFormat::mrc);
-    if (!ergWorkout && !workoutGameUsesTargetPower()) {
+    if (workoutGameCourseRuntime.enabled()
+            || (!ergWorkout && !workoutGameUsesTargetPower())) {
         workoutRideModeEnabled = false;
         workoutRideFallbackNotified = false;
     }
@@ -3059,9 +3060,7 @@ TrainerControlCapabilities TrainSidebar::activeTrainerCapabilities()
 
 bool TrainSidebar::workoutGameRequiresTargetPower()
 {
-    return workoutGameCourseRuntime.enabled()
-            && workoutGameCourseRuntime.coursePreset()
-                    != WorkoutGameCoursePreset::RideFirst;
+    return workoutGameCourseRuntime.enabled();
 }
 
 bool TrainSidebar::workoutGameUsesTargetPower()
@@ -3078,7 +3077,7 @@ bool TrainSidebar::autoEnableWorkoutRideForCurrentWorkout()
             workoutRideModeAvailability();
     if (!WorkoutRideTargetPlanner::shouldAutoEnableForWorkoutGame(
                 !visibleWorkoutGameViews.isEmpty(),
-                workoutGameRequiresTargetPower(),
+                workoutGameCourseRuntime.enabled(),
                 workoutRideModeEnabled,
                 availability)) {
         return false;
@@ -3114,7 +3113,7 @@ WorkoutRideModeAvailability TrainSidebar::workoutRideModeAvailability()
     const bool ergWorkout = context->currentErgFile()
             && (mode == ErgFileFormat::erg || mode == ErgFileFormat::mrc);
     const bool powerControlledWorkout =
-            ergWorkout || workoutGameUsesTargetPower();
+            ergWorkout && !workoutGameCourseRuntime.enabled();
     return WorkoutRideTargetPlanner::availability(
             status & RT_CONNECTED,
             status & RT_RUNNING,
@@ -3209,6 +3208,7 @@ bool TrainSidebar::prepareWorkoutRidePowerTarget(
 {
     WorkoutRideTargetInput input;
     input.enabled = workoutRideModeEnabled;
+    input.preserveWorkoutPrescription = workoutGameCourseRuntime.enabled();
     input.workoutWatts = baseWorkoutWatts;
     input.cadenceRpm = displayCadence;
     input.relativeGearRatio = virtualDrivetrain.relativeRatio();

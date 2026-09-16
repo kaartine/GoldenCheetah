@@ -70,6 +70,21 @@ double totalAbsoluteTurn(const WorkoutGameCourseSourceResult &result)
     return radians;
 }
 
+std::vector<std::size_t> generatedSectionIndexes(
+        const WorkoutGameDistanceCourse &course,
+        const WorkoutGameInterval &source)
+{
+    std::vector<std::size_t> result;
+    const std::int64_t endMs = source.startMs + source.durationMs;
+    for (std::size_t index = 0; index < course.sections.size(); ++index) {
+        const std::int64_t startMs = course.sections[index].sourceStartMs;
+        if (startMs >= source.startMs && startMs < endMs) {
+            result.push_back(index);
+        }
+    }
+    return result;
+}
+
 template<typename T>
 T *requiredChild(QObject &parent, const char *name)
 {
@@ -205,20 +220,32 @@ private slots:
             results[index] = WorkoutGameCourseSourceAdapter::convert(request);
             QCOMPARE(results[index].status, WorkoutGameCourseSourceStatus::Ready);
             QVERIFY(results[index].document.sourceIntervals.size() >= 10u);
-            QCOMPARE(results[index].document.course.sections.size(),
-                     results[index].document.sourceIntervals.size());
             for (std::size_t sectionIndex = 0;
                     sectionIndex < results[index].document.sourceIntervals.size();
                     ++sectionIndex) {
                 const WorkoutGameInterval &source =
                         results[index].document.sourceIntervals[sectionIndex];
-                const WorkoutGameDistanceCourseSection &generated =
-                        results[index].document.course.sections[sectionIndex];
-                QCOMPARE(generated.targetStartWatts, source.startWatts);
-                QCOMPARE(generated.targetEndWatts, source.endWatts);
-                QCOMPARE(generated.nominalDurationMs, source.durationMs);
-                QCOMPARE(generated.minimumDurationMs, source.durationMs);
-                QCOMPARE(generated.maximumDurationMs, source.durationMs);
+                const std::vector<std::size_t> generated =
+                        generatedSectionIndexes(
+                            results[index].document.course, source);
+                QVERIFY(!generated.empty());
+                QCOMPARE(results[index].document.course.sections[
+                            generated.front()].targetStartWatts,
+                         source.startWatts);
+                QCOMPARE(results[index].document.course.sections[
+                            generated.back()].targetEndWatts,
+                         source.endWatts);
+                std::int64_t generatedDurationMs = 0;
+                for (std::size_t generatedIndex : generated) {
+                    const WorkoutGameDistanceCourseSection &section =
+                            results[index].document.course.sections[generatedIndex];
+                    generatedDurationMs += section.nominalDurationMs;
+                    QCOMPARE(section.minimumDurationMs,
+                             section.nominalDurationMs);
+                    QCOMPARE(section.maximumDurationMs,
+                             section.nominalDurationMs);
+                }
+                QCOMPARE(generatedDurationMs, source.durationMs);
             }
         }
 
@@ -413,6 +440,7 @@ private slots:
         QVERIFY(guarantee.contains("ERG", Qt::CaseInsensitive));
         QVERIFY(guarantee.contains("terrain variation", Qt::CaseInsensitive));
         QVERIFY(guarantee.contains("course slope", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("game physics", Qt::CaseInsensitive));
 
         struct ExpectedPreset {
             const char *button;

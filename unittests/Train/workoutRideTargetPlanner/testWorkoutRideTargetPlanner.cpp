@@ -86,6 +86,23 @@ private slots:
         QCOMPARE(result.targetWatts, 240.0);
     }
 
+    void generatedMtbCoursePreservesWorkoutTargetAcrossCadenceAndGear()
+    {
+        WorkoutRideTargetInput input;
+        input.enabled = true;
+        input.preserveWorkoutPrescription = true;
+        input.workoutWatts = 240.0;
+        input.cadenceRpm = 55.0;
+        input.relativeGearRatio = 0.55;
+
+        const PlannedTrainerTarget result =
+                WorkoutRideTargetPlanner::plan(
+                        input, TrainerControlCapabilities::targetPowerOnly());
+
+        QCOMPARE(result.mode, PlannedTrainerTargetMode::StandardErg);
+        QCOMPARE(result.targetWatts, 240.0);
+    }
+
     void easierAndHarderGearsChangeRequiredPower()
     {
         VirtualDrivetrain drivetrain;
@@ -389,7 +406,7 @@ private slots:
                 << true << true << true << true << true << false;
         QTest::newRow("disconnected")
                 << false << false << true << true << false << false;
-        QTest::newRow("ride-first-slope-course")
+        QTest::newRow("non-power-controlled-workout")
                 << true << false << false << true << false << false;
         QTest::newRow("telemetry-only")
                 << true << false << true << false << false << false;
@@ -415,10 +432,10 @@ private slots:
         QCOMPARE(result.editable, editable);
     }
 
-    void workoutGameAutoSelectionFollowsViewOrPowerControlledCourse_data()
+    void workoutGameAutoSelectionExcludesGeneratedMtbCourses_data()
     {
         QTest::addColumn<bool>("gameVisible");
-        QTest::addColumn<bool>("powerControlledMtbCourse");
+        QTest::addColumn<bool>("generatedMtbCourse");
         QTest::addColumn<bool>("alreadyEnabled");
         QTest::addColumn<bool>("supported");
         QTest::addColumn<bool>("editable");
@@ -426,8 +443,10 @@ private slots:
 
         QTest::newRow("visible-ready-game")
                 << true << false << false << true << true << true;
-        QTest::newRow("hidden-power-controlled-mtb-course")
-                << false << true << false << true << true << true;
+        QTest::newRow("hidden-generated-mtb-course")
+                << false << true << false << true << true << false;
+        QTest::newRow("visible-generated-mtb-course")
+                << true << true << false << true << true << false;
         QTest::newRow("ordinary-erg-view")
                 << false << false << false << true << true << false;
         QTest::newRow("already-enabled")
@@ -438,10 +457,10 @@ private slots:
                 << true << true << false << false << false << false;
     }
 
-    void workoutGameAutoSelectionFollowsViewOrPowerControlledCourse()
+    void workoutGameAutoSelectionExcludesGeneratedMtbCourses()
     {
         QFETCH(bool, gameVisible);
-        QFETCH(bool, powerControlledMtbCourse);
+        QFETCH(bool, generatedMtbCourse);
         QFETCH(bool, alreadyEnabled);
         QFETCH(bool, supported);
         QFETCH(bool, editable);
@@ -452,7 +471,7 @@ private slots:
         availability.editable = editable;
 
         QCOMPARE(WorkoutRideTargetPlanner::shouldAutoEnableForWorkoutGame(
-                         gameVisible, powerControlledMtbCourse,
+                         gameVisible, generatedMtbCourse,
                          alreadyEnabled, availability),
                  expected);
     }

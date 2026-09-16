@@ -60,6 +60,7 @@ PlannedTrainerTarget WorkoutRideTargetPlanner::plan(
     };
 
     if (!input.enabled
+            || input.preserveWorkoutPrescription
             || !capabilities.targetPower
             || !std::isfinite(input.workoutWatts)
             || input.workoutWatts < 0.0
@@ -101,11 +102,12 @@ WorkoutRideModeAvailability WorkoutRideTargetPlanner::availability(
 
 bool WorkoutRideTargetPlanner::shouldAutoEnableForWorkoutGame(
         bool gameVisible,
-        bool powerControlledMtbCourse,
+        bool generatedMtbCourse,
         bool alreadyEnabled,
         const WorkoutRideModeAvailability &availability)
 {
-    return (gameVisible || powerControlledMtbCourse)
+    return gameVisible
+            && !generatedMtbCourse
             && !alreadyEnabled
             && availability.supported
             && availability.editable;

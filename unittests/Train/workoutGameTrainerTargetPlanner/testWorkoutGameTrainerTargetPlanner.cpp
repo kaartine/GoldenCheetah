@@ -161,14 +161,23 @@ private slots:
         QVERIFY(trainer.windValues.empty());
     }
 
-    void rideFirstRetainsCourseSlopeControl()
+    void rideFirstSendsTheOriginalPowerTarget()
     {
+        FakePhysicalTrainer trainer;
+        TrainerTargetCoordinator coordinator;
         const TrainerTarget target = WorkoutGameTrainerTargetPlanner::plan(
                 sampleInput(WorkoutGameCoursePreset::RideFirst));
 
-        QCOMPARE(target.mode, TrainerTargetMode::Slope);
-        QCOMPARE(target.value, -4.0);
-        QCOMPARE(target.windResistance, 0.37);
+        QCOMPARE(target.mode, TrainerTargetMode::Erg);
+        QCOMPARE(target.value, 112.0);
+        QCOMPARE(target.workoutPosition, 125.0);
+        QCOMPARE(coordinator.apply(target, {&trainer}),
+                 TrainerTargetResult::Applied);
+        QCOMPARE(trainer.calls, QStringList({QStringLiteral("load")}));
+        QCOMPARE(trainer.loadValues.size(), std::size_t(1));
+        QCOMPARE(trainer.loadValues.front(), 112.0);
+        QVERIFY(trainer.gradientValues.empty());
+        QVERIFY(trainer.windValues.empty());
     }
 
     void missingPowerCapabilityFallsBackToSlope()

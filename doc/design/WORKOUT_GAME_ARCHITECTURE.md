@@ -1140,14 +1140,18 @@ power feels like a slow/high-torque or fast/low-torque effort.
 
 `TrainSidebar` remains the only component allowed to send trainer commands.
 Generated MTB courses keep distance-based progression and road physics separate
-from physical trainer control. `Workout first` sends the original prescribed
-power as ERG commands. `Balanced` also uses ERG and adds short, deterministic
+from physical trainer control. All three presets use ERG commands when the
+trainer supports target power. `Workout first` and `Ride first` send the
+original prescribed power. `Balanced` adds short, deterministic
 technical-feature efforts bounded to 8 percent and 20 W. Each effort uses a
 smooth compensating offset whose mean over the source section is zero, keeping
 the prescribed average workload. Course grade affects game speed and road
-physics, not Balanced trainer power. `Ride first` sends course grade through
-slope control. A trainer without target-power support falls back to slope
-control; power and slope commands are never sent concurrently.
+physics, not trainer power. Generated MTB courses also bypass Workout Ride
+cadence and virtual-gear scaling, so the original prescription remains
+authoritative; the Workout Ride selector is unavailable for these courses.
+Starting a generated MTB course requires trainer target-power
+support; the planner's slope fallback remains defensive only. Power and slope
+commands are never sent concurrently.
 
 `WorkoutGameTrainerTargetPlanner` owns this policy as pure, unit-tested logic.
 The UI, recording target, anonymous target trace and physical device command all

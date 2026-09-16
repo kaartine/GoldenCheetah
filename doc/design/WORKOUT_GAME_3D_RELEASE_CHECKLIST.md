@@ -1509,13 +1509,21 @@ matrix remain the next B4 gate; this evidence does not replace `REL-04`.
 **Trainer-control refresh (2026-09-07):** generated courses now separate road
 physics from the command sent to the physical trainer. Workout First follows
 the original ERG prescription exactly. Balanced follows the same prescription
-with a bounded, zero-mean technical-feature signal, while Ride First retains
+with a bounded, zero-mean technical-feature signal. Ride First originally retained
 slope control. The planner, course runtime, distance playback, conversion UI,
 trainer coordinator, Workout Ride, FTMS readiness and Bluetooth lifecycle
 suites pass 200 focused cases in total. Planner and runtime ASan/UBSan repeats
 also pass. A complete application link succeeds in the Jammy/Qt 6.8.3 release
 container. Packaged AppImage checks and a physical KICKR ride remain open; this
 evidence does not replace `REL-04`.
+
+**Physical trainer feedback correction (2026-09-16):** a KICKR ride showed that
+Ride First's slope control could make a prescribed workout almost unloaded on a
+predominantly downhill generated course. All generated MTB presets now require
+and use trainer target-power control. Ride First keeps its downhill and technical
+visual character, but the physical trainer follows the original prescribed watts.
+Generated MTB courses also bypass Workout Ride cadence and virtual-gear scaling;
+virtual gears continue to affect game speed and riding feel only.
 
 **Live-ride feedback hardening (2026-09-09):** Qt Quick 3D is now the default
 on supported desktop OpenGL platforms; the explicit painter and Scene Graph

@@ -89,11 +89,10 @@ double effortCentre(WorkoutGameTerrainKind terrain)
 }
 
 bool WorkoutGameTrainerTargetPlanner::usesTargetPower(
-        WorkoutGameCoursePreset preset,
+        WorkoutGameCoursePreset,
         bool targetPowerSupported)
 {
-    return targetPowerSupported
-            && preset != WorkoutGameCoursePreset::RideFirst;
+    return targetPowerSupported;
 }
 
 double WorkoutGameTrainerTargetPlanner::workoutPowerWatts(
