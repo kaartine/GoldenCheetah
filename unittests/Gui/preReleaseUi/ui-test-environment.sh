@@ -2,6 +2,44 @@
 
 PRESERVED_XDG_RUNTIME_DIR=
 
+configure_ui_test_workout_game_renderer()
+{
+    local renderer_requested=${GC_WORKOUT_GAME_3D:-0}
+
+    if [ "$#" -ne 0 ]; then
+        echo "configure_ui_test_workout_game_renderer takes no arguments" >&2
+        return 2
+    fi
+    case "$renderer_requested" in
+        0|1) ;;
+        *)
+            echo "GC_WORKOUT_GAME_3D must be 0 or 1" >&2
+            return 2
+            ;;
+    esac
+
+    if [ -z "${GC_WORKOUT_GAME_FORCE_PAINTER+x}" ]; then
+        if [ "$renderer_requested" = 1 ]; then
+            GC_WORKOUT_GAME_FORCE_PAINTER=0
+        else
+            GC_WORKOUT_GAME_FORCE_PAINTER=1
+        fi
+    fi
+    case "$GC_WORKOUT_GAME_FORCE_PAINTER" in
+        0|1) ;;
+        *)
+            echo "GC_WORKOUT_GAME_FORCE_PAINTER must be 0 or 1" >&2
+            return 2
+            ;;
+    esac
+    if [ "$renderer_requested" = 1 ] &&
+       [ "$GC_WORKOUT_GAME_FORCE_PAINTER" = 1 ]; then
+        echo "Quick 3D validation cannot force the Painter renderer" >&2
+        return 2
+    fi
+    export GC_WORKOUT_GAME_FORCE_PAINTER
+}
+
 capture_ui_test_session_environment()
 {
     local runtime_dir

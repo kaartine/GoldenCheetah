@@ -200,6 +200,50 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                 self.assertEqual(completed.returncode, expected_status)
                 self.assertIn(expected_error, completed.stderr)
 
+    def test_renderer_environment_selects_a_consistent_default(self):
+        cases = (
+            ({}, "1", 0, ""),
+            ({"GC_WORKOUT_GAME_3D": "0"}, "1", 0, ""),
+            ({"GC_WORKOUT_GAME_3D": "1"}, "0", 0, ""),
+            ({
+                "GC_WORKOUT_GAME_3D": "0",
+                "GC_WORKOUT_GAME_FORCE_PAINTER": "0",
+            }, "0", 0, ""),
+            ({
+                "GC_WORKOUT_GAME_3D": "1",
+                "GC_WORKOUT_GAME_FORCE_PAINTER": "1",
+            }, "", 2, "cannot force the Painter renderer"),
+            ({"GC_WORKOUT_GAME_3D": "quick"}, "", 2,
+             "GC_WORKOUT_GAME_3D must be 0 or 1"),
+            ({"GC_WORKOUT_GAME_FORCE_PAINTER": "quick"}, "", 2,
+             "GC_WORKOUT_GAME_FORCE_PAINTER must be 0 or 1"),
+        )
+        for variables, expected, status, error in cases:
+            with self.subTest(variables=variables):
+                environment = dict(os.environ)
+                environment.pop("GC_WORKOUT_GAME_3D", None)
+                environment.pop("GC_WORKOUT_GAME_FORCE_PAINTER", None)
+                environment.update(variables)
+                completed = subprocess.run(
+                    [
+                        "bash", "-c",
+                        'source "$1"; '
+                        "configure_ui_test_workout_game_renderer; "
+                        'status=$?; [ "$status" -eq 0 ] && '
+                        'printf "%s" "$GC_WORKOUT_GAME_FORCE_PAINTER"; '
+                        'exit "$status"',
+                        "bash", str(ENVIRONMENT_HELPER_PATH),
+                    ],
+                    env=environment,
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+
+                self.assertEqual(completed.returncode, status)
+                self.assertEqual(completed.stdout, expected)
+                self.assertIn(error, completed.stderr)
+
     def test_xvfb_recursion_drops_the_callers_runtime_before_at_spi(self):
         runner = RUNNER_PATH.read_text(encoding="utf-8")
 
