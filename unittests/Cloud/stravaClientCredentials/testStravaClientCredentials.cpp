@@ -101,9 +101,10 @@ class TestStravaClientCredentials : public QObject
 
 private slots:
     void runtimeCredentialsTakePrecedence();
-    void compileTimeFallbackRequiresAuthoritativeVaultMiss();
+    void compileTimeFallbackUsedWhenVaultRecordMissing();
     void missingAndIncompleteCredentialsFailClosed();
-    void vaultFailureRejectsCompileTimeFallback();
+    void vaultFailureUsesCompileTimeFallback();
+    void vaultFailureWithoutCompileTimeFallbackFailsClosed();
     void credentialsCanBeRemoved();
     void removalFailureRetainsCredential();
     void blankInputCannotDeleteInvalidRecord();
@@ -135,7 +136,7 @@ void TestStravaClientCredentials::runtimeCredentialsTakePrecedence()
 }
 
 void TestStravaClientCredentials::
-compileTimeFallbackRequiresAuthoritativeVaultMiss()
+compileTimeFallbackUsedWhenVaultRecordMissing()
 {
     FakeVault vault;
     const StravaClientCredentials::Resolution resolved =
@@ -176,7 +177,7 @@ void TestStravaClientCredentials::missingAndIncompleteCredentialsFailClosed()
     QVERIFY(rejected.credentials.clientSecret.isEmpty());
 }
 
-void TestStravaClientCredentials::vaultFailureRejectsCompileTimeFallback()
+void TestStravaClientCredentials::vaultFailureUsesCompileTimeFallback()
 {
     FakeVault vault;
     vault.status =
@@ -185,6 +186,25 @@ void TestStravaClientCredentials::vaultFailureRejectsCompileTimeFallback()
     const StravaClientCredentials::Resolution resolved =
         StravaClientCredentials::resolve(
             vault, FallbackClientId, FallbackClientSecret);
+    QCOMPARE(resolved.status,
+             StravaClientCredentials::Status::Available);
+    QCOMPARE(resolved.credentials.source,
+             StravaClientCredentials::Source::CompileTimeFallback);
+    QCOMPARE(resolved.credentials.clientId, FallbackClientId);
+    QCOMPARE(resolved.credentials.clientSecret,
+             FallbackClientSecret);
+}
+
+void TestStravaClientCredentials::
+vaultFailureWithoutCompileTimeFallbackFailsClosed()
+{
+    FakeVault vault;
+    vault.status =
+        StravaClientCredentials::VaultStatus::Unavailable;
+
+    const StravaClientCredentials::Resolution resolved =
+        StravaClientCredentials::resolve(
+            vault, QString(), QString());
     QCOMPARE(resolved.status,
              StravaClientCredentials::Status::VaultUnavailable);
     QVERIFY(!resolved.isAvailable());

@@ -11,6 +11,7 @@
 
 #include "StravaOAuthPolicy.h"
 
+#include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -94,12 +95,6 @@ Resolution resolve(
     const QString &compileTimeClientSecret)
 {
     const VaultReadResult runtime = vault.read();
-    if (runtime.status == VaultStatus::Unavailable) {
-        return failure(
-            Status::VaultUnavailable,
-            QStringLiteral(
-                "Strava OAuth client credentials could not be read securely."));
-    }
     if (runtime.status == VaultStatus::Present) {
         QString clientId;
         QString clientSecret;
@@ -119,16 +114,29 @@ Resolution resolve(
         };
         return result;
     }
-    if (runtime.status != VaultStatus::NotFound) {
+    const bool fallbackAvailable =
+        StravaOAuthPolicy::hasUsableCredentials(
+            compileTimeClientId,
+            compileTimeClientSecret);
+    if (runtime.status == VaultStatus::Unavailable
+        && !fallbackAvailable) {
         return failure(
             Status::VaultUnavailable,
             QStringLiteral(
                 "Strava OAuth client credentials could not be read securely."));
     }
-
-    if (!StravaOAuthPolicy::hasUsableCredentials(
-            compileTimeClientId,
-            compileTimeClientSecret)) {
+    if (runtime.status != VaultStatus::NotFound
+        && runtime.status != VaultStatus::Unavailable) {
+        return failure(
+            Status::VaultUnavailable,
+            QStringLiteral(
+                "Strava OAuth client credentials could not be read securely."));
+    }
+    if (runtime.status == VaultStatus::Unavailable) {
+        qInfo() << "Strava OAuth runtime client credential vault"
+                   " is unavailable; using configured build credentials.";
+    }
+    if (!fallbackAvailable) {
         return failure(
             Status::Missing,
             QStringLiteral(
