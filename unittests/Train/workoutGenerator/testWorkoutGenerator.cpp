@@ -74,6 +74,92 @@ private slots:
         QCOMPARE(signatures.size(), WorkoutGenerator::focuses().size());
     }
 
+    void defaultSettingsRemainPurposeSpecific_data()
+    {
+        QTest::addColumn<int>("focus");
+        QTest::addColumn<int>("warmup");
+        QTest::addColumn<int>("primer");
+        QTest::addColumn<int>("preWorkRecovery");
+        QTest::addColumn<double>("workPercent");
+        QTest::addColumn<int>("workSeconds");
+        QTest::addColumn<double>("recoveryPercent");
+        QTest::addColumn<int>("recoverySeconds");
+        QTest::addColumn<int>("repetitions");
+        QTest::addColumn<int>("blocks");
+        QTest::addColumn<int>("blockRecovery");
+        QTest::addColumn<int>("lastBlockRecovery");
+        QTest::addColumn<bool>("recoveryAfterLast");
+        QTest::addColumn<int>("cooldown");
+
+        QTest::newRow("endurance")
+                << int(WorkoutTrainingFocus::Endurance)
+                << 600 << 0 << 0 << 68.0 << 2700 << 55.0 << 0
+                << 1 << 1 << 0 << 0 << false << 300;
+        QTest::newRow("tempo")
+                << int(WorkoutTrainingFocus::Tempo)
+                << 600 << 0 << 0 << 82.0 << 900 << 55.0 << 240
+                << 2 << 1 << 0 << 0 << false << 300;
+        QTest::newRow("sweet-spot")
+                << int(WorkoutTrainingFocus::SweetSpot)
+                << 600 << 0 << 0 << 90.0 << 600 << 55.0 << 300
+                << 3 << 1 << 0 << 0 << false << 300;
+        QTest::newRow("threshold")
+                << int(WorkoutTrainingFocus::Threshold)
+                << 600 << 0 << 0 << 100.0 << 480 << 55.0 << 240
+                << 4 << 1 << 0 << 0 << false << 300;
+        QTest::newRow("vo2max")
+                << int(WorkoutTrainingFocus::Vo2Max)
+                << 720 << 60 << 120 << 115.0 << 180 << 55.0 << 180
+                << 5 << 1 << 0 << 0 << false << 480;
+        QTest::newRow("anaerobic")
+                << int(WorkoutTrainingFocus::Anaerobic)
+                << 720 << 60 << 180 << 125.0 << 30 << 55.0 << 30
+                << 6 << 3 << 300 << 300 << true << 480;
+        QTest::newRow("sprint")
+                << int(WorkoutTrainingFocus::Sprint)
+                << 900 << 60 << 180 << 170.0 << 10 << 50.0 << 50
+                << 5 << 3 << 300 << 300 << true << 600;
+        QTest::newRow("descending-20-20")
+                << int(WorkoutTrainingFocus::AnaerobicCapacity20_20)
+                << 60 << 240 << 120 << 130.0 << 20 << 55.0 << 20
+                << 14 << 4 << 240 << 180 << true << 360;
+    }
+
+    void defaultSettingsRemainPurposeSpecific()
+    {
+        QFETCH(int, focus);
+        QFETCH(int, warmup);
+        QFETCH(int, primer);
+        QFETCH(int, preWorkRecovery);
+        QFETCH(double, workPercent);
+        QFETCH(int, workSeconds);
+        QFETCH(double, recoveryPercent);
+        QFETCH(int, recoverySeconds);
+        QFETCH(int, repetitions);
+        QFETCH(int, blocks);
+        QFETCH(int, blockRecovery);
+        QFETCH(int, lastBlockRecovery);
+        QFETCH(bool, recoveryAfterLast);
+        QFETCH(int, cooldown);
+
+        const WorkoutGenerationSettings settings =
+                WorkoutGenerator::defaultsFor(
+                    static_cast<WorkoutTrainingFocus>(focus));
+        QCOMPARE(settings.warmupSeconds, warmup);
+        QCOMPARE(settings.primerSeconds, primer);
+        QCOMPARE(settings.preWorkRecoverySeconds, preWorkRecovery);
+        QCOMPARE(settings.workPercentFtp, workPercent);
+        QCOMPARE(settings.workSeconds, workSeconds);
+        QCOMPARE(settings.recoveryPercentFtp, recoveryPercent);
+        QCOMPARE(settings.recoverySeconds, recoverySeconds);
+        QCOMPARE(settings.repetitionsPerBlock, repetitions);
+        QCOMPARE(settings.blockCount, blocks);
+        QCOMPARE(settings.blockRecoverySeconds, blockRecovery);
+        QCOMPARE(settings.lastBlockRecoverySeconds, lastBlockRecovery);
+        QCOMPARE(settings.includeRecoveryAfterLastRep, recoveryAfterLast);
+        QCOMPARE(settings.cooldownSeconds, cooldown);
+    }
+
     void pamPresetReproducesDescendingTwentyTwentyBlocks()
     {
         const WorkoutGenerationSettings settings =
