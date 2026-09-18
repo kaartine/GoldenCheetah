@@ -319,7 +319,7 @@ void TestWorkoutDeletionService::restoresFilesAndRowsWhenCommitFails()
 {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString workout = directory.filePath(QStringLiteral("vo2.erg"));
+    const QString workout = directory.filePath(QStringLiteral("vo2.crs"));
     const QString sidecar = workoutDeletionSidecarPath(workout);
     QVERIFY(writeFile(workout, QByteArrayLiteral("vo2")));
     QVERIFY(writeFile(sidecar, QByteArrayLiteral("metadata")));
