@@ -2547,6 +2547,33 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     "Failed library import overwrote the selected workout"
                 )
 
+            driver.activate(driver.find("New", "push button", showing=True))
+            editor = driver.find(
+                "Workout code", "text", showing=True, timeout=10.0
+            )
+            editor.queryEditableText().setTextContents("1m@124")
+            imported = source.with_name("ui-transition-save-ok.erg")
+
+            driver.click_named_item("ui-delete")
+            driver.find("Unsaved Workout", "dialog", showing=True)
+            driver.activate(driver.find("Save", "push button", showing=True))
+            choose_save_path(imported)
+            driver.wait_file(imported)
+            target = driver.find(
+                "ui-delete", "table cell", showing=True, timeout=20.0
+            )
+            if not driver.selected(target):
+                raise UiFailure(
+                    "Successful Save As changed the requested tree selection"
+                )
+            editor = driver.find(
+                "Workout code", "text", showing=True, timeout=10.0
+            )
+            if "1m@124" in editor.queryText().getText(0, -1):
+                raise UiFailure(
+                    "Successful Save As left the imported draft loaded"
+                )
+
         def delete_workout_and_sidecar():
             enter_train()
             workout = root / "library" / ATHLETE / "workouts" / "ui-delete.crs"

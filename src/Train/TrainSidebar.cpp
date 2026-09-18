@@ -1097,6 +1097,24 @@ TrainSidebar::devices()
  * Workout Selected
  *--------------------------------------------------------------------*/
 void
+TrainSidebar::selectWorkoutPathSilently(const QString &path)
+{
+    QSignalBlocker blockSelection(workoutTree->selectionModel());
+    workoutTree->clearSelection();
+    workoutTree->setCurrentIndex(QModelIndex());
+    for (int row = 0; row < workoutModel->rowCount(); ++row) {
+        const QModelIndex source = workoutModel->index(
+                row, TdbWorkoutModelIdx::filepath);
+        if (workoutModel->data(source, Qt::DisplayRole).toString() != path) {
+            continue;
+        }
+        workoutTree->setCurrentIndex(sortModel->mapFromSource(
+                workoutModel->index(row, 0)));
+        break;
+    }
+}
+
+void
 TrainSidebar::workoutTreeWidgetSelectionChanged()
 {
     QModelIndex current = workoutTree->currentIndex();
@@ -1107,19 +1125,7 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
 
     if (!TrainSidebarRuntime::workoutSelectionAllowed(
             context->isRunning(), workoutfile, filename)) {
-        QSignalBlocker blockSelection(workoutTree->selectionModel());
-        workoutTree->clearSelection();
-        for (int row = 0; row < workoutModel->rowCount(); ++row) {
-            const QModelIndex source = workoutModel->index(
-                    row, TdbWorkoutModelIdx::filepath);
-            if (workoutModel->data(source, Qt::DisplayRole).toString()
-                    != workoutfile) {
-                continue;
-            }
-            workoutTree->setCurrentIndex(sortModel->mapFromSource(
-                    workoutModel->index(row, 0)));
-            break;
-        }
+        selectWorkoutPathSilently(workoutfile);
         return;
     }
 
@@ -1132,21 +1138,12 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
         return;
     }
     if (!context->prepareErgFileSelection()) {
-        QSignalBlocker blockSelection(workoutTree->selectionModel());
-        workoutTree->clearSelection();
-        for (int row = 0; row < workoutModel->rowCount(); ++row) {
-            const QModelIndex source = workoutModel->index(
-                    row, TdbWorkoutModelIdx::filepath);
-            if (workoutModel->data(source, Qt::DisplayRole).toString()
-                    != workoutfile) {
-                continue;
-            }
-            workoutTree->setCurrentIndex(sortModel->mapFromSource(
-                    workoutModel->index(row, 0)));
-            break;
-        }
+        selectWorkoutPathSilently(workoutfile);
         return;
     }
+    // Saving an untitled workout can synchronously import and select it.
+    // Restore the user's original target before the outer transition resumes.
+    selectWorkoutPathSilently(filename);
     ErgFile *prior = const_cast<ErgFile*>(ergFileQueryAdapter.getErgFile());
     workoutfile = filename;
     workoutGameCourseRuntime.reset();
