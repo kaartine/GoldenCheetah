@@ -34,7 +34,9 @@ bool insertWorkout(TrainDB &database, const QString &path)
     ErgFileBase workout;
     workout.filename(path);
     workout.name(QStringLiteral("Deletion test"));
-    workout.format(ErgFileFormat::erg);
+    workout.format(path.endsWith(QStringLiteral(".crs"), Qt::CaseInsensitive)
+                           ? ErgFileFormat::crs
+                           : ErgFileFormat::erg);
     return database.importWorkout(path, workout);
 }
 
@@ -57,7 +59,7 @@ void TestWorkoutDeletionTrainDb::commitsFileAndDatabaseDeletion()
     TrainDB database{QDir(home.path())};
     QCOMPARE(database.schemaStatus(), TrainDB::SchemaStatus::current);
 
-    const QString workout = home.filePath(QStringLiteral("workout.erg"));
+    const QString workout = home.filePath(QStringLiteral("workout.crs"));
     const QString sidecar = workoutDeletionSidecarPath(workout);
     QVERIFY(writeFile(workout, QByteArrayLiteral("workout")));
     QVERIFY(writeFile(sidecar, QByteArrayLiteral("metadata")));

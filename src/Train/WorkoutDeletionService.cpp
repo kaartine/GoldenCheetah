@@ -110,6 +110,10 @@ WorkoutDeletionResult failBeforeDatabase(
 QString workoutDeletionSidecarPath(const QString &workoutPath)
 {
     const QFileInfo workout(workoutPath);
+    if (workout.suffix().compare(
+                QStringLiteral("crs"), Qt::CaseInsensitive) != 0) {
+        return {};
+    }
     return workout.dir().filePath(
             workout.completeBaseName() + QStringLiteral(".gcmtb.json"));
 }
@@ -195,6 +199,7 @@ WorkoutDeletionResult deleteWorkoutsAtomically(
         }
 
         const QString sidecar = workoutDeletionSidecarPath(workout);
+        if (sidecar.isEmpty()) continue;
         if (operations.isSymbolicLink(sidecar)) {
             result.failedPath = sidecar;
             result.errorMessage = QObject::tr(

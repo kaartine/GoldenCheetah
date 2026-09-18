@@ -90,6 +90,7 @@ class TestWorkoutDeletionService : public QObject
 
 private slots:
     void sidecarPathUsesCompleteBaseName();
+    void nonCourseWorkoutDoesNotOwnSidecar();
     void deletesWorkoutAndSidecarAfterCommit();
     void preservesDatabaseWhenWorkoutStagingFails();
     void restoresWorkoutWhenSidecarStagingFails();
@@ -109,6 +110,30 @@ void TestWorkoutDeletionService::sidecarPathUsesCompleteBaseName()
              QStringLiteral("/tmp/trail.mtb.gcmtb.json"));
     QCOMPARE(workoutDeletionSidecarPath(QStringLiteral("/tmp/trail.crs")),
              QStringLiteral("/tmp/trail.gcmtb.json"));
+}
+
+void TestWorkoutDeletionService::nonCourseWorkoutDoesNotOwnSidecar()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString workout = directory.filePath(QStringLiteral("trail.erg"));
+    const QString course = directory.filePath(QStringLiteral("trail.crs"));
+    const QString sidecar = directory.filePath(
+            QStringLiteral("trail.gcmtb.json"));
+    QVERIFY(workoutDeletionSidecarPath(workout).isEmpty());
+    QVERIFY(writeFile(workout, QByteArrayLiteral("workout")));
+    QVERIFY(writeFile(course, QByteArrayLiteral("course")));
+    QVERIFY(writeFile(sidecar, QByteArrayLiteral("course metadata")));
+
+    FakeDatabase database;
+    database.rows << workout;
+    const WorkoutDeletionResult result = deleteWorkoutsAtomically(
+            QStringList() << workout, database.operations());
+
+    QVERIFY2(result.succeeded, qPrintable(result.errorMessage));
+    QVERIFY(!QFileInfo::exists(workout));
+    QVERIFY(QFileInfo::exists(course));
+    QCOMPARE(readFile(sidecar), QByteArrayLiteral("course metadata"));
 }
 
 void TestWorkoutDeletionService::deletesWorkoutAndSidecarAfterCommit()
