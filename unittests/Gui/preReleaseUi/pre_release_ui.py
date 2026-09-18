@@ -34,6 +34,7 @@ UI_TEST_NAMES = (
     "startup_and_main_navigation",
     "view_navigation",
     "prepared_workout_library_import",
+    "library_scan_preserves_unsearched_workouts",
     "train_control_accessibility",
     "data_generator_and_virtual_gears",
     "create_edit_mtb_course_lifecycle",
@@ -43,6 +44,9 @@ UI_TEST_NAMES = (
     "graceful_shutdown_request",
 )
 UI_TEST_DEPENDENCIES = {
+    "library_scan_preserves_unsearched_workouts": (
+        "prepared_workout_library_import",
+    ),
     "create_edit_mtb_course_lifecycle": (
         "prepared_workout_library_import",
     ),
@@ -1941,6 +1945,46 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 "ui-test", "table cell", showing=True, timeout=30.0
             )
 
+        def scan_preserves_unsearched_workouts():
+            driver.click(
+                driver.find(
+                    "Tools", "menu item", showing=True, timeout=20.0
+                )
+            )
+            driver.click(
+                driver.find(
+                    "Scan disk for workouts, videos, videoSyncs...",
+                    "menu item",
+                    showing=True,
+                    timeout=10.0,
+                )
+            )
+            driver.find(
+                "Search for Workouts, Syncs and Media",
+                "dialog",
+                showing=True,
+                timeout=30.0,
+            )
+            workouts = driver.find(
+                "Workout files (.erg, .mrc, .zwo etc)",
+                "check box",
+                showing=True,
+            )
+            if driver.checked(workouts):
+                driver.activate(workouts)
+            if driver.checked(workouts):
+                raise UiFailure("Workout search checkbox did not turn off")
+            driver.activate(
+                driver.find("Search", "push button", showing=True, timeout=10.0)
+            )
+            driver.activate(
+                driver.find("Save", "push button", showing=True, timeout=60.0)
+            )
+            enter_train()
+            driver.find(
+                "ui-test", "table cell", showing=True, timeout=30.0
+            )
+
         def generator_and_gears():
             enter_train()
             driver.select_named("Data Generator")
@@ -2057,7 +2101,13 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 "radio button",
                 showing=True,
             )
-            driver.activate(driver.find("Next", "push button", showing=True))
+            driver.activate(
+                driver.find_named_any(
+                    ("Next >", "Next"),
+                    "push button",
+                    showing=True,
+                )
+            )
 
             driver.require_visible_names(
                 [
@@ -2085,13 +2135,25 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             driver.set_value(work_seconds, 25)
             driver.find("0:57:00", showing=True, timeout=10.0)
 
-            driver.activate(driver.find("Back", "push button", showing=True))
+            driver.activate(
+                driver.find_named_any(
+                    ("< Back", "Back"),
+                    "push button",
+                    showing=True,
+                )
+            )
             driver.find(
                 "Generate for a training goal",
                 "radio button",
                 showing=True,
             )
-            driver.activate(driver.find("Next", "push button", showing=True))
+            driver.activate(
+                driver.find_named_any(
+                    ("Next >", "Next"),
+                    "push button",
+                    showing=True,
+                )
+            )
             work_seconds = driver.find(
                 "Work interval", "spin button", showing=True
             )
@@ -2103,7 +2165,10 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 / "ui-generated-20-20.mrc"
             )
             driver.activate(driver.find("Finish", "push button", showing=True))
-            driver.find(role="file chooser", showing=True, timeout=30.0)
+            try:
+                driver.find(role="file chooser", showing=True, timeout=2.0)
+            except UiFailure:
+                driver.find(role="dialog", showing=True, timeout=30.0)
             editable = None
             for node in driver.find_all(role="text", showing=True):
                 try:
@@ -2160,6 +2225,11 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             suite.run("view_navigation", views)
         if "prepared_workout_library_import" in selected_tests:
             suite.run("prepared_workout_library_import", import_prepared_workout)
+        if "library_scan_preserves_unsearched_workouts" in selected_tests:
+            suite.run(
+                "library_scan_preserves_unsearched_workouts",
+                scan_preserves_unsearched_workouts,
+            )
         if "train_control_accessibility" in selected_tests:
             suite.run("train_control_accessibility", train_controls)
         if "data_generator_and_virtual_gears" in selected_tests:

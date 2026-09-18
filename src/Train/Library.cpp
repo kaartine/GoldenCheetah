@@ -889,19 +889,21 @@ LibrarySearchDialog::updateDB()
 
     trainDB->startLUW();
 
-    // workouts
-    // If the workout existed already, it won't be modified
-    foreach(QString ergFile, workoutsFound) {
-        ErgFile file(ergFile, ErgFileFormat::unknown, context);
-        if (file.isValid()) {
-            trainDB->importWorkout(ergFile, file);
+    if (findWorkouts->isChecked()) {
+        // If the workout existed already, it won't be modified.
+        foreach(QString ergFile, workoutsFound) {
+            ErgFile file(ergFile, ErgFileFormat::unknown, context);
+            if (file.isValid()) {
+                trainDB->importWorkout(ergFile, file);
+            }
         }
-    }
-    // Now, we can delete old workouts in the table that have not been scanned now
-    QStringList workouts = trainDB->getWorkouts();
-    for (const QString &workout : workouts) {
-        if (!workoutsFound.contains(workout)) {
-            trainDB->deleteWorkout(workout);
+
+        // Only an explicit workout scan is authoritative for workout rows.
+        const QStringList workouts = trainDB->getWorkouts();
+        for (const QString &workout : workouts) {
+            if (!workoutsFound.contains(workout)) {
+                trainDB->deleteWorkout(workout);
+            }
         }
     }
 
