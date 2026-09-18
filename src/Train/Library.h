@@ -113,6 +113,7 @@ class Library : QObject
         static void initialise(QDir gcRoot); // init
         static Library *findLibrary(QString);
         static LibraryImportResult importFiles(Context *context, QStringList files, LibraryBatchImportConfirmation dialog=LibraryBatchImportConfirmation::optionalDialog);
+        static bool refreshWorkout(Context *context, const QString &path);
         void removeRef(Context *context, QString ref);
 
         static bool refreshWorkouts(Context *context);

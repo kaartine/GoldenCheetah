@@ -220,6 +220,9 @@ private slots:
     void importFilesSuccessSignalsAfterCommit();
     void importFilesCopiesMtbCourseMetadata();
     void importFilesFailureRollsBackMtbCourseMetadata();
+    void refreshWorkoutUpdatesOnlyRequestedRow();
+    void refreshWorkoutParseFailurePreservesExistingRow();
+    void refreshWorkoutCommitFailureRollsBackWithoutSignal();
     void refreshWorkoutsUpdateFailureDoesNotCommitPartialBatch();
     void refreshWorkoutsSchemaFailureDoesNotReportSuccess();
     void refreshWorkoutsCommitFailureRollsBackWithoutSignal();
@@ -414,6 +417,74 @@ void TestLibraryTransactionSafety::importFilesFailureRollsBackMtbCourseMetadata(
     QVERIFY(!QFileInfo::exists(target));
     QVERIFY(!QFileInfo::exists(targetMetadata));
     QVERIFY(!environment.database->hasWorkout(target));
+}
+
+void TestLibraryTransactionSafety::refreshWorkoutUpdatesOnlyRequestedRow()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+
+    const QString changed = environment.filePath(
+            QStringLiteral("changed.erg"));
+    const QString untouched = environment.filePath(
+            QStringLiteral("untouched.erg"));
+    QVERIFY(writeFile(changed, QByteArrayLiteral("225")));
+    QVERIFY(writeFile(untouched, QByteArrayLiteral("275")));
+    QVERIFY(environment.database->importWorkout(
+            changed, workout(100.0, QStringLiteral("Changed"))));
+    QVERIFY(environment.database->importWorkout(
+            untouched, workout(125.0, QStringLiteral("Untouched"))));
+
+    QSqlDatabase connection = QSqlDatabase::database(
+            QStringLiteral("train"), false);
+    QSignalSpy changedSignal(environment.database.get(), &TrainDB::dataChanged);
+    QVERIFY(Library::refreshWorkout(&environment.context, changed));
+
+    QCOMPARE(storedAveragePower(connection, changed), 225.0);
+    QCOMPARE(storedAveragePower(connection, untouched), 125.0);
+    QCOMPARE(changedSignal.count(), 1);
+}
+
+void TestLibraryTransactionSafety::refreshWorkoutParseFailurePreservesExistingRow()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+
+    const QString path = environment.filePath(QStringLiteral("invalid.erg"));
+    QVERIFY(writeFile(path, QByteArrayLiteral("not-a-workout")));
+    QVERIFY(environment.database->importWorkout(
+            path, workout(135.0, QStringLiteral("Original"))));
+
+    QSqlDatabase connection = QSqlDatabase::database(
+            QStringLiteral("train"), false);
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    QVERIFY(!Library::refreshWorkout(&environment.context, path));
+
+    QVERIFY(environment.database->hasWorkout(path));
+    QCOMPARE(storedAveragePower(connection, path), 135.0);
+    QCOMPARE(changed.count(), 0);
+}
+
+void TestLibraryTransactionSafety::refreshWorkoutCommitFailureRollsBackWithoutSignal()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+
+    const QString path = environment.filePath(
+            QStringLiteral("refresh-commit-failure.erg"));
+    QVERIFY(writeFile(path, QByteArrayLiteral("240")));
+    QVERIFY(environment.database->importWorkout(
+            path, workout(120.0, QStringLiteral("Original"))));
+    QSqlDatabase connection = QSqlDatabase::database(
+            QStringLiteral("train"), false);
+    QVERIFY(installDeferredCommitFailure(
+            connection, QStringLiteral("UPDATE"), path));
+
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    QVERIFY(!Library::refreshWorkout(&environment.context, path));
+
+    QCOMPARE(storedAveragePower(connection, path), 120.0);
+    QCOMPARE(changed.count(), 0);
 }
 
 void TestLibraryTransactionSafety::

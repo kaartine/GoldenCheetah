@@ -90,6 +90,7 @@ public:
         QStringList files,
         LibraryBatchImportConfirmation confirmation =
             LibraryBatchImportConfirmation::optionalDialog);
+    static bool refreshWorkout(Context *context, const QString &path);
     static bool refreshWorkouts(Context *context);
 };
 

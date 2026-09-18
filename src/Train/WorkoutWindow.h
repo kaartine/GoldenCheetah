@@ -109,6 +109,9 @@ class WorkoutWindow : public GcChartWindow
 
         bool draw; // draw or select mode?
 
+    private:
+        bool confirmWorkoutTransition();
+
    public slots:
         // set properties
 

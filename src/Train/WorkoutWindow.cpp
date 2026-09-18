@@ -524,22 +524,7 @@ WorkoutWindow::ergFileSelected(ErgFile*f, ErgFileFormat format)
 {
     if (active) return;
 
-    if (workout->isDirty()) {
-        QMessageBox msgBox;
-        msgBox.setText(tr("You have unsaved changes to a workout."));
-        msgBox.setInformativeText(tr("Do you want to save them?"));
-        msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-        msgBox.setDefaultButton(QMessageBox::Cancel);
-        msgBox.setIcon(QMessageBox::Warning);
-        msgBox.exec();
-
-        // save first, otherwise changes lost
-        if(msgBox.clickedButton() == msgBox.button(QMessageBox::Yes)) {
-            active = true;
-            saveFile();
-            active = false;
-        }
-    }
+    if (!confirmWorkoutTransition()) return;
 
     // just get on with it.
     format = f ? f->format() : format;
@@ -553,6 +538,31 @@ WorkoutWindow::ergFileSelected(ErgFile*f, ErgFileFormat format)
 
     // almost certainly hides it on load
     setScroller(QPointF(workout->minVX(), workout->maxVX()));
+}
+
+bool
+WorkoutWindow::confirmWorkoutTransition()
+{
+    if (!workout->isDirty()) return true;
+
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle(tr("Unsaved Workout"));
+    msgBox.setText(tr("You have unsaved changes to a workout."));
+    msgBox.setInformativeText(
+            tr("Save the changes before switching workouts?"));
+    msgBox.setStandardButtons(
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+    msgBox.setDefaultButton(QMessageBox::Cancel);
+    msgBox.setIcon(QMessageBox::Warning);
+    const int answer = msgBox.exec();
+    if (answer == QMessageBox::Cancel) return false;
+    if (answer == QMessageBox::Discard) return true;
+
+    const bool saved = ergFile ? workout->save() : saveAs();
+    if (saved && ergFile && !ergFile->filename().isEmpty()) {
+        Library::refreshWorkout(context, ergFile->filename());
+    }
+    return saved;
 }
 
 void
@@ -653,7 +663,14 @@ WorkoutWindow::saveFile()
     const bool saved = ergFile ? workout->save() : saveAs();
 
     // force any other plots to take the changes
-    if (saved) context->notifyErgFileSelected(ergFile);
+    if (saved) {
+        if (ergFile && !ergFile->filename().isEmpty()
+                && !Library::refreshWorkout(context, ergFile->filename())) {
+            QMessageBox::warning(this, tr("Save Workout"),
+                    tr("The workout was saved, but its library summary could not be updated."));
+        }
+        context->notifyErgFileSelected(ergFile);
+    }
 }
 
 void

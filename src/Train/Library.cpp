@@ -493,6 +493,26 @@ Library::refreshWorkouts
     return ok && transaction.commit();
 }
 
+bool
+Library::refreshWorkout
+(Context *context, const QString &path)
+{
+    if (context == nullptr || trainDB == nullptr || !QFileInfo(path).isFile()) {
+        return false;
+    }
+
+    ErgFile workout(path, ErgFileFormat::unknown, context);
+    if (!workout.isValid()) return false;
+
+    TrainDB::ScopedLUW transaction(*trainDB);
+    if (!transaction.isActive()
+            || !trainDB->importWorkout(
+                path, workout, ImportMode::insertOrUpdate)) {
+        return false;
+    }
+    return transaction.commit();
+}
+
 
 #ifndef GC_LIBRARY_TRANSACTION_TEST_HOOKS
 void
