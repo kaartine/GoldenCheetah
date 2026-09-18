@@ -784,6 +784,11 @@ LibrarySearchDialog::search()
         // traversal. Never apply incomplete results as authoritative state.
         if (!validateSearchRequest()) return;
 
+        const QList<QString> previousPaths = library ? library->paths
+                                                     : QList<QString>();
+        const QList<QString> previousRefs = library ? library->refs
+                                                    : QList<QString>();
+
         // first lets update the library paths to
         // reflect the user selections
         if (library) {
@@ -805,13 +810,44 @@ LibrarySearchDialog::search()
 
 
             // now write to disk..
-            LibraryParser::serialize(context->athlete->home->root());
+            QString serializationError;
+            if (!LibraryParser::serialize(
+                        context->athlete->home->root(),
+                        &serializationError)) {
+                library->paths = previousPaths;
+                library->refs = previousRefs;
+                QMessageBox::warning(
+                    this,
+                    tr("Library update failed"),
+                    tr("The search paths could not be saved. The existing "
+                       "library was not changed.\n\n%1")
+                            .arg(serializationError));
+                return;
+            }
         }
 
         // ok, we've completed a search without aborting
         // so lets rebuild the database of workouts and videos
         // using what we found...
-        updateDB();
+        if (!updateDB()) {
+            if (library) {
+                library->paths = previousPaths;
+                library->refs = previousRefs;
+                QString recoveryError;
+                if (!LibraryParser::serialize(
+                            context->athlete->home->root(),
+                            &recoveryError)) {
+                    QMessageBox::critical(
+                        this,
+                        tr("Library recovery failed"),
+                        tr("The database update failed and the previous search "
+                           "paths could not be restored on disk. Keep this "
+                           "dialog open and retry saving the library.\n\n%1")
+                                .arg(recoveryError));
+                }
+            }
+            return;
+        }
         close();
 
         return;
@@ -972,7 +1008,7 @@ LibrarySearchDialog::removeReference()
     }
 }
 
-void
+bool
 LibrarySearchDialog::updateDB()
 {
     TrainDB::ScopedLUW transaction(*trainDB);
@@ -982,7 +1018,7 @@ LibrarySearchDialog::updateDB()
             tr("Library update failed"),
             tr("The scan results could not be saved. The existing library "
                "was not changed."));
-        return;
+        return false;
     }
 
     bool ok = true;
@@ -1061,7 +1097,9 @@ LibrarySearchDialog::updateDB()
             tr("Library update failed"),
             tr("The scan results could not be saved. The existing library "
                "was not changed."));
+        return false;
     }
+    return true;
 }
 
 //

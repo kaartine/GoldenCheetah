@@ -145,7 +145,7 @@ class LibrarySearchDialog : public QDialog
         void addDirectory();
         void removeDirectory();
         void removeReference();
-        void updateDB();
+        bool updateDB();
 
     private:
         Context *context;
