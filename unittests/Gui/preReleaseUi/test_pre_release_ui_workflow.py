@@ -24,6 +24,9 @@ MATRIX_PATH = Path(__file__).with_name("run-pre-release-ui-matrix.sh")
 RUNNER_PATH = Path(__file__).with_name("run-pre-release-ui.sh")
 ENVIRONMENT_HELPER_PATH = Path(__file__).with_name("ui-test-environment.sh")
 LIBRARY_SOURCE_PATH = MODULE_PATH.parents[3] / "src" / "Train" / "Library.cpp"
+WORKOUT_WIZARD_SOURCE_PATH = (
+    MODULE_PATH.parents[3] / "src" / "Train" / "WorkoutWizard.cpp"
+)
 
 
 class PreReleaseUiWorkflowTests(unittest.TestCase):
@@ -188,27 +191,40 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertIs(selected, row)
         driver.click_named_item.assert_called_once_with("ui-test-mtb")
 
-    def test_keyboard_order_waits_for_combo_selection_to_be_restored(self):
+    def test_keyboard_order_does_not_queue_a_combo_restore_key(self):
         focus = object()
         driver = object.__new__(UI.UiDriver)
         driver.find = mock.Mock(return_value=focus)
         driver.focus_main_window = mock.Mock()
         driver.click = mock.Mock()
         driver.send_named_key = mock.Mock()
-        driver.name = mock.Mock(
-            side_effect=("Sprint", "20/20 descending sets")
-        )
+        driver.name = mock.Mock(return_value="Sprint")
 
         with mock.patch.object(UI.time, "sleep"):
             driver.require_keyboard_order(
                 [("20/20 descending sets", "combo box")], timeout=1.0
             )
 
-        self.assertEqual(driver.name.call_count, 2)
+        self.assertEqual(driver.name.call_count, 1)
         self.assertEqual(
             driver.send_named_key.call_args_list,
-            [mock.call("Escape"), mock.call("Up"), mock.call("Down")],
+            [mock.call("Escape"), mock.call("Up")],
         )
+
+    def test_workout_generator_declares_complete_tab_order(self):
+        source = WORKOUT_WIZARD_SOURCE_PATH.read_text(encoding="utf-8")
+        tab_order = source[source.index("const QList<QWidget *> tabOrder") :]
+        controls = (
+            "focusBox", "ftpBox", "workPowerSlider", "workPowerBox",
+            "recoveryPowerSlider", "recoveryPowerBox", "workSecondsBox",
+            "recoverySecondsBox", "repetitionsBox", "setsBox",
+            "repetitionDeltaBox", "setRecoveryBox", "finalSetRecoveryBox",
+            "warmupMinutesBox", "cooldownMinutesBox", "recoverAfterLastBox",
+        )
+
+        positions = [tab_order.index(control) for control in controls]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("QWidget::setTabOrder", tab_order)
 
     def test_runner_requires_generated_distance_course_at_game_start(self):
         runner = RUNNER_PATH.read_text(encoding="utf-8")

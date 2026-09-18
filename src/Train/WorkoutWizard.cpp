@@ -1073,6 +1073,20 @@ void GeneratedWorkoutPage::initializePage()
     connect(recoverAfterLastBox, &QCheckBox::toggled,
             this, &GeneratedWorkoutPage::controlsChanged);
 
+    const QList<QWidget *> tabOrder = {
+        focusBox, ftpBox,
+        workPowerSlider, workPowerBox,
+        recoveryPowerSlider, recoveryPowerBox,
+        workSecondsBox, recoverySecondsBox,
+        repetitionsBox, setsBox, repetitionDeltaBox,
+        setRecoveryBox, finalSetRecoveryBox,
+        warmupMinutesBox, cooldownMinutesBox,
+        recoverAfterLastBox
+    };
+    for (int index = 1; index < tabOrder.size(); ++index) {
+        QWidget::setTabOrder(tabOrder.at(index - 1), tabOrder.at(index));
+    }
+
     int ftp = 190;
     if (context && context->athlete && context->athlete->zones("Bike")) {
         const int range = context->athlete->zones("Bike")->whichRange(

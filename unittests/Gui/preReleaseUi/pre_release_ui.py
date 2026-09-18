@@ -743,14 +743,6 @@ class UiDriver:
             time.sleep(0.1)
         else:
             raise UiFailure("Training focus is not keyboard-operable")
-        self.send_named_key("Down")
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.name(first) == first_name:
-                break
-            time.sleep(0.1)
-        else:
-            raise UiFailure("Training focus did not return to its original value")
 
         for index, (name, role) in enumerate(controls[1:], start=2):
             self.send_named_key("Tab")
@@ -2331,6 +2323,14 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     ("Cool-down", "spin button"),
                     ("Recovery after the last repetition", "check box"),
                 ]
+            )
+            driver.select_combo_item(
+                (
+                    "Endurance", "Tempo", "Sweet spot", "Threshold",
+                    "VO2max", "Anaerobic", "Sprint",
+                    "20/20 descending sets",
+                ),
+                "20/20 descending sets",
             )
             driver.find("0:53:20", showing=True, timeout=10.0)
             driver.find(
