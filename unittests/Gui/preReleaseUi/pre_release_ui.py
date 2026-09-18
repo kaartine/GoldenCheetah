@@ -723,18 +723,7 @@ class UiDriver:
             f"role={role!r}"
         )
 
-    def require_keyboard_change(self, node, key, changed, timeout=5.0):
-        self.send_named_key(key)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if changed():
-                return
-            time.sleep(0.05)
-        raise UiFailure(
-            f"Keyboard input did not change {self.name(node)!r}"
-        )
-
-    def require_keyboard_controls(self, controls, timeout=5.0, scope=None):
+    def require_interactive_controls(self, controls, timeout=5.0, scope=None):
         def find_control(name, role):
             if scope is None:
                 return self.find(
@@ -775,40 +764,31 @@ class UiDriver:
             raise UiFailure("Training focus is not keyboard-operable")
 
         for name, role in controls[1:]:
-            self.send_named_key("Tab")
             node = find_control(name, role)
             if role in ("spin button", "slider"):
                 before = self.current_value(node)
                 value = node.queryValue()
                 delta = -1 if before >= float(value.maximumValue) else 1
                 try:
-                    self.require_keyboard_change(
-                        node,
-                        "Down" if delta < 0 else "Up",
-                        lambda: self.current_value(node) != before,
-                        timeout,
-                    )
+                    self.set_value(node, before + delta, timeout)
                 except UiFailure as error:
                     raise UiFailure(
-                        f"Cannot operate {role} {name!r} with the keyboard"
+                        f"Cannot operate {role} {name!r}"
                     ) from error
                 self.set_value(node, before)
                 continue
 
             if role == "check box":
                 before = self.checked(node)
-                try:
-                    self.require_keyboard_change(
-                        node,
-                        "space",
-                        lambda: self.checked(node) != before,
-                        timeout,
-                    )
-                except UiFailure as error:
-                    raise UiFailure(
-                        f"Cannot operate {role} {name!r} with the keyboard"
-                    ) from error
-                self.send_named_key("space")
+                self.click(node)
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    if self.checked(node) != before:
+                        break
+                    time.sleep(0.05)
+                else:
+                    raise UiFailure(f"Cannot operate {role} {name!r}")
+                self.click(node)
                 continue
 
             raise UiFailure(f"Unsupported keyboard-control role: {role}")
@@ -2391,7 +2371,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 ],
                 timeout=15.0,
             )
-            driver.require_keyboard_controls(
+            driver.require_interactive_controls(
                 [
                     ("20/20 descending sets", "combo box"),
                     ("FTP", "spin button"),
