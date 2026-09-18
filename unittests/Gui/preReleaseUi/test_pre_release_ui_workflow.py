@@ -192,7 +192,9 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         driver.click_named_item.assert_called_once_with("ui-test-mtb")
 
     def test_keyboard_order_does_not_queue_a_combo_restore_key(self):
-        focus = object()
+        focus = mock.Mock()
+        component = mock.Mock()
+        focus.queryComponent.return_value = component
         driver = object.__new__(UI.UiDriver)
         driver.find = mock.Mock(return_value=focus)
         driver.focus_main_window = mock.Mock()
@@ -210,6 +212,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             driver.send_named_key.call_args_list,
             [mock.call("Escape"), mock.call("Up")],
         )
+        component.grabFocus.assert_called_once_with()
 
     def test_workout_generator_declares_complete_tab_order(self):
         source = WORKOUT_WIZARD_SOURCE_PATH.read_text(encoding="utf-8")

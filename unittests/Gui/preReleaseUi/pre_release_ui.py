@@ -743,6 +743,10 @@ class UiDriver:
             time.sleep(0.1)
         else:
             raise UiFailure("Training focus is not keyboard-operable")
+        try:
+            first.queryComponent().grabFocus()
+        except Exception as error:
+            raise UiFailure("Cannot restore focus to the training focus") from error
 
         for index, (name, role) in enumerate(controls[1:], start=2):
             self.send_named_key("Tab")
