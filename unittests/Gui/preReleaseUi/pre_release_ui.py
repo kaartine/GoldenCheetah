@@ -2211,24 +2211,24 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 if not completed:
                     stop_without_saving()
 
-        def save_workout():
-            def choose_save_path(destination: Path) -> None:
+        def choose_save_path(destination: Path) -> None:
+            try:
+                driver.find(role="file chooser", showing=True, timeout=2.0)
+            except UiFailure:
+                driver.find(role="dialog", showing=True, timeout=30.0)
+            editable = None
+            for node in driver.find_all(role="text", showing=True):
                 try:
-                    driver.find(role="file chooser", showing=True, timeout=2.0)
-                except UiFailure:
-                    driver.find(role="dialog", showing=True, timeout=30.0)
-                editable = None
-                for node in driver.find_all(role="text", showing=True):
-                    try:
-                        node.queryEditableText()
-                        editable = node
-                    except Exception:
-                        continue
-                if editable is None:
-                    raise UiFailure("Save dialog file name input was not found")
-                editable.queryEditableText().setTextContents(str(destination))
-                driver.click(driver.find("Save", "push button", showing=True))
+                    node.queryEditableText()
+                    editable = node
+                except Exception:
+                    continue
+            if editable is None:
+                raise UiFailure("Save dialog file name input was not found")
+            editable.queryEditableText().setTextContents(str(destination))
+            driver.click(driver.find("Save", "push button", showing=True))
 
+        def save_workout():
             enter_train()
             driver.select_combo_item(
                 ["Workout Game", "Workout Editor"], "Workout Editor"
@@ -2458,6 +2458,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             driver.select_combo_item(
                 ["Workout Game", "Workout Editor"], "Workout Editor"
             )
+            source = root / "library" / ATHLETE / "workouts" / "ui-test.erg"
+            original = source.read_bytes()
             driver.click_named_item("ui-test")
             driver.activate(
                 driver.find("Properties", "push button", showing=True)
@@ -2488,15 +2490,62 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 raise UiFailure(
                     "Cancel discarded the edited workout contents"
                 )
+            if source.read_bytes() != original:
+                raise UiFailure("Cancel changed the source workout file")
 
             driver.click_named_item("ui-delete")
             driver.find("Unsaved Workout", "dialog", showing=True)
             driver.activate(
                 driver.find("Discard", "push button", showing=True)
             )
-            driver.find(
+            target = driver.find(
                 "ui-delete", "table cell", showing=True, timeout=10.0
             )
+            if not driver.selected(target):
+                raise UiFailure("Discard did not select the target workout")
+            if source.read_bytes() != original:
+                raise UiFailure("Discard changed the source workout file")
+
+            driver.activate(driver.find("New", "push button", showing=True))
+            editor = driver.find(
+                "Workout code", "text", showing=True, timeout=10.0
+            )
+            editor.queryEditableText().setTextContents("1m@123")
+            external = root / "external-transition" / "ui-test.erg"
+            external.parent.mkdir(parents=True, exist_ok=True)
+
+            driver.click_named_item("ui-test")
+            driver.find("Unsaved Workout", "dialog", showing=True)
+            driver.activate(driver.find("Save", "push button", showing=True))
+            choose_save_path(external)
+            driver.wait_file(external)
+            driver.find(
+                "The workout was saved, but it could not be added to the "
+                "workout library. The editor will continue using the saved file.",
+                showing=True,
+                timeout=20.0,
+            )
+            driver.activate(
+                driver.find("OK", "push button", showing=True, timeout=10.0)
+            )
+            selected = driver.find(
+                "ui-test", "table cell", showing=True, timeout=10.0
+            )
+            if not driver.selected(selected):
+                raise UiFailure(
+                    "Saved transition did not select the requested workout"
+                )
+            editor = driver.find(
+                "Workout code", "text", showing=True, timeout=10.0
+            )
+            if "1m@123" in editor.queryText().getText(0, -1):
+                raise UiFailure(
+                    "Saved transition left the external draft in the editor"
+                )
+            if source.read_bytes() != original:
+                raise UiFailure(
+                    "Failed library import overwrote the selected workout"
+                )
 
         def delete_workout_and_sidecar():
             enter_train()

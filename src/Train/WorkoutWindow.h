@@ -32,6 +32,8 @@
 #include <QMessageBox>
 #include <QPointF>
 
+#include <memory>
+
 #include "Context.h"
 #include "RideFile.h" // for data series types
 #include "Library.h"  // workout library
@@ -85,6 +87,7 @@ class WorkoutWindow : public GcChartWindow
     public:
 
         WorkoutWindow(Context *context);
+        ~WorkoutWindow() override;
 
         // the ergfile we are editing
         ErgFile *ergFile;
@@ -111,6 +114,7 @@ class WorkoutWindow : public GcChartWindow
 
     private:
         bool confirmWorkoutTransition();
+        std::unique_ptr<ErgFile> standaloneErgFile;
 
    public slots:
         // set properties

@@ -368,6 +368,8 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     configChanged(CONFIG_APPEARANCE);
 }
 
+WorkoutWindow::~WorkoutWindow() = default;
+
 void
 WorkoutWindow::resizeEvent(QResizeEvent *)
 {
@@ -527,6 +529,9 @@ WorkoutWindow::ergFileSelected(ErgFile*f, ErgFileFormat format)
 {
     if (active) return;
 
+    const bool replaceStandalone = standaloneErgFile
+            && f != standaloneErgFile.get();
+
     // just get on with it.
     format = f ? f->format() : format;
     if (format == ErgFileFormat::mrc) codeFormat->setText(tr("MRC - Relative Watts"));
@@ -539,6 +544,7 @@ WorkoutWindow::ergFileSelected(ErgFile*f, ErgFileFormat format)
 
     // almost certainly hides it on load
     setScroller(QPointF(workout->minVX(), workout->maxVX()));
+    if (replaceStandalone) standaloneErgFile.reset();
 }
 
 void
@@ -571,10 +577,20 @@ WorkoutWindow::confirmWorkoutTransition()
     if (answer == QMessageBox::Discard) return true;
 
     const bool saved = ergFile ? workout->save() : saveAs();
-    if (saved && ergFile && !ergFile->filename().isEmpty()) {
-        Library::refreshWorkout(context, ergFile->filename());
+    if (!saved) {
+        // Save As can save the external file successfully but fail to import
+        // it into the library. In that case the editor is clean and the
+        // requested transition can safely continue.
+        return !workout->isDirty();
     }
-    return saved;
+    if (ergFile && !ergFile->filename().isEmpty()
+            && !Library::refreshWorkout(context, ergFile->filename())) {
+        QMessageBox::warning(
+            this,
+            tr("Save Workout"),
+            tr("The workout was saved, but its library summary could not be updated."));
+    }
+    return true;
 }
 
 void
@@ -669,7 +685,8 @@ WorkoutWindow::saveAs()
                 tr("The workout was saved, but it could not be added to the "
                    "workout library. The editor will continue using the saved "
                    "file."));
-        ergFileSelected(newergFile.release(), targetFormat);
+        standaloneErgFile = std::move(newergFile);
+        ergFileSelected(standaloneErgFile.get(), targetFormat);
         return false;
     }
     return true;
