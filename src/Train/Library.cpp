@@ -669,9 +669,24 @@ LibrarySearchDialog::LibrarySearchDialog(Context *context) : context(context)
     connect(searchButton, SIGNAL(clicked()), this, SLOT(search()));
 }
 
+LibrarySearchDialog::~LibrarySearchDialog()
+{
+    if (searcher != nullptr) {
+        disconnect(searcher, nullptr, this, nullptr);
+        searcher->abort();
+        searcher->wait();
+        delete searcher;
+        searcher = nullptr;
+    }
+}
+
 void
 LibrarySearchDialog::setWidgets()
 {
+    findWorkouts->setEnabled(!searching);
+    findMedia->setEnabled(!searching);
+    findVideoSyncs->setEnabled(!searching);
+
     if (searching) {
         setFixedHeight(250 *dpiYFactor);
         searchButton->hide();
@@ -710,10 +725,61 @@ LibrarySearchDialog::setWidgets()
     }
 }
 
+bool
+LibrarySearchDialog::validateSearchRequest()
+{
+    if (!findWorkouts->isChecked()
+        && !findMedia->isChecked()
+        && !findVideoSyncs->isChecked()) {
+        QMessageBox::warning(
+            this,
+            tr("Search cannot start"),
+            tr("Select at least one file type to search for."));
+        return false;
+    }
+
+    const int pathCount = searchPathTable->invisibleRootItem()->childCount();
+    if (pathCount == 0) {
+        QMessageBox::warning(
+            this,
+            tr("Search cannot start"),
+            tr("Add at least one search path before starting the search."));
+        return false;
+    }
+
+    QStringList unavailablePaths;
+    for (int index = 0; index < pathCount; ++index) {
+        const QTreeWidgetItem *item =
+            searchPathTable->invisibleRootItem()->child(index);
+        const QString path = item == nullptr ? QString() : item->text(0);
+        const QFileInfo info(path);
+        if (path.isEmpty() || !info.isDir() || !info.isReadable()) {
+            unavailablePaths.append(path.isEmpty() ? tr("(empty path)")
+                                                   : path);
+        }
+    }
+    if (unavailablePaths.isEmpty()) return true;
+
+    QMessageBox message(
+        QMessageBox::Warning,
+        tr("Search cannot start"),
+        tr("The search cannot start because a configured search path is "
+           "unavailable or unreadable."),
+        QMessageBox::Ok,
+        this);
+    message.setDetailedText(unavailablePaths.join('\n'));
+    message.exec();
+    return false;
+}
+
 void
 LibrarySearchDialog::search()
 {
     if (searchButton->text() == tr("Save")) {
+
+        // A removable or network-backed search root may disappear after the
+        // traversal. Never apply incomplete results as authoritative state.
+        if (!validateSearchRequest()) return;
 
         // first lets update the library paths to
         // reflect the user selections
@@ -773,49 +839,7 @@ LibrarySearchDialog::search()
 
     } else {
 
-        if (!findWorkouts->isChecked()
-            && !findMedia->isChecked()
-            && !findVideoSyncs->isChecked()) {
-            QMessageBox::warning(
-                this,
-                tr("Search cannot start"),
-                tr("Select at least one file type to search for."));
-            return;
-        }
-
-        const int pathCount =
-            searchPathTable->invisibleRootItem()->childCount();
-        if (pathCount == 0) {
-            QMessageBox::warning(
-                this,
-                tr("Search cannot start"),
-                tr("Add at least one search path before starting the search."));
-            return;
-        }
-
-        QStringList unavailablePaths;
-        for (int index = 0; index < pathCount; ++index) {
-            const QTreeWidgetItem *item =
-                searchPathTable->invisibleRootItem()->child(index);
-            const QString path = item == nullptr ? QString() : item->text(0);
-            const QFileInfo info(path);
-            if (path.isEmpty() || !info.isDir() || !info.isReadable()) {
-                unavailablePaths.append(path.isEmpty() ? tr("(empty path)")
-                                                       : path);
-            }
-        }
-        if (!unavailablePaths.isEmpty()) {
-            QMessageBox message(
-                QMessageBox::Warning,
-                tr("Search cannot start"),
-                tr("The search cannot start because a configured search "
-                   "path is unavailable or unreadable."),
-                QMessageBox::Ok,
-                this);
-            message.setDetailedText(unavailablePaths.join('\n'));
-            message.exec();
-            return;
-        }
+        if (!validateSearchRequest()) return;
 
         setSearching(true);
         workoutCountN = videoCountN = videosyncCountN = pathIndex = 0;
@@ -831,24 +855,36 @@ LibrarySearchDialog::search()
         searcher = new LibrarySearch(path, findMedia->isChecked(), findWorkouts->isChecked(), findVideoSyncs->isChecked());
     }
 
-    connect(searcher, SIGNAL(done()), this, SLOT(search()));
-    connect(searcher, SIGNAL(searching(QString)), this, SLOT(pathsearching(QString)));
-    connect(searcher, SIGNAL(foundVideo(QString)), this, SLOT(foundVideo(QString)));
-    connect(searcher, SIGNAL(foundVideoSync(QString)), this, SLOT(foundVideoSync(QString)));
-    connect(searcher, SIGNAL(foundWorkout(QString)), this, SLOT(foundWorkout(QString)));
+    LibrarySearch *activeSearcher = searcher;
+    connect(activeSearcher, &LibrarySearch::done, this,
+            [this, activeSearcher]() {
+                if (searcher.data() == activeSearcher) search();
+            });
+    connect(activeSearcher, &LibrarySearch::searching,
+            this, &LibrarySearchDialog::pathsearching);
+    connect(activeSearcher, &LibrarySearch::foundVideo,
+            this, &LibrarySearchDialog::foundVideo);
+    connect(activeSearcher, &LibrarySearch::foundVideoSync,
+            this, &LibrarySearchDialog::foundVideoSync);
+    connect(activeSearcher, &LibrarySearch::foundWorkout,
+            this, &LibrarySearchDialog::foundWorkout);
+    connect(activeSearcher, &QThread::finished,
+            activeSearcher, &QObject::deleteLater);
 
-    searcher->start();
+    activeSearcher->start();
 }
 
 void
 LibrarySearchDialog::pathsearching(QString text)
 {
+    if (sender() != searcher.data()) return;
     pathLabel->setText(text);
 }
 
 void
 LibrarySearchDialog::foundWorkout(QString name)
 {
+    if (sender() != searcher.data()) return;
     workoutCount->setText(QString("%1").arg(++workoutCountN));
     workoutsFound << name;
 }
@@ -856,6 +892,7 @@ LibrarySearchDialog::foundWorkout(QString name)
 void
 LibrarySearchDialog::foundVideo(QString name)
 {
+    if (sender() != searcher.data()) return;
     mediaCount->setText(QString("%1").arg(++videoCountN));
     videosFound << name;
 }
@@ -863,6 +900,7 @@ LibrarySearchDialog::foundVideo(QString name)
 void
 LibrarySearchDialog::foundVideoSync(QString name)
 {
+    if (sender() != searcher.data()) return;
     videosyncCount->setText(QString("%1").arg(++videosyncCountN));
     videosyncsFound << name;
 }
@@ -873,9 +911,12 @@ LibrarySearchDialog::cancel()
     if (searching) {
 
         if (searcher) {
-            searcher->abort();
+            LibrarySearch *activeSearcher = searcher;
             searcher = NULL;
-            // we will NOT get a done signal...
+            disconnect(activeSearcher, nullptr, this, nullptr);
+            activeSearcher->abort();
+            activeSearcher->wait();
+            activeSearcher->deleteLater();
         }
 
         // ...so lets clean up
@@ -931,42 +972,45 @@ LibrarySearchDialog::removeReference()
 void
 LibrarySearchDialog::updateDB()
 {
-    // wipe away all data but personal data: tags, rating, etc
-    // To keep personal data, we are not deleting workouts table and tags related tables
-    trainDB->rebuildDBButUserDataTables();
+    TrainDB::ScopedLUW transaction(*trainDB);
+    if (!transaction.isActive()) {
+        QMessageBox::warning(
+            this,
+            tr("Library update failed"),
+            tr("The scan results could not be saved. The existing library "
+               "was not changed."));
+        return;
+    }
 
-    trainDB->startLUW();
+    bool ok = true;
 
     if (findWorkouts->isChecked()) {
-        // If the workout existed already, it won't be modified.
         foreach(QString ergFile, workoutsFound) {
             ErgFile file(ergFile, ErgFileFormat::unknown, context);
             if (file.isValid()) {
-                trainDB->importWorkout(ergFile, file);
-            }
-        }
-
-        // Only an explicit workout scan is authoritative for workout rows.
-        const QStringList workouts = trainDB->getWorkouts();
-        for (const QString &workout : workouts) {
-            if (!workoutsFound.contains(workout)) {
-                trainDB->deleteWorkout(workout);
+                ok = trainDB->importWorkout(
+                         ergFile, file, ImportMode::insertOrUpdate)
+                     && ok;
             }
         }
     }
 
-
-
-    // videos
-    foreach(QString video, videosFound) {
-        trainDB->importVideo(video);
+    if (findMedia->isChecked()) {
+        foreach(QString video, videosFound) {
+            ok = trainDB->importVideo(video, ImportMode::insertOrUpdate) && ok;
+        }
     }
 
-    // videosyncs
-    foreach(QString videosync, videosyncsFound) {
-        int mode=0;
-        VideoSyncFile file(videosync, mode, context);
-        trainDB->importVideoSync(videosync, file);
+    if (findVideoSyncs->isChecked()) {
+        foreach(QString videosync, videosyncsFound) {
+            int mode=0;
+            VideoSyncFile file(videosync, mode, context);
+            if (file.isValid()) {
+                ok = trainDB->importVideoSync(
+                         videosync, file, ImportMode::insertOrUpdate)
+                     && ok;
+            }
+        }
     }
 
     // Now check and re-add references, if there are any
@@ -981,14 +1025,18 @@ LibrarySearchDialog::updateDB()
             if (!QFile(r).exists()) continue;
 
             // is a video?
-            if (helper.isMedia(r)) trainDB->importVideo(r);
+            if (helper.isMedia(r)) {
+                ok = trainDB->importVideo(r, ImportMode::insertOrUpdate) && ok;
+            }
 
             // is a videosync?
             if (VideoSyncFile::isVideoSync(r)) {
                 int mode=0;
                 VideoSyncFile file(r, mode, context);
                 if (file.isValid()) {
-                    trainDB->importVideoSync(r, file);
+                    ok = trainDB->importVideoSync(
+                             r, file, ImportMode::insertOrUpdate)
+                         && ok;
                 }
             }
 
@@ -996,12 +1044,21 @@ LibrarySearchDialog::updateDB()
             if (ErgFile::isWorkout(r)) {
                 ErgFile file(r, ErgFileFormat::unknown, context);
                 if (file.isValid()) {
-                    trainDB->importWorkout(r, file);
+                    ok = trainDB->importWorkout(
+                             r, file, ImportMode::insertOrUpdate)
+                         && ok;
                 }
             }
         }
     }
-    trainDB->endLUW();
+
+    if (!ok || !transaction.commit()) {
+        QMessageBox::warning(
+            this,
+            tr("Library update failed"),
+            tr("The scan results could not be saved. The existing library "
+               "was not changed."));
+    }
 }
 
 //
@@ -1011,7 +1068,7 @@ LibrarySearchDialog::updateDB()
 LibrarySearch::LibrarySearch(QString path, bool findMedia, bool findWorkout, bool findVideoSync)
               : path(path), findMedia(findMedia), findWorkout(findWorkout), findVideoSync(findVideoSync)
 {
-    aborted = false;
+    aborted.store(false, std::memory_order_relaxed);
 }
 
 void
@@ -1035,7 +1092,7 @@ LibrarySearch::run()
         if (QFileInfo(name).isDir()) emit searching(name);
 
         // we've been told to stop!
-        if (aborted) {
+        if (aborted.load(std::memory_order_relaxed)) {
             // we don't emit done -- since it kicks off another search
             return;
         }
@@ -1055,7 +1112,7 @@ LibrarySearch::run()
 void
 LibrarySearch::abort()
 {
-    aborted = true;
+    aborted.store(true, std::memory_order_relaxed);
 }
 
 //

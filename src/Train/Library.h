@@ -29,10 +29,13 @@
 #include <QFileDialog>
 #include <QCheckBox>
 #include <QPushButton>
+#include <QPointer>
 #include <QTextEdit>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QThread>
+
+#include <atomic>
 
 
 enum class LibraryBatchImportConfirmation {
@@ -128,6 +131,7 @@ class LibrarySearchDialog : public QDialog
 
     public:
         LibrarySearchDialog(Context *context);
+        ~LibrarySearchDialog() override;
 
     private slots:
         void search();
@@ -146,7 +150,7 @@ class LibrarySearchDialog : public QDialog
     private:
         Context *context;
         Library *library;
-        LibrarySearch *searcher;
+        QPointer<LibrarySearch> searcher;
         bool searching;
         int pathIndex, workoutCountN, videoCountN, videosyncCountN;
 
@@ -160,6 +164,7 @@ class LibrarySearchDialog : public QDialog
         
         // update widgets to switch between searching and not searching
         void setWidgets();
+        bool validateSearchRequest();
 
         // gui widgets
         QCheckBox *findWorkouts,
@@ -182,7 +187,7 @@ class LibrarySearch : public QThread
     Q_OBJECT
 
     public:
-        LibrarySearch(QString path, bool findMedia, bool findVideoSync, bool findWorkout);
+        LibrarySearch(QString path, bool findMedia, bool findWorkout, bool findVideoSync);
         void run();
 
     public slots:
@@ -197,7 +202,7 @@ class LibrarySearch : public QThread
         void foundWorkout(QString);
 
     private:
-        volatile bool aborted;
+        std::atomic_bool aborted;
         QString path;
         bool findMedia, findWorkout, findVideoSync;
 };
