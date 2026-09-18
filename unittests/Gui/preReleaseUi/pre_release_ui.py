@@ -704,6 +704,64 @@ class UiDriver:
             f"role={role!r}"
         )
 
+    def require_keyboard_order(self, controls, timeout=5.0):
+        first_name, first_role = controls[0]
+        first = self.find(first_name, first_role, showing=True, timeout=timeout)
+        try:
+            self.focus_main_window()
+            self.click(first)
+            self.send_named_key("Escape")
+        except Exception as error:
+            raise UiFailure(
+                f"Cannot focus {first_role} {first_name!r}"
+            ) from error
+
+        self.send_named_key("Up")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.name(first) != first_name:
+                break
+            time.sleep(0.1)
+        else:
+            raise UiFailure("Training focus is not keyboard-operable")
+        self.send_named_key("Down")
+
+        for index, (name, role) in enumerate(controls[1:], start=2):
+            self.send_named_key("Tab")
+            node = self.find(name, role, showing=True, timeout=timeout)
+            if role in ("spin button", "slider"):
+                before = self.current_value(node)
+                value = node.queryValue()
+                delta = -1 if before >= float(value.maximumValue) else 1
+                self.send_named_key("Down" if delta < 0 else "Up")
+                try:
+                    self.wait_value(node, before + delta, timeout)
+                except UiFailure as error:
+                    raise UiFailure(
+                        f"Tab order did not activate {role} {name!r} at "
+                        f"position {index}"
+                    ) from error
+                self.set_value(node, before)
+                continue
+
+            if role == "check box":
+                before = self.checked(node)
+                self.send_named_key("space")
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    if self.checked(node) != before:
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise UiFailure(
+                        f"Tab order did not activate {role} {name!r} at "
+                        f"position {index}"
+                    )
+                self.send_named_key("space")
+                continue
+
+            raise UiFailure(f"Unsupported keyboard-order role: {role}")
+
     def require_names(self, names, role=None, timeout=10.0):
         deadline = time.monotonic() + timeout
         missing = list(names)
@@ -2212,6 +2270,26 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 ],
                 timeout=15.0,
             )
+            driver.require_keyboard_order(
+                [
+                    ("20/20 descending sets", "combo box"),
+                    ("FTP", "spin button"),
+                    ("Work intensity slider", "slider"),
+                    ("Work intensity", "spin button"),
+                    ("Recovery intensity slider", "slider"),
+                    ("Recovery intensity", "spin button"),
+                    ("Work interval", "spin button"),
+                    ("Recovery interval", "spin button"),
+                    ("Repetitions in first set", "spin button"),
+                    ("Sets", "spin button"),
+                    ("Repetition change per set", "spin button"),
+                    ("Recovery between sets", "spin button"),
+                    ("Recovery before final set", "spin button"),
+                    ("Warm-up", "spin button"),
+                    ("Cool-down", "spin button"),
+                    ("Recovery after the last repetition", "check box"),
+                ]
+            )
             driver.find("0:53:20", showing=True, timeout=10.0)
             driver.find(
                 "14 / 12 / 10 / 8 efforts; set recovery "
@@ -2278,6 +2356,30 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 raise UiFailure(
                     "Workout generator lost final-set recovery after Back/Next"
                 )
+
+            repetitions = driver.find(
+                "Repetitions in first set", "spin button", showing=True
+            )
+            repetition_delta = driver.find(
+                "Repetition change per set", "spin button", showing=True
+            )
+            driver.set_value(repetitions, 1)
+            driver.set_value(repetition_delta, -1)
+            driver.find(
+                "The repetition progression produces an invalid set.",
+                showing=True,
+                timeout=10.0,
+            )
+            finish = driver.find("Finish", "push button", showing=True)
+            if driver.enabled(finish):
+                raise UiFailure(
+                    "Workout generator enabled Finish for invalid settings"
+                )
+            driver.set_value(repetitions, 14)
+            driver.set_value(repetition_delta, -2)
+            driver.find_enabled(
+                "Finish", "push button", showing=True, timeout=10.0
+            )
 
             destination = (
                 root / "library" / ATHLETE / "workouts"
