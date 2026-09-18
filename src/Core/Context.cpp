@@ -236,6 +236,13 @@ const QString &Context::currentMediaFilename() const
     return trainingSession().mediaFilename();
 }
 
+bool Context::prepareErgFileSelection()
+{
+    bool accepted = true;
+    emit ergFileSelectionRequested(&accepted);
+    return accepted;
+}
+
 void Context::notifyErgFileSelected(ErgFile *workout)
 {
     trainingSession().setWorkout(workout);

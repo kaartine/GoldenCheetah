@@ -42,6 +42,7 @@ UI_TEST_NAMES = (
     "workout_game_training_lifecycle",
     "workout_generator_lifecycle",
     "new_workout_save_as",
+    "dirty_workout_transition_guard",
     "workout_deletion_removes_mtb_sidecar",
     "graceful_shutdown_request",
 )
@@ -59,6 +60,9 @@ UI_TEST_DEPENDENCIES = {
         "prepared_workout_library_import",
     ),
     "workout_deletion_removes_mtb_sidecar": (
+        "prepared_workout_library_import",
+    ),
+    "dirty_workout_transition_guard": (
         "prepared_workout_library_import",
     ),
 }
@@ -334,6 +338,21 @@ MINUTES WATTS
 3.00 165
 3.00 100
 30.00 100
+[END COURSE DATA]
+""",
+    )
+    write_text(
+        athlete / "workouts/ui-delete.crs",
+        """[COURSE HEADER]
+VERSION=1
+UNITS=METRIC
+DESCRIPTION=Deletion test course
+FILE NAME=ui-delete.crs
+DISTANCE GRADE WIND
+[END COURSE HEADER]
+[COURSE DATA]
+0.25 0.0 0
+0.25 2.0 0
 [END COURSE DATA]
 """,
     )
@@ -2434,13 +2453,58 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             if capture_screenshots:
                 driver.screenshot("06-workout-generator-saved")
 
+        def dirty_workout_transition_guard():
+            enter_train()
+            driver.select_combo_item(
+                ["Workout Game", "Workout Editor"], "Workout Editor"
+            )
+            driver.click_named_item("ui-test")
+            driver.activate(
+                driver.find("Properties", "push button", showing=True)
+            )
+            editor = driver.find(
+                "Workout code", "text", showing=True, timeout=10.0
+            )
+            text = editor.queryText().getText(0, -1)
+            dirty_marker = "\n; unsaved transition test"
+            editor.queryEditableText().setTextContents(text + dirty_marker)
+
+            driver.click_named_item("ui-delete")
+            driver.find("Unsaved Workout", "dialog", showing=True)
+            driver.activate(
+                driver.find("Cancel", "push button", showing=True)
+            )
+            selected = driver.find(
+                "ui-test", "table cell", showing=True, timeout=10.0
+            )
+            if not driver.selected(selected):
+                raise UiFailure(
+                    "Cancel did not restore the edited workout selection"
+                )
+            editor = driver.find(
+                "Workout code", "text", showing=True, timeout=10.0
+            )
+            if dirty_marker not in editor.queryText().getText(0, -1):
+                raise UiFailure(
+                    "Cancel discarded the edited workout contents"
+                )
+
+            driver.click_named_item("ui-delete")
+            driver.find("Unsaved Workout", "dialog", showing=True)
+            driver.activate(
+                driver.find("Discard", "push button", showing=True)
+            )
+            driver.find(
+                "ui-delete", "table cell", showing=True, timeout=10.0
+            )
+
         def delete_workout_and_sidecar():
             enter_train()
-            workout = root / "library" / ATHLETE / "workouts" / "ui-test.erg"
-            sidecar = workout.with_name("ui-test.gcmtb.json")
+            workout = root / "library" / ATHLETE / "workouts" / "ui-delete.crs"
+            sidecar = workout.with_name("ui-delete.gcmtb.json")
             write_text(sidecar, '{"schemaVersion": 1}\n')
 
-            driver.right_click_named_item("ui-test")
+            driver.right_click_named_item("ui-delete")
             driver.activate_popup_item(8)
             driver.activate(
                 driver.find(
@@ -2453,7 +2517,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             deadline = time.monotonic() + 20.0
             while time.monotonic() < deadline:
                 if not driver.find_all(
-                    name="ui-test", role="table cell", showing=True
+                    name="ui-delete", role="table cell", showing=True
                 ):
                     return
                 time.sleep(0.2)
@@ -2514,6 +2578,11 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             and not skip_save_as_from_environment()
         ):
             suite.run("new_workout_save_as", save_workout)
+        if "dirty_workout_transition_guard" in selected_tests:
+            suite.run(
+                "dirty_workout_transition_guard",
+                dirty_workout_transition_guard,
+            )
         if "workout_deletion_removes_mtb_sidecar" in selected_tests:
             suite.run(
                 "workout_deletion_removes_mtb_sidecar",

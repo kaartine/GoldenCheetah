@@ -1123,13 +1123,31 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
         return;
     }
 
-    // wipe away the current selected workout once we've told everyone
-    // since they might be editing it and want to save changes first (!!)
-    ErgFile *prior = const_cast<ErgFile*>(ergFileQueryAdapter.getErgFile());
-    if (prior != nullptr && prior->filename() == filename) {
+    // Ask editors to finish or discard their changes before retaining the
+    // pointer that this transition will eventually release. Saving a new
+    // workout can synchronously import and select it, replacing that pointer.
+    const ErgFile *currentWorkout = ergFileQueryAdapter.getErgFile();
+    if (currentWorkout != nullptr && currentWorkout->filename() == filename) {
         // Prevent re-loading if the prior element is the same the new one
         return;
     }
+    if (!context->prepareErgFileSelection()) {
+        QSignalBlocker blockSelection(workoutTree->selectionModel());
+        workoutTree->clearSelection();
+        for (int row = 0; row < workoutModel->rowCount(); ++row) {
+            const QModelIndex source = workoutModel->index(
+                    row, TdbWorkoutModelIdx::filepath);
+            if (workoutModel->data(source, Qt::DisplayRole).toString()
+                    != workoutfile) {
+                continue;
+            }
+            workoutTree->setCurrentIndex(sortModel->mapFromSource(
+                    workoutModel->index(row, 0)));
+            break;
+        }
+        return;
+    }
+    ErgFile *prior = const_cast<ErgFile*>(ergFileQueryAdapter.getErgFile());
     workoutfile = filename;
     workoutGameCourseRuntime.reset();
 
@@ -1575,6 +1593,10 @@ TrainSidebar::deleteWorkouts()
 
         if(msgBox.clickedButton() != deleteButton) return;
 
+        if (deletesActiveWorkout && !context->prepareErgFileSelection()) {
+            return;
+        }
+
         // A committed database change refreshes the model synchronously. Keep
         // that refresh from selecting a different workout while this operation
         // still owns the current ErgFile.
@@ -1628,10 +1650,15 @@ TrainSidebar::removeInvalidWorkout()
 
     if(msgBox.clickedButton() != removeButton) return;
 
-    // delete from DB
-    trainDB->startLUW();
-    trainDB->deleteWorkout(filename);
-    trainDB->endLUW();
+    TrainDB::ScopedLUW transaction(*trainDB);
+    if (!transaction.isActive()
+            || !trainDB->deleteWorkout(filename)
+            || !transaction.commit()) {
+        QMessageBox::critical(
+                this,
+                tr("Remove Workout Failed"),
+                tr("The invalid workout could not be removed from the library."));
+    }
 
 }
 

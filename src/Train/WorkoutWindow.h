@@ -136,6 +136,7 @@ class WorkoutWindow : public GcChartWindow
         void scrollMoved();
 
         // and erg file was selected
+        void prepareErgFileSelection(bool *accepted);
         void ergFileSelected(ErgFile *, ErgFileFormat format = ErgFileFormat::unknown);
 
         // qwkcode edited!

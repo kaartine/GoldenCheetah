@@ -211,6 +211,7 @@ class Context : public QObject
 
         // realtime signals
         void notifyTelemetryUpdate(const RealtimeData &rtData) { telemetryUpdate(rtData); }
+        bool prepareErgFileSelection();
         void notifyErgFileSelected(ErgFile *x);
         void notifyVideoSyncFileSelected(VideoSyncFile *x);
         ErgFile *currentErgFile() const;
@@ -362,6 +363,7 @@ class Context : public QObject
 
         // realtime
         void telemetryUpdate(RealtimeData rtData);
+        void ergFileSelectionRequested(bool *accepted);
         void ergFileSelected(ErgFile *);
         void ergFileSelected(ErgFileBase *);
         void videoSyncFileSelected(VideoSyncFile *);

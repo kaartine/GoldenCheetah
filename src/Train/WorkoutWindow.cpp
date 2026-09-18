@@ -328,6 +328,7 @@ WorkoutWindow::WorkoutWindow(Context *context) :
 
     // editing the code...
     code = new CodeEditor(this);
+    code->setAccessibleName(tr("Workout code"));
     code->setContextMenuPolicy(Qt::NoContextMenu); // no context menu
     code->installEventFilter(this); // filter the undo/redo stuff
 
@@ -348,6 +349,8 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     redoAct->setEnabled(false);
 
     // watch for erg file selection
+    connect(context, SIGNAL(ergFileSelectionRequested(bool*)),
+            this, SLOT(prepareErgFileSelection(bool*)));
     connect(context, SIGNAL(ergFileSelected(ErgFile*)), this, SLOT(ergFileSelected(ErgFile*)));
 
     // watch for erg run/stop
@@ -524,8 +527,6 @@ WorkoutWindow::ergFileSelected(ErgFile*f, ErgFileFormat format)
 {
     if (active) return;
 
-    if (!confirmWorkoutTransition()) return;
-
     // just get on with it.
     format = f ? f->format() : format;
     if (format == ErgFileFormat::mrc) codeFormat->setText(tr("MRC - Relative Watts"));
@@ -538,6 +539,17 @@ WorkoutWindow::ergFileSelected(ErgFile*f, ErgFileFormat format)
 
     // almost certainly hides it on load
     setScroller(QPointF(workout->minVX(), workout->maxVX()));
+}
+
+void
+WorkoutWindow::prepareErgFileSelection(bool *accepted)
+{
+    if (accepted == nullptr || !*accepted) return;
+    if (active) {
+        *accepted = false;
+        return;
+    }
+    *accepted = confirmWorkoutTransition();
 }
 
 bool
@@ -568,6 +580,7 @@ WorkoutWindow::confirmWorkoutTransition()
 void
 WorkoutWindow::newErgFile()
 {
+    if (!confirmWorkoutTransition()) return;
     // new blank file clear points .. texts .. metadata etc
     ergFileSelected(NULL, ErgFileFormat::erg);
 }
@@ -576,6 +589,7 @@ WorkoutWindow::newErgFile()
 void
 WorkoutWindow::newMrcFile()
 {
+    if (!confirmWorkoutTransition()) return;
     // new blank file clear points .. texts .. metadata etc
     ergFileSelected(NULL, ErgFileFormat::mrc);
 }
@@ -645,8 +659,6 @@ WorkoutWindow::saveAs()
     }
 
     workout->markSaved();
-    ErgFile *savedWorkout = newergFile.release();
-    ergFileSelected(savedWorkout);
 
     // add to collection with new name, a single new file
     const LibraryImportResult imported = Library::importFiles(
@@ -657,13 +669,8 @@ WorkoutWindow::saveAs()
                 tr("The workout was saved, but it could not be added to the "
                    "workout library. The editor will continue using the saved "
                    "file."));
+        ergFileSelected(newergFile.release(), targetFormat);
         return false;
-    }
-
-    const QString importedPath = imported.importedWorkouts.value(filename);
-    if (ergFile != nullptr && ergFile->filename() != importedPath) {
-        ergFile->filename(importedPath);
-        ergFile->originalFilename(QFileInfo(importedPath).fileName());
     }
     return true;
 }
