@@ -734,9 +734,29 @@ class UiDriver:
             f"Keyboard input did not change {self.name(node)!r}"
         )
 
-    def require_keyboard_controls(self, controls, timeout=5.0):
+    def require_keyboard_controls(self, controls, timeout=5.0, scope=None):
+        def find_control(name, role):
+            if scope is None:
+                return self.find(
+                    name, role, showing=True, timeout=timeout
+                )
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                matches = [
+                    node for node in self.all_nodes(scope)
+                    if self.name(node) == name
+                    and self.role(node) == role
+                    and self.showing(node)
+                ]
+                if matches:
+                    return matches[-1]
+                time.sleep(0.05)
+            raise UiFailure(
+                f"Accessible dialog control not found: {role} {name!r}"
+            )
+
         first_name, first_role = controls[0]
-        first = self.find(first_name, first_role, showing=True, timeout=timeout)
+        first = find_control(first_name, first_role)
         try:
             self.click(first)
             self.send_named_key("Home")
@@ -755,19 +775,17 @@ class UiDriver:
             raise UiFailure("Training focus is not keyboard-operable")
 
         for name, role in controls[1:]:
-            node = self.find(name, role, showing=True, timeout=timeout)
+            self.send_named_key("Tab")
+            node = find_control(name, role)
             if role in ("spin button", "slider"):
                 before = self.current_value(node)
-                self.click(node)
-                time.sleep(0.1)
-                focused_value = self.current_value(node)
                 value = node.queryValue()
-                delta = -1 if focused_value >= float(value.maximumValue) else 1
+                delta = -1 if before >= float(value.maximumValue) else 1
                 try:
                     self.require_keyboard_change(
                         node,
                         "Down" if delta < 0 else "Up",
-                        lambda: self.current_value(node) != focused_value,
+                        lambda: self.current_value(node) != before,
                         timeout,
                     )
                 except UiFailure as error:
@@ -779,28 +797,18 @@ class UiDriver:
 
             if role == "check box":
                 before = self.checked(node)
-                self.click(node)
-                deadline = time.monotonic() + timeout
-                while time.monotonic() < deadline:
-                    if self.checked(node) != before:
-                        break
-                    time.sleep(0.05)
-                else:
-                    raise UiFailure(
-                        f"Cannot focus check box {name!r} with the mouse"
-                    )
-                focused_value = self.checked(node)
                 try:
                     self.require_keyboard_change(
                         node,
                         "space",
-                        lambda: self.checked(node) != focused_value,
+                        lambda: self.checked(node) != before,
                         timeout,
                     )
                 except UiFailure as error:
                     raise UiFailure(
                         f"Cannot operate {role} {name!r} with the keyboard"
                     ) from error
+                self.send_named_key("space")
                 continue
 
             raise UiFailure(f"Unsupported keyboard-control role: {role}")
@@ -2352,7 +2360,9 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     timeout=10.0,
                 )
             )
-            driver.find("Workout Wizard", "dialog", showing=True, timeout=10.0)
+            wizard = driver.find(
+                "Workout Wizard", "dialog", showing=True, timeout=10.0
+            )
             driver.find(
                 "Generate for a training goal",
                 "radio button",
@@ -2399,7 +2409,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     ("Warm-up", "spin button"),
                     ("Cool-down", "spin button"),
                     ("Recovery after the last repetition", "check box"),
-                ]
+                ],
+                scope=wizard,
             )
             driver.select_combo_item(
                 (
