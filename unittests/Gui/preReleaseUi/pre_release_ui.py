@@ -2119,28 +2119,56 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     stop_without_saving()
 
         def save_workout():
+            def choose_save_path(destination: Path) -> None:
+                try:
+                    driver.find(role="file chooser", showing=True, timeout=2.0)
+                except UiFailure:
+                    driver.find(role="dialog", showing=True, timeout=30.0)
+                editable = None
+                for node in driver.find_all(role="text", showing=True):
+                    try:
+                        node.queryEditableText()
+                        editable = node
+                    except Exception:
+                        continue
+                if editable is None:
+                    raise UiFailure("Save dialog file name input was not found")
+                editable.queryEditableText().setTextContents(str(destination))
+                driver.click(driver.find("Save", "push button", showing=True))
+
             enter_train()
             driver.select_combo_item(
                 ["Workout Game", "Workout Editor"], "Workout Editor"
             )
+            conflict = (
+                root / "library" / ATHLETE / "workouts" / "ui-save.erg"
+            )
+            write_text(conflict, "library workout must remain unchanged\n")
+            original = conflict.read_bytes()
+            external = root / "external" / conflict.name
+            external.parent.mkdir(parents=True, exist_ok=True)
+
             driver.activate(driver.find("New", "push button", showing=True))
             driver.click(driver.find("Save As", "push button", showing=True))
-            try:
-                driver.find(role="file chooser", showing=True, timeout=2.0)
-            except UiFailure:
-                driver.find(role="dialog", showing=True, timeout=30.0)
-            destination = root / "library" / ATHLETE / "workouts" / "ui-save.erg"
-            editable = None
-            for node in driver.find_all(role="text", showing=True):
-                try:
-                    node.queryEditableText()
-                    editable = node
-                except Exception:
-                    continue
-            if editable is None:
-                raise UiFailure("Save dialog file name input was not found")
-            editable.queryEditableText().setTextContents(str(destination))
-            driver.click(driver.find("Save", "push button", showing=True))
+            choose_save_path(external)
+            driver.wait_file(external)
+            driver.find(
+                "The workout was saved, but it could not be added to the "
+                "workout library. The editor will continue using the saved file.",
+                showing=True,
+                timeout=20.0,
+            )
+            driver.activate(
+                driver.find("OK", "push button", showing=True, timeout=10.0)
+            )
+            if conflict.read_bytes() != original:
+                raise UiFailure(
+                    "Failed Save As import overwrote the library workout"
+                )
+
+            destination = conflict.with_name("ui-save-ok.erg")
+            driver.click(driver.find("Save As", "push button", showing=True))
+            choose_save_path(destination)
             driver.wait_file(destination)
             if capture_screenshots:
                 driver.screenshot("06-workout-saved")

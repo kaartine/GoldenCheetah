@@ -649,7 +649,22 @@ WorkoutWindow::saveAs()
     ergFileSelected(savedWorkout);
 
     // add to collection with new name, a single new file
-    Library::importFiles(context, QStringList(filename));
+    const LibraryImportResult imported = Library::importFiles(
+            context, {filename}, LibraryBatchImportConfirmation::noDialog);
+    if (!imported.allSucceeded()) {
+        QMessageBox::warning(
+                this, tr("Save Workout"),
+                tr("The workout was saved, but it could not be added to the "
+                   "workout library. The editor will continue using the saved "
+                   "file."));
+        return false;
+    }
+
+    const QString importedPath = imported.importedWorkouts.value(filename);
+    if (ergFile != nullptr && ergFile->filename() != importedPath) {
+        ergFile->filename(importedPath);
+        ergFile->originalFilename(QFileInfo(importedPath).fileName());
+    }
     return true;
 }
 
