@@ -477,6 +477,12 @@ RideImportWizard::getNumberOfFiles() {
 }
 
 void
+RideImportWizard::prepareTrainingContinuation()
+{
+    trainingContinuationEnabled = true;
+}
+
+void
 RideImportWizard::enableTrainingContinuation()
 {
     trainingContinuationEnabled = true;
@@ -1432,4 +1438,3 @@ void RideDelegate::setModelData(QWidget *editor, QAbstractItemModel *model, cons
         model->setData(index, value, Qt::DisplayRole);
     }
 }
-

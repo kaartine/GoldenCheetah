@@ -1785,6 +1785,16 @@ class WorkoutGameUiWorkflow:
             "Continue Training", "push button", showing=True, timeout=30.0
         )
         self.activate_stop_dialog_button("Save")
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            stop = self.driver.find(
+                "Stop training", "push button", showing=True, timeout=1.0
+            )
+            if not self.driver.enabled(stop):
+                break
+            time.sleep(0.1)
+        else:
+            raise UiFailure("Training remained active after saving")
         activity = self.driver.wait_new_file(
             self.activities,
             self.existing_activities,

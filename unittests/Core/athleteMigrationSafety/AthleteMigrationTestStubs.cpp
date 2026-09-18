@@ -994,6 +994,7 @@ RideImportWizard::RideImportWizard(
 RideImportWizard::~RideImportWizard() = default;
 int RideImportWizard::getNumberOfFiles() { return 0; }
 int RideImportWizard::process() { return 0; }
+void RideImportWizard::prepareTrainingContinuation() {}
 void RideImportWizard::closeEvent(QCloseEvent *) {}
 void RideImportWizard::done(int) {}
 void RideImportWizard::abortClicked() {}

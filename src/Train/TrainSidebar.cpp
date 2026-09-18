@@ -2018,6 +2018,7 @@ void TrainSidebar::RequestStop()
     connect(dialog, SIGNAL(trainingContinueRequested()), this, SLOT(continueTraining()));
     connect(dialog, SIGNAL(finished(int)), this, SLOT(stopDialogFinished()));
 
+    dialog->prepareTrainingContinuation();
     dialog->process();
     if (stopConfirmationDialog && stopConfirmationActive) {
         dialog->enableTrainingContinuation();

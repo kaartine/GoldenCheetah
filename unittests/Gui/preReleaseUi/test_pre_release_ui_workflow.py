@@ -888,9 +888,11 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             stop = object()
             ready = object()
             save = object()
+            stopped = object()
             finish = object()
             driver = mock.Mock()
-            driver.find.side_effect = [ready, save, finish]
+            driver.find.side_effect = [ready, save, stopped, finish]
+            driver.enabled.return_value = False
             driver.wait_new_file.return_value = activity
             driver.reopen_saved_activity.return_value = "saved activity row"
             workflow = object.__new__(UI.WorkoutGameUiWorkflow)
