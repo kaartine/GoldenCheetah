@@ -485,8 +485,11 @@ Library::refreshWorkouts
             if (ergfile.isValid()) {
                 ok &= trainDB->importWorkout(filepath, ergfile, ImportMode::update);
             } else {
-                ok &= trainDB->deleteWorkout(filepath);
-                qDebug() << "Library::refreshWorkouts:" << i << "/" << model->rowCount() << ": Removing" << filepath << "- file does not parse correctly: Does it exist?";
+                qWarning() << "Library::refreshWorkouts:" << i << "/"
+                           << model->rowCount() << ": Preserving" << filepath
+                           << "because the file could not be read or parsed.";
+                ok = false;
+                break;
             }
         }
     }

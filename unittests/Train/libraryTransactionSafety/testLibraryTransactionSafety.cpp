@@ -175,6 +175,15 @@ double storedAveragePower(QSqlDatabase &database,
     return available ? query.value(0).toDouble() : 0.0;
 }
 
+int storedRating(QSqlDatabase &database, const QString &path)
+{
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+        "SELECT rating FROM workout WHERE filepath = :filepath"));
+    query.bindValue(QStringLiteral(":filepath"), path);
+    return query.exec() && query.next() ? query.value(0).toInt() : -1;
+}
+
 ErgFileBase workout(double averagePower, const QString &name)
 {
     ErgFileBase file;
@@ -223,6 +232,7 @@ private slots:
     void refreshWorkoutUpdatesOnlyRequestedRow();
     void refreshWorkoutParseFailurePreservesExistingRow();
     void refreshWorkoutCommitFailureRollsBackWithoutSignal();
+    void refreshWorkoutsParseFailurePreservesEntireBatch();
     void refreshWorkoutsUpdateFailureDoesNotCommitPartialBatch();
     void refreshWorkoutsSchemaFailureDoesNotReportSuccess();
     void refreshWorkoutsCommitFailureRollsBackWithoutSignal();
@@ -484,6 +494,34 @@ void TestLibraryTransactionSafety::refreshWorkoutCommitFailureRollsBackWithoutSi
     QVERIFY(!Library::refreshWorkout(&environment.context, path));
 
     QCOMPARE(storedAveragePower(connection, path), 120.0);
+    QCOMPARE(changed.count(), 0);
+}
+
+void TestLibraryTransactionSafety::refreshWorkoutsParseFailurePreservesEntireBatch()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+
+    const QString valid = environment.filePath(
+        QStringLiteral("refresh-valid.erg"));
+    const QString invalid = environment.filePath(
+        QStringLiteral("refresh-invalid.erg"));
+    QVERIFY(writeFile(valid, QByteArrayLiteral("245")));
+    QVERIFY(writeFile(invalid, QByteArrayLiteral("not-a-workout")));
+    QVERIFY(environment.database->importWorkout(
+        valid, workout(120.0, QStringLiteral("Valid"))));
+    QVERIFY(environment.database->importWorkout(
+        invalid, workout(140.0, QStringLiteral("Invalid"))));
+    QVERIFY(environment.database->rateWorkout(invalid, 4));
+
+    QSqlDatabase connection = QSqlDatabase::database(
+        QStringLiteral("train"), false);
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+
+    QVERIFY(!Library::refreshWorkouts(&environment.context));
+    QCOMPARE(storedAveragePower(connection, valid), 120.0);
+    QCOMPARE(storedAveragePower(connection, invalid), 140.0);
+    QCOMPARE(storedRating(connection, invalid), 4);
     QCOMPARE(changed.count(), 0);
 }
 
