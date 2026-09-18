@@ -350,7 +350,8 @@ WorkoutWindow::WorkoutWindow(Context *context) :
 
     // watch for erg file selection
     connect(context, SIGNAL(ergFileSelectionRequested(bool*)),
-            this, SLOT(prepareErgFileSelection(bool*)));
+            this, SLOT(prepareErgFileSelection(bool*)),
+            Qt::DirectConnection);
     connect(context, SIGNAL(ergFileSelected(ErgFile*)), this, SLOT(ergFileSelected(ErgFile*)));
 
     // watch for erg run/stop

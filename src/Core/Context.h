@@ -363,6 +363,7 @@ class Context : public QObject
 
         // realtime
         void telemetryUpdate(RealtimeData rtData);
+        // The stack-backed result requires synchronous direct connections.
         void ergFileSelectionRequested(bool *accepted);
         void ergFileSelected(ErgFile *);
         void ergFileSelected(ErgFileBase *);
