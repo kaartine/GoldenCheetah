@@ -35,6 +35,7 @@ UI_TEST_NAMES = (
     "view_navigation",
     "prepared_workout_library_import",
     "library_scan_preserves_unsearched_workouts",
+    "library_scan_rejects_unavailable_path",
     "train_control_accessibility",
     "data_generator_and_virtual_gears",
     "create_edit_mtb_course_lifecycle",
@@ -45,6 +46,9 @@ UI_TEST_NAMES = (
 )
 UI_TEST_DEPENDENCIES = {
     "library_scan_preserves_unsearched_workouts": (
+        "prepared_workout_library_import",
+    ),
+    "library_scan_rejects_unavailable_path": (
         "prepared_workout_library_import",
     ),
     "create_edit_mtb_course_lifecycle": (
@@ -1985,6 +1989,58 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 "ui-test", "table cell", showing=True, timeout=30.0
             )
 
+        def scan_rejects_unavailable_path():
+            workouts = root / "library" / ATHLETE / "workouts"
+            unavailable = workouts.with_name("workouts-unavailable")
+            workouts.rename(unavailable)
+            try:
+                driver.click(
+                    driver.find(
+                        "Tools", "menu item", showing=True, timeout=20.0
+                    )
+                )
+                driver.click(
+                    driver.find(
+                        "Scan disk for workouts, videos, videoSyncs...",
+                        "menu item",
+                        showing=True,
+                        timeout=10.0,
+                    )
+                )
+                driver.find(
+                    "Search for Workouts, Syncs and Media",
+                    "dialog",
+                    showing=True,
+                    timeout=30.0,
+                )
+                driver.activate(
+                    driver.find(
+                        "Search", "push button", showing=True, timeout=10.0
+                    )
+                )
+                driver.find(
+                    "The search cannot start because a configured search "
+                    "path is unavailable or unreadable.",
+                    showing=True,
+                    timeout=10.0,
+                )
+                driver.activate(
+                    driver.find("OK", "push button", showing=True, timeout=10.0)
+                )
+                driver.activate(
+                    driver.find(
+                        "Cancel", "push button", showing=True, timeout=10.0
+                    )
+                )
+            finally:
+                if unavailable.exists() and not workouts.exists():
+                    unavailable.rename(workouts)
+
+            enter_train()
+            driver.find(
+                "ui-test", "table cell", showing=True, timeout=30.0
+            )
+
         def generator_and_gears():
             enter_train()
             driver.select_named("Data Generator")
@@ -2229,6 +2285,11 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             suite.run(
                 "library_scan_preserves_unsearched_workouts",
                 scan_preserves_unsearched_workouts,
+            )
+        if "library_scan_rejects_unavailable_path" in selected_tests:
+            suite.run(
+                "library_scan_rejects_unavailable_path",
+                scan_rejects_unavailable_path,
             )
         if "train_control_accessibility" in selected_tests:
             suite.run("train_control_accessibility", train_controls)

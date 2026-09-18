@@ -39,6 +39,7 @@
 #include <QLabel>
 #include <QApplication>
 #include <QDirIterator>
+#include <QMessageBox>
 
 // helpers
 #include "VideoWindow.h"
@@ -772,8 +773,55 @@ LibrarySearchDialog::search()
 
     } else {
 
+        if (!findWorkouts->isChecked()
+            && !findMedia->isChecked()
+            && !findVideoSyncs->isChecked()) {
+            QMessageBox::warning(
+                this,
+                tr("Search cannot start"),
+                tr("Select at least one file type to search for."));
+            return;
+        }
+
+        const int pathCount =
+            searchPathTable->invisibleRootItem()->childCount();
+        if (pathCount == 0) {
+            QMessageBox::warning(
+                this,
+                tr("Search cannot start"),
+                tr("Add at least one search path before starting the search."));
+            return;
+        }
+
+        QStringList unavailablePaths;
+        for (int index = 0; index < pathCount; ++index) {
+            const QTreeWidgetItem *item =
+                searchPathTable->invisibleRootItem()->child(index);
+            const QString path = item == nullptr ? QString() : item->text(0);
+            const QFileInfo info(path);
+            if (path.isEmpty() || !info.isDir() || !info.isReadable()) {
+                unavailablePaths.append(path.isEmpty() ? tr("(empty path)")
+                                                       : path);
+            }
+        }
+        if (!unavailablePaths.isEmpty()) {
+            QMessageBox message(
+                QMessageBox::Warning,
+                tr("Search cannot start"),
+                tr("The search cannot start because a configured search "
+                   "path is unavailable or unreadable."),
+                QMessageBox::Ok,
+                this);
+            message.setDetailedText(unavailablePaths.join('\n'));
+            message.exec();
+            return;
+        }
+
         setSearching(true);
         workoutCountN = videoCountN = videosyncCountN = pathIndex = 0;
+        workoutsFound.clear();
+        videosFound.clear();
+        videosyncsFound.clear();
         workoutCount->setText(QString("%1").arg(workoutCountN));
         mediaCount->setText(QString("%1").arg(videoCountN));
         videosyncCount->setText(QString("%1").arg(videosyncCountN));
