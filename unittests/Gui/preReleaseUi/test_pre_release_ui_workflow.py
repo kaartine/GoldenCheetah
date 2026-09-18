@@ -191,7 +191,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertIs(selected, row)
         driver.click_named_item.assert_called_once_with("ui-test-mtb")
 
-    def test_keyboard_controls_do_not_queue_a_combo_restore_key(self):
+    def test_keyboard_controls_commit_a_popup_selection(self):
         focus = mock.Mock()
         driver = object.__new__(UI.UiDriver)
         driver.find = mock.Mock(return_value=focus)
@@ -208,7 +208,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertEqual(driver.name.call_count, 1)
         self.assertEqual(
             driver.send_named_key.call_args_list,
-            [mock.call("Escape"), mock.call("Up")],
+            [mock.call("Home"), mock.call("Return")],
         )
 
     def test_keyboard_change_waits_for_observable_control_change(self):

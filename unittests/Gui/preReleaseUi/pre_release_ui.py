@@ -738,15 +738,14 @@ class UiDriver:
         first_name, first_role = controls[0]
         first = self.find(first_name, first_role, showing=True, timeout=timeout)
         try:
-            self.focus_main_window()
             self.click(first)
-            self.send_named_key("Escape")
+            self.send_named_key("Home")
+            self.send_named_key("Return")
         except Exception as error:
             raise UiFailure(
                 f"Cannot focus {first_role} {first_name!r}"
             ) from error
 
-        self.send_named_key("Up")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.name(first) != first_name:
