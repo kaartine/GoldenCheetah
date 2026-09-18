@@ -970,6 +970,12 @@ void GeneratedWorkoutPage::initializePage()
     setRecoveryBox->setAccessibleName(tr("Recovery between sets"));
     setRecoveryBox->setRange(0, 60 * 60);
     setRecoveryBox->setSuffix(tr(" s"));
+    finalSetRecoveryBox = new QSpinBox(this);
+    finalSetRecoveryBox->setObjectName(
+            QStringLiteral("workoutGeneratorFinalSetRecovery"));
+    finalSetRecoveryBox->setAccessibleName(tr("Recovery before final set"));
+    finalSetRecoveryBox->setRange(0, 60 * 60);
+    finalSetRecoveryBox->setSuffix(tr(" s"));
     warmupMinutesBox = new QSpinBox(this);
     warmupMinutesBox->setObjectName(QStringLiteral("workoutGeneratorWarmup"));
     warmupMinutesBox->setAccessibleName(tr("Warm-up"));
@@ -996,6 +1002,7 @@ void GeneratedWorkoutPage::initializePage()
     form->addRow(tr("Sets"), setsBox);
     form->addRow(tr("Repetition change per set"), repetitionDeltaBox);
     form->addRow(tr("Recovery between sets"), setRecoveryBox);
+    form->addRow(tr("Recovery before final set"), finalSetRecoveryBox);
     form->addRow(tr("Warm-up"), warmupMinutesBox);
     form->addRow(tr("Cool-down"), cooldownMinutesBox);
     form->addRow(QString(), recoverAfterLastBox);
@@ -1006,19 +1013,25 @@ void GeneratedWorkoutPage::initializePage()
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidget(controls);
-    scroll->setMinimumWidth(410 * dpiXFactor);
+    scroll->setMinimumWidth(500 * dpiXFactor);
 
     plot = new WorkoutPlot();
     plot->setObjectName(QStringLiteral("workoutGeneratorPreview"));
     plot->setYAxisTitle(tr("% FTP"));
     plot->setXAxisTitle(tr("Time (minutes)"));
-    plot->setMinimumSize(420 * dpiXFactor, 260 * dpiYFactor);
+    plot->setMinimumSize(480 * dpiXFactor, 280 * dpiYFactor);
 
     QGridLayout *summary = new QGridLayout();
     durationValue = new QLabel(this);
     averagePowerValue = new QLabel(this);
     stressValue = new QLabel(this);
     intervalValue = new QLabel(this);
+    intervalValue->setWordWrap(true);
+    durationValue->setAccessibleDescription(tr("Generated duration"));
+    averagePowerValue->setAccessibleDescription(
+            tr("Generated average power"));
+    stressValue->setAccessibleDescription(tr("Generated estimated stress"));
+    intervalValue->setAccessibleDescription(tr("Generated main set"));
     summary->addWidget(new QLabel(tr("Duration"), this), 0, 0);
     summary->addWidget(durationValue, 0, 1);
     summary->addWidget(new QLabel(tr("Average power"), this), 1, 0);
@@ -1030,6 +1043,7 @@ void GeneratedWorkoutPage::initializePage()
 
     validationLabel = new QLabel(this);
     validationLabel->setObjectName(QStringLiteral("workoutGeneratorValidation"));
+    validationLabel->setAccessibleDescription(tr("Workout validation error"));
     validationLabel->setWordWrap(true);
     QPalette validationPalette = validationLabel->palette();
     validationPalette.setColor(QPalette::WindowText, Qt::red);
@@ -1049,7 +1063,8 @@ void GeneratedWorkoutPage::initializePage()
     const QList<QSpinBox *> boxes = {
         ftpBox, workPowerBox, recoveryPowerBox, workSecondsBox,
         recoverySecondsBox, repetitionsBox, setsBox, repetitionDeltaBox,
-        setRecoveryBox, warmupMinutesBox, cooldownMinutesBox
+        setRecoveryBox, finalSetRecoveryBox,
+        warmupMinutesBox, cooldownMinutesBox
     };
     for (QSpinBox *box : boxes) {
         connect(box, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -1082,10 +1097,8 @@ WorkoutGenerationSettings GeneratedWorkoutPage::settingsFromControls() const
     value.repetitionsPerBlock = repetitionsBox->value();
     value.blockCount = setsBox->value();
     value.repetitionDeltaPerBlock = repetitionDeltaBox->value();
-    if (setRecoveryBox->value() != settings.blockRecoverySeconds) {
-        value.blockRecoverySeconds = setRecoveryBox->value();
-        value.lastBlockRecoverySeconds = setRecoveryBox->value();
-    }
+    value.blockRecoverySeconds = setRecoveryBox->value();
+    value.lastBlockRecoverySeconds = finalSetRecoveryBox->value();
     value.warmupSeconds = warmupMinutesBox->value() * 60;
     value.cooldownSeconds = cooldownMinutesBox->value() * 60;
     value.includeRecoveryAfterLastRep = recoverAfterLastBox->isChecked();
@@ -1099,7 +1112,8 @@ void GeneratedWorkoutPage::applySettings(
     const QList<QObject *> controls = {
         focusBox, ftpBox, workPowerBox, recoveryPowerBox, workSecondsBox,
         recoverySecondsBox, repetitionsBox, setsBox, repetitionDeltaBox,
-        setRecoveryBox, warmupMinutesBox, cooldownMinutesBox,
+        setRecoveryBox, finalSetRecoveryBox,
+        warmupMinutesBox, cooldownMinutesBox,
         recoverAfterLastBox
     };
     std::vector<std::unique_ptr<QSignalBlocker>> blockers;
@@ -1119,6 +1133,7 @@ void GeneratedWorkoutPage::applySettings(
     setsBox->setValue(value.blockCount);
     repetitionDeltaBox->setValue(value.repetitionDeltaPerBlock);
     setRecoveryBox->setValue(value.blockRecoverySeconds);
+    finalSetRecoveryBox->setValue(value.lastBlockRecoverySeconds);
     warmupMinutesBox->setValue(value.warmupSeconds / 60);
     cooldownMinutesBox->setValue(value.cooldownSeconds / 60);
     recoverAfterLastBox->setChecked(value.includeRecoveryAfterLastRep);
@@ -1175,11 +1190,29 @@ void GeneratedWorkoutPage::controlsChanged()
     stressValue->setText(ready
             ? QString::number(generated.summary.estimatedStress, 'f', 1)
             : QStringLiteral("-"));
-    intervalValue->setText(ready
-            ? tr("%1 efforts in %2 sets")
-                .arg(generated.summary.workIntervalCount)
-                .arg(generated.summary.repetitionsByBlock.size())
-            : QStringLiteral("-"));
+    if (ready) {
+        QStringList repetitions;
+        for (int value : generated.summary.repetitionsByBlock) {
+            repetitions.append(QString::number(value));
+        }
+        QStringList recoveries;
+        const int setCount = generated.summary.repetitionsByBlock.size();
+        for (int set = 0; set + 1 < setCount; ++set) {
+            const int seconds = set + 2 == setCount
+                    ? settings.lastBlockRecoverySeconds
+                    : settings.blockRecoverySeconds;
+            recoveries.append(QStringLiteral("%1:%2")
+                    .arg(seconds / 60)
+                    .arg(seconds % 60, 2, 10, QLatin1Char('0')));
+        }
+        intervalValue->setText(recoveries.isEmpty()
+                ? tr("%1 efforts").arg(repetitions.join(QStringLiteral(" / ")))
+                : tr("%1 efforts; set recovery %2")
+                    .arg(repetitions.join(QStringLiteral(" / ")),
+                         recoveries.join(QStringLiteral(" / "))));
+    } else {
+        intervalValue->setText(QStringLiteral("-"));
+    }
     emit completeChanged();
 }
 
@@ -1236,6 +1269,7 @@ WorkoutWizard::WorkoutWizard(Context *context) :QWizard(context->mainWindow)
     HelpWhatsThis *help = new HelpWhatsThis(this);
     this->setWhatsThis(help->getWhatsThisText(HelpWhatsThis::MenuBar_Tools_CreateWorkout));
     setMinimumSize(QSize(600*dpiXFactor, 500 *dpiYFactor));
+    resize(QSize(1120*dpiXFactor, 700*dpiYFactor));
 
     setAttribute(Qt::WA_DeleteOnClose);
     setPage(WW_WorkoutTypePage, new WorkoutTypePage(context));

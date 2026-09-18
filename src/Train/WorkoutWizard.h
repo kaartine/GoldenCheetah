@@ -362,6 +362,7 @@ class GeneratedWorkoutPage : public WorkoutPage
     QSpinBox *setsBox = nullptr;
     QSpinBox *repetitionDeltaBox = nullptr;
     QSpinBox *setRecoveryBox = nullptr;
+    QSpinBox *finalSetRecoveryBox = nullptr;
     QSpinBox *warmupMinutesBox = nullptr;
     QSpinBox *cooldownMinutesBox = nullptr;
     QCheckBox *recoverAfterLastBox = nullptr;

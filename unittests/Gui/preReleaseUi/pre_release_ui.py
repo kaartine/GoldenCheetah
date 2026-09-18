@@ -2179,10 +2179,18 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     "Recovery interval",
                     "Repetitions in first set",
                     "Sets",
+                    "Recovery between sets",
+                    "Recovery before final set",
                 ],
                 timeout=15.0,
             )
             driver.find("0:53:20", showing=True, timeout=10.0)
+            driver.find(
+                "14 / 12 / 10 / 8 efforts; set recovery "
+                "4:00 / 4:00 / 3:00",
+                showing=True,
+                timeout=10.0,
+            )
             ftp = driver.find("FTP", "spin button", showing=True)
             work_power = driver.find(
                 "Work intensity", "spin button", showing=True
@@ -2190,10 +2198,24 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             work_seconds = driver.find(
                 "Work interval", "spin button", showing=True
             )
+            final_set_recovery = driver.find(
+                "Recovery before final set",
+                "spin button",
+                showing=True,
+            )
             driver.set_value(ftp, 200)
             driver.set_value(work_power, 135)
             driver.set_value(work_seconds, 25)
-            driver.find("0:57:00", showing=True, timeout=10.0)
+            driver.set_value(final_set_recovery, 150)
+            driver.find("0:56:30", showing=True, timeout=10.0)
+            driver.find(
+                "14 / 12 / 10 / 8 efforts; set recovery "
+                "4:00 / 4:00 / 2:30",
+                showing=True,
+                timeout=10.0,
+            )
+            if capture_screenshots:
+                driver.screenshot("05-workout-generator-configured")
 
             driver.activate(
                 driver.find_named_any(
@@ -2219,6 +2241,15 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             )
             if driver.current_value(work_seconds) != 25:
                 raise UiFailure("Workout generator lost edits after Back/Next")
+            final_set_recovery = driver.find(
+                "Recovery before final set",
+                "spin button",
+                showing=True,
+            )
+            if driver.current_value(final_set_recovery) != 150:
+                raise UiFailure(
+                    "Workout generator lost final-set recovery after Back/Next"
+                )
 
             destination = (
                 root / "library" / ATHLETE / "workouts"
@@ -2242,7 +2273,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             driver.click(driver.find("Save", "push button", showing=True))
             driver.wait_file(destination)
             result = validate_generated_workout(destination)
-            if (not math.isclose(result["duration_minutes"], 57.0,
+            if (not math.isclose(result["duration_minutes"], 56.5,
                                  abs_tol=0.001)
                     or result["maximum_percent"] != 135.0):
                 raise UiFailure(

@@ -13,6 +13,7 @@
 #include <QTest>
 
 #include <cmath>
+#include <limits>
 
 class TestWorkoutGenerator : public QObject
 {
@@ -59,6 +60,8 @@ private slots:
         QCOMPARE(settings.blockCount, 4);
         QCOMPARE(settings.repetitionsPerBlock, 14);
         QCOMPARE(settings.repetitionDeltaPerBlock, -2);
+        QCOMPARE(settings.blockRecoverySeconds, 4 * 60);
+        QCOMPARE(settings.lastBlockRecoverySeconds, 3 * 60);
 
         const WorkoutGenerationResult result =
                 WorkoutGenerator::generate(settings);
@@ -68,6 +71,13 @@ private slots:
         QCOMPARE(result.summary.workIntervalCount, 44);
         QCOMPARE(result.summary.durationSeconds, 53 * 60 + 20);
         QCOMPARE(result.intervals.size(), std::size_t(95));
+        QVector<int> blockRecoveries;
+        for (const WorkoutGeneratedInterval &interval : result.intervals) {
+            if (interval.role == WorkoutGeneratedIntervalRole::BlockRecovery) {
+                blockRecoveries.append(interval.durationSeconds);
+            }
+        }
+        QCOMPARE(blockRecoveries, QVector<int>({240, 240, 180}));
         QVERIFY(std::abs(result.summary.averagePercentFtp - 77.6875) < 0.001);
         QVERIFY(std::abs(result.summary.estimatedStress - 63.25556) < 0.001);
     }
@@ -170,6 +180,128 @@ private slots:
         const WorkoutGenerationResult result =
                 WorkoutGenerator::generate(settings);
         QVERIFY(result.status != WorkoutGenerationStatus::Ready);
+        QVERIFY(!result.error.isEmpty());
+        QVERIFY(result.intervals.empty());
+        QCOMPARE(result.summary.durationSeconds, 0);
+    }
+
+    void rejectsEveryValidatedFieldOutsideItsBoundary_data()
+    {
+        QTest::addColumn<QString>("field");
+        QTest::addColumn<double>("value");
+
+        QTest::newRow("ftp-low") << QStringLiteral("ftp") << 49.0;
+        QTest::newRow("ftp-high") << QStringLiteral("ftp") << 601.0;
+        const QStringList percentFields = {
+            QStringLiteral("warmupStart"),
+            QStringLiteral("warmupEnd"),
+            QStringLiteral("primerPercent"),
+            QStringLiteral("workPercent"),
+            QStringLiteral("recoveryPercent"),
+            QStringLiteral("cooldownStart"),
+            QStringLiteral("cooldownEnd")
+        };
+        for (const QString &field : percentFields) {
+            QTest::newRow(qPrintable(field + QStringLiteral("-low")))
+                    << field << 19.99;
+            QTest::newRow(qPrintable(field + QStringLiteral("-high")))
+                    << field << 250.01;
+        }
+        QTest::newRow("percent-nan")
+                << QStringLiteral("workPercent")
+                << std::numeric_limits<double>::quiet_NaN();
+        QTest::newRow("percent-infinity")
+                << QStringLiteral("recoveryPercent")
+                << std::numeric_limits<double>::infinity();
+
+        const QList<QPair<QString, int>> durations = {
+            {QStringLiteral("warmupSeconds"), 3600},
+            {QStringLiteral("primerSeconds"), 1200},
+            {QStringLiteral("preWorkRecoverySeconds"), 1800},
+            {QStringLiteral("recoverySeconds"), 3600},
+            {QStringLiteral("blockRecoverySeconds"), 3600},
+            {QStringLiteral("lastBlockRecoverySeconds"), 3600},
+            {QStringLiteral("cooldownSeconds"), 3600}
+        };
+        for (const auto &duration : durations) {
+            QTest::newRow(qPrintable(duration.first + QStringLiteral("-low")))
+                    << duration.first << -1.0;
+            QTest::newRow(qPrintable(duration.first + QStringLiteral("-high")))
+                    << duration.first << double(duration.second + 1);
+        }
+        QTest::newRow("work-seconds-low")
+                << QStringLiteral("workSeconds") << 4.0;
+        QTest::newRow("work-seconds-high")
+                << QStringLiteral("workSeconds") << 7201.0;
+        QTest::newRow("repetitions-low")
+                << QStringLiteral("repetitions") << 0.0;
+        QTest::newRow("repetitions-high")
+                << QStringLiteral("repetitions") << 101.0;
+        QTest::newRow("sets-low") << QStringLiteral("sets") << 0.0;
+        QTest::newRow("sets-high") << QStringLiteral("sets") << 21.0;
+    }
+
+    void rejectsEveryValidatedFieldOutsideItsBoundary()
+    {
+        QFETCH(QString, field);
+        QFETCH(double, value);
+        WorkoutGenerationSettings settings = WorkoutGenerator::defaultsFor(
+                WorkoutTrainingFocus::Threshold);
+
+        if (field == QStringLiteral("ftp")) settings.ftpWatts = int(value);
+        else if (field == QStringLiteral("warmupStart"))
+            settings.warmupStartPercentFtp = value;
+        else if (field == QStringLiteral("warmupEnd"))
+            settings.warmupEndPercentFtp = value;
+        else if (field == QStringLiteral("primerPercent"))
+            settings.primerPercentFtp = value;
+        else if (field == QStringLiteral("workPercent"))
+            settings.workPercentFtp = value;
+        else if (field == QStringLiteral("recoveryPercent"))
+            settings.recoveryPercentFtp = value;
+        else if (field == QStringLiteral("cooldownStart"))
+            settings.cooldownStartPercentFtp = value;
+        else if (field == QStringLiteral("cooldownEnd"))
+            settings.cooldownEndPercentFtp = value;
+        else if (field == QStringLiteral("warmupSeconds"))
+            settings.warmupSeconds = int(value);
+        else if (field == QStringLiteral("primerSeconds"))
+            settings.primerSeconds = int(value);
+        else if (field == QStringLiteral("preWorkRecoverySeconds"))
+            settings.preWorkRecoverySeconds = int(value);
+        else if (field == QStringLiteral("workSeconds"))
+            settings.workSeconds = int(value);
+        else if (field == QStringLiteral("recoverySeconds"))
+            settings.recoverySeconds = int(value);
+        else if (field == QStringLiteral("blockRecoverySeconds"))
+            settings.blockRecoverySeconds = int(value);
+        else if (field == QStringLiteral("lastBlockRecoverySeconds"))
+            settings.lastBlockRecoverySeconds = int(value);
+        else if (field == QStringLiteral("cooldownSeconds"))
+            settings.cooldownSeconds = int(value);
+        else if (field == QStringLiteral("repetitions"))
+            settings.repetitionsPerBlock = int(value);
+        else if (field == QStringLiteral("sets"))
+            settings.blockCount = int(value);
+        else QFAIL("Unknown boundary-test field");
+
+        const WorkoutGenerationResult result =
+                WorkoutGenerator::generate(settings);
+        QVERIFY(result.status != WorkoutGenerationStatus::Ready);
+        QVERIFY(!result.error.isEmpty());
+        QVERIFY(result.intervals.empty());
+        QCOMPARE(result.summary.durationSeconds, 0);
+    }
+
+    void rejectsUnknownFocusWithoutPartialOutput()
+    {
+        WorkoutGenerationSettings settings = WorkoutGenerator::defaultsFor(
+                WorkoutTrainingFocus::Endurance);
+        settings.focus = static_cast<WorkoutTrainingFocus>(999);
+
+        const WorkoutGenerationResult result =
+                WorkoutGenerator::generate(settings);
+        QCOMPARE(result.status, WorkoutGenerationStatus::InvalidSettings);
         QVERIFY(!result.error.isEmpty());
         QVERIFY(result.intervals.empty());
         QCOMPARE(result.summary.durationSeconds, 0);
