@@ -2466,7 +2466,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 "Workout code", "text", showing=True, timeout=10.0
             )
             text = editor.queryText().getText(0, -1)
-            dirty_marker = "\n; unsaved transition test"
+            dirty_marker = "\n1m@111"
             editor.queryEditableText().setTextContents(text + dirty_marker)
 
             driver.click_named_item("ui-delete")
