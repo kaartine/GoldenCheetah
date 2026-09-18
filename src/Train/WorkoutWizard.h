@@ -35,6 +35,8 @@
 #include <QHeaderView>
 #include <QTableWidget>
 
+#include "WorkoutGenerator.h"
+
 // gc
 #include "Settings.h"
 #include "RideFile.h"
@@ -70,7 +72,9 @@ public:
         {
             QVariant v(validateData(value.toString()));
             QTableWidgetItem::setData(role,v);
+            return;
         }
+        QTableWidgetItem::setData(role, value);
     }
 };
 
@@ -115,15 +119,24 @@ protected:
 
 public slots:
     void addButtonClicked() { insertDataRow(table->rowCount()); }
-    void delButtonClicked() { table->removeRow(table->currentRow()); }
+    void delButtonClicked()
+    {
+        const int row = table->currentRow();
+        if (row >= 0) table->removeRow(row);
+    }
     void lapButtonClicked()
     {
         int row = table->currentRow();
+        row = row >= 0 ? row + 1 : table->rowCount();
         table->insertRow(row);
         table->setItem(row,0,new WorkoutItemLap());
         table->setItem(row,1,new QTableWidgetItem());
     }
-    void insertButtonClicked() { insertDataRow(table->currentRow()); }
+    void insertButtonClicked()
+    {
+        const int row = table->currentRow();
+        insertDataRow(row >= 0 ? row : table->rowCount());
+    }
     void cellChanged(int, int) { dataChanged(); }
 
 signals:
@@ -218,8 +231,12 @@ public:
 
 class WorkoutPage : public QWizardPage
 {
+protected:
+    Context *context;
+
 public:
-    WorkoutPage(QWidget *parent) : QWizardPage(parent) {}
+    WorkoutPage(Context *context, QWidget *parent)
+        : QWizardPage(parent), context(context) {}
     virtual bool SaveWorkout() = 0;
     void SaveWorkoutHeader(QTextStream &stream, QString fileName, QString description, QString units)
     {
@@ -237,10 +254,15 @@ public:
 class WorkoutTypePage : public QWizardPage
 {
     Q_OBJECT
-    QButtonGroup *buttonGroupBox;
-    QRadioButton *absWattageRadioButton, *relWattageRadioButton, *gradientRadioButton, *importRadioButton;
+    Context *context;
+    QButtonGroup *buttonGroupBox = nullptr;
+    QRadioButton *generatedRadioButton = nullptr;
+    QRadioButton *absWattageRadioButton = nullptr;
+    QRadioButton *relWattageRadioButton = nullptr;
+    QRadioButton *gradientRadioButton = nullptr;
+    QRadioButton *importRadioButton = nullptr;
 public:
-    WorkoutTypePage(QWidget *parent=0);
+    WorkoutTypePage(Context *context, QWidget *parent=0);
     bool isComplete() const { return true; }
     void initializePage();
     int nextId() const;
@@ -249,13 +271,13 @@ public:
 class AbsWattagePage : public WorkoutPage
 {
     Q_OBJECT
-    WorkoutEditorAbs *we;
-    WorkoutMetricsSummary *metricsSummary;
-    WorkoutPlot *plot;
+    WorkoutEditorAbs *we = nullptr;
+    WorkoutMetricsSummary *metricsSummary = nullptr;
+    WorkoutPlot *plot = nullptr;
 private slots:
     void updateMetrics();
 public:
-    AbsWattagePage(QWidget *parent=0);
+    AbsWattagePage(Context *context, QWidget *parent=0);
     void initializePage();
     bool SaveWorkout();
     bool isFinalPage() const { return true; }
@@ -265,14 +287,14 @@ public:
 class RelWattagePage : public WorkoutPage
 {
     Q_OBJECT
-    WorkoutEditorRel *we;
-    WorkoutMetricsSummary *metricsSummary;
-    WorkoutPlot *plot;
-    int ftp;
+    WorkoutEditorRel *we = nullptr;
+    WorkoutMetricsSummary *metricsSummary = nullptr;
+    WorkoutPlot *plot = nullptr;
+    int ftp = 100;
 private slots:
     void updateMetrics();
 public:
-    RelWattagePage(QWidget *parent=0);
+    RelWattagePage(Context *context, QWidget *parent=0);
     void initializePage();
     bool isFinalPage() const { return true; }
     int nextId()  const { return -1; }
@@ -284,16 +306,15 @@ class GradientPage : public WorkoutPage
 {
     Q_OBJECT
 
-    WorkoutEditorGradient *we;
-    WorkoutMetricsSummary *metricsSummary;
-    Context *context;
-    bool metricUnits;
+    WorkoutEditorGradient *we = nullptr;
+    WorkoutMetricsSummary *metricsSummary = nullptr;
+    bool metricUnits = true;
 
 private slots:
 
     void updateMetrics();
 public:
-    GradientPage(QWidget *parent=0);
+    GradientPage(Context *context, QWidget *parent=0);
     void initializePage();
     bool SaveWorkout();
     bool isFinalPage() const { return true; }
@@ -303,20 +324,70 @@ public:
 class ImportPage : public WorkoutPage
 {
     Q_OBJECT
-    WorkoutPlot *plot;
+    WorkoutPlot *plot = nullptr;
     QVector<QPair<double,double> > rideData; // orignal distance/alt in metric
-    bool metricUnits;
-    QSpinBox *gradeBox;
-    QSpinBox *segmentBox;
-    WorkoutMetricsSummary *metricsSummary;
+    bool metricUnits = true;
+    QSpinBox *gradeBox = nullptr;
+    QSpinBox *segmentBox = nullptr;
+    WorkoutMetricsSummary *metricsSummary = nullptr;
     QVector<QPair<double,double> >  rideProfile; // distance and slope
+    bool validInput = false;
 public slots:
      void updatePlot();
 public:
-    ImportPage(QWidget * parent=0);
+    ImportPage(Context *context, QWidget * parent=0);
     void initializePage();
+    bool isComplete() const { return validInput; }
     bool SaveWorkout();
     bool isFinalPage() const { return true; }
+};
+
+class QCheckBox;
+class QComboBox;
+class QSlider;
+
+class GeneratedWorkoutPage : public WorkoutPage
+{
+    Q_OBJECT
+
+    QComboBox *focusBox = nullptr;
+    QSpinBox *ftpBox = nullptr;
+    QSlider *workPowerSlider = nullptr;
+    QSpinBox *workPowerBox = nullptr;
+    QSlider *recoveryPowerSlider = nullptr;
+    QSpinBox *recoveryPowerBox = nullptr;
+    QSpinBox *workSecondsBox = nullptr;
+    QSpinBox *recoverySecondsBox = nullptr;
+    QSpinBox *repetitionsBox = nullptr;
+    QSpinBox *setsBox = nullptr;
+    QSpinBox *repetitionDeltaBox = nullptr;
+    QSpinBox *setRecoveryBox = nullptr;
+    QSpinBox *warmupMinutesBox = nullptr;
+    QSpinBox *cooldownMinutesBox = nullptr;
+    QCheckBox *recoverAfterLastBox = nullptr;
+    QLabel *durationValue = nullptr;
+    QLabel *averagePowerValue = nullptr;
+    QLabel *stressValue = nullptr;
+    QLabel *intervalValue = nullptr;
+    QLabel *validationLabel = nullptr;
+    WorkoutPlot *plot = nullptr;
+    WorkoutGenerationSettings settings;
+    WorkoutGenerationResult generated;
+
+    WorkoutGenerationSettings settingsFromControls() const;
+    void applySettings(const WorkoutGenerationSettings &value);
+
+private slots:
+    void focusChanged(int index);
+    void controlsChanged();
+
+public:
+    GeneratedWorkoutPage(Context *context, QWidget *parent=0);
+    void initializePage();
+    bool isComplete() const;
+    bool SaveWorkout();
+    bool isFinalPage() const { return true; }
+    int nextId() const { return -1; }
 };
 
 
@@ -325,7 +396,14 @@ class WorkoutWizard : public QWizard
 {
     Q_OBJECT
 public:
-    enum { WW_WorkoutTypePage, WW_AbsWattagePage, WW_RelWattagePage, WW_GradientPage, WW_ImportPage };
+    enum {
+        WW_WorkoutTypePage,
+        WW_GeneratedWorkoutPage,
+        WW_AbsWattagePage,
+        WW_RelWattagePage,
+        WW_GradientPage,
+        WW_ImportPage
+    };
 
     WorkoutWizard(Context *context);
 
@@ -335,5 +413,3 @@ public:
 
 
 #endif
-
-

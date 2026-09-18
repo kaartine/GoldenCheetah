@@ -38,6 +38,7 @@ UI_TEST_NAMES = (
     "data_generator_and_virtual_gears",
     "create_edit_mtb_course_lifecycle",
     "workout_game_training_lifecycle",
+    "workout_generator_lifecycle",
     "new_workout_save_as",
     "graceful_shutdown_request",
 )
@@ -328,6 +329,46 @@ MINUTES WATTS
 
 class UiFailure(RuntimeError):
     pass
+
+
+def validate_generated_workout(path: Path) -> dict:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        start = lines.index("[COURSE DATA]") + 1
+        end = lines.index("[END COURSE DATA]", start)
+    except (OSError, UnicodeError, ValueError) as error:
+        raise UiFailure(f"Invalid generated workout: {path}") from error
+
+    points = []
+    for line_number, line in enumerate(lines[start:end], start + 1):
+        fields = line.split()
+        if len(fields) != 2:
+            raise UiFailure(
+                f"Invalid generated workout point at line {line_number}"
+            )
+        try:
+            minute, percent = map(float, fields)
+        except ValueError as error:
+            raise UiFailure(
+                f"Invalid generated workout point at line {line_number}"
+            ) from error
+        if (not math.isfinite(minute) or not math.isfinite(percent)
+                or minute < 0.0 or not 20.0 <= percent <= 250.0):
+            raise UiFailure(
+                f"Generated workout value is out of range at line {line_number}"
+            )
+        if points and minute < points[-1][0]:
+            raise UiFailure("Generated workout time is not monotonic")
+        points.append((minute, percent))
+
+    if len(points) < 2 or points[0][0] != 0.0 or points[-1][0] <= 0.0:
+        raise UiFailure("Generated workout course data is incomplete")
+    return {
+        "duration_minutes": points[-1][0],
+        "minimum_percent": min(point[1] for point in points),
+        "maximum_percent": max(point[1] for point in points),
+        "point_count": len(points),
+    }
 
 
 def validate_mtb_course_sidecar(
@@ -1024,6 +1065,16 @@ class UiDriver:
             return float(node.queryValue().currentValue)
         except Exception as error:
             raise UiFailure(f"No numeric value for {self.name(node)!r}") from error
+
+    def set_value(self, node, expected, timeout=5.0):
+        try:
+            value = node.queryValue()
+            value.currentValue = expected
+        except Exception as error:
+            raise UiFailure(
+                f"Cannot set numeric value for {self.name(node)!r}"
+            ) from error
+        self.wait_value(node, expected, timeout)
 
     def send_key(self, text: str):
         self.focus_main_window()
@@ -1990,6 +2041,95 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             if capture_screenshots:
                 driver.screenshot("06-workout-saved")
 
+        def workout_generator():
+            driver.activate(driver.find("Tools", "menu item", showing=True))
+            driver.activate(
+                driver.find(
+                    "Create a new workout...",
+                    "menu item",
+                    showing=True,
+                    timeout=10.0,
+                )
+            )
+            driver.find("Workout Wizard", "dialog", showing=True, timeout=10.0)
+            driver.find(
+                "Generate for a training goal",
+                "radio button",
+                showing=True,
+            )
+            driver.activate(driver.find("Next", "push button", showing=True))
+
+            driver.require_visible_names(
+                [
+                    "Training focus",
+                    "FTP",
+                    "Work intensity",
+                    "Recovery intensity",
+                    "Work interval",
+                    "Recovery interval",
+                    "Repetitions in first set",
+                    "Sets",
+                ],
+                timeout=15.0,
+            )
+            driver.find("0:53:20", showing=True, timeout=10.0)
+            ftp = driver.find("FTP", "spin button", showing=True)
+            work_power = driver.find(
+                "Work intensity", "spin button", showing=True
+            )
+            work_seconds = driver.find(
+                "Work interval", "spin button", showing=True
+            )
+            driver.set_value(ftp, 200)
+            driver.set_value(work_power, 135)
+            driver.set_value(work_seconds, 25)
+            driver.find("0:57:00", showing=True, timeout=10.0)
+
+            driver.activate(driver.find("Back", "push button", showing=True))
+            driver.find(
+                "Generate for a training goal",
+                "radio button",
+                showing=True,
+            )
+            driver.activate(driver.find("Next", "push button", showing=True))
+            work_seconds = driver.find(
+                "Work interval", "spin button", showing=True
+            )
+            if driver.current_value(work_seconds) != 25:
+                raise UiFailure("Workout generator lost edits after Back/Next")
+
+            destination = (
+                root / "library" / ATHLETE / "workouts"
+                / "ui-generated-20-20.mrc"
+            )
+            driver.activate(driver.find("Finish", "push button", showing=True))
+            driver.find(role="file chooser", showing=True, timeout=30.0)
+            editable = None
+            for node in driver.find_all(role="text", showing=True):
+                try:
+                    node.queryEditableText()
+                    editable = node
+                except Exception:
+                    continue
+            if editable is None:
+                raise UiFailure("Generated workout filename input was not found")
+            editable.queryEditableText().setTextContents(str(destination))
+            driver.click(driver.find("Save", "push button", showing=True))
+            driver.wait_file(destination)
+            result = validate_generated_workout(destination)
+            if (not math.isclose(result["duration_minutes"], 57.0,
+                                 abs_tol=0.001)
+                    or result["maximum_percent"] != 135.0):
+                raise UiFailure(
+                    f"Generated workout did not preserve controls: {result!r}"
+                )
+            write_text(
+                artifacts / "generated-workout-evidence.json",
+                json.dumps(result, indent=2, sort_keys=True) + "\n",
+            )
+            if capture_screenshots:
+                driver.screenshot("06-workout-generator-saved")
+
         def shutdown():
             try:
                 driver.click(
@@ -2028,6 +2168,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             suite.run("create_edit_mtb_course_lifecycle", mtb_course_lifecycle)
         if "workout_game_training_lifecycle" in selected_tests:
             suite.run("workout_game_training_lifecycle", game_training_lifecycle)
+        if "workout_generator_lifecycle" in selected_tests:
+            suite.run("workout_generator_lifecycle", workout_generator)
         if (
             "new_workout_save_as" in selected_tests
             and not skip_save_as_from_environment()

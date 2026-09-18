@@ -27,14 +27,19 @@
 #include "LibraryParser.h"
 #include "TrainDB.h"
 #include "WorkoutFileWriter.h"
+#include "WorkoutGenerator.h"
 
 #include "qwt_plot.h"
 #include "qwt_plot_curve.h"
+#include <QCheckBox>
+#include <QComboBox>
+#include <QFileInfo>
+#include <QFormLayout>
+#include <QScrollArea>
+#include <QSignalBlocker>
+#include <QSlider>
 #include <limits>
-
-
-// hack...  Need to get the CP and zones for metrics
-Context *hackContext;
+#include <memory>
 
 /// workout plot
 class WorkoutPlot: public QwtPlot
@@ -130,7 +135,9 @@ void WorkoutEditorRel::insertDataRow(int row)
     // precentage of ftp
     table->setItem(row,1,new WorkoutItemDouble());
     // current ftp
-    table->setItem(row,1,new WorkoutItemInt());
+    WorkoutItemInt *watts = new WorkoutItemInt();
+    watts->setFlags(watts->flags() & (~Qt::ItemIsEditable));
+    table->setItem(row,2,watts);
 }
 
 template<int minGrade, int maxGrade>
@@ -212,33 +219,39 @@ void WorkoutMetricsSummary::updateMetrics(QMap<QString, QString> &map)
 
 /// WorkoutTypePage
 
-WorkoutTypePage::WorkoutTypePage(QWidget *parent) : QWizardPage(parent)
+WorkoutTypePage::WorkoutTypePage(Context *context, QWidget *parent)
+    : QWizardPage(parent), context(context)
 {
 }
 
 void WorkoutTypePage::initializePage()
 {
+    if (buttonGroupBox) return;
     setTitle(tr("Workout Creator"));
     setSubTitle(tr("Select the workout type to be created"));
     buttonGroupBox = new QButtonGroup(this);
+    generatedRadioButton = new QRadioButton(tr("Generate for a training goal"));
+    generatedRadioButton->setChecked(true);
     absWattageRadioButton = new QRadioButton(tr("Absolute Wattage"));
-    absWattageRadioButton->click();
     relWattageRadioButton = new QRadioButton(tr("Relative Wattage"));
     gradientRadioButton = new QRadioButton(tr("Gradient"));
 
-    if (hackContext->rideItem()) {
-        QString s = hackContext->rideItem()->ride()->startTime().toLocalTime().toString();
+    if (context && context->rideItem()) {
+        QString s = context->rideItem()->ride()->startTime().toLocalTime().toString();
         QString importStr = tr("Import Selected Activity (") + s + ")";
         importRadioButton = new QRadioButton((importStr));
     } else {
         importRadioButton = new QRadioButton(tr("No activity selected"));
+        importRadioButton->setEnabled(false);
     }
     QVBoxLayout *groupBoxLayout = new QVBoxLayout();
 
+    groupBoxLayout->addWidget(generatedRadioButton);
     groupBoxLayout->addWidget(absWattageRadioButton);
     groupBoxLayout->addWidget(relWattageRadioButton);
     groupBoxLayout->addWidget(gradientRadioButton);
     groupBoxLayout->addWidget(importRadioButton);
+    registerField("generatedWorkout",generatedRadioButton);
     registerField("absWattage",absWattageRadioButton);
     registerField("relWattage",relWattageRadioButton);
     registerField("gradientWattage",gradientRadioButton);
@@ -248,7 +261,9 @@ void WorkoutTypePage::initializePage()
 
 int WorkoutTypePage::nextId() const
 {
-    if(absWattageRadioButton->isChecked())
+    if(generatedRadioButton->isChecked())
+        return WorkoutWizard::WW_GeneratedWorkoutPage;
+    else if(absWattageRadioButton->isChecked())
         return WorkoutWizard::WW_AbsWattagePage;
     else if (relWattageRadioButton->isChecked())
         return WorkoutWizard::WW_RelWattagePage;
@@ -262,10 +277,12 @@ int WorkoutTypePage::nextId() const
 
 //// AbsWattagePage
 
-AbsWattagePage::AbsWattagePage(QWidget *parent) : WorkoutPage(parent) {}
+AbsWattagePage::AbsWattagePage(Context *context, QWidget *parent)
+    : WorkoutPage(context, parent) {}
 
 void AbsWattagePage::initializePage()
 {
+    if (we) return;
     setTitle(tr("Workout Wizard"));
     setSubTitle(tr("Absolute Wattage Workout Creator"));
     QHBoxLayout *layout = new QHBoxLayout();
@@ -302,7 +319,7 @@ void AbsWattagePage::updateMetrics()
     int curSecs = 0;
     // create rideFile
     QSharedPointer<RideFile> workout(new RideFile());
-    workout->context = hackContext;
+    workout->context = context;
     workout->setRecIntSecs(1);
     double curMin = 0;
     for(int i = 0; i < data.size() ; i++)
@@ -346,7 +363,7 @@ void AbsWattagePage::updateMetrics()
 #if 0 //XXX REFACTOR METRICS
     const RideMetricFactory &factory = RideMetricFactory::instance();
     const RideMetric *rm = factory.rideMetric("skiba_xpower");
-    QHash<QString,RideMetricPtr> results = rm->computeMetrics(NULL,&*workout,hackContext->athlete->zones("Bike"),hackContext->athlete->hrZones(),metrics);
+    QHash<QString,RideMetricPtr> results = rm->computeMetrics(NULL,&*workout,context->athlete->zones("Bike"),context->athlete->hrZones(),metrics);
     metricsSummary->updateMetrics(metrics,results);
 #endif
 }
@@ -398,19 +415,27 @@ bool AbsWattagePage::SaveWorkout()
     // import them via the workoutimporter
     QStringList files;
     files << filename;
-    Library::importFiles(hackContext, files);
+    const LibraryImportResult imported = Library::importFiles(
+            context, files, LibraryBatchImportConfirmation::noDialog);
+    if (!imported.allSucceeded()) {
+        QMessageBox::warning(this, tr("Save Workout"),
+                tr("The workout was saved but could not be added to the workout library."));
+        return false;
+    }
     return true;
 }
 
 /// RelativeWattagePage
 
-RelWattagePage::RelWattagePage(QWidget *parent) : WorkoutPage(parent) {}
+RelWattagePage::RelWattagePage(Context *context, QWidget *parent)
+    : WorkoutPage(context, parent) {}
 
 void RelWattagePage::initializePage()
 {
-    if (hackContext->athlete->zones("Bike") && hackContext->athlete->zones("Bike")->whichRange(QDate::currentDate()) >= 0) {
-        int zoneRange = hackContext->athlete->zones("Bike")->whichRange(QDate::currentDate());
-        ftp = hackContext->athlete->zones("Bike")->getCP(zoneRange);
+    if (we) return;
+    if (context && context->athlete && context->athlete->zones("Bike") && context->athlete->zones("Bike")->whichRange(QDate::currentDate()) >= 0) {
+        int zoneRange = context->athlete->zones("Bike")->whichRange(QDate::currentDate());
+        ftp = context->athlete->zones("Bike")->getCP(zoneRange);
     } else {
         ftp = 100; // if zones are not available let's make absolute watts match percentajes
     }
@@ -454,7 +479,7 @@ void RelWattagePage::updateMetrics()
     int curSecs = 0;
     // create rideFile
     QSharedPointer<RideFile> workout(new RideFile());
-    workout->context = hackContext;
+    workout->context = context;
     workout->setRecIntSecs(1);
     for(int i = 0; i < data.size() ; i++)
     {
@@ -493,7 +518,7 @@ void RelWattagePage::updateMetrics()
 #if 0 //XXX REFACTOR METRICS
     const RideMetricFactory &factory = RideMetricFactory::instance();
     const RideMetric *rm = factory.rideMetric("skiba_xpower");
-    QHash<QString,RideMetricPtr> results = rm->computeMetrics(NULL,&*workout,hackContext->athlete->zones("Bike"),hackContext->athlete->hrZones(),metrics);
+    QHash<QString,RideMetricPtr> results = rm->computeMetrics(NULL,&*workout,context->athlete->zones("Bike"),context->athlete->hrZones(),metrics);
     metricsSummary->updateMetrics(metrics,results);
 #endif
 }
@@ -545,15 +570,23 @@ bool RelWattagePage::SaveWorkout()
     // import them via the workoutimporter
     QStringList files;
     files << filename;
-    Library::importFiles(hackContext, files);
+    const LibraryImportResult imported = Library::importFiles(
+            context, files, LibraryBatchImportConfirmation::noDialog);
+    if (!imported.allSucceeded()) {
+        QMessageBox::warning(this, tr("Save Workout"),
+                tr("The workout was saved but could not be added to the workout library."));
+        return false;
+    }
     return true;
 }
 
 /// GradientPage
-GradientPage::GradientPage(QWidget *parent) : WorkoutPage(parent) {}
+GradientPage::GradientPage(Context *context, QWidget *parent)
+    : WorkoutPage(context, parent) {}
 
 void GradientPage::initializePage()
 {
+    if (we) return;
     metricUnits = GlobalContext::context()->useMetricUnits;
     setTitle(tr("Workout Wizard"));
 
@@ -582,7 +615,7 @@ void GradientPage::updateMetrics()
     QVector<QPair<QString,QString> > data;
     we->rawData(data);
 
-    int totalDistance = 0;
+    double totalDistance = 0.0;
     double gain = 0;
 
     // create rideFile
@@ -593,7 +626,9 @@ void GradientPage::updateMetrics()
         if(data[i].first == "LAP") continue;
         double distance = data[i].first.toDouble();
         double grade = data[i].second.toDouble();
-        double delta = distance  * (metricUnits ? 1000 : 5120) * grade /100;
+        constexpr double FeetPerMile = 5280.0;
+        double delta = distance * (metricUnits ? 1000.0 : FeetPerMile)
+                * grade / 100.0;
         gain += (delta > 0) ? delta : 0;
         totalDistance += distance;
     }
@@ -651,19 +686,32 @@ bool GradientPage::SaveWorkout()
     // import them via the workoutimporter
     QStringList files;
     files << filename;
-    Library::importFiles(hackContext, files);
+    const LibraryImportResult imported = Library::importFiles(
+            context, files, LibraryBatchImportConfirmation::noDialog);
+    if (!imported.allSucceeded()) {
+        QMessageBox::warning(this, tr("Save Workout"),
+                tr("The workout was saved but could not be added to the workout library."));
+        return false;
+    }
     return true;
 }
 
 
 
-ImportPage::ImportPage(QWidget *parent) : WorkoutPage(parent) {}
+ImportPage::ImportPage(Context *context, QWidget *parent)
+    : WorkoutPage(context, parent) {}
 
 void ImportPage::initializePage()
 {
-        RideItem *rideItem = hackContext->rideItem();
-        if (NULL == rideItem)
+        if (plot) return;
+        RideItem *rideItem = context ? context->rideItem() : nullptr;
+        if (NULL == rideItem || rideItem->ride()->dataPoints().isEmpty()) {
+            setTitle(tr("Workout Wizard"));
+            setSubTitle(tr("The selected activity has no samples to import."));
+            setFinalPage(false);
             return;
+        }
+        validInput = true;
 
         setTitle(tr("Workout Wizard"));
         setSubTitle(tr("Import current activity as a Gradient ride (slope based)"));
@@ -691,15 +739,16 @@ void ImportPage::initializePage()
         gradeBox = new QSpinBox();
         gradeBox->setValue(20);
         gradeBox->setMaximum(40);
-        gradeBox->setMinimum(-40);
+        gradeBox->setMinimum(1);
         gradeBox->setToolTip(tr("Maximum supported grade is +-40"));
         connect(gradeBox,SIGNAL(valueChanged(int)),this,SLOT(updatePlot()));
 
         segmentBox = new QSpinBox();
         segmentBox->setMinimum(0);
-        segmentBox->setMaximum((metricUnits ? 1000 : 5120));
-        segmentBox->setValue((metricUnits ? 1000 : 5120)/2);
-        segmentBox->setSingleStep((metricUnits ? 1000 : 5120)/100);
+        constexpr int FeetPerMile = 5280;
+        segmentBox->setMaximum((metricUnits ? 1000 : FeetPerMile));
+        segmentBox->setValue((metricUnits ? 1000 : FeetPerMile)/2);
+        segmentBox->setSingleStep((metricUnits ? 1000 : FeetPerMile)/100);
         s = QString(tr("Segment length is based on"))+ " " + QString(metricUnits ? tr("meters"): tr("feet"));
         segmentBox->setToolTip((s));
         connect(segmentBox,SIGNAL(valueChanged(int)),this,SLOT(updatePlot()));
@@ -721,6 +770,7 @@ void ImportPage::initializePage()
 
 void ImportPage::updatePlot()
 {
+    if (rideData.isEmpty() || !gradeBox || !segmentBox) return;
     QVector<double> x;
     QVector<double> y;
     QPair<double,double> p;
@@ -728,7 +778,8 @@ void ImportPage::updatePlot()
     int segmentLength = segmentBox->value();
     double maxSlope = gradeBox->value();
 
-    double curAlt;
+    double curAlt = rideData.at(0).second
+            * (!metricUnits ? FEET_PER_METER : 1);
     rideProfile.clear();
     double startDistance = 0;
     double curDistance = 0;
@@ -738,11 +789,13 @@ void ImportPage::updatePlot()
     {
         totalDistance = p.first * (!metricUnits ? MILES_PER_KM : 1);
         curAlt = p.second * (!metricUnits ? FEET_PER_METER : 1);
-        curDistance = (totalDistance - startDistance) * (metricUnits ? 1000 : 5120);
+        constexpr double FeetPerMile = 5280.0;
+        curDistance = (totalDistance - startDistance)
+                * (metricUnits ? 1000.0 : FeetPerMile);
         if(curDistance > segmentLength)
         {
             double slope = (curAlt - startAlt) / curDistance * 100;
-            slope = std::min(slope, maxSlope);
+            slope = std::clamp(slope, -maxSlope, maxSlope);
             double alt = startAlt + (slope * curDistance / 100);
             x.append(totalDistance);
             y.append(alt);
@@ -750,6 +803,14 @@ void ImportPage::updatePlot()
             startDistance = totalDistance;
             startAlt = curAlt;
         }
+    }
+    if (totalDistance > startDistance && curDistance > 0.0) {
+        double slope = (curAlt - startAlt) / curDistance * 100.0;
+        slope = std::clamp(slope, -maxSlope, maxSlope);
+        const double alt = startAlt + slope * curDistance / 100.0;
+        x.append(totalDistance);
+        y.append(alt);
+        rideProfile.append(QPair<double,double>(totalDistance, slope));
     }
 
     double gain= 0;
@@ -809,7 +870,364 @@ bool ImportPage::SaveWorkout()
     // import them via the workoutimporter
     QStringList files;
     files << filename;
-    Library::importFiles(hackContext, files);
+    const LibraryImportResult imported = Library::importFiles(
+            context, files, LibraryBatchImportConfirmation::noDialog);
+    if (!imported.allSucceeded()) {
+        QMessageBox::warning(this, tr("Save Workout"),
+                tr("The workout was saved but could not be added to the workout library."));
+        return false;
+    }
+    return true;
+}
+
+GeneratedWorkoutPage::GeneratedWorkoutPage(Context *context, QWidget *parent)
+    : WorkoutPage(context, parent)
+{
+}
+
+void GeneratedWorkoutPage::initializePage()
+{
+    if (focusBox) return;
+
+    setTitle(tr("Workout Generator"));
+    setSubTitle(tr("Build a structured workout for a training goal"));
+
+    focusBox = new QComboBox(this);
+    focusBox->setObjectName(QStringLiteral("workoutGeneratorFocus"));
+    focusBox->setAccessibleName(tr("Training focus"));
+    for (WorkoutTrainingFocus focus : WorkoutGenerator::focuses()) {
+        focusBox->addItem(WorkoutGenerator::focusName(focus), int(focus));
+    }
+
+    ftpBox = new QSpinBox(this);
+    ftpBox->setObjectName(QStringLiteral("workoutGeneratorFtp"));
+    ftpBox->setAccessibleName(tr("FTP"));
+    ftpBox->setRange(50, 600);
+    ftpBox->setSuffix(tr(" W"));
+
+    auto createPowerControl = [this](
+            const QString &name,
+            QSlider *&slider,
+            QSpinBox *&box,
+            int minimum,
+            int maximum) {
+        QWidget *container = new QWidget(this);
+        QHBoxLayout *layout = new QHBoxLayout(container);
+        layout->setContentsMargins(0, 0, 0, 0);
+        slider = new QSlider(Qt::Horizontal, container);
+        slider->setObjectName(name + QStringLiteral("Slider"));
+        slider->setRange(minimum, maximum);
+        slider->setMinimumWidth(150 * dpiXFactor);
+        box = new QSpinBox(container);
+        box->setObjectName(name + QStringLiteral("Value"));
+        box->setRange(minimum, maximum);
+        box->setSuffix(tr(" %"));
+        layout->addWidget(slider, 1);
+        layout->addWidget(box);
+        connect(slider, &QSlider::valueChanged, box, &QSpinBox::setValue);
+        connect(box, QOverload<int>::of(&QSpinBox::valueChanged),
+                slider, &QSlider::setValue);
+        return container;
+    };
+
+    QFormLayout *form = new QFormLayout();
+    form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    form->addRow(tr("Training focus"), focusBox);
+    form->addRow(tr("FTP"), ftpBox);
+    form->addRow(tr("Work intensity"), createPowerControl(
+            QStringLiteral("workoutGeneratorWorkPower"),
+            workPowerSlider, workPowerBox, 20, 250));
+    form->addRow(tr("Recovery intensity"), createPowerControl(
+            QStringLiteral("workoutGeneratorRecoveryPower"),
+            recoveryPowerSlider, recoveryPowerBox, 20, 100));
+
+    workSecondsBox = new QSpinBox(this);
+    workSecondsBox->setObjectName(QStringLiteral("workoutGeneratorWorkSeconds"));
+    workSecondsBox->setAccessibleName(tr("Work interval"));
+    workSecondsBox->setRange(5, 2 * 60 * 60);
+    workSecondsBox->setSuffix(tr(" s"));
+    recoverySecondsBox = new QSpinBox(this);
+    recoverySecondsBox->setObjectName(QStringLiteral("workoutGeneratorRecoverySeconds"));
+    recoverySecondsBox->setAccessibleName(tr("Recovery interval"));
+    recoverySecondsBox->setRange(0, 60 * 60);
+    recoverySecondsBox->setSuffix(tr(" s"));
+    repetitionsBox = new QSpinBox(this);
+    repetitionsBox->setObjectName(QStringLiteral("workoutGeneratorRepetitions"));
+    repetitionsBox->setAccessibleName(tr("Repetitions in first set"));
+    repetitionsBox->setRange(1, 100);
+    setsBox = new QSpinBox(this);
+    setsBox->setObjectName(QStringLiteral("workoutGeneratorSets"));
+    setsBox->setAccessibleName(tr("Sets"));
+    setsBox->setRange(1, 20);
+    repetitionDeltaBox = new QSpinBox(this);
+    repetitionDeltaBox->setObjectName(QStringLiteral("workoutGeneratorRepetitionDelta"));
+    repetitionDeltaBox->setAccessibleName(tr("Repetition change per set"));
+    repetitionDeltaBox->setRange(-20, 20);
+    repetitionDeltaBox->setToolTip(
+            tr("Change in repetitions from one set to the next"));
+    setRecoveryBox = new QSpinBox(this);
+    setRecoveryBox->setObjectName(QStringLiteral("workoutGeneratorSetRecovery"));
+    setRecoveryBox->setAccessibleName(tr("Recovery between sets"));
+    setRecoveryBox->setRange(0, 60 * 60);
+    setRecoveryBox->setSuffix(tr(" s"));
+    warmupMinutesBox = new QSpinBox(this);
+    warmupMinutesBox->setObjectName(QStringLiteral("workoutGeneratorWarmup"));
+    warmupMinutesBox->setAccessibleName(tr("Warm-up"));
+    warmupMinutesBox->setRange(0, 60);
+    warmupMinutesBox->setSuffix(tr(" min"));
+    cooldownMinutesBox = new QSpinBox(this);
+    cooldownMinutesBox->setObjectName(QStringLiteral("workoutGeneratorCooldown"));
+    cooldownMinutesBox->setAccessibleName(tr("Cool-down"));
+    cooldownMinutesBox->setRange(0, 60);
+    cooldownMinutesBox->setSuffix(tr(" min"));
+    recoverAfterLastBox = new QCheckBox(
+            tr("Recovery after the last repetition"), this);
+    recoverAfterLastBox->setObjectName(
+            QStringLiteral("workoutGeneratorRecoverAfterLast"));
+
+    workPowerSlider->setAccessibleName(tr("Work intensity slider"));
+    workPowerBox->setAccessibleName(tr("Work intensity"));
+    recoveryPowerSlider->setAccessibleName(tr("Recovery intensity slider"));
+    recoveryPowerBox->setAccessibleName(tr("Recovery intensity"));
+
+    form->addRow(tr("Work interval"), workSecondsBox);
+    form->addRow(tr("Recovery interval"), recoverySecondsBox);
+    form->addRow(tr("Repetitions in first set"), repetitionsBox);
+    form->addRow(tr("Sets"), setsBox);
+    form->addRow(tr("Repetition change per set"), repetitionDeltaBox);
+    form->addRow(tr("Recovery between sets"), setRecoveryBox);
+    form->addRow(tr("Warm-up"), warmupMinutesBox);
+    form->addRow(tr("Cool-down"), cooldownMinutesBox);
+    form->addRow(QString(), recoverAfterLastBox);
+
+    QWidget *controls = new QWidget(this);
+    controls->setLayout(form);
+    QScrollArea *scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidget(controls);
+    scroll->setMinimumWidth(410 * dpiXFactor);
+
+    plot = new WorkoutPlot();
+    plot->setObjectName(QStringLiteral("workoutGeneratorPreview"));
+    plot->setYAxisTitle(tr("% FTP"));
+    plot->setXAxisTitle(tr("Time (minutes)"));
+    plot->setMinimumSize(420 * dpiXFactor, 260 * dpiYFactor);
+
+    QGridLayout *summary = new QGridLayout();
+    durationValue = new QLabel(this);
+    averagePowerValue = new QLabel(this);
+    stressValue = new QLabel(this);
+    intervalValue = new QLabel(this);
+    summary->addWidget(new QLabel(tr("Duration"), this), 0, 0);
+    summary->addWidget(durationValue, 0, 1);
+    summary->addWidget(new QLabel(tr("Average power"), this), 1, 0);
+    summary->addWidget(averagePowerValue, 1, 1);
+    summary->addWidget(new QLabel(tr("Estimated stress"), this), 2, 0);
+    summary->addWidget(stressValue, 2, 1);
+    summary->addWidget(new QLabel(tr("Main set"), this), 3, 0);
+    summary->addWidget(intervalValue, 3, 1);
+
+    validationLabel = new QLabel(this);
+    validationLabel->setObjectName(QStringLiteral("workoutGeneratorValidation"));
+    validationLabel->setWordWrap(true);
+    QPalette validationPalette = validationLabel->palette();
+    validationPalette.setColor(QPalette::WindowText, Qt::red);
+    validationLabel->setPalette(validationPalette);
+
+    QVBoxLayout *previewLayout = new QVBoxLayout();
+    previewLayout->addWidget(plot, 1);
+    previewLayout->addLayout(summary);
+    previewLayout->addWidget(validationLabel);
+
+    QHBoxLayout *pageLayout = new QHBoxLayout(this);
+    pageLayout->addWidget(scroll);
+    pageLayout->addLayout(previewLayout, 1);
+
+    connect(focusBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &GeneratedWorkoutPage::focusChanged);
+    const QList<QSpinBox *> boxes = {
+        ftpBox, workPowerBox, recoveryPowerBox, workSecondsBox,
+        recoverySecondsBox, repetitionsBox, setsBox, repetitionDeltaBox,
+        setRecoveryBox, warmupMinutesBox, cooldownMinutesBox
+    };
+    for (QSpinBox *box : boxes) {
+        connect(box, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, &GeneratedWorkoutPage::controlsChanged);
+    }
+    connect(recoverAfterLastBox, &QCheckBox::toggled,
+            this, &GeneratedWorkoutPage::controlsChanged);
+
+    int ftp = 190;
+    if (context && context->athlete && context->athlete->zones("Bike")) {
+        const int range = context->athlete->zones("Bike")->whichRange(
+                QDate::currentDate());
+        if (range >= 0) ftp = context->athlete->zones("Bike")->getCP(range);
+    }
+    settings = WorkoutGenerator::defaultsFor(
+            WorkoutTrainingFocus::AnaerobicCapacity20_20);
+    settings.ftpWatts = ftp;
+    applySettings(settings);
+}
+
+WorkoutGenerationSettings GeneratedWorkoutPage::settingsFromControls() const
+{
+    WorkoutGenerationSettings value = settings;
+    value.focus = WorkoutTrainingFocus(focusBox->currentData().toInt());
+    value.ftpWatts = ftpBox->value();
+    value.workPercentFtp = workPowerBox->value();
+    value.recoveryPercentFtp = recoveryPowerBox->value();
+    value.workSeconds = workSecondsBox->value();
+    value.recoverySeconds = recoverySecondsBox->value();
+    value.repetitionsPerBlock = repetitionsBox->value();
+    value.blockCount = setsBox->value();
+    value.repetitionDeltaPerBlock = repetitionDeltaBox->value();
+    if (setRecoveryBox->value() != settings.blockRecoverySeconds) {
+        value.blockRecoverySeconds = setRecoveryBox->value();
+        value.lastBlockRecoverySeconds = setRecoveryBox->value();
+    }
+    value.warmupSeconds = warmupMinutesBox->value() * 60;
+    value.cooldownSeconds = cooldownMinutesBox->value() * 60;
+    value.includeRecoveryAfterLastRep = recoverAfterLastBox->isChecked();
+    return value;
+}
+
+void GeneratedWorkoutPage::applySettings(
+        const WorkoutGenerationSettings &value)
+{
+    settings = value;
+    const QList<QObject *> controls = {
+        focusBox, ftpBox, workPowerBox, recoveryPowerBox, workSecondsBox,
+        recoverySecondsBox, repetitionsBox, setsBox, repetitionDeltaBox,
+        setRecoveryBox, warmupMinutesBox, cooldownMinutesBox,
+        recoverAfterLastBox
+    };
+    std::vector<std::unique_ptr<QSignalBlocker>> blockers;
+    blockers.reserve(controls.size());
+    for (QObject *control : controls) {
+        blockers.push_back(std::make_unique<QSignalBlocker>(control));
+    }
+
+    const int focusIndex = focusBox->findData(int(value.focus));
+    if (focusIndex >= 0) focusBox->setCurrentIndex(focusIndex);
+    ftpBox->setValue(value.ftpWatts);
+    workPowerBox->setValue(int(std::lround(value.workPercentFtp)));
+    recoveryPowerBox->setValue(int(std::lround(value.recoveryPercentFtp)));
+    workSecondsBox->setValue(value.workSeconds);
+    recoverySecondsBox->setValue(value.recoverySeconds);
+    repetitionsBox->setValue(value.repetitionsPerBlock);
+    setsBox->setValue(value.blockCount);
+    repetitionDeltaBox->setValue(value.repetitionDeltaPerBlock);
+    setRecoveryBox->setValue(value.blockRecoverySeconds);
+    warmupMinutesBox->setValue(value.warmupSeconds / 60);
+    cooldownMinutesBox->setValue(value.cooldownSeconds / 60);
+    recoverAfterLastBox->setChecked(value.includeRecoveryAfterLastRep);
+    controlsChanged();
+}
+
+void GeneratedWorkoutPage::focusChanged(int index)
+{
+    if (index < 0) return;
+    WorkoutGenerationSettings value = WorkoutGenerator::defaultsFor(
+            WorkoutTrainingFocus(focusBox->itemData(index).toInt()));
+    value.ftpWatts = ftpBox->value();
+    applySettings(value);
+}
+
+void GeneratedWorkoutPage::controlsChanged()
+{
+    if (!focusBox) return;
+    settings = settingsFromControls();
+    generated = WorkoutGenerator::generate(settings);
+    const bool ready = generated.status == WorkoutGenerationStatus::Ready;
+    validationLabel->setVisible(!ready);
+    validationLabel->setText(ready ? QString() : generated.error);
+
+    QVector<double> x;
+    QVector<double> y;
+    double minutes = 0.0;
+    if (ready) {
+        x.reserve(int(generated.intervals.size()) * 2);
+        y.reserve(int(generated.intervals.size()) * 2);
+        for (const WorkoutGeneratedInterval &interval : generated.intervals) {
+            x.append(minutes);
+            y.append(interval.startPercentFtp);
+            minutes += double(interval.durationSeconds) / 60.0;
+            x.append(minutes);
+            y.append(interval.endPercentFtp);
+        }
+    }
+    plot->setAxisAutoScale(QwtAxis::YLeft);
+    plot->setAxisAutoScale(QwtAxis::XBottom);
+    plot->setData(x, y);
+    plot->replot();
+
+    const int duration = ready ? generated.summary.durationSeconds : 0;
+    durationValue->setText(QStringLiteral("%1:%2:%3")
+            .arg(duration / 3600)
+            .arg((duration / 60) % 60, 2, 10, QLatin1Char('0'))
+            .arg(duration % 60, 2, 10, QLatin1Char('0')));
+    averagePowerValue->setText(ready
+            ? tr("%1 W (%2% FTP)")
+                .arg(int(std::lround(generated.summary.averageWatts)))
+                .arg(generated.summary.averagePercentFtp, 0, 'f', 1)
+            : QStringLiteral("-"));
+    stressValue->setText(ready
+            ? QString::number(generated.summary.estimatedStress, 'f', 1)
+            : QStringLiteral("-"));
+    intervalValue->setText(ready
+            ? tr("%1 efforts in %2 sets")
+                .arg(generated.summary.workIntervalCount)
+                .arg(generated.summary.repetitionsByBlock.size())
+            : QStringLiteral("-"));
+    emit completeChanged();
+}
+
+bool GeneratedWorkoutPage::isComplete() const
+{
+    return generated.status == WorkoutGenerationStatus::Ready;
+}
+
+bool GeneratedWorkoutPage::SaveWorkout()
+{
+    generated = WorkoutGenerator::generate(settingsFromControls());
+    if (generated.status != WorkoutGenerationStatus::Ready) {
+        QMessageBox::warning(this, tr("Save Workout"), generated.error);
+        return false;
+    }
+
+    QString workoutDir = appsettings->value(this, GC_WORKOUTDIR).toString();
+    QString filename = QFileDialog::getSaveFileName(
+            this, tr("Save Generated Workout"), workoutDir,
+            tr("Relative Power Workout *.mrc"));
+    if (filename.isEmpty()) return false;
+    filename = WorkoutFileWriter::ensureSuffix(filename, QStringLiteral(".mrc"));
+
+    WorkoutFileWriter writer(filename);
+    QString error;
+    if (!writer.open(error)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, error));
+        return false;
+    }
+    QTextStream &stream = writer.stream();
+    SaveWorkoutHeader(stream, QFileInfo(filename).fileName(),
+            WorkoutGenerator::focusName(settings.focus),
+            QStringLiteral("MINUTES PERCENT"));
+    stream << QString::fromUtf8(WorkoutGenerator::mrcCourseData(generated));
+    if (!writer.commit(error)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, error));
+        return false;
+    }
+
+    const LibraryImportResult imported = Library::importFiles(
+            context, {filename}, LibraryBatchImportConfirmation::noDialog);
+    if (!imported.allSucceeded()) {
+        QMessageBox::warning(this, tr("Save Workout"),
+                tr("The workout was saved but could not be added to the workout library."));
+        return false;
+    }
     return true;
 }
 
@@ -819,12 +1237,13 @@ WorkoutWizard::WorkoutWizard(Context *context) :QWizard(context->mainWindow)
     this->setWhatsThis(help->getWhatsThisText(HelpWhatsThis::MenuBar_Tools_CreateWorkout));
     setMinimumSize(QSize(600*dpiXFactor, 500 *dpiYFactor));
 
-    hackContext = context;
-    setPage(WW_WorkoutTypePage, new WorkoutTypePage());
-    setPage(WW_AbsWattagePage, new AbsWattagePage());
-    setPage(WW_RelWattagePage, new RelWattagePage());
-    setPage(WW_GradientPage, new GradientPage());
-    setPage(WW_ImportPage, new ImportPage());
+    setAttribute(Qt::WA_DeleteOnClose);
+    setPage(WW_WorkoutTypePage, new WorkoutTypePage(context));
+    setPage(WW_GeneratedWorkoutPage, new GeneratedWorkoutPage(context));
+    setPage(WW_AbsWattagePage, new AbsWattagePage(context));
+    setPage(WW_RelWattagePage, new RelWattagePage(context));
+    setPage(WW_GradientPage, new GradientPage(context));
+    setPage(WW_ImportPage, new ImportPage(context));
     this->setStartId(WW_WorkoutTypePage);
 
 #ifdef Q_OS_MAC
@@ -838,5 +1257,5 @@ WorkoutWizard::WorkoutWizard(Context *context) :QWizard(context->mainWindow)
 void WorkoutWizard::accept()
 {
     WorkoutPage *page = (WorkoutPage *)this->currentPage();
-    if (page->SaveWorkout()) done(0);
+    if (page->SaveWorkout()) QWizard::accept();
 }

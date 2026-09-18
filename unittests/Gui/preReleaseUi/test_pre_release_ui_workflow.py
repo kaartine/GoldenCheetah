@@ -27,6 +27,38 @@ LIBRARY_SOURCE_PATH = MODULE_PATH.parents[3] / "src" / "Train" / "Library.cpp"
 
 
 class PreReleaseUiWorkflowTests(unittest.TestCase):
+    def test_generated_workout_validator_accepts_monotonic_mrc(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workout = Path(directory) / "generated.mrc"
+            workout.write_text(
+                "[COURSE DATA]\n"
+                "0.000 55\n"
+                "1.000 55\n"
+                "1.000 135\n"
+                "57.000 55\n"
+                "[END COURSE DATA]\n",
+                encoding="utf-8",
+            )
+
+            result = UI.validate_generated_workout(workout)
+
+            self.assertEqual(result["duration_minutes"], 57.0)
+            self.assertEqual(result["minimum_percent"], 55.0)
+            self.assertEqual(result["maximum_percent"], 135.0)
+            self.assertEqual(result["point_count"], 4)
+
+    def test_generated_workout_validator_rejects_time_reversal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workout = Path(directory) / "generated.mrc"
+            workout.write_text(
+                "[COURSE DATA]\n0.000 55\n1.000 135\n0.500 55\n"
+                "[END COURSE DATA]\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(UI.UiFailure, "not monotonic"):
+                UI.validate_generated_workout(workout)
+
     def test_library_search_dialog_exposes_its_title_to_accessibility(self):
         source = LIBRARY_SOURCE_PATH.read_text(encoding="utf-8")
 
