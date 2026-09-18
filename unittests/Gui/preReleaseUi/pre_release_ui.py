@@ -1788,6 +1788,9 @@ class WorkoutGameUiWorkflow:
         self.activate_stop_training()
         paused_size = recording.stat().st_size
         self.activate_stop_dialog_button("Continue Training")
+        self.stop_training_button = self.driver.find_enabled(
+            "Stop training", "push button", showing=True, timeout=10.0
+        )
         self.driver.wait_file_growth(recording, paused_size)
         if self.capture_screenshots:
             self.driver.screenshot("05-workout-game-continued")
@@ -1817,7 +1820,7 @@ class WorkoutGameUiWorkflow:
                 self.driver.send_named_key(key)
             self.driver.send_named_key("Return")
             return
-        self.driver.activate(button)
+        self.driver.click(button)
 
     def stop_save_and_reopen(self, recording: Path) -> Path:
         time.sleep(1.0)
@@ -1831,9 +1834,12 @@ class WorkoutGameUiWorkflow:
         self.activate_stop_dialog_button("Save")
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
-            stop = self.driver.find(
-                "Stop training", "push button", showing=True, timeout=1.0
-            )
+            try:
+                stop = self.driver.find(
+                    "Stop training", "push button", showing=True, timeout=1.0
+                )
+            except UiFailure:
+                break
             if not self.driver.enabled(stop):
                 break
             time.sleep(0.1)
