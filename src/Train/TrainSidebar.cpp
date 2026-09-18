@@ -29,6 +29,7 @@
 #include "TrainingControllerLifecycle.h"
 #include "TrainingCommandRouter.h"
 #include "TrainingDeviceSelection.h"
+#include "WorkoutDeletionService.h"
 #include "WorkoutGameCourseConversionDialog.h"
 #include "WorkoutGameTrainerTargetPlanner.h"
 #include "RideImportWizard.h"
@@ -1523,12 +1524,33 @@ TrainSidebar::deleteWorkouts()
     foreach (QModelIndex index, list) {
         QModelIndex target = sortModel->mapToSource(index);
         QString filename = workoutModel->data(workoutModel->index(target.row(), TdbWorkoutModelIdx::filepath), Qt::DisplayRole).toString();
-        if (QFileInfo::exists(filename)) {
-            nameList.append(filename);
-        }
+        nameList.append(filename);
     }
 
     if (nameList.count()>0) {
+        const ErgFile *activeWorkout = ergFileQueryAdapter.getErgFile();
+        const QString activeWorkoutPath = activeWorkout
+                ? QFileInfo(activeWorkout->filename()).absoluteFilePath()
+                : (workoutfile.isEmpty()
+                       ? QString()
+                       : QFileInfo(workoutfile).absoluteFilePath());
+        bool deletesActiveWorkout = false;
+        for (const QString &path : nameList) {
+            if (!activeWorkoutPath.isEmpty()
+                    && QFileInfo(path).absoluteFilePath()
+                        == activeWorkoutPath) {
+                deletesActiveWorkout = true;
+                break;
+            }
+        }
+        if (deletesActiveWorkout && context->isRunning()) {
+            QMessageBox::warning(
+                    this,
+                    tr("Delete Workout"),
+                    tr("Stop the current training session before deleting its active workout."));
+            return;
+        }
+
         // are you sure?
         QMessageBox msgBox;
         if (nameList.count()==1) {
@@ -1553,15 +1575,37 @@ TrainSidebar::deleteWorkouts()
 
         if(msgBox.clickedButton() != deleteButton) return;
 
-        foreach (QString filename, nameList) {
-            if (QFileInfo(filename).exists()) {
-                // delete from disk
-                QFile(filename).remove();
-                // delete from DB
-                trainDB->startLUW();
-                trainDB->deleteWorkout(filename);
-                trainDB->endLUW();
-            }
+        // A committed database change refreshes the model synchronously. Keep
+        // that refresh from selecting a different workout while this operation
+        // still owns the current ErgFile.
+        QSignalBlocker blockSelection(workoutTree->selectionModel());
+        const WorkoutDeletionResult result =
+                deleteWorkoutsAtomically(*trainDB, nameList);
+        if (!result.succeeded) {
+            QMessageBox::critical(
+                    this,
+                    tr("Delete Workouts Failed"),
+                    result.errorMessage);
+            return;
+        }
+
+        if (deletesActiveWorkout) {
+            ErgFile *deletedWorkout =
+                    const_cast<ErgFile *>(ergFileQueryAdapter.getErgFile());
+            context->notifyErgFileSelected(NULL);
+            ergFileQueryAdapter.setErgFile(NULL);
+            workoutGameCourseRuntime.reset();
+            workoutfile.clear();
+            workoutTree->clearSelection();
+            workoutTree->setCurrentIndex(QModelIndex());
+            delete deletedWorkout;
+        }
+
+        if (!result.warningMessage.isEmpty()) {
+            QMessageBox::warning(
+                    this,
+                    tr("Workout Deleted with Cleanup Warning"),
+                    result.warningMessage);
         }
     }
 }

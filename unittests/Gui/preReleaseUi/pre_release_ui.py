@@ -42,6 +42,7 @@ UI_TEST_NAMES = (
     "workout_game_training_lifecycle",
     "workout_generator_lifecycle",
     "new_workout_save_as",
+    "workout_deletion_removes_mtb_sidecar",
     "graceful_shutdown_request",
 )
 UI_TEST_DEPENDENCIES = {
@@ -55,6 +56,9 @@ UI_TEST_DEPENDENCIES = {
         "prepared_workout_library_import",
     ),
     "workout_game_training_lifecycle": (
+        "prepared_workout_library_import",
+    ),
+    "workout_deletion_removes_mtb_sidecar": (
         "prepared_workout_library_import",
     ),
 }
@@ -2251,6 +2255,31 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             if capture_screenshots:
                 driver.screenshot("06-workout-generator-saved")
 
+        def delete_workout_and_sidecar():
+            enter_train()
+            workout = root / "library" / ATHLETE / "workouts" / "ui-test.erg"
+            sidecar = workout.with_name("ui-test.gcmtb.json")
+            write_text(sidecar, '{"schemaVersion": 1}\n')
+
+            driver.right_click_named_item("ui-test")
+            driver.activate_popup_item(8)
+            driver.activate(
+                driver.find(
+                    "Delete", "push button", showing=True, timeout=20.0
+                )
+            )
+            driver.wait_file_removed(workout, timeout=20.0)
+            driver.wait_file_removed(sidecar, timeout=20.0)
+
+            deadline = time.monotonic() + 20.0
+            while time.monotonic() < deadline:
+                if not driver.find_all(
+                    name="ui-test", role="table cell", showing=True
+                ):
+                    return
+                time.sleep(0.2)
+            raise UiFailure("Deleted workout remains visible in the library")
+
         def shutdown():
             try:
                 driver.click(
@@ -2306,6 +2335,11 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             and not skip_save_as_from_environment()
         ):
             suite.run("new_workout_save_as", save_workout)
+        if "workout_deletion_removes_mtb_sidecar" in selected_tests:
+            suite.run(
+                "workout_deletion_removes_mtb_sidecar",
+                delete_workout_and_sidecar,
+            )
         if "graceful_shutdown_request" in selected_tests:
             suite.run("graceful_shutdown_request", shutdown)
         return 1 if suite.write_junit() else 0

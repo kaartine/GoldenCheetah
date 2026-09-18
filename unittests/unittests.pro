@@ -47,6 +47,8 @@ exists(unittests.pri) {
 			   Train/trainDbVersionSafety \
 			   Train/libraryTransactionSafety \
 			   Train/libraryParserSerialize \
+			   Train/workoutDeletionService \
+			   Train/workoutDeletionTrainDb \
 				   Core/measuresAtomicSave \
 				   Core/plannedActivityFileStager \
 				   Core/linkedActivitySaveCleanup \
