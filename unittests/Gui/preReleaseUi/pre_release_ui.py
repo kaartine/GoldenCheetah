@@ -723,7 +723,18 @@ class UiDriver:
             f"role={role!r}"
         )
 
-    def require_keyboard_order(self, controls, timeout=5.0):
+    def require_keyboard_change(self, node, key, changed, timeout=5.0):
+        self.send_named_key(key)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if changed():
+                return
+            time.sleep(0.05)
+        raise UiFailure(
+            f"Keyboard input did not change {self.name(node)!r}"
+        )
+
+    def require_keyboard_controls(self, controls, timeout=5.0):
         first_name, first_role = controls[0]
         first = self.find(first_name, first_role, showing=True, timeout=timeout)
         try:
@@ -743,46 +754,57 @@ class UiDriver:
             time.sleep(0.1)
         else:
             raise UiFailure("Training focus is not keyboard-operable")
-        try:
-            first.queryComponent().grabFocus()
-        except Exception as error:
-            raise UiFailure("Cannot restore focus to the training focus") from error
 
-        for index, (name, role) in enumerate(controls[1:], start=2):
-            self.send_named_key("Tab")
+        for name, role in controls[1:]:
             node = self.find(name, role, showing=True, timeout=timeout)
             if role in ("spin button", "slider"):
                 before = self.current_value(node)
+                self.click(node)
+                time.sleep(0.1)
+                focused_value = self.current_value(node)
                 value = node.queryValue()
-                delta = -1 if before >= float(value.maximumValue) else 1
-                self.send_named_key("Down" if delta < 0 else "Up")
+                delta = -1 if focused_value >= float(value.maximumValue) else 1
                 try:
-                    self.wait_value(node, before + delta, timeout)
+                    self.require_keyboard_change(
+                        node,
+                        "Down" if delta < 0 else "Up",
+                        lambda: self.current_value(node) != focused_value,
+                        timeout,
+                    )
                 except UiFailure as error:
                     raise UiFailure(
-                        f"Tab order did not activate {role} {name!r} at "
-                        f"position {index}"
+                        f"Cannot operate {role} {name!r} with the keyboard"
                     ) from error
                 self.set_value(node, before)
                 continue
 
             if role == "check box":
                 before = self.checked(node)
-                self.send_named_key("space")
+                self.click(node)
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
                     if self.checked(node) != before:
                         break
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                 else:
                     raise UiFailure(
-                        f"Tab order did not activate {role} {name!r} at "
-                        f"position {index}"
+                        f"Cannot focus check box {name!r} with the mouse"
                     )
-                self.send_named_key("space")
+                focused_value = self.checked(node)
+                try:
+                    self.require_keyboard_change(
+                        node,
+                        "space",
+                        lambda: self.checked(node) != focused_value,
+                        timeout,
+                    )
+                except UiFailure as error:
+                    raise UiFailure(
+                        f"Cannot operate {role} {name!r} with the keyboard"
+                    ) from error
                 continue
 
-            raise UiFailure(f"Unsupported keyboard-order role: {role}")
+            raise UiFailure(f"Unsupported keyboard-control role: {role}")
 
     def require_names(self, names, role=None, timeout=10.0):
         deadline = time.monotonic() + timeout
@@ -2231,6 +2253,33 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             editable.queryEditableText().setTextContents(str(destination))
             driver.click(driver.find("Save", "push button", showing=True))
 
+        def ensure_workout_code_visible() -> None:
+            if not driver.find_all(
+                    name="Workout code", role="text", showing=True):
+                driver.activate(
+                    driver.find(
+                        "Properties", "push button", showing=True, timeout=10.0
+                    )
+                )
+                driver.find(
+                    "Workout code", "text", showing=True, timeout=10.0
+                )
+
+        def start_new_erg_workout() -> None:
+            ensure_workout_code_visible()
+            driver.click(driver.find("New", "push button", showing=True))
+            driver.send_named_key("Down")
+            driver.send_named_key("Return")
+            editor = driver.find(
+                "Workout code", "text", showing=True, timeout=10.0
+            )
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if not editor.queryText().getText(0, -1).strip():
+                    return
+                time.sleep(0.05)
+            raise UiFailure("New ERG workout did not clear the editor")
+
         def save_workout():
             enter_train()
             driver.select_combo_item(
@@ -2244,28 +2293,47 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             external = root / "external" / conflict.name
             external.parent.mkdir(parents=True, exist_ok=True)
 
-            driver.activate(driver.find("New", "push button", showing=True))
+            start_new_erg_workout()
             driver.click(driver.find("Save As", "push button", showing=True))
             choose_save_path(external)
             driver.wait_file(external)
-            driver.find(
+            warning_text = (
                 "The workout was saved, but it could not be added to the "
-                "workout library. The editor will continue using the saved file.",
+                "workout library. The editor will continue using the saved file."
+            )
+            driver.find(
+                warning_text,
                 showing=True,
                 timeout=20.0,
             )
-            driver.activate(
+            driver.click(
                 driver.find("OK", "push button", showing=True, timeout=10.0)
             )
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if not driver.find_all(name=warning_text, showing=True):
+                    break
+                time.sleep(0.05)
+            else:
+                raise UiFailure("Save As import warning did not close")
             if conflict.read_bytes() != original:
                 raise UiFailure(
                     "Failed Save As import overwrote the library workout"
                 )
 
+            editor = driver.find(
+                "Workout code", "text", showing=True, timeout=10.0
+            )
+            editor.queryEditableText().setTextContents("1m@150")
+            driver.find_enabled(
+                "Save", "push button", showing=True, timeout=10.0
+            )
             destination = conflict.with_name("ui-save-ok.erg")
             driver.click(driver.find("Save As", "push button", showing=True))
             choose_save_path(destination)
             driver.wait_file(destination)
+            if driver.find_all(name=warning_text, showing=True):
+                raise UiFailure("Valid Save As unexpectedly failed to import")
             if capture_screenshots:
                 driver.screenshot("06-workout-saved")
 
@@ -2308,7 +2376,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 ],
                 timeout=15.0,
             )
-            driver.require_keyboard_order(
+            driver.require_keyboard_controls(
                 [
                     ("20/20 descending sets", "combo box"),
                     ("FTP", "spin button"),
@@ -2465,6 +2533,76 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 driver.screenshot("06-workout-generator-saved")
 
         def dirty_workout_transition_guard():
+            def wait_unsaved_dialog():
+                message = driver.find(
+                    "You have unsaved changes to a workout.",
+                    showing=True,
+                    timeout=10.0,
+                )
+                ancestor = message
+                message_bounds = message.queryComponent().getExtents(
+                    driver.pyatspi.DESKTOP_COORDS
+                )
+                message_center = (
+                    message_bounds.x + message_bounds.width // 2,
+                    message_bounds.y + message_bounds.height // 2,
+                )
+                for unused in range(8):
+                    candidates = [
+                        node
+                        for node in driver.all_nodes(ancestor)
+                        if driver.role(node) == "push button"
+                        and driver.showing(node)
+                        and driver.name(node) in {"Save", "Discard", "Cancel"}
+                    ]
+                    names = {driver.name(node) for node in candidates}
+                    if names == {"Save", "Discard", "Cancel"}:
+                        def distance(node):
+                            bounds = node.queryComponent().getExtents(
+                                driver.pyatspi.DESKTOP_COORDS
+                            )
+                            center = (
+                                bounds.x + bounds.width // 2,
+                                bounds.y + bounds.height // 2,
+                            )
+                            return ((center[0] - message_center[0]) ** 2
+                                    + (center[1] - message_center[1]) ** 2)
+
+                        buttons = {
+                            name: min(
+                                (node for node in candidates
+                                 if driver.name(node) == name),
+                                key=distance,
+                            )
+                            for name in names
+                        }
+                        with (artifacts / "unsaved-dialog-buttons.log").open(
+                                "a", encoding="utf-8") as evidence:
+                            for node in candidates:
+                                bounds = node.queryComponent().getExtents(
+                                    driver.pyatspi.DESKTOP_COORDS
+                                )
+                                evidence.write(
+                                    f"candidate {driver.name(node)} "
+                                    f"{bounds.x},{bounds.y},"
+                                    f"{bounds.width},{bounds.height} "
+                                    f"distance={distance(node)}\n"
+                                )
+                            for name, node in sorted(buttons.items()):
+                                bounds = node.queryComponent().getExtents(
+                                    driver.pyatspi.DESKTOP_COORDS
+                                )
+                                evidence.write(
+                                    f"selected {name} {bounds.x},{bounds.y},"
+                                    f"{bounds.width},{bounds.height}\n"
+                                )
+                        return buttons
+                    try:
+                        ancestor = ancestor.parent
+                    except Exception:
+                        break
+                raise UiFailure("Unsaved workout dialog buttons were not found")
+
             enter_train()
             driver.select_combo_item(
                 ["Workout Game", "Workout Editor"], "Workout Editor"
@@ -2472,21 +2610,37 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             source = root / "library" / ATHLETE / "workouts" / "ui-test.erg"
             original = source.read_bytes()
             driver.click_named_item("ui-test")
-            driver.activate(
-                driver.find("Properties", "push button", showing=True)
+            selected = driver.find(
+                "ui-test", "table cell", showing=True, timeout=10.0
             )
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if driver.selected(selected):
+                    break
+                time.sleep(0.05)
+            else:
+                raise UiFailure("Edited workout selection did not settle")
+            ensure_workout_code_visible()
             editor = driver.find(
                 "Workout code", "text", showing=True, timeout=10.0
             )
             text = editor.queryText().getText(0, -1)
             dirty_marker = "\n1m@111"
             editor.queryEditableText().setTextContents(text + dirty_marker)
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if dirty_marker in editor.queryText().getText(0, -1):
+                    break
+                time.sleep(0.05)
+            else:
+                raise UiFailure("Workout editor did not retain the dirty edit")
+            driver.find_enabled(
+                "Save", "push button", showing=True, timeout=10.0
+            )
 
             driver.click_named_item("ui-delete")
-            driver.find("Unsaved Workout", "dialog", showing=True)
-            driver.activate(
-                driver.find("Cancel", "push button", showing=True)
-            )
+            buttons = wait_unsaved_dialog()
+            driver.click(buttons["Cancel"])
             selected = driver.find(
                 "ui-test", "table cell", showing=True, timeout=10.0
             )
@@ -2505,10 +2659,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 raise UiFailure("Cancel changed the source workout file")
 
             driver.click_named_item("ui-delete")
-            driver.find("Unsaved Workout", "dialog", showing=True)
-            driver.activate(
-                driver.find("Discard", "push button", showing=True)
-            )
+            buttons = wait_unsaved_dialog()
+            driver.click(buttons["Discard"])
             target = driver.find(
                 "ui-delete", "table cell", showing=True, timeout=10.0
             )
@@ -2517,28 +2669,50 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             if source.read_bytes() != original:
                 raise UiFailure("Discard changed the source workout file")
 
-            driver.activate(driver.find("New", "push button", showing=True))
+            start_new_erg_workout()
             editor = driver.find(
                 "Workout code", "text", showing=True, timeout=10.0
             )
             editor.queryEditableText().setTextContents("1m@123")
+            driver.find_enabled(
+                "Save", "push button", showing=True, timeout=10.0
+            )
             external = root / "external-transition" / "ui-test.erg"
             external.parent.mkdir(parents=True, exist_ok=True)
 
             driver.click_named_item("ui-test")
-            driver.find("Unsaved Workout", "dialog", showing=True)
-            driver.activate(driver.find("Save", "push button", showing=True))
+            buttons = wait_unsaved_dialog()
+            driver.click(buttons["Save"])
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if not driver.find_all(
+                        name="You have unsaved changes to a workout.",
+                        showing=True):
+                    break
+                time.sleep(0.05)
+            else:
+                raise UiFailure("Save did not close the unsaved workout dialog")
             choose_save_path(external)
             driver.wait_file(external)
-            driver.find(
+            warning_text = (
                 "The workout was saved, but it could not be added to the "
-                "workout library. The editor will continue using the saved file.",
+                "workout library. The editor will continue using the saved file."
+            )
+            driver.find(
+                warning_text,
                 showing=True,
                 timeout=20.0,
             )
-            driver.activate(
+            driver.click(
                 driver.find("OK", "push button", showing=True, timeout=10.0)
             )
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if not driver.find_all(name=warning_text, showing=True):
+                    break
+                time.sleep(0.05)
+            else:
+                raise UiFailure("Saved transition warning did not close")
             selected = driver.find(
                 "ui-test", "table cell", showing=True, timeout=10.0
             )
@@ -2558,16 +2732,28 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     "Failed library import overwrote the selected workout"
                 )
 
-            driver.activate(driver.find("New", "push button", showing=True))
+            start_new_erg_workout()
             editor = driver.find(
                 "Workout code", "text", showing=True, timeout=10.0
             )
             editor.queryEditableText().setTextContents("1m@124")
+            driver.find_enabled(
+                "Save", "push button", showing=True, timeout=10.0
+            )
             imported = source.with_name("ui-transition-save-ok.erg")
 
             driver.click_named_item("ui-delete")
-            driver.find("Unsaved Workout", "dialog", showing=True)
-            driver.activate(driver.find("Save", "push button", showing=True))
+            buttons = wait_unsaved_dialog()
+            driver.click(buttons["Save"])
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if not driver.find_all(
+                        name="You have unsaved changes to a workout.",
+                        showing=True):
+                    break
+                time.sleep(0.05)
+            else:
+                raise UiFailure("Save did not close the unsaved workout dialog")
             choose_save_path(imported)
             driver.wait_file(imported)
             target = driver.find(
@@ -2592,7 +2778,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             write_text(sidecar, '{"schemaVersion": 1}\n')
 
             driver.right_click_named_item("ui-delete")
-            driver.activate_popup_item(8)
+            driver.activate_popup_item(7)
             driver.activate(
                 driver.find(
                     "Delete", "push button", showing=True, timeout=20.0

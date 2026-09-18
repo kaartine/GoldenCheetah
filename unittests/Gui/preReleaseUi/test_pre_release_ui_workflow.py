@@ -191,10 +191,8 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertIs(selected, row)
         driver.click_named_item.assert_called_once_with("ui-test-mtb")
 
-    def test_keyboard_order_does_not_queue_a_combo_restore_key(self):
+    def test_keyboard_controls_do_not_queue_a_combo_restore_key(self):
         focus = mock.Mock()
-        component = mock.Mock()
-        focus.queryComponent.return_value = component
         driver = object.__new__(UI.UiDriver)
         driver.find = mock.Mock(return_value=focus)
         driver.focus_main_window = mock.Mock()
@@ -203,7 +201,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         driver.name = mock.Mock(return_value="Sprint")
 
         with mock.patch.object(UI.time, "sleep"):
-            driver.require_keyboard_order(
+            driver.require_keyboard_controls(
                 [("20/20 descending sets", "combo box")], timeout=1.0
             )
 
@@ -212,7 +210,20 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             driver.send_named_key.call_args_list,
             [mock.call("Escape"), mock.call("Up")],
         )
-        component.grabFocus.assert_called_once_with()
+
+    def test_keyboard_change_waits_for_observable_control_change(self):
+        control = mock.Mock()
+        driver = object.__new__(UI.UiDriver)
+        driver.send_named_key = mock.Mock()
+        changed = mock.Mock(side_effect=(False, True))
+
+        with mock.patch.object(UI.time, "sleep"):
+            driver.require_keyboard_change(
+                control, "Up", changed, timeout=1.0
+            )
+
+        driver.send_named_key.assert_called_once_with("Up")
+        self.assertEqual(changed.call_count, 2)
 
     def test_workout_generator_declares_complete_tab_order(self):
         source = WORKOUT_WIZARD_SOURCE_PATH.read_text(encoding="utf-8")
