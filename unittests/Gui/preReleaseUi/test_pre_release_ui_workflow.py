@@ -188,6 +188,28 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertIs(selected, row)
         driver.click_named_item.assert_called_once_with("ui-test-mtb")
 
+    def test_keyboard_order_waits_for_combo_selection_to_be_restored(self):
+        focus = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find = mock.Mock(return_value=focus)
+        driver.focus_main_window = mock.Mock()
+        driver.click = mock.Mock()
+        driver.send_named_key = mock.Mock()
+        driver.name = mock.Mock(
+            side_effect=("Sprint", "20/20 descending sets")
+        )
+
+        with mock.patch.object(UI.time, "sleep"):
+            driver.require_keyboard_order(
+                [("20/20 descending sets", "combo box")], timeout=1.0
+            )
+
+        self.assertEqual(driver.name.call_count, 2)
+        self.assertEqual(
+            driver.send_named_key.call_args_list,
+            [mock.call("Escape"), mock.call("Up"), mock.call("Down")],
+        )
+
     def test_runner_requires_generated_distance_course_at_game_start(self):
         runner = RUNNER_PATH.read_text(encoding="utf-8")
         helper = ENVIRONMENT_HELPER_PATH.read_text(encoding="utf-8")
