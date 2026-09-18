@@ -886,10 +886,11 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             recording.write_text("secs,watts\n0,190\n", encoding="ascii")
             activity.write_text("{}\n", encoding="ascii")
             stop = object()
+            ready = object()
             save = object()
             finish = object()
             driver = mock.Mock()
-            driver.find.side_effect = [save, finish]
+            driver.find.side_effect = [ready, save, finish]
             driver.wait_new_file.return_value = activity
             driver.reopen_saved_activity.return_value = "saved activity row"
             workflow = object.__new__(UI.WorkoutGameUiWorkflow)
@@ -910,6 +911,15 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                 activity.parent, set(), "*.json", timeout=15.0
             )
             driver.reopen_saved_activity.assert_called_once_with(activity)
+            self.assertEqual(
+                driver.find.call_args_list[0],
+                mock.call(
+                    "Continue Training",
+                    "push button",
+                    showing=True,
+                    timeout=30.0,
+                ),
+            )
             self.assertEqual(
                 (artifacts / "reopened-activity.txt").read_text(
                     encoding="utf-8"

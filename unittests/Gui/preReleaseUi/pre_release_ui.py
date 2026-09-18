@@ -1778,6 +1778,12 @@ class WorkoutGameUiWorkflow:
     def stop_save_and_reopen(self, recording: Path) -> Path:
         time.sleep(1.0)
         self.activate_stop_training()
+        # Save becomes visible while the import pass is still finishing.  The
+        # continuation control is exposed only after TrainSidebar has armed
+        # the dialog's save/discard signals, so use it as the readiness gate.
+        self.driver.find(
+            "Continue Training", "push button", showing=True, timeout=30.0
+        )
         self.activate_stop_dialog_button("Save")
         activity = self.driver.wait_new_file(
             self.activities,
