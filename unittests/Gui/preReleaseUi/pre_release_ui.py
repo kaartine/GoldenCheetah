@@ -2421,7 +2421,9 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             result = validate_generated_workout(destination)
             if (not math.isclose(result["duration_minutes"], 56.5,
                                  abs_tol=0.001)
-                    or result["maximum_percent"] != 135.0):
+                    or result["minimum_percent"] != 55.0
+                    or result["maximum_percent"] != 135.0
+                    or result["point_count"] != 190):
                 raise UiFailure(
                     f"Generated workout did not preserve controls: {result!r}"
                 )

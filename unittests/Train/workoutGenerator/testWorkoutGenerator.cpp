@@ -20,6 +20,30 @@ class TestWorkoutGenerator : public QObject
     Q_OBJECT
 
 private slots:
+    void focusNamesMatchEverySupportedGoal()
+    {
+        QStringList names;
+        for (WorkoutTrainingFocus focus : WorkoutGenerator::focuses()) {
+            names.append(WorkoutGenerator::focusName(focus));
+        }
+
+        QCOMPARE(names, QStringList({
+            QStringLiteral("Endurance"),
+            QStringLiteral("Tempo"),
+            QStringLiteral("Sweet spot"),
+            QStringLiteral("Threshold"),
+            QStringLiteral("VO2max"),
+            QStringLiteral("Anaerobic"),
+            QStringLiteral("Sprint"),
+            QStringLiteral("20/20 descending sets")
+        }));
+        QCOMPARE(QSet<QString>(names.cbegin(), names.cend()).size(),
+                 names.size());
+        QCOMPARE(WorkoutGenerator::focusName(
+                         static_cast<WorkoutTrainingFocus>(999)),
+                 QStringLiteral("Unknown"));
+    }
+
     void everyFocusHasDistinctValidDefaults()
     {
         QSet<QString> signatures;

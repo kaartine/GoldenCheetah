@@ -49,6 +49,7 @@ exists(unittests.pri) {
 			   Train/libraryParserSerialize \
 			   Train/workoutDeletionService \
 			   Train/workoutDeletionTrainDb \
+			   Train/workoutGenerator \
 				   Core/measuresAtomicSave \
 				   Core/plannedActivityFileStager \
 				   Core/linkedActivitySaveCleanup \

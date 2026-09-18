@@ -41,6 +41,9 @@ all qt Train/webDownloadImportPolicy
 all qt Train/trainDbVersionSafety
 all qt Train/libraryTransactionSafety
 all qt Train/libraryParserSerialize
+all qt Train/workoutDeletionService
+all qt Train/workoutDeletionTrainDb
+all qt Train/workoutGenerator
 all qt Core/measuresAtomicSave
 all qt Core/plannedActivityFileStager
 all qt Core/linkedActivitySaveCleanup
@@ -143,6 +146,7 @@ all qt Train/workoutGame3DCameraContinuity
 all qt Train/workoutGame3DChunkBuilder
 all qt Train/workoutGame3DFeatureAsset
 all qt Train/workoutGame3DGeometry
+all qt Train/workoutGame3DHealth
 all qt Train/workoutGame3DTerrainProfile
 all qt Train/workoutGame3DView
 all qt Train/workoutGameAudio
