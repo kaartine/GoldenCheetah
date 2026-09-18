@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "LibraryTransactionTestStubs.h"
+#include "LibraryScanPersistence.h"
 #include "TrainDB.h"
 #include "WorkoutImportBatch.h"
 
@@ -237,6 +238,10 @@ private slots:
     void refreshWorkoutsSchemaFailureDoesNotReportSuccess();
     void refreshWorkoutsCommitFailureRollsBackWithoutSignal();
     void refreshWorkoutsSuccessSignalsAfterCommit();
+    void scanPersistenceCommitsRequestedState();
+    void scanPersistenceRestoresMemoryAfterSerializationFailure();
+    void scanPersistenceRestoresEveryStoreAfterDatabaseFailure();
+    void scanPersistenceReportsRecoverySerializationFailure();
     void dialogBatchStartFailureDoesNotCommitOrAccept();
     void dialogBatchDuplicateFailureRollsBackEarlierWrite();
     void dialogBatchSchemaFailureRollsBackFilesAndDatabase();
@@ -248,6 +253,134 @@ private slots:
     void dialogBatchSerializeFailureRestoresAllStores();
     void dialogBatchSuccessPublishesOnlyAfterCommit();
 };
+
+void TestLibraryTransactionSafety::scanPersistenceCommitsRequestedState()
+{
+    QList<QString> paths{QStringLiteral("old-path")};
+    QList<QString> refs{QStringLiteral("old-ref")};
+    int serializations = 0;
+    int databaseUpdates = 0;
+
+    const LibraryScanPersistenceResult result =
+            LibraryScanPersistence::persist(
+                paths,
+                refs,
+                {QStringLiteral("new-path")},
+                {QStringLiteral("new-ref")},
+                [&](QString *) {
+                    ++serializations;
+                    return paths == QList<QString>{QStringLiteral("new-path")}
+                        && refs == QList<QString>{QStringLiteral("new-ref")};
+                },
+                [&](QString *) {
+                    ++databaseUpdates;
+                    return paths == QList<QString>{QStringLiteral("new-path")}
+                        && refs == QList<QString>{QStringLiteral("new-ref")};
+                });
+
+    QVERIFY(result.succeeded());
+    QCOMPARE(paths, QList<QString>{QStringLiteral("new-path")});
+    QCOMPARE(refs, QList<QString>{QStringLiteral("new-ref")});
+    QCOMPARE(serializations, 1);
+    QCOMPARE(databaseUpdates, 1);
+}
+
+void TestLibraryTransactionSafety::
+scanPersistenceRestoresMemoryAfterSerializationFailure()
+{
+    QList<QString> paths{QStringLiteral("old-path")};
+    QList<QString> refs{QStringLiteral("old-ref")};
+    bool databaseCalled = false;
+
+    const LibraryScanPersistenceResult result =
+            LibraryScanPersistence::persist(
+                paths,
+                refs,
+                {QStringLiteral("new-path")},
+                {QStringLiteral("new-ref")},
+                [](QString *error) {
+                    *error = QStringLiteral("serialize failed");
+                    return false;
+                },
+                [&](QString *) {
+                    databaseCalled = true;
+                    return true;
+                });
+
+    QCOMPARE(result.status,
+             LibraryScanPersistenceStatus::SerializationFailed);
+    QCOMPARE(result.error, QStringLiteral("serialize failed"));
+    QCOMPARE(paths, QList<QString>{QStringLiteral("old-path")});
+    QCOMPARE(refs, QList<QString>{QStringLiteral("old-ref")});
+    QVERIFY(!databaseCalled);
+}
+
+void TestLibraryTransactionSafety::
+scanPersistenceRestoresEveryStoreAfterDatabaseFailure()
+{
+    QList<QString> paths{QStringLiteral("old-path")};
+    QList<QString> refs{QStringLiteral("old-ref")};
+    int serializations = 0;
+
+    const LibraryScanPersistenceResult result =
+            LibraryScanPersistence::persist(
+                paths,
+                refs,
+                {QStringLiteral("new-path")},
+                {QStringLiteral("new-ref")},
+                [&](QString *) {
+                    ++serializations;
+                    if (serializations == 1) {
+                        return paths ==
+                                QList<QString>{QStringLiteral("new-path")};
+                    }
+                    return paths ==
+                                QList<QString>{QStringLiteral("old-path")}
+                        && refs == QList<QString>{QStringLiteral("old-ref")};
+                },
+                [](QString *error) {
+                    *error = QStringLiteral("database failed");
+                    return false;
+                });
+
+    QCOMPARE(result.status, LibraryScanPersistenceStatus::DatabaseFailed);
+    QCOMPARE(result.error, QStringLiteral("database failed"));
+    QCOMPARE(paths, QList<QString>{QStringLiteral("old-path")});
+    QCOMPARE(refs, QList<QString>{QStringLiteral("old-ref")});
+    QCOMPARE(serializations, 2);
+}
+
+void TestLibraryTransactionSafety::
+scanPersistenceReportsRecoverySerializationFailure()
+{
+    QList<QString> paths{QStringLiteral("old-path")};
+    QList<QString> refs{QStringLiteral("old-ref")};
+    int serializations = 0;
+
+    const LibraryScanPersistenceResult result =
+            LibraryScanPersistence::persist(
+                paths,
+                refs,
+                {QStringLiteral("new-path")},
+                {QStringLiteral("new-ref")},
+                [&](QString *error) {
+                    ++serializations;
+                    if (serializations == 1) return true;
+                    *error = QStringLiteral("recovery failed");
+                    return false;
+                },
+                [](QString *error) {
+                    *error = QStringLiteral("database failed");
+                    return false;
+                });
+
+    QCOMPARE(result.status, LibraryScanPersistenceStatus::RecoveryFailed);
+    QCOMPARE(result.error, QStringLiteral("database failed"));
+    QCOMPARE(result.recoveryError, QStringLiteral("recovery failed"));
+    QCOMPARE(paths, QList<QString>{QStringLiteral("old-path")});
+    QCOMPARE(refs, QList<QString>{QStringLiteral("old-ref")});
+    QCOMPARE(serializations, 2);
+}
 
 void TestLibraryTransactionSafety::importFilesDuplicateFailureRollsBackBatch()
 {

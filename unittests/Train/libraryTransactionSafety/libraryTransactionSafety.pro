@@ -15,6 +15,7 @@ SOURCES = testLibraryTransactionSafety.cpp \
           ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/Train/Library.cpp \
           ../../../src/Train/LibraryImportFileStager.cpp \
+          ../../../src/Train/LibraryScanPersistence.cpp \
           ../../../src/Train/WorkoutImportBatch.cpp \
           ../../../src/Train/TrainDB.cpp \
           ../../../src/Train/ErgFileBase.cpp \
@@ -23,6 +24,7 @@ SOURCES = testLibraryTransactionSafety.cpp \
 HEADERS = LibraryTransactionTestStubs.h \
           ../../../src/FileIO/AnchoredFileSystem.h \
           ../../../src/Train/LibraryImportFileStager.h \
+          ../../../src/Train/LibraryScanPersistence.h \
           ../../../src/Train/WorkoutImportBatch.h \
           ../../../src/Train/TrainDB.h \
           ../../../src/Train/ErgFileBase.h \

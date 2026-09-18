@@ -17,6 +17,7 @@
  */
 
 #include "LibraryImportFileStager.h"
+#include "LibraryScanPersistence.h"
 #include "TrainDB.h"
 #include "WorkoutImportBatch.h"
 #include "WorkoutGameCourseDocument.h"
@@ -784,69 +785,68 @@ LibrarySearchDialog::search()
         // traversal. Never apply incomplete results as authoritative state.
         if (!validateSearchRequest()) return;
 
-        const QList<QString> previousPaths = library ? library->paths
-                                                     : QList<QString>();
-        const QList<QString> previousRefs = library ? library->refs
-                                                    : QList<QString>();
-
-        // first lets update the library paths to
-        // reflect the user selections
+        QList<QString> requestedPaths;
+        QList<QString> requestedRefs;
         if (library) {
-            library->paths.clear();
             for(int i=0; i<searchPathTable->invisibleRootItem()->childCount(); i++) {
                 QTreeWidgetItem *item = searchPathTable->invisibleRootItem()->child(i);
-                QString path = item->text(0);
-
-                library->paths.append(path);
+                requestedPaths.append(item->text(0));
             }
 
-            library->refs.clear();
             for(int i=0; i<refTable->invisibleRootItem()->childCount(); i++) {
                 QTreeWidgetItem *item = refTable->invisibleRootItem()->child(i);
-                QString ref = item->text(0);
-
-                library->refs.append(ref);
+                requestedRefs.append(item->text(0));
             }
 
-
-            // now write to disk..
-            QString serializationError;
-            if (!LibraryParser::serialize(
-                        context->athlete->home->root(),
-                        &serializationError)) {
-                library->paths = previousPaths;
-                library->refs = previousRefs;
-                QMessageBox::warning(
-                    this,
-                    tr("Library update failed"),
-                    tr("The search paths could not be saved. The existing "
-                       "library was not changed.\n\n%1")
-                            .arg(serializationError));
-                return;
-            }
-        }
-
-        // ok, we've completed a search without aborting
-        // so lets rebuild the database of workouts and videos
-        // using what we found...
-        if (!updateDB()) {
-            if (library) {
-                library->paths = previousPaths;
-                library->refs = previousRefs;
-                QString recoveryError;
-                if (!LibraryParser::serialize(
-                            context->athlete->home->root(),
-                            &recoveryError)) {
+            const LibraryScanPersistenceResult persisted =
+                    LibraryScanPersistence::persist(
+                        library->paths,
+                        library->refs,
+                        requestedPaths,
+                        requestedRefs,
+                        [this](QString *error) {
+                            return LibraryParser::serialize(
+                                context->athlete->home->root(), error);
+                        },
+                        [this](QString *error) {
+                            return updateDB(error);
+                        });
+            if (!persisted.succeeded()) {
+                if (persisted.status ==
+                        LibraryScanPersistenceStatus::SerializationFailed) {
+                    QMessageBox::warning(
+                        this,
+                        tr("Library update failed"),
+                        tr("The search paths could not be saved. The existing "
+                           "library was not changed.\n\n%1")
+                                .arg(persisted.error));
+                } else if (persisted.status ==
+                           LibraryScanPersistenceStatus::RecoveryFailed) {
                     QMessageBox::critical(
                         this,
                         tr("Library recovery failed"),
                         tr("The database update failed and the previous search "
                            "paths could not be restored on disk. Keep this "
-                           "dialog open and retry saving the library.\n\n%1")
-                                .arg(recoveryError));
+                           "dialog open and retry saving the library.\n\n%1\n\n%2")
+                                .arg(persisted.error,
+                                     persisted.recoveryError));
+                } else {
+                    QMessageBox::warning(
+                        this,
+                        tr("Library update failed"),
+                        persisted.error);
                 }
+                return;
             }
-            return;
+        } else {
+            QString databaseError;
+            if (!updateDB(&databaseError)) {
+                QMessageBox::warning(
+                    this,
+                    tr("Library update failed"),
+                    databaseError);
+                return;
+            }
         }
         close();
 
@@ -1009,15 +1009,15 @@ LibrarySearchDialog::removeReference()
 }
 
 bool
-LibrarySearchDialog::updateDB()
+LibrarySearchDialog::updateDB(QString *error)
 {
+    if (error != nullptr) error->clear();
     TrainDB::ScopedLUW transaction(*trainDB);
     if (!transaction.isActive()) {
-        QMessageBox::warning(
-            this,
-            tr("Library update failed"),
-            tr("The scan results could not be saved. The existing library "
-               "was not changed."));
+        if (error != nullptr) {
+            *error = tr("The scan results could not be saved. The existing "
+                        "library was not changed.");
+        }
         return false;
     }
 
@@ -1092,11 +1092,10 @@ LibrarySearchDialog::updateDB()
     }
 
     if (!ok || !transaction.commit()) {
-        QMessageBox::warning(
-            this,
-            tr("Library update failed"),
-            tr("The scan results could not be saved. The existing library "
-               "was not changed."));
+        if (error != nullptr) {
+            *error = tr("The scan results could not be saved. The existing "
+                        "library was not changed.");
+        }
         return false;
     }
     return true;
