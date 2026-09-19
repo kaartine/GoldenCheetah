@@ -267,6 +267,7 @@ contains(DEFINES, "GC_WANT_PYTHON") {
 
     ## Python Embedding & Charts
     HEADERS += Python/PythonEmbed.h Python/PythonExecutionGate.h \
+               Python/PythonPathAppender.h \
                Python/PythonRuntimeFinalizer.h Python/PythonRuntimeInitializer.h \
                Python/PythonChartRunState.h Python/PythonChartRunner.h \
                Python/PythonChartOwner.h \

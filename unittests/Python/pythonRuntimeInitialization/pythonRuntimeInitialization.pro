@@ -13,4 +13,5 @@ LIBS += $$PYTHONLIBS
 
 SOURCES += realPythonRuntimeInitialization.cpp
 HEADERS += $$PWD/../../../src/Python/PythonRuntimeInitializer.h \
-           $$PWD/../../../src/Python/PythonRuntimeFinalizer.h
+           $$PWD/../../../src/Python/PythonRuntimeFinalizer.h \
+           $$PWD/../../../src/Python/PythonPathAppender.h

@@ -101,6 +101,7 @@ private slots:
     void runtimeFinalizerEnforcesOwnerStateAndOrdering();
     void runtimeFinalizerHandlesPartialAndFlushErrors();
     void runtimeInitializerTracksFailureOwnership();
+    void pathAppenderOwnsReferencesOnEveryExit();
     void processLifetimeOwnerControlsPublication();
     void pythonConfigurationOwnsInitializationInputs();
     void pythonInitializationOwnershipWiring();
@@ -1227,6 +1228,56 @@ TestPythonChartLifecycle::runtimeInitializerTracksFailureOwnership()
     QCOMPARE(outcome.first, Initializer::Result::Initialized);
     QCOMPARE(outcome.second, QList<int>({1, 2, 3, 4}));
     QCOMPARE(state, State::InterpreterInitialized);
+}
+
+void
+TestPythonChartLifecycle::pathAppenderOwnsReferencesOnEveryExit()
+{
+    using Appender = PythonPathAppender;
+    int sysValue = 1;
+    int pathValue = 2;
+    int entryValue = 3;
+
+    const auto run = [&](const bool hasPath, const bool isList,
+                         const bool hasEntry, const bool appendSucceeds) {
+        QList<int> released;
+        const auto result = Appender::append(
+            &sysValue,
+            {
+                [&](void *) -> void * {
+                    return hasPath ? &pathValue : nullptr;
+                },
+                [&](void *) -> bool { return isList; },
+                [&]() -> void * { return hasEntry ? &entryValue : nullptr; },
+                [&](void *, void *) -> bool { return appendSucceeds; },
+                [&](void *reference) {
+                    released.append(reference == &entryValue ? 3 : 2);
+                }
+            });
+        return qMakePair(result, released);
+    };
+
+    auto outcome = run(false, true, true, true);
+    QCOMPARE(outcome.first, Appender::Result::MissingPath);
+    QVERIFY(outcome.second.isEmpty());
+
+    outcome = run(true, false, true, true);
+    QCOMPARE(outcome.first, Appender::Result::InvalidPath);
+    QCOMPARE(outcome.second, QList<int>({2}));
+
+    outcome = run(true, true, false, true);
+    QCOMPARE(outcome.first, Appender::Result::AllocationFailed);
+    QCOMPARE(outcome.second, QList<int>({2}));
+
+    outcome = run(true, true, true, false);
+    QCOMPARE(outcome.first, Appender::Result::AppendFailed);
+    QCOMPARE(outcome.second, QList<int>({3, 2}));
+
+    outcome = run(true, true, true, true);
+    QCOMPARE(outcome.first, Appender::Result::Appended);
+    QCOMPARE(outcome.second, QList<int>({3, 2}));
+
+    QCOMPARE(Appender::append(nullptr, {}), Appender::Result::Rejected);
 }
 
 void

@@ -64,6 +64,25 @@ public:
     PyConfig config;
 };
 
+class PythonObjectGuard final
+{
+public:
+    explicit PythonObjectGuard(PyObject *object) : object_(object) {}
+    ~PythonObjectGuard() { Py_XDECREF(object_); }
+
+    void reset()
+    {
+        Py_XDECREF(object_);
+        object_ = nullptr;
+    }
+
+    PythonObjectGuard(const PythonObjectGuard &) = delete;
+    PythonObjectGuard &operator=(const PythonObjectGuard &) = delete;
+
+private:
+    PyObject *object_;
+};
+
 bool pythonConfigFailed(const char *operation, const PyStatus &status)
 {
     if (!PyStatus_Exception(status)) return false;
@@ -452,10 +471,38 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
 
         // did module import fail (python not installed properly?)
         if (sys != NULL)  {
+            PythonObjectGuard sysGuard(sys);
 
             printd("Add '.' to Path\n");
-            PyObject *path = PyObject_GetAttrString(sys, "path");
-            PyList_Append(path, PyUnicode_FromString("."));
+            const PythonPathAppender::Result pathResult =
+                PythonPathAppender::append(
+                    sys,
+                    {
+                        [](void *module) {
+                            return static_cast<void *>(PyObject_GetAttrString(
+                                static_cast<PyObject *>(module), "path"));
+                        },
+                        [](void *path) {
+                            return PyList_Check(static_cast<PyObject *>(path));
+                        },
+                        []() {
+                            return static_cast<void *>(PyUnicode_FromString("."));
+                        },
+                        [](void *path, void *entry) {
+                            return PyList_Append(
+                                static_cast<PyObject *>(path),
+                                static_cast<PyObject *>(entry)) == 0;
+                        },
+                        [](void *reference) {
+                            Py_DECREF(static_cast<PyObject *>(reference));
+                        }
+                    });
+            if (pathResult != PythonPathAppender::Result::Appended) {
+                fprintf(stderr, "Unable to append '.' to Python sys.path.\n");
+                PyErr_Print();
+                PyErr_Clear();
+            }
+            sysGuard.reset();
 
             // get version
             printd("Py_GetVersion()\n");

@@ -8561,13 +8561,27 @@ commit before the next finding begins.
   real CPython 3.12 runtime. Python 3.8 and the Windows/macOS/deployed-Python
   layouts remain release-matrix checks. The full GoldenCheetah/SIP application
   smoke already required by ARCH-003D2 remains a deployment prerequisite.
-- ARCH-003D4 (queued reference-lifetime defect observed during D3 and recorded
+- ARCH-003D4 (FIXED; reference-lifetime defect observed during D3 and recorded
   before correction): Python post-initialization obtains a new `sys.path`
   reference and passes a second new temporary Unicode reference directly to
   `PyList_Append`, but releases neither reference and ignores allocation/append
   failures. Give both references explicit owned lifetimes, handle null/non-list
   and append failures without calling through invalid objects, and cover both
   success and injected-failure cleanup before changing the production path.
+- ARCH-003D4 resolution: a testable path-appender now validates the module and
+  list reference, creates the Unicode entry only after validation, checks the
+  append result, and releases both owned references in the required entry-then-
+  path order on every exit. Production also owns and releases the imported
+  `sys` module while the GIL is still held. Failures emit and clear Python
+  diagnostics without dereferencing a missing or wrong-typed object.
+- ARCH-003D4 verification: the lifecycle suite passes 22/22 normally and under
+  ASan/UBSan, with injected missing-path, wrong-type, allocation, append, and
+  success paths proving exact cleanup. A real CPython 3.12 child verifies the
+  appended value, list growth, and unchanged held `sys.path` reference count.
+  Production `PythonEmbed.cpp` compiles against CPython 3.12, the dependency
+  suite passes 14/14, and `git diff --check` is clean. Independent post-review
+  found no blocker or major issue and returned GO; its test-child cleanup note
+  was corrected before commit while D5 remained explicitly open.
 - ARCH-003D5 (queued post-initialization readiness defect found by independent
   D3 post-review and recorded before correction): Python setup ignores failures
   from the catcher-install and library scripts, then fetches `catchOutErr` and

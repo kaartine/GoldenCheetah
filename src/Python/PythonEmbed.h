@@ -30,6 +30,7 @@
 #include <thread>
 
 #include "PythonExecutionGate.h"
+#include "PythonPathAppender.h"
 #include "PythonRuntimeFinalizer.h"
 #include "PythonRuntimeInitializer.h"
 #include "RideItem.h"
