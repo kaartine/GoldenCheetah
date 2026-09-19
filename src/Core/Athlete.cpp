@@ -18,6 +18,8 @@
 
 #include "Athlete.h"
 
+#include "AthleteRefreshLifecycle.h"
+#include "AthleteSession.h"
 #include "MainWindow.h"
 #include "Context.h"
 #include "Seasons.h"
@@ -537,6 +539,13 @@ Athlete::releaseOwnedResources(bool saveCharts) noexcept
         cloudAutoDownload->cancelAndWait();
         delete cloudAutoDownload;
         cloudAutoDownload = nullptr;
+    }
+
+    // Permanently close admission and join configuration-dependent workers
+    // before destroying the cache or any zone/route/measure dependency.
+    if (context
+        && !context->athleteSession().refreshLifecycle().beginShutdown()) {
+        qFatal("Athlete refresh lifecycle shutdown failed");
     }
 
     // close the ride cache down first

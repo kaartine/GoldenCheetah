@@ -31,6 +31,8 @@
 
 #include "Context.h"
 #include "Athlete.h"
+#include "AthleteRefreshLifecycle.h"
+#include "AthleteSession.h"
 #include "RideFileCache.h"
 #include "RideCacheModel.h"
 #include "Specification.h"
@@ -156,6 +158,14 @@ RideCache::RideCache(Context *context) : context(context)
     progress_ = 100;
     exiting = false;
     estimator = new Estimator(context);
+    const bool lifecycleRegistered =
+        context->athleteSession().refreshLifecycle().registerParticipant({
+            this,
+            [this]() { quiesceForConfigTransition(); },
+            [this]() { resumeAfterConfigTransition(); }
+        });
+    if (!lifecycleRegistered)
+        qFatal("RideCache could not register its refresh lifecycle");
 
     // initial load of user defined metrics - do once we have an initial context
     // but before we refresh or check metrics for the first time
@@ -489,6 +499,9 @@ RideCache::~RideCache()
 {
     exiting = true;
 
+    context->athleteSession().refreshLifecycle()
+        .unregisterParticipant(this);
+
     if (startupLoader_ && startupLoader_->isRunning()) {
         startupLoader_->requestInterruption();
         startupLoader_->wait();
@@ -496,11 +509,6 @@ RideCache::~RideCache()
 
     if (estimator) {
         estimator->stop();
-        if (! estimator->wait(5000)) {
-            qWarning() << "Estimator did not stop in time, forcing termination.";
-            estimator->terminate();
-            estimator->wait();
-        }
         delete estimator;
         estimator = nullptr;
     }
@@ -857,6 +865,11 @@ RideCache::refresh()
         return;
     }
 
+    if (!context->athleteSession().refreshLifecycle().admitsWork()) {
+        refreshAfterConfigTransition_ = true;
+        return;
+    }
+
     if (replacementRefreshBlocked_
         && *replacementRefreshBlocked_)
         return;
@@ -880,6 +893,42 @@ RideCache::refresh()
     if (deferStart) return;
     if (active) interruptActiveRefresh();
     else startLatestRefresh();
+}
+
+void
+RideCache::quiesceForConfigTransition()
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    refreshAfterConfigTransition_ = refreshAfterConfigTransition_
+        || isRunning() || refreshGeneration_.hasPending();
+    estimatorAfterConfigTransition_ = estimator
+        && estimator->hasPendingOrRunning();
+
+    if (estimator) estimator->stop();
+    cancel();
+}
+
+void
+RideCache::resumeAfterConfigTransition()
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (exiting) return;
+
+    const bool restartRefresh = refreshAfterConfigTransition_;
+    const bool restartEstimator = estimatorAfterConfigTransition_;
+    refreshAfterConfigTransition_ = false;
+    estimatorAfterConfigTransition_ = false;
+
+    if (restartRefresh) refresh();
+    if (estimator) {
+        const Estimator::DeferredRequest deferred =
+            estimator->takeDeferredRequest();
+        if (deferred == Estimator::DeferredRequest::Immediate)
+            estimator->calculate();
+        else if (restartEstimator
+                 || deferred == Estimator::DeferredRequest::Lazy)
+            estimator->refresh();
+    }
 }
 
 void

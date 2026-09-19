@@ -73,6 +73,13 @@ void AthleteConfigDialog::closeClicked()
 //   ! new mode: change the CP associated with the present mode
 void AthleteConfigDialog::saveClicked()
 {
+    // The pages below mutate live zone/measure/settings state.  Join readers
+    // before the first write and keep admission closed until notification.
+    if (!context->beginConfigTransition()) {
+        qCritical() << "Could not begin athlete configuration transition";
+        return;
+    }
+
     // what changed ?
     qint32 changed = 0;
 
@@ -83,15 +90,14 @@ void AthleteConfigDialog::saveClicked()
         // hide away whilst changes are applied
         hide();
 
-        // if a refresh is happenning stop it, whilst we
-        // update all the configuration settings!
-        context->athlete->rideCache->cancel();
-
         // tell this context athlete settings changed
         context->notifyConfigChanged(changed);
+        context->finishConfigTransition();
 
         // hide the dialog
         close();
+    } else {
+        context->finishConfigTransition();
     }
 }
 

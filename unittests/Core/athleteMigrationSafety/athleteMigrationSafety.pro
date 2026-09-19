@@ -36,6 +36,7 @@ isEmpty(GC_CLOUD_SERVICE_SOURCE) {
 
 SOURCES = testAthleteMigrationSafety.cpp \
           AthleteMigrationTestStubs.cpp \
+          ../../../src/Core/AthleteRefreshLifecycle.cpp \
           ../../../src/Core/AthleteSession.cpp \
           ../../../src/Core/TrainingSession.cpp \
           CloudAutoDownloadTestSupport.cpp \

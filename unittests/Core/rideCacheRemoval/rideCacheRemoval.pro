@@ -15,6 +15,7 @@ DEFINES += GC_RIDE_CACHE_REMOVAL_TEST_HOOKS \
 
 SOURCES = testRideCacheRemoval.cpp \
           RideCacheRemovalTestStubs.cpp \
+          ../../../src/Core/AthleteRefreshLifecycle.cpp \
           ../../../src/Core/AthleteSession.cpp \
           ../../../src/Core/TrainingSession.cpp \
           ../../../src/FileIO/AnchoredFileSystem.cpp \
@@ -43,6 +44,7 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../contrib/qzip/zip.cpp
 
 HEADERS = ../../../src/Core/Athlete.h \
+          ../../../src/Core/AthleteRefreshLifecycle.h \
           ../../../src/Core/AthleteSession.h \
           ../../../src/Core/TrainingSession.h \
           ../../../src/Core/SessionServices.h \

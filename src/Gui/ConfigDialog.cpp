@@ -236,9 +236,12 @@ void ConfigDialog::closeClicked()
 //   ! new mode: change the CP associated with the present mode
 void ConfigDialog::saveClicked()
 {
-    // if a refresh is happening stop it, whilst we
-    // update all the configuration settings!
-    context->athlete->rideCache->cancel();
+    // Stop and join every athlete's configuration-dependent workers before
+    // the first settings page writes shared global state.
+    if (!GlobalContext::context()->beginConfigTransition()) {
+        qCritical() << "Could not begin global configuration transition";
+        return;
+    }
 
     // what changed ?
     qint32 changed = 0;
@@ -283,11 +286,20 @@ void ConfigDialog::saveClicked()
             // close all the mainwindows
             foreach(MainWindow *m, mainwindows) m->byebye();
 
-            // NOTE: we don't notifyConfigChanged() now because the context
-            //       has been zapped along with the windows we need to get out
-            //       as quickly as possible.
-            close();
-            return;
+            if (mainwindows.isEmpty()) {
+                // Every Context has entered permanent shutdown, so there is no
+                // participant left whose outer transition needs reopening.
+                close();
+                return;
+            }
+
+            // At least one window refused closure (for example an active
+            // import or an unsaved ride). Keep the application usable: cancel
+            // the restart, restore the old root, and fall through to the
+            // normal notify/finish path for every surviving Context.
+            restarting = false;
+            appsettings->setValue(
+                GC_HOMEDIR, general->generalPage->athleteWAS);
 
         } else {
 
@@ -299,6 +311,7 @@ void ConfigDialog::saveClicked()
 
     // global context changed, will be cascaded to each athlete context
     GlobalContext::context()->notifyConfigChanged(changed);
+    GlobalContext::context()->finishConfigTransition();
 
     // done.
     close();

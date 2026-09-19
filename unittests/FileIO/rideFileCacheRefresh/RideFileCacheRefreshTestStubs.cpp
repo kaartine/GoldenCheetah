@@ -9,6 +9,7 @@
 
 #include "Athlete.h"
 #include "AthleteSession.h"
+#include "AthleteRefreshLifecycle.h"
 #include "Colors.h"
 #include "CompressedActivityFile.h"
 #include "Context.h"

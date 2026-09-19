@@ -18,6 +18,7 @@
 
 #include "Context.h"
 #include "AthleteSession.h"
+#include "AthleteRefreshLifecycle.h"
 #include "TrainingSession.h"
 #include "SessionServices.h"
 
@@ -59,10 +60,46 @@ GlobalContext::context()
     return &globalContext;
 }
 
+bool
+GlobalContext::beginConfigTransition()
+{
+    QList<Context *> begun;
+    foreach(Context *p, _contexts) {
+        if (!Context::isValid(p)) continue;
+        if (!p->beginConfigTransition()) {
+            for (Context *entered : begun)
+                entered->finishConfigTransition();
+            return false;
+        }
+        begun.append(p);
+    }
+    return true;
+}
+
+bool
+GlobalContext::finishConfigTransition()
+{
+    bool finished = true;
+    foreach(Context *p, _contexts) {
+        if (Context::isValid(p))
+            finished = p->finishConfigTransition() && finished;
+    }
+    return finished;
+}
+
 void
 GlobalContext::notifyConfigChanged(qint32 state)
 {
     QApplication::setOverrideCursor(Qt::WaitCursor);
+
+    // Callers that can mutate configuration must begin this transaction before
+    // their first write.  This fallback still protects the replaceable global
+    // objects below for legacy notification paths.
+    if (!beginConfigTransition()) {
+        QApplication::restoreOverrideCursor();
+        qCritical() << "Could not protect global configuration reload";
+        return;
+    }
 
     // read it in - global only
     readConfig(state);
@@ -74,6 +111,8 @@ GlobalContext::notifyConfigChanged(qint32 state)
     foreach(Context *p, _contexts)
         if (Context::isValid(p))
             p->notifyConfigChanged(state);
+
+    finishConfigTransition();
 
     QApplication::restoreOverrideCursor();
 }
@@ -310,6 +349,24 @@ void
 Context::notifyConfigChanged(qint32 state)
 {
     QApplication::setOverrideCursor(Qt::WaitCursor);
+    if (!beginConfigTransition()) {
+        QApplication::restoreOverrideCursor();
+        qCritical() << "Could not protect athlete configuration notification";
+        return;
+    }
     emit configChanged(state);
+    finishConfigTransition();
     QApplication::restoreOverrideCursor();
+}
+
+bool
+Context::beginConfigTransition()
+{
+    return athleteSession().refreshLifecycle().beginConfigTransition();
+}
+
+bool
+Context::finishConfigTransition()
+{
+    return athleteSession().refreshLifecycle().finishConfigTransition();
 }

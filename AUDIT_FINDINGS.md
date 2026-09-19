@@ -8677,6 +8677,98 @@ commit before the next finding begins.
   refresh keys and calendar/colour semantics and add deterministic
   config-change/teardown barrier tests. Coordinate this work with ARCH-004C so
   the HTTP worker no longer mutates the shared settings registry.
+- ARCH-003F1 (required lifecycle item recorded before correction): Add an
+  owner-thread refresh lifecycle barrier before any replaceable global or
+  athlete configuration object can be destroyed or mutated. The barrier must
+  close admission, interrupt and synchronously join every active refresh
+  worker, reject wrong-thread/admission-after-shutdown use, and reopen only
+  after a completed configuration transition. Global configuration reload and
+  athlete teardown must invoke it explicitly; cooperative generation
+  invalidation alone is not an object-lifetime barrier.
+- ARCH-003F2 (required snapshot item recorded before correction): Capture an
+  immutable, AthleteSession-owned environment for every admitted refresh
+  generation on the GUI thread. It must contain value copies of the colour
+  field/rules, calendar-field semantics, unit mode, and every global or
+  athlete setting reachable from `RideItem::checkStale`, `refresh`, interval
+  discovery, and built-in metric calculation (weight, discovery, CP-for-FTP,
+  pace/swim pace, elevation hysteresis, date of birth, sex, W' formula and
+  tau). Worker code must not fall back to `GlobalContext` QObjects or
+  `appsettings` while such an environment is active. ARCH-004C's request-local
+  anchored INI reader remains a separate boundary and must not be reused here.
+- ARCH-003F3 (required publication item recorded before correction): A worker
+  currently mutates `RideItem` in place before the generation acceptance check,
+  so an invalidated generation can expose partial or stale results even when
+  bookkeeping rejects it. Compute into a detached per-item result and publish
+  it on the owner thread only after validating the generation, or provide an
+  equivalent transaction that proves rejected generations publish no item,
+  notification, or save mutations.
+- ARCH-003F4 (required deterministic verification recorded before correction):
+  Add latch-controlled tests for config transition and teardown joining,
+  generation N rejection while N+1 is requested, exception/early-exit lease
+  release, wrong-thread and post-shutdown admission rejection, queued callback
+  suppression, and multi-key snapshot consistency. Run the focused suite under
+  ASan/UBSan; retain a TSan run as a release prerequisite if the available Qt
+  build is not TSan-instrumented.
+- ARCH-003F5 (adjacent worker defect found by independent F review and recorded
+  before correction): `Estimator::run` also dereferences the replaceable global
+  `RideMetadata` object, while configuration reload can delete it. Its teardown
+  escalates from a cooperative five-second wait to unsafe `QThread::terminate`.
+  Include Estimator admission and cooperative joining in the pre-mutation
+  configuration/teardown barrier, remove forced termination, and give its
+  worker the same immutable value-data rule (or a separately proven snapshot)
+  before claiming ARCH-003F complete. Audit the startup loader and background
+  saver at this boundary; they currently join/drain during cache teardown but
+  must not be assumed safe during a configuration transition without evidence.
+- ARCH-003F1 resolution: `AthleteSession` now owns an owner-thread lifecycle
+  coordinator with balanced nested configuration transitions, permanent
+  shutdown, fail-closed participant registration, and synchronous quiesce/
+  resume callbacks. Both settings dialogs enter the transition before their
+  first page write. Global reload retains the barrier through replacement and
+  all Context broadcasts; athlete notification pairs its nested transition,
+  and each dialog releases its outer ownership afterward. `RideCache` joins
+  refresh workers and Estimator without holding the lifecycle state open to
+  new admission, while Athlete teardown closes admission permanently before
+  cache, routes, measures, or zones are destroyed. Requests made during the
+  transition are coalesced and resumed only after the final owner releases it.
+- ARCH-003F1/F5 lifecycle verification: the focused suite passes 7/7 normally
+  and under ASan/UBSan. It covers nested ownership, synchronous latch-worker
+  joining, permanent shutdown, wrong-thread rejection, and production wiring/
+  CI inclusion. Estimator now gates both lazy and immediate entry points,
+  preserves their priority while closed, and restarts exactly once through the
+  RideCache participant. The former five-second `QThread::terminate` fallback
+  is removed. All changed production translation units (`Context`, `Athlete`,
+  `AthleteSession`, `RideCache`, `Estimator`, and both settings dialogs) compile
+  with warnings as errors against Qt 6.4.2 using temporary, non-installed
+  compatibility headers; the dependency suite passes 14/14 and `git diff
+  --check` is clean. The broader session-boundary suite reaches compilation but
+  is blocked in this Qt 6.4.2 environment by its pre-existing incomplete
+  `ErgFile`/`VideoSyncFile` typed-connect incompatibility.
+- ARCH-003F1 residual: this barrier prevents deletion/mutation while current
+  workers run, but it intentionally does not make worker inputs immutable or
+  prevent rejected workers from mutating `RideItem` before generation
+  validation. ARCH-003F2 and ARCH-003F3 remain required. Estimator's global
+  metadata read is lifetime-safe under the new barrier, but migrating it to
+  immutable value data remains part of F2/F5 completion. A TSan-instrumented
+  Qt build remains a release prerequisite.
+- ARCH-003F1a (review blocker recorded before correction): The accepted
+  athlete-library restart branch returned with the dialog-owned outer global
+  transition still open. `MainWindow::closeEvent` may refuse closure for an
+  unsaved activity or active import, leaving every surviving Context with
+  refresh/Estimator admission permanently closed. After requesting all window
+  closes, return with the transition intentionally abandoned only when no
+  Context survives; otherwise cancel restart, restore the previous library
+  root, run the normal notification path, and balance the outer transition.
+- ARCH-003F1a resolution: The restart path now abandons the open transition
+  only after the global MainWindow registry proves that no Context survived.
+  If any window refuses closure, restart is cancelled, the previous athlete
+  root is restored, and normal global notification plus the paired outer
+  finish reopens every survivor. The production-wiring regression test pins
+  the survivor check, rollback, notification, and finish ordering.
+- ARCH-003F1 independent final review: GO. The reviewer found no remaining
+  blocker or major issue after verifying partial-begin rollback, refused-
+  restart recovery, nested depth, Estimator deferral, permanent shutdown, and
+  aggregate-test registration. F2/F3 and the documented TSan prerequisite are
+  intentionally outside this commit.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

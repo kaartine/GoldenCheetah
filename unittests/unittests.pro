@@ -12,6 +12,7 @@ exists(unittests.pri) {
 			   Build/publicReleaseCredentials \
 			   Build/linkerSectionFlags \
 			   Core/athleteMigrationSafety \
+			   Core/athleteRefreshLifecycle \
 			   Core/sessionBoundaries \
 			   Core/credentialSettings \
 			   Core/dataFilterResources \

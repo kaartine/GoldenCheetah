@@ -8,6 +8,7 @@
  */
 
 #include "AthleteSession.h"
+#include "AthleteRefreshLifecycle.h"
 #include "Context.h"
 #include "SessionServices.h"
 #include "TrainingSession.h"
@@ -18,6 +19,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QThread>
 
 #include <cstdio>
 #include <memory>
@@ -319,6 +321,8 @@ private slots:
     void contextOwnershipBoundaryIsEnforced();
     void cacheFailurePathUsesInjectedPersistencePort();
     void athleteSessionOwnsInjectedServices();
+    void refreshLifecycleCoordinatesTransitionsAndShutdown();
+    void refreshLifecycleRejectsWrongThread();
     void trainingSessionOwnsStateAndApplicationService();
     void productionContextOwnsAndDelegatesSessions();
 };
@@ -433,6 +437,69 @@ void TestSessionBoundaries::athleteSessionOwnsInjectedServices()
 
     QVERIFY(applicationDestroyed);
     QVERIFY(persistenceDestroyed);
+}
+
+void TestSessionBoundaries::
+refreshLifecycleCoordinatesTransitionsAndShutdown()
+{
+    AthleteRefreshLifecycle lifecycle;
+    int quiesceCount = 0;
+    int resumeCount = 0;
+    int identity = 0;
+
+    QVERIFY(lifecycle.registerParticipant({
+        &identity,
+        [&]() { ++quiesceCount; },
+        [&]() { ++resumeCount; }
+    }));
+    QVERIFY(lifecycle.admitsWork());
+
+    QVERIFY(lifecycle.beginConfigTransition());
+    QCOMPARE(quiesceCount, 1);
+    QVERIFY(lifecycle.transitionActive());
+    QVERIFY(!lifecycle.admitsWork());
+
+    // Nested callers share one transaction and must not quiesce twice.
+    QVERIFY(lifecycle.beginConfigTransition());
+    QCOMPARE(quiesceCount, 1);
+    QVERIFY(lifecycle.finishConfigTransition());
+    QCOMPARE(resumeCount, 0);
+    QVERIFY(!lifecycle.admitsWork());
+    QVERIFY(lifecycle.finishConfigTransition());
+    QCOMPARE(resumeCount, 1);
+    QVERIFY(lifecycle.admitsWork());
+
+    QVERIFY(lifecycle.beginShutdown());
+    QCOMPARE(quiesceCount, 2);
+    QVERIFY(lifecycle.shutdownStarted());
+    QVERIFY(!lifecycle.admitsWork());
+    QVERIFY(!lifecycle.finishConfigTransition());
+    QVERIFY(!lifecycle.registerParticipant({
+        reinterpret_cast<void *>(quintptr(1)), []() {}, {}}));
+    QVERIFY(lifecycle.unregisterParticipant(&identity));
+    QVERIFY(lifecycle.beginShutdown());
+    QCOMPARE(quiesceCount, 2);
+}
+
+void TestSessionBoundaries::refreshLifecycleRejectsWrongThread()
+{
+    AthleteRefreshLifecycle lifecycle;
+    bool transitionResult = true;
+    bool shutdownResult = true;
+    QThread worker;
+    QObject probe;
+    probe.moveToThread(&worker);
+    connect(&worker, &QThread::started, &probe, [&]() {
+        transitionResult = lifecycle.beginConfigTransition();
+        shutdownResult = lifecycle.beginShutdown();
+        worker.quit();
+    });
+
+    worker.start();
+    QVERIFY(worker.wait(5000));
+    QVERIFY(!transitionResult);
+    QVERIFY(!shutdownResult);
+    QVERIFY(lifecycle.admitsWork());
 }
 
 void TestSessionBoundaries::trainingSessionOwnsStateAndApplicationService()

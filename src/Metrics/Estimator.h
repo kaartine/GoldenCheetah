@@ -53,6 +53,8 @@ class Estimator : public QThread {
 
     public:
 
+        enum class DeferredRequest { None, Lazy, Immediate };
+
         Estimator(Context *);
         ~Estimator();
 
@@ -64,6 +66,8 @@ class Estimator : public QThread {
 
         // cancel any pending/running and kick off with 15 sec delay
         void refresh();
+        bool hasPendingOrRunning() const;
+        DeferredRequest takeDeferredRequest();
 
         // filter marks performances as submax
         QList<Performance> filter(QList<Performance>);
@@ -90,6 +94,7 @@ class Estimator : public QThread {
         QTimer singleshot;
 
         EstimatorThreadControl threadControl_;
+        DeferredRequest deferredRequest_ = DeferredRequest::None;
 };
 
 #endif

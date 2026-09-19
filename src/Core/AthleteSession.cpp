@@ -9,6 +9,7 @@
 
 #include "AthleteSession.h"
 
+#include "AthleteRefreshLifecycle.h"
 #include "SessionServices.h"
 
 #include <QtGlobal>
@@ -18,9 +19,11 @@ AthleteSession::AthleteSession(
     std::unique_ptr<AthletePersistenceService> persistenceService)
     : applicationService_(std::move(applicationService))
     , persistenceService_(std::move(persistenceService))
+    , refreshLifecycle_(std::make_unique<AthleteRefreshLifecycle>())
 {
     Q_ASSERT(applicationService_);
     Q_ASSERT(persistenceService_);
+    Q_ASSERT(refreshLifecycle_);
 }
 
 AthleteSession::~AthleteSession() = default;
@@ -33,4 +36,14 @@ QWebEngineProfile *AthleteSession::webEngineProfile() const
 AthletePersistenceService &AthleteSession::persistenceService() const
 {
     return *persistenceService_;
+}
+
+AthleteRefreshLifecycle &AthleteSession::refreshLifecycle()
+{
+    return *refreshLifecycle_;
+}
+
+const AthleteRefreshLifecycle &AthleteSession::refreshLifecycle() const
+{
+    return *refreshLifecycle_;
 }

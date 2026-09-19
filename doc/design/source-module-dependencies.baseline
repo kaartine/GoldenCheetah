@@ -10617,6 +10617,18 @@
     {
       "source": "src/Metrics/Estimator.cpp",
       "source_module": "Metrics",
+      "target": "src/Core/AthleteRefreshLifecycle.h",
+      "target_module": "Core"
+    },
+    {
+      "source": "src/Metrics/Estimator.cpp",
+      "source_module": "Metrics",
+      "target": "src/Core/AthleteSession.h",
+      "target_module": "Core"
+    },
+    {
+      "source": "src/Metrics/Estimator.cpp",
+      "source_module": "Metrics",
       "target": "src/Core/Context.h",
       "target_module": "Core"
     },

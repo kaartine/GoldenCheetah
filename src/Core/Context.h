@@ -73,6 +73,8 @@ class GlobalContext : public QObject
 
         static GlobalContext *context();
 
+        bool beginConfigTransition();
+        bool finishConfigTransition();
         void notifyConfigChanged(qint32);
 
         // metadata etc
@@ -177,6 +179,8 @@ class Context : public QObject
         // APPLICATION EVENTS
         // *********************************************
         void notifyConfigChanged(qint32); // Global and athlete specific changes communicated via this signal
+        bool beginConfigTransition();
+        bool finishConfigTransition();
 
         // athlete load/close
         void notifyLoadProgress(QString folder, double progress) { emit loadProgress(folder,progress); }

@@ -15,11 +15,13 @@ DEFINES += GC_TEST_SOURCE_ROOT=\\\"$${GC_TEST_SOURCE_ROOT}\\\"
 
 SOURCES = testSessionBoundaries.cpp \
           SessionBoundaryLinkStubs.cpp \
+          ../../../src/Core/AthleteRefreshLifecycle.cpp \
           ../../../src/Core/AthleteSession.cpp \
           ../../../src/Core/Context.cpp \
           ../../../src/Core/TrainingSession.cpp
 
-HEADERS = ../../../src/Core/AthleteSession.h \
+HEADERS = ../../../src/Core/AthleteRefreshLifecycle.h \
+          ../../../src/Core/AthleteSession.h \
           ../../../src/Core/Context.h \
           ../../../src/Core/RideItem.h \
           ../../../src/Core/TrainingSession.h \

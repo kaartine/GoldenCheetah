@@ -476,6 +476,8 @@ class RideCache : public QObject
         int modelIndexOf(RideItem *item) const;
         RideCacheModel *model_ = nullptr;
         bool exiting = false;
+	    bool refreshAfterConfigTransition_ = false;
+	    bool estimatorAfterConfigTransition_ = false;
 	    double progress_; // percent
 
         QVector<RideCacheRefreshThread*> refreshThreads;
@@ -513,6 +515,8 @@ class RideCache : public QObject
 
         void startLatestRefresh();
         void interruptActiveRefresh();
+        void quiesceForConfigTransition();
+        void resumeAfterConfigTransition();
         bool settleRefreshForSave(QString &error);
         std::shared_ptr<const RideCacheSave::Snapshot>
             captureSaveSnapshot(const QString &targetPath);

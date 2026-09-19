@@ -20,6 +20,8 @@
 
 #include "Context.h"
 #include "Athlete.h"
+#include "AthleteRefreshLifecycle.h"
+#include "AthleteSession.h"
 #include "RideFileCache.h"
 #include "RideCacheModel.h"
 #include "Specification.h"
@@ -114,6 +116,12 @@ Estimator::~Estimator()
 void
 Estimator::refresh()
 {
+    if (!context->athleteSession().refreshLifecycle().admitsWork()) {
+        if (deferredRequest_ == DeferredRequest::None)
+            deferredRequest_ = DeferredRequest::Lazy;
+        return;
+    }
+
     printd("Lazy start triggered.\n");
 
     stop(); // stop any running threads
@@ -123,10 +131,29 @@ Estimator::refresh()
     singleshot.start();
 }
 
+bool
+Estimator::hasPendingOrRunning() const
+{
+    return isRunning() || singleshot.isActive();
+}
+
+Estimator::DeferredRequest
+Estimator::takeDeferredRequest()
+{
+    const DeferredRequest request = deferredRequest_;
+    deferredRequest_ = DeferredRequest::None;
+    return request;
+}
+
 // setup and run, if not already running
 void
 Estimator::calculate()
 {
+    if (!context->athleteSession().refreshLifecycle().admitsWork()) {
+        deferredRequest_ = DeferredRequest::Immediate;
+        return;
+    }
+
     // already doing that, so return straight away
     if (!threadControl_.prepareForStart(*this)) return;
 
