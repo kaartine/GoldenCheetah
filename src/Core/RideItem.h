@@ -255,6 +255,7 @@ class RideItem : public QObject
 
         // refresh when stale
         bool refresh();
+        bool refresh(const RideRefreshEnvironment &environment);
 
         // get/set
         void setRide(RideFile *);
@@ -268,6 +269,7 @@ class RideItem : public QObject
     private:
         bool prepareForRefreshRelevantMutation();
         bool checkStaleImpl(const RideRefreshEnvironment *environment);
+        bool refreshImpl(const RideRefreshEnvironment *environment);
         void updateIntervals(bool notify = true);
         void borrowRideForRefresh(RideFile *ride);
         void borrowFileCacheForRefresh(RideFileCache *cache);

@@ -147,6 +147,16 @@ private:
     const StoragePaths storagePaths_;
 };
 
+template<typename LegacyColor>
+QColor rideRefreshBuildColor(
+    const RideRefreshEnvironment *environment,
+    const QString &colorText,
+    LegacyColor &&legacyColor)
+{
+    if (environment) return environment->colorFor(colorText);
+    return legacyColor();
+}
+
 std::shared_ptr<const RideRefreshEnvironment>
 captureRideRefreshEnvironment(Context *context, quint64 generation);
 

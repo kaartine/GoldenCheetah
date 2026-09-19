@@ -9037,6 +9037,14 @@ commit before the next finding begins.
   Admit mutable access only on the cache owner thread or on a distinct
   transient item's own thread; reject a cache-affine item from every worker,
   and inspect cache membership only where the cache-owned containers are safe.
+- ARCH-003F2c3b (retained builder dispatch and color consumer recorded before
+  correction): The worker retains one immutable environment but still calls
+  the environment-free `RideItem::refresh()`, whose build color consults
+  mutable `GlobalContext` metadata and color-engine state. Add an explicit
+  bound overload used by the worker and route only color-field/rule evaluation
+  through its retained snapshot. Preserve the legacy overload for synchronous
+  callers and keep parser, weight, zones, cache construction, metrics,
+  intervals, fingerprint, and calendar text explicitly open under F2c3.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -10204,6 +10212,27 @@ commit before the next finding begins.
   dependencies pass 14/14, and `git diff --check` is clean. Independent review
   first found the open-state TOCTOU and transient/cross-owner admission gaps;
   final re-review returned GO with no remaining blocker or major finding.
+- ARCH-003F2c3b resolution: the refresh worker now passes its retained
+  immutable `RideRefreshEnvironment` into an explicit bound `RideItem`
+  overload. That overload shares the legacy builder implementation but derives
+  the build color only from the generation-captured color field and ordered
+  rules; its lazy fallback cannot consult `GlobalContext`, `RideMetadata`, or
+  `ColorEngine`. The environment-free overload remains the compatibility path
+  for synchronous callers and preserves its prior live color behavior.
+- ARCH-003F2c3b verification: the environment suite passes 22/22 normally and
+  under ASan/UBSan, including executable proof that the bound color branch
+  never invokes its legacy fallback and a production contract that pins the
+  retained worker dispatch. The production `RideItem.cpp` and `RideCache.cpp`
+  units compile with warnings as errors. The production-mutator suite passes
+  3/3 and computed-state suite 10/10, each normally and under ASan/UBSan; the
+  complete removal suite passes 408/408 outside its atomic-writer sandbox
+  constraint. Source dependencies pass 14/14 and `git diff --check` is clean.
+  Independent review returned GO with no blocker or major finding.
+- ARCH-003F2c3b residual: the bound builder still has live dependencies on the
+  source parser context, weight/measures/settings, zones, `RideFileCache`, the
+  metric singleton and live metric context, interval construction and update,
+  fingerprint inputs, and Calendar Text formatting. Those remain under
+  ARCH-003F2c3; detached owner-thread publication remains under ARCH-003F3.
 - ARCH-003F2c3a residual: generation-bound `checkStale` still writes color,
   weight, CRC, and stale state in the worker, as tracked by ARCH-003F3c2. The
   builder's remaining live environment consumers are tracked by ARCH-003F2c3,

@@ -179,6 +179,24 @@ colorRulesPreserveEngineOrderingAndFallback()
     QCOMPARE(
         snapshot->colorFor(QStringLiteral("zeta and alpha")),
         QColor(Qt::blue));
+
+    int legacyCalls = 0;
+    QCOMPARE(
+        rideRefreshBuildColor(
+            snapshot.get(), QStringLiteral("ALPHA"), [&]() {
+                ++legacyCalls;
+                return QColor(Qt::yellow);
+            }),
+        QColor(Qt::red));
+    QCOMPARE(legacyCalls, 0);
+    QCOMPARE(
+        rideRefreshBuildColor(
+            nullptr, QStringLiteral("ALPHA"), [&]() {
+                ++legacyCalls;
+                return QColor(Qt::yellow);
+            }),
+        QColor(Qt::yellow));
+    QCOMPARE(legacyCalls, 1);
 }
 
 void TestRideRefreshEnvironment::
@@ -1456,7 +1474,8 @@ productionWorkersRetainTheirPublishedGeneration()
     const qsizetype backgroundGate = source.indexOf(
         "!work->inputs.backgroundRefreshAllowed", staleCheck);
     const qsizetype refreshCall = source.indexOf(
-        "const bool refreshed = item->refresh()", backgroundGate);
+        "const bool refreshed = item->refresh(*environment)",
+        backgroundGate);
     const qsizetype disposition = source.indexOf(
         "refreshResultDisposition(", refreshCall);
     const qsizetype refreshOutcome = source.indexOf(
@@ -1693,6 +1712,37 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(!boundBody.contains("->zones("));
     QVERIFY(!boundBody.contains("if (!isstale)"));
     QVERIFY(!boundBody.contains("return isstale"));
+
+    const qsizetype legacyRefresh = itemSource.indexOf(
+        "RideItem::refresh()\n{");
+    const qsizetype legacyRefreshDelegate = itemSource.indexOf(
+        "refreshImpl(nullptr)", legacyRefresh);
+    const qsizetype boundRefresh = itemSource.indexOf(
+        "RideItem::refresh(const RideRefreshEnvironment &environment)",
+        legacyRefreshDelegate);
+    const qsizetype boundRefreshDelegate = itemSource.indexOf(
+        "refreshImpl(&environment)", boundRefresh);
+    const qsizetype refreshImpl = itemSource.indexOf(
+        "RideItem::refreshImpl(const RideRefreshEnvironment *environment)",
+        boundRefreshDelegate);
+    const qsizetype boundColorText = itemSource.indexOf(
+        "const QString boundColorText = environment", refreshImpl);
+    const qsizetype boundColorField = itemSource.indexOf(
+        "sourceRide->getTag(environment->colorField(), \"\")",
+        boundColorText);
+    const qsizetype boundColorEvaluation = itemSource.indexOf(
+        "rideRefreshBuildColor(", boundColorField);
+    const qsizetype nextBuildField = itemSource.indexOf(
+        "staging.present =", boundColorEvaluation);
+    QVERIFY(legacyRefresh >= 0);
+    QVERIFY(legacyRefreshDelegate > legacyRefresh);
+    QVERIFY(boundRefresh > legacyRefreshDelegate);
+    QVERIFY(boundRefreshDelegate > boundRefresh);
+    QVERIFY(refreshImpl > boundRefreshDelegate);
+    QVERIFY(boundColorText > refreshImpl);
+    QVERIFY(boundColorField > boundColorText);
+    QVERIFY(boundColorEvaluation > boundColorField);
+    QVERIFY(nextBuildField > boundColorEvaluation);
 
     const QByteArray captureBody = itemSource.mid(
         captureInputs, boundOverload - captureInputs);

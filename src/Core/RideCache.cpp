@@ -2546,7 +2546,7 @@ void RideCacheRefreshThread::run()
         if (item
             && item->checkStale(*environment, work->inputs)) {
             if (!work->inputs.backgroundRefreshAllowed) continue;
-            const bool refreshed = item->refresh();
+            const bool refreshed = item->refresh(*environment);
             QMutexLocker locker(&target->updateMutex);
             const auto disposition =
                 RideCacheStartup::refreshResultDisposition(

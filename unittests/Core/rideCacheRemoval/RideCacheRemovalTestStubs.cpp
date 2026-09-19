@@ -1170,6 +1170,7 @@ void RideItem::close()
 }
 
 bool RideItem::refresh() { return true; }
+bool RideItem::refresh(const RideRefreshEnvironment &) { return true; }
 
 void RideItem::setDirty(bool dirty)
 {

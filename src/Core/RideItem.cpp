@@ -940,6 +940,18 @@ bool RideItem::hasLinkedActivity() const
 bool
 RideItem::refresh()
 {
+    return refreshImpl(nullptr);
+}
+
+bool
+RideItem::refresh(const RideRefreshEnvironment &environment)
+{
+    return refreshImpl(&environment);
+}
+
+bool
+RideItem::refreshImpl(const RideRefreshEnvironment *environment)
+{
     if (!isstale) {
         return rideItemRefreshSucceeded(
             RideItemRefreshOutcome::AlreadyCurrent);
@@ -1017,9 +1029,16 @@ RideItem::refresh()
     staging.isSwim = sourceRide->isSwim();
     staging.isXtrain = sourceRide->isXtrain();
     staging.isAero = sourceRide->isAero();
-    staging.color = GlobalContext::context()->colorEngine->colorFor(
-        sourceRide->getTag(
-            GlobalContext::context()->rideMetadata->getColorField(), ""));
+    const QString boundColorText = environment
+        ? sourceRide->getTag(environment->colorField(), "")
+        : QString();
+    staging.color = rideRefreshBuildColor(
+        environment, boundColorText, [sourceRide]() {
+            return GlobalContext::context()->colorEngine->colorFor(
+                sourceRide->getTag(
+                    GlobalContext::context()->rideMetadata->getColorField(),
+                    ""));
+        });
     staging.present = sourceRide->getTag("Data", "");
     staging.samples = !sourceRide->dataPoints().isEmpty();
 
