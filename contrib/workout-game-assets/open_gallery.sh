@@ -20,6 +20,13 @@ if [[ -z "${DISPLAY:-}" ]]; then
 fi
 
 if command -v blender >/dev/null 2>&1; then
+    native_config="${BLENDER_USER_CONFIG:-/tmp/gc-blender-config}"
+    export BLENDER_USER_CONFIG="$native_config"
+    mkdir -p "$native_config"
+    if [[ ! -s "$native_config/userpref.blend" ]]; then
+        blender --background --factory-startup --python-expr \
+            'import bpy; bpy.context.preferences.view.show_splash = False; bpy.ops.wm.save_userpref()'
+    fi
     exec blender --no-window-focus --python "$gallery_script" -- \
         --root "$repository" "$@"
 fi

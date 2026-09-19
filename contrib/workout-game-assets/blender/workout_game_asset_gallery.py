@@ -777,7 +777,9 @@ def _run_ui_smoke_test():
         raise RuntimeError("UI smoke test has no viewport window region")
 
     scene = bpy.context.scene
+    selected_asset = scene.workout_game_gallery_asset
     scene.workout_game_gallery_asset = IMPORTED_ASSETS[-1].catalog.asset_id
+    scene.workout_game_gallery_asset = selected_asset
     with bpy.context.temp_override(
         window=window,
         screen=window.screen,
