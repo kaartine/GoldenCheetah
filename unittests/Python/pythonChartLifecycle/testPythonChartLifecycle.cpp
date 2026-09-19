@@ -100,8 +100,9 @@ private slots:
     void executionGateShutdownTimeoutAndWrongThreadFailClosed();
     void runtimeFinalizerEnforcesOwnerStateAndOrdering();
     void runtimeFinalizerHandlesPartialAndFlushErrors();
+    void runtimeInitializerTracksFailureOwnership();
     void processLifetimeOwnerControlsPublication();
-    void programNameStorageOutlivesPythonInitialization();
+    void pythonConfigurationOwnsInitializationInputs();
     void pythonInitializationOwnershipWiring();
 };
 
@@ -1167,6 +1168,65 @@ TestPythonChartLifecycle::runtimeFinalizerHandlesPartialAndFlushErrors()
         Finalizer::Result::Rejected);
     QCOMPARE(state, Finalizer::State::InterpreterInitialized);
     QCOMPARE(finalizeCalls, 1);
+
+    state = Finalizer::State::Preinitialized;
+    QCOMPARE(
+        Finalizer::run(
+            std::this_thread::get_id(), state, saved, clear, catcher, {}),
+        Finalizer::Result::Finalized);
+    QCOMPARE(state, Finalizer::State::Finalized);
+    QCOMPARE(finalizeCalls, 1);
+}
+
+void
+TestPythonChartLifecycle::runtimeInitializerTracksFailureOwnership()
+{
+    using Initializer = PythonRuntimeInitializer;
+    using State = Initializer::State;
+
+    const auto run = [](State &state, const int failAt,
+                        const bool interpreterExists) {
+        QList<int> calls;
+        const auto result = Initializer::run(
+            state,
+            {
+                [&]() { calls.append(1); return failAt != 1; },
+                [&]() { calls.append(2); return failAt != 2; },
+                [&]() { calls.append(3); return failAt != 3; },
+                [&]() { calls.append(4); return interpreterExists; }
+            });
+        return qMakePair(result, calls);
+    };
+
+    State state = State::NotStarted;
+    auto outcome = run(state, 1, false);
+    QCOMPARE(outcome.first, Initializer::Result::Failed);
+    QCOMPARE(outcome.second, QList<int>({1}));
+    QCOMPARE(state, State::Preinitialized);
+    QCOMPARE(run(state, 0, true).first, Initializer::Result::Rejected);
+
+    state = State::NotStarted;
+    outcome = run(state, 2, false);
+    QCOMPARE(outcome.first, Initializer::Result::Failed);
+    QCOMPARE(outcome.second, QList<int>({1, 2}));
+    QCOMPARE(state, State::Preinitialized);
+
+    state = State::NotStarted;
+    outcome = run(state, 3, false);
+    QCOMPARE(outcome.first, Initializer::Result::Failed);
+    QCOMPARE(outcome.second, QList<int>({1, 2, 3, 4}));
+    QCOMPARE(state, State::Preinitialized);
+
+    state = State::NotStarted;
+    outcome = run(state, 3, true);
+    QCOMPARE(outcome.first, Initializer::Result::Failed);
+    QCOMPARE(state, State::InterpreterInitialized);
+
+    state = State::NotStarted;
+    outcome = run(state, 0, true);
+    QCOMPARE(outcome.first, Initializer::Result::Initialized);
+    QCOMPARE(outcome.second, QList<int>({1, 2, 3, 4}));
+    QCOMPARE(state, State::InterpreterInitialized);
 }
 
 void
@@ -1273,7 +1333,7 @@ TestPythonChartLifecycle::processLifetimeOwnerControlsPublication()
 }
 
 void
-TestPythonChartLifecycle::programNameStorageOutlivesPythonInitialization()
+TestPythonChartLifecycle::pythonConfigurationOwnsInitializationInputs()
 {
     QFile header(QStringLiteral(
         GC_TEST_SOURCE_ROOT "/src/Python/PythonEmbed.h"));
@@ -1287,13 +1347,36 @@ TestPythonChartLifecycle::programNameStorageOutlivesPythonInitialization()
         qPrintable(implementation.errorString()));
     const QByteArray implementationSource = implementation.readAll();
 
-    QVERIFY(headerSource.contains("std::wstring programNameStorage_;"));
+    QVERIFY(headerSource.contains("PythonRuntimeInitializer.h"));
     QVERIFY(implementationSource.contains(
-        "programNameStorage_ = pybin.toStdWString();"));
+        "PyConfig_InitPythonConfig(&config);"));
     QVERIFY(implementationSource.contains(
-        "Py_SetProgramName(programNameStorage_.data());"));
-    QVERIFY(!implementationSource.contains(
-        "pybin.toStdWString().c_str()"));
+        "PyConfig_SetString("));
+    QVERIFY(implementationSource.contains(
+        "&guard.config, &guard.config.program_name,"));
+    QVERIFY(implementationSource.contains(
+        "&guard.config, &guard.config.executable,"));
+    QVERIFY(implementationSource.contains(
+        "&guard.config, &guard.config.home,"));
+    QVERIFY(implementationSource.contains(
+        "Py_InitializeFromConfig(&guard.config);"));
+    QVERIFY(implementationSource.contains("PyConfig_Clear(&config);"));
+    QVERIFY(implementationSource.contains("guard.config.parse_argv = 0;"));
+    QVERIFY(implementationSource.contains("guard.config.use_environment = 1;"));
+    QVERIFY(implementationSource.contains(
+        "guard.config.install_signal_handlers = 0;"));
+    QVERIFY(implementationSource.contains("guard.config.site_import = 1;"));
+    QVERIFY(implementationSource.contains(
+        "guard.config.module_search_paths_set = 0;"));
+    QVERIFY(!implementationSource.contains("Py_SetProgramName("));
+    QVERIFY(!implementationSource.contains("Py_InitializeEx("));
+    QVERIFY(!implementationSource.contains("PyEval_InitThreads("));
+    const qsizetype appendBuiltIn = implementationSource.indexOf(
+        "PyImport_AppendInittab(");
+    const qsizetype initialize = implementationSource.indexOf(
+        "Py_InitializeFromConfig(&guard.config);");
+    QVERIFY(appendBuiltIn >= 0);
+    QVERIFY(initialize > appendBuiltIn);
 }
 
 void

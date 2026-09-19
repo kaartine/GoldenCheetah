@@ -18,6 +18,7 @@ class PythonRuntimeFinalizer final
 public:
     enum class State {
         NotStarted,
+        Preinitialized,
         InterpreterInitialized,
         Ready,
         Finalizing,
@@ -46,8 +47,14 @@ public:
     {
         if (std::this_thread::get_id() != initializationThread
             || state == State::NotStarted || state == State::Finalizing
-            || state == State::Finalized
-            || !hooks.restoreThread || !hooks.releaseReference
+            || state == State::Finalized) {
+            return Result::Rejected;
+        }
+        if (state == State::Preinitialized) {
+            state = State::Finalized;
+            return Result::Finalized;
+        }
+        if (!hooks.restoreThread || !hooks.releaseReference
             || !hooks.finalize) {
             return Result::Rejected;
         }

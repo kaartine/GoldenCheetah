@@ -38,6 +38,10 @@
 #endif
 #include <Python.h>
 
+#if PY_VERSION_HEX < 0x03080000
+#error "GoldenCheetah embedded Python requires CPython 3.8 or newer"
+#endif
+
 // we only really support Python 3, so lets only work on that basis
 #if PY_MAJOR_VERSION >= 3
 #define PYTHON3_VERSION PY_MINOR_VERSION
@@ -47,6 +51,33 @@
 PythonEmbed *python;
 
 namespace {
+
+class PythonConfigGuard final
+{
+public:
+    PythonConfigGuard() { PyConfig_InitPythonConfig(&config); }
+    ~PythonConfigGuard() { PyConfig_Clear(&config); }
+
+    PythonConfigGuard(const PythonConfigGuard &) = delete;
+    PythonConfigGuard &operator=(const PythonConfigGuard &) = delete;
+
+    PyConfig config;
+};
+
+bool pythonConfigFailed(const char *operation, const PyStatus &status)
+{
+    if (!PyStatus_Exception(status)) return false;
+    fprintf(
+        stderr,
+        "Python configuration failed during %s%s%s%s (exit code %d).\n",
+        operation,
+        status.func ? " [" : "",
+        status.func ? status.func : "",
+        status.func ? "]" : "",
+        status.exitcode);
+    if (status.err_msg) fprintf(stderr, "%s\n", status.err_msg);
+    return true;
+}
 
 class PythonGilGuard final
 {
@@ -347,23 +378,66 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
 
         printd("Python is installed: %s\n", pybin.toStdString().c_str());
 
-        // tell python our program name - pretend to be the usual interpreter
-        printd("Py_SetProgramName: %s\n", pybin.toStdString().c_str()); // not wide char string as printd uses printf not wprintf
-        programNameStorage_ = pybin.toStdWString();
-        Py_SetProgramName(programNameStorage_.data());
+        const auto initializeConfiguredPython = [&]() {
+            PythonConfigGuard guard;
+            const std::wstring executable =
+                QFileInfo(pybin).absoluteFilePath().toStdWString();
+            const std::wstring home = PYTHONHOME.toStdWString();
+            return PythonRuntimeInitializer::run(
+                initializationState_,
+                {
+                    [&]() {
+                        guard.config.parse_argv = 0;
+                        guard.config.use_environment = 1;
+                        guard.config.install_signal_handlers = 0;
+                        guard.config.site_import = 1;
+                        guard.config.module_search_paths_set = 0;
 
-        // our own module
-        printd("PyImport_AppendInittab: goldencheetah\n");
-        PyImport_AppendInittab("goldencheetah", PyInit_goldencheetah);
+                        PyStatus status = PyConfig_SetString(
+                            &guard.config, &guard.config.program_name,
+                            executable.c_str());
+                        if (pythonConfigFailed("program_name", status)) {
+                            return false;
+                        }
+                        status = PyConfig_SetString(
+                            &guard.config, &guard.config.executable,
+                            executable.c_str());
+                        if (pythonConfigFailed("executable", status)) {
+                            return false;
+                        }
+                        if (!home.empty()) {
+                            status = PyConfig_SetString(
+                                &guard.config, &guard.config.home,
+                                home.c_str());
+                            if (pythonConfigFailed("home", status)) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    },
+                    [&]() {
+                        printd("PyImport_AppendInittab: goldencheetah\n");
+                        if (PyImport_AppendInittab(
+                                "goldencheetah", PyInit_goldencheetah) != -1) {
+                            return true;
+                        }
+                        fprintf(
+                            stderr,
+                            "Python built-in module registration failed.\n");
+                        return false;
+                    },
+                    [&]() {
+                        printd("Py_InitializeFromConfig\n");
+                        const PyStatus status =
+                            Py_InitializeFromConfig(&guard.config);
+                        return !pythonConfigFailed("initialization", status);
+                    },
+                    []() { return Py_IsInitialized() != 0; }
+                }) == PythonRuntimeInitializer::Result::Initialized;
+        };
 
-        // need to load the interpreter etc
-        printd("PyInitializeEx(0)\n");
-        Py_InitializeEx(0);
-        if (!Py_IsInitialized()) {
-            fprintf(stderr, "Python interpreter initialization did not complete.\n");
-            return;
-        }
-        initializationState_ = InitializationState::InterpreterInitialized;
+        if (initializeConfiguredPython()) {
+            initializationState_ = InitializationState::InterpreterInitialized;
 
         // set path - allocate storage for it...
         //printd("set path=%s\n", pypath.toStdString().c_str());
@@ -441,8 +515,6 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
             PyErr_Clear(); //and clear them !
 
             // prepare for threaded processing
-            printd("PyEval_InitThreads\n");
-            PyEval_InitThreads();
             mainThreadState_ = static_cast<void *>(PyEval_SaveThread());
             initializationState_ = InitializationState::Ready;
             loaded = true;
@@ -450,6 +522,7 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
             printd("Embedding completes\n");
             return;
         } // sys != NULL
+        } // configured Python initialized
     } // pythonInstalled == true
 
     // if we get here loading failed

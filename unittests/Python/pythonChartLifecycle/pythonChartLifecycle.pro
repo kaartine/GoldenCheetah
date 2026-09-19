@@ -19,6 +19,7 @@ SOURCES = testPythonChartLifecycle.cpp \
 
 HEADERS = $$PWD/../../../src/Python/PythonExecutionGate.h \
           $$PWD/../../../src/Python/PythonRuntimeFinalizer.h \
+          $$PWD/../../../src/Python/PythonRuntimeInitializer.h \
           $$PWD/../../../src/Core/ProcessLifetimeRuntimeOwner.h \
           $$PWD/../../../src/Python/PythonChartRunState.h \
           $$PWD/../../../src/Python/PythonChartRunner.h \

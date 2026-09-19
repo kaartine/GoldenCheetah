@@ -8511,31 +8511,90 @@ commit before the next finding begins.
   wrapper and alias are a bounded intentional OS-lifetime allocation required
   by legacy raw-pointer callers; future process-level atomic lifetime pins can
   remove it.
-- ARCH-003D3 (queued initialization-modernization work recorded before
+- ARCH-003D3 (FIXED; queued initialization-modernization work recorded before
   correction): replace deprecated `Py_SetProgramName`, `Py_InitializeEx`, and
   `PyEval_InitThreads` setup with one owned `PyConfig` initialization path.
   Preserve deployed/system `PYTHONHOME`, module-search, isolated-environment,
   built-in `goldencheetah` registration, and user-visible diagnostics; add
-  failure injection for every pre/post-initialization phase before removing the
-  legacy calls. This is separate from the now-proven D2 shutdown contract.
-- ARCH-003E (FIXED; concrete defect recorded before correction):
+  failure injection for every configuration, registration, and interpreter-
+  creation phase before removing the legacy calls. The independent post-review
+  split the pre-existing post-initialization reference and readiness defects
+  into ARCH-003D4/D5 before accepting this narrower initialization migration.
+  This is separate from the now-proven D2 shutdown contract.
+- ARCH-003D3a (preinitialization ownership defect found by independent D3
+  pre-review and recorded before correction): `PyConfig` setters can implicitly
+  preinitialize CPython before `Py_IsInitialized()` becomes true. Treating a
+  setter, built-in registration, or initialize failure as `NotStarted` would
+  destroy the wrapper and allow an unsafe retry. Publish a conservative,
+  monotonic `Preinitialized` state before the first config operation, retain it
+  without retry, and close it at shutdown without calling `Py_FinalizeEx` when
+  no interpreter was created. Promote immediately to `InterpreterInitialized`
+  whenever `Py_IsInitialized()` becomes true.
+- ARCH-003D3/D3a resolution: embedded Python initialization now has a single
+  CPython 3.8+-compatible `PyConfig_InitPythonConfig` path. It explicitly sets
+  program name and executable from the resolved absolute interpreter path,
+  conditionally sets the resolved home, preserves environment/site discovery
+  and the existing post-initialization path additions, disables Python signal
+  handler installation, registers the built-in module before initialization,
+  and clears the config on every exit. A separate monotonic initializer owns
+  the transition from `NotStarted` to `Preinitialized` before any setter and
+  promotes partial failed initialization whenever CPython reports a live
+  interpreter. Deprecated `Py_SetProgramName`, `Py_InitializeEx`, and
+  `PyEval_InitThreads` calls are removed. Shutdown closes a preinitialized-only
+  runtime without calling Python APIs, while the process-lifetime owner prevents
+  a retry after any process-global preinitialization side effect.
+- ARCH-003D3/D3a verification: the focused lifecycle suite passes 21/21 both
+  normally and under ASan/UBSan (leak detection disabled). It injects failures
+  into configuration, built-in registration, and interpreter initialization;
+  proves no retry, conservative ownership, partial-interpreter promotion, and
+  preinitialized-only shutdown with no finalizer hooks. A checked-in real
+  CPython 3.12 child passes both successful and invalid-home processes,
+  including `program_name`/`sys.executable`, `encodings`, `site`, built-in
+  module import, signal-handler preservation, clean finalization, and failed
+  initialization with no live interpreter. Production `PythonEmbed.cpp`
+  compiles without the former deprecation warnings, the dependency suite passes
+  14/14, and `git diff --check` is clean. Independent post-review identified
+  the pre-existing post-init defect now queued as D5; after that recorded scope
+  split it found no blocker in the migration and returned GO for this commit.
+- ARCH-003D3/D3a residual: the implementation is source-compatible with the
+  supported CPython 3.8+ `PyConfig` API, but this environment only provided a
+  real CPython 3.12 runtime. Python 3.8 and the Windows/macOS/deployed-Python
+  layouts remain release-matrix checks. The full GoldenCheetah/SIP application
+  smoke already required by ARCH-003D2 remains a deployment prerequisite.
+- ARCH-003D4 (queued reference-lifetime defect observed during D3 and recorded
+  before correction): Python post-initialization obtains a new `sys.path`
+  reference and passes a second new temporary Unicode reference directly to
+  `PyList_Append`, but releases neither reference and ignores allocation/append
+  failures. Give both references explicit owned lifetimes, handle null/non-list
+  and append failures without calling through invalid objects, and cover both
+  success and injected-failure cleanup before changing the production path.
+- ARCH-003D5 (queued post-initialization readiness defect found by independent
+  D3 post-review and recorded before correction): Python setup ignores failures
+  from the catcher-install and library scripts, then fetches `catchOutErr` and
+  calls `PyObject_GetAttrString` on it without proving the object exists. A
+  script/import/allocation failure can therefore dereference null or publish a
+  `Ready` runtime with missing output hooks. Extract a fail-closed, testable
+  post-initialization transaction that checks every Python result, owns all
+  intermediate references, prints and clears diagnostics deliberately, and
+  reaches `Ready`/`PyEval_SaveThread` only after the complete binding/catcher
+  contract is established. Cover each failure boundary and partial-runtime
+  shutdown before correcting production.
+- ARCH-003E (FIXED, then superseded by ARCH-003D3; concrete defect recorded
+  before correction):
   `Py_SetProgramName` receives storage from a temporary `std::wstring`, although
   CPython requires that storage to remain valid for the interpreter lifetime.
   Give the program-name buffer explicit `PythonEmbed` lifetime and cover the
   initialization contract before correcting it.
-- ARCH-003E resolution: `PythonEmbed` now owns the converted program name in a
-  `std::wstring` member and passes that member's writable C++17 buffer to
-  `Py_SetProgramName`; the storage therefore remains valid for the full embed
-  object lifetime instead of ending at the initialization statement.
+- ARCH-003E resolution: the original correction gave the legacy call stable
+  wrapper-owned storage. ARCH-003D3 subsequently removed that legacy API;
+  `PyConfig_SetString` now copies the absolute program name into config-owned
+  storage, which is retained through `Py_InitializeFromConfig` and then safely
+  released by `PyConfig_Clear`.
 - ARCH-003E verification: The production-wiring test first failed on the absent
   owned member, then the complete Python chart lifecycle suite passed 14/14 on
-  Qt 6.4.2 after the correction. The rebuilt suite compiles the changed header,
-  asserts the owned-storage assignment and call site, and rejects the former
-  temporary `toStdWString().c_str()` expression. Production `PythonEmbed.cpp`
-  also compiles as C++17 against Python 3.12 headers; only the already-known
-  upstream deprecation warnings for `Py_SetProgramName` and
-  `PyEval_InitThreads` remain. Interpreter ownership/finalization is still the
-  separate ARCH-003D work item.
+  Qt 6.4.2 after the correction. The superseding D3 tests now assert config-
+  owned inputs and reject all three legacy initialization APIs; its real-
+  interpreter and production-build evidence is recorded above.
 - ARCH-003F (queued high-risk seam recorded before correction): RideCache
   refresh workers directly dereference replaceable `GlobalContext`
   `RideMetadata`/`ColorEngine` QObject state and read multi-key `appsettings`

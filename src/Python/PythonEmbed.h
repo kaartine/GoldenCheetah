@@ -27,11 +27,11 @@
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <string>
 #include <thread>
 
 #include "PythonExecutionGate.h"
 #include "PythonRuntimeFinalizer.h"
+#include "PythonRuntimeInitializer.h"
 #include "RideItem.h"
 #include "Specification.h"
 
@@ -140,7 +140,6 @@ class PythonEmbed {
 
 private:
     InitializationState initializationState_ = InitializationState::NotStarted;
-    std::wstring programNameStorage_;
     const std::thread::id initializationThread_{std::this_thread::get_id()};
     void *mainThreadState_ = nullptr;
     PythonExecutionGate executionGate;
