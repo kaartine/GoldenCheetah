@@ -8901,6 +8901,24 @@ commit before the next finding begins.
   run/swim pace selection, zero/negative raw CP-setting truthiness, and signed
   discovery addition. Pin these legacy and fail-closed branches before the
   value is admitted to worker code.
+- ARCH-003F2c2b (stale-fingerprint worker cutover recorded before correction):
+  Pass the retained generation explicitly into the worker `checkStale` call,
+  use only its captured fingerprint there, and treat a missing immutable value
+  as stale without falling back to live Athlete, Context, settings, zones,
+  measures, or routes. Preserve the legacy no-environment overload for
+  owner-thread callers until their remaining dependencies are migrated.
+- ARCH-003F2c2b1 (bound-branch contract gap recorded before correction): The
+  first source contract proves ordering between the immutable and legacy
+  branches but would still admit a live fallback inside the bound branch.
+  Reject Athlete, appsettings, legacy HRV, zone, and route access tokens from
+  the immutable branch and pin fail-closed evaluation before downstream cache
+  checking before accepting the worker cutover.
+- ARCH-003F2c2c (remaining stale-check live inputs recorded before correction):
+  Even after the fingerprint cutover, worker `checkStale` still reaches live
+  color metadata, metric schema, Body weight, RideFileCache analysis/path
+  state, and mutable item metadata. Capture or stage those inputs and remove
+  each worker-reachable live read before declaring the stale-check cutover
+  complete; do not hide them behind the legacy overload.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9228,11 +9246,31 @@ commit before the next finding begins.
   F2c2a2 records that finding. Final re-review: GO with no blocker, major, or
   minor finding.
 - ARCH-003F2c2a residual: this commit supplies the immutable compatibility
-  value but does not yet change the worker call site. The next F2c item must
-  pass the retained generation into `RideItem::checkStale`, reject a missing
-  value, and remove its live schema, color, cache, zone, measure, route, and
-  settings reads. F3 still owns detached publication after generation
-  acceptance.
+  value but does not yet change the worker call site. F2c2b must pass the
+  retained generation into `RideItem::checkStale` and reject a missing value
+  without a live zone, measure, route, or settings fallback. F2c2c separately
+  owns the remaining live schema, color, weight, cache, path, and item-metadata
+  reads. F3 still owns detached publication after generation acceptance.
+- ARCH-003F2c2b/F2c2b1 resolution: the refresh worker now calls the explicit
+  generation-bound `RideItem::checkStale` overload with its retained immutable
+  environment. That overload obtains the zone/route/HRV/discovery value only
+  from the generation and treats a missing value or mismatch as stale. The
+  no-argument overload alone preserves the legacy live formula for callers not
+  yet admitted to the worker path.
+- ARCH-003F2c2b verification: the focused environment and production-source
+  contract suite passes 14/14 normally and under ASan/UBSan. The contract pins
+  worker selection before the bound call, non-null overload delegation,
+  immutable-before-legacy branch ordering, absence of Athlete/appsettings/HRV/
+  zone/route fallback tokens from the bound branch, and fail-closed evaluation
+  before downstream cache checking. Qt 6.8.3 production builds of
+  `RideItem.cpp` and `RideCache.cpp` pass with warnings as errors; source
+  dependencies pass 14/14 and `git diff --check` passes. Independent review
+  first returned NO-GO for the bound-branch contract gap recorded as F2c2b1;
+  final re-review: GO with no blocker, major, or minor finding.
+- ARCH-003F2c2b residual: F2c2c must still replace the worker's live color,
+  metric-schema, Body-weight, RideFileCache analysis/path, and mutable
+  item-metadata inputs. F3 must prevent generation replacement from exposing
+  worker mutations by publishing detached results only after acceptance.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

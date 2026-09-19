@@ -494,6 +494,8 @@ productionWorkersRetainTheirPublishedGeneration()
         "while (!isInterruptionRequested())", run);
     const qsizetype nextRefresh = source.indexOf(
         "target->nextRefresh(generation)", run);
+    const qsizetype staleCheck = source.indexOf(
+        "item->checkStale(*environment)", nextRefresh);
     const qsizetype constructor = source.indexOf(
         "RideCacheRefreshThread::RideCacheRefreshThread(");
     const qsizetype retained = source.indexOf(
@@ -508,6 +510,7 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(guard > run);
     QVERIFY(loop > guard);
     QVERIFY(nextRefresh > loop);
+    QVERIFY(staleCheck > nextRefresh);
     QVERIFY(constructor >= 0);
     QVERIFY(retained > constructor);
     QVERIFY(constructorBody > retained);
@@ -517,6 +520,55 @@ productionWorkersRetainTheirPublishedGeneration()
     const QByteArray header = headerFile.readAll();
     QVERIFY(header.contains(
         "const std::shared_ptr<const RideRefreshEnvironment> environment;"));
+
+    QFile itemSourceFile(root.filePath(QStringLiteral("src/Core/RideItem.cpp")));
+    QVERIFY(itemSourceFile.open(QIODevice::ReadOnly));
+    const QByteArray itemSource = itemSourceFile.readAll();
+    const qsizetype boundOverload = itemSource.indexOf(
+        "RideItem::checkStale(const RideRefreshEnvironment &environment)");
+    const qsizetype boundDelegation = itemSource.indexOf(
+        "return checkStaleImpl(&environment);", boundOverload);
+    const qsizetype implementation = itemSource.indexOf(
+        "RideItem::checkStaleImpl(", boundDelegation);
+    const qsizetype immutableBranch = itemSource.indexOf(
+        "if (environment) {", implementation);
+    const qsizetype immutableFingerprint = itemSource.indexOf(
+        "environment->rideItemFingerprint(", immutableBranch);
+    const qsizetype legacyBranch = itemSource.indexOf(
+        "} else {", immutableFingerprint);
+    const qsizetype legacyFingerprint = itemSource.indexOf(
+        "context->athlete->zones(sport)->getFingerprint", legacyBranch);
+    const qsizetype failClosed = itemSource.indexOf(
+        "if (!refreshFingerprint || fingerprint != *refreshFingerprint)",
+        legacyFingerprint);
+    const qsizetype cacheCheck = itemSource.indexOf(
+        "RideFileCache::checkStale(context, this)", failClosed);
+    QVERIFY(boundOverload >= 0);
+    QVERIFY(boundDelegation > boundOverload);
+    QVERIFY(implementation > boundDelegation);
+    QVERIFY(immutableBranch > implementation);
+    QVERIFY(immutableFingerprint > immutableBranch);
+    QVERIFY(legacyBranch > immutableFingerprint);
+    QVERIFY(legacyFingerprint > legacyBranch);
+    QVERIFY(failClosed > legacyFingerprint);
+    QVERIFY(cacheCheck > failClosed);
+    const QByteArray immutableBody = itemSource.mid(
+        immutableBranch, legacyBranch - immutableBranch);
+    QVERIFY(!immutableBody.contains("context->athlete"));
+    QVERIFY(!immutableBody.contains("appsettings"));
+    QVERIFY(!immutableBody.contains("getHrvFingerprint"));
+    QVERIFY(!immutableBody.contains("->zones("));
+    QVERIFY(!immutableBody.contains("->hrZones("));
+    QVERIFY(!immutableBody.contains("->paceZones("));
+    QVERIFY(!immutableBody.contains("->routes"));
+
+    QFile itemHeaderFile(root.filePath(QStringLiteral("src/Core/RideItem.h")));
+    QVERIFY(itemHeaderFile.open(QIODevice::ReadOnly));
+    const QByteArray itemHeader = itemHeaderFile.readAll();
+    QVERIFY(itemHeader.contains(
+        "bool checkStale(const RideRefreshEnvironment &environment);"));
+    QVERIFY(itemHeader.contains(
+        "bool checkStaleImpl(const RideRefreshEnvironment *environment);"));
 }
 
 QTEST_GUILESS_MAIN(TestRideRefreshEnvironment)

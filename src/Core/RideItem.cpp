@@ -22,6 +22,7 @@
 #include "RideMetric.h"
 #include "RideFile.h"
 #include "RideFileCache.h"
+#include "RideRefreshEnvironment.h"
 #include "RideMetadata.h"
 #include "IntervalItem.h"
 #include "Route.h"
@@ -518,6 +519,18 @@ RideItem::setStartTime(QDateTime newDateTime)
 bool
 RideItem::checkStale()
 {
+    return checkStaleImpl(nullptr);
+}
+
+bool
+RideItem::checkStale(const RideRefreshEnvironment &environment)
+{
+    return checkStaleImpl(&environment);
+}
+
+bool
+RideItem::checkStaleImpl(const RideRefreshEnvironment *environment)
+{
     // if we're marked stale already then just return that !
     if (isstale) return true;
 
@@ -553,15 +566,22 @@ RideItem::checkStale()
             // HRV fingerprint added to detect changes on HRV Measures
 
             // get the new zone configuration fingerprint that applies for the ride date
-            unsigned long rfingerprint = static_cast<unsigned long>(context->athlete->zones(sport)->getFingerprint(dateTime.date()))
-                        + (appsettings->cvalue(context->athlete->cyclist, context->athlete->zones(sport)->useCPforFTPSetting(), 0).toInt() ? 1 : 0)
-                        + static_cast<unsigned long>(context->athlete->paceZones(isSwim)->getFingerprint(dateTime.date()))
-                        + static_cast<unsigned long>(context->athlete->hrZones(sport)->getFingerprint(dateTime.date()))
-                        + static_cast<unsigned long>(context->athlete->routes->getFingerprint())
-                        + static_cast<unsigned long>(getHrvFingerprint())
-                        + appsettings->cvalue(context->athlete->cyclist, GC_DISCOVERY, 57).toInt(); // 57 does not include search for PEAKS
+            std::optional<unsigned long> refreshFingerprint;
+            if (environment) {
+                refreshFingerprint = environment->rideItemFingerprint(
+                    dateTime.date(), sport, isSwim);
+            } else {
+                refreshFingerprint =
+                    static_cast<unsigned long>(context->athlete->zones(sport)->getFingerprint(dateTime.date()))
+                    + (appsettings->cvalue(context->athlete->cyclist, context->athlete->zones(sport)->useCPforFTPSetting(), 0).toInt() ? 1 : 0)
+                    + static_cast<unsigned long>(context->athlete->paceZones(isSwim)->getFingerprint(dateTime.date()))
+                    + static_cast<unsigned long>(context->athlete->hrZones(sport)->getFingerprint(dateTime.date()))
+                    + static_cast<unsigned long>(context->athlete->routes->getFingerprint())
+                    + static_cast<unsigned long>(getHrvFingerprint())
+                    + appsettings->cvalue(context->athlete->cyclist, GC_DISCOVERY, 57).toInt(); // 57 does not include search for PEAKS
+            }
 
-            if (fingerprint != rfingerprint) {
+            if (!refreshFingerprint || fingerprint != *refreshFingerprint) {
 
                 isstale = true;
 

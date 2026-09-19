@@ -2340,7 +2340,7 @@ void RideCacheRefreshThread::run()
             }
         }
 
-        if (item && item->checkStale()) {
+        if (item && item->checkStale(*environment)) {
             item->refresh();
             QMutexLocker locker(&target->updateMutex);
             const auto disposition =

@@ -38,6 +38,7 @@ class Context;
 class UserData;
 class ComparePane;
 class RideCacheItemSnapshot;
+class RideRefreshEnvironment;
 
 class RideItem : public QObject
 {
@@ -217,6 +218,7 @@ class RideItem : public QObject
         void setDirty(bool);
         bool isDirty() { return isdirty; }
         bool checkStale(); // check if we need to refresh
+        bool checkStale(const RideRefreshEnvironment &environment);
         bool isStale() { return isstale; }
 
         // Activity linking methods
@@ -238,6 +240,7 @@ class RideItem : public QObject
         bool operator<(RideItem right) const { return dateTime < right.dateTime; }
 
     private:
+        bool checkStaleImpl(const RideRefreshEnvironment *environment);
         void updateIntervals();
 };
 
