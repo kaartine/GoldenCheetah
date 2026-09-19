@@ -1129,6 +1129,15 @@ APIWebService::listRides(const AnchoredFileSystem::DirectoryAnchor &athleteDirec
     // list 'em by reading the ride cache from disk
     if ((nometa == false || nometrics == false) && settings.intervals == false) {
 
+        QString rideItemActivityPath;
+        if (!LocalApiEndpointInput::prepareRideItemActivityPath(
+                athleteDirectory, rideItemActivityPath,
+                rideDatabaseError)) {
+            response.setStatus(500);
+            response.write("unable to prepare activity path safely.\n");
+            return;
+        }
+
         int i=0;
         foreach(const RideMetric *m, indexed) {
 
@@ -1178,7 +1187,7 @@ APIWebService::listRides(const AnchoredFileSystem::DirectoryAnchor &athleteDirec
             jc->old = false;
 
             // clean item
-            jc->item.path = home.absolutePath() + "/activities";
+            jc->item.path = rideItemActivityPath;
             jc->item.context = NULL;
             jc->item.isstale = jc->item.isdirty = jc->item.isedit = false;
 

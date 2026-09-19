@@ -104,6 +104,8 @@ private slots:
     void measuresDateRowBudgetBoundaries();
     void measuresJsonAcceptanceMatchesLegacy();
     void measuresSchemaRejectsUnsafeNonSelectedGroup();
+    void rideItemActivityPathUsesSelectedAthlete();
+    void rideItemActivityPathRejectsReplacedAthlete();
 };
 
 void TestLocalApiFileStore::opensRetainedRegularFile()
@@ -127,6 +129,77 @@ void TestLocalApiFileStore::opensRetainedRegularFile()
     QByteArray contents;
     QVERIFY2(generation.readAll(contents, error), qPrintable(error));
     QCOMPARE(contents, QByteArrayLiteral("ride-data"));
+}
+
+void TestLocalApiFileStore::rideItemActivityPathUsesSelectedAthlete()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities")));
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("bob/activities")));
+
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+
+    QString activityPath;
+    QVERIFY2(LocalApiEndpointInput::prepareRideItemActivityPath(
+                 athleteDirectory, activityPath, error),
+             qPrintable(error));
+    QCOMPARE(
+        QDir::cleanPath(activityPath),
+        QDir::cleanPath(QDir(root.path()).filePath(
+            QStringLiteral("alice/activities"))));
+    QVERIFY(QDir::cleanPath(activityPath)
+        != QDir::cleanPath(QDir(root.path()).filePath(
+            QStringLiteral("activities"))));
+    QVERIFY(QDir::cleanPath(activityPath)
+        != QDir::cleanPath(QDir(root.path()).filePath(
+            QStringLiteral("bob/activities"))));
+}
+
+void TestLocalApiFileStore::rideItemActivityPathRejectsReplacedAthlete()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities")));
+    const QString athletePath = QDir(root.path()).filePath(
+        QStringLiteral("alice"));
+    const QString retainedPath = QDir(root.path()).filePath(
+        QStringLiteral("retained-alice"));
+
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+    const bool renamed = QDir().rename(athletePath, retainedPath);
+#ifdef Q_OS_WIN
+    if (!renamed) {
+        QString activityPath;
+        QVERIFY2(LocalApiEndpointInput::prepareRideItemActivityPath(
+                     athleteDirectory, activityPath, error),
+                 qPrintable(error));
+        QCOMPARE(
+            QDir::cleanPath(activityPath),
+            QDir::cleanPath(QDir(athletePath).filePath(
+                QStringLiteral("activities"))));
+        return;
+    }
+#else
+    QVERIFY(renamed);
+#endif
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities")));
+
+    QString activityPath(QStringLiteral("must be cleared"));
+    QVERIFY(!LocalApiEndpointInput::prepareRideItemActivityPath(
+        athleteDirectory, activityPath, error));
+    QVERIFY(activityPath.isEmpty());
+    QVERIFY(!error.isEmpty());
 }
 
 void TestLocalApiFileStore::rejectsDirectoryAlias()

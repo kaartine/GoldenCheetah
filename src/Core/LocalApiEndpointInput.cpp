@@ -11,6 +11,7 @@
 #include "PortableFileName.h"
 
 #include <QBuffer>
+#include <QDir>
 #include <QFileInfo>
 #include <QHash>
 #include <QJsonDocument>
@@ -92,6 +93,35 @@ bool prepareMeasuresDataFileNames(
         }
         fileNames.append(fileName);
     }
+    return true;
+}
+
+bool prepareRideItemActivityPath(
+    const AnchoredFileSystem::DirectoryAnchor &athleteDirectory,
+    QString &activityPath,
+    QString &error)
+{
+    activityPath.clear();
+    error.clear();
+    if (!athleteDirectory.isValid()) {
+        error = QStringLiteral("The athlete directory is unavailable");
+        return false;
+    }
+    const auto pathStillMatches = [&athleteDirectory, &error]() {
+        if (athleteDirectory.pathMatches(error)) return true;
+        if (error.isEmpty()) {
+            error = QStringLiteral("The athlete directory path changed");
+        }
+        return false;
+    };
+    if (!pathStillMatches()) return false;
+
+    const QString preparedPath = QDir(
+        athleteDirectory.displayPath()).filePath(
+            QStringLiteral("activities"));
+    if (!pathStillMatches()) return false;
+
+    activityPath = preparedPath;
     return true;
 }
 

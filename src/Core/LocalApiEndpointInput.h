@@ -57,6 +57,10 @@ bool prepareMeasuresDataFileNames(
     const QStringList &groupSymbols,
     QStringList &fileNames,
     QString &error);
+bool prepareRideItemActivityPath(
+    const AnchoredFileSystem::DirectoryAnchor &athleteDirectory,
+    QString &activityPath,
+    QString &error);
 
 enum class Status {
     Ready,

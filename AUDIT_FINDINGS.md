@@ -8072,11 +8072,45 @@ commit before the next finding begins.
   review found no remaining blocker. Native Windows/macOS execution and a
   clean capable-filesystem run of the atomic-save suite remain verification
   prerequisites.
-- ARCH-004B3d (correctness finding recorded before correction): The RideDB
+- ARCH-004B3d (completed; correctness finding recorded before correction): The RideDB
   parser assigns `RideItem::path` from `<athlete-root>/activities`, omitting the
   selected athlete component. Confirm the parser's path contract with a focused
   test before changing it; do not fold an unverified behavior change into the
   directory-enumeration remediation.
+- ARCH-004B3d1 (test-quality finding recorded before correction): The initial
+  multi-athlete regression fixture accidentally created `bob/activities` in an
+  unrelated existing test instead of the new path-contract test. Move that
+  setup into the focused test before treating its cross-athlete assertion as
+  evidence.
+- ARCH-004B3d2 (review finding recorded before correction): An anchored path
+  identity mismatch can make `pathMatches()` return false without a diagnostic
+  string. Preserve fail-closed behavior and supply a local diagnostic before
+  returning so request failures remain supportable.
+- ARCH-004B3d3 (cross-platform review finding recorded before correction): The
+  retained-directory replacement test assumes an open athlete directory can
+  always be renamed. Windows intentionally opens that handle without delete
+  sharing, so cover the prevented-replacement path there while continuing to
+  require and validate replacement on platforms that permit it.
+- ARCH-004B3d resolution: `RideItem::path` is now prepared from the retained
+  selected-athlete directory rather than the Local API's multi-athlete root.
+  The helper verifies the retained path before and after reading its
+  informational display path, clears output on failure, and supplies a local
+  diagnostic when an identity mismatch has none. The parser branch resolves
+  this path before writing CSV headings and fails closed with an unambiguous
+  response if the athlete path changed. The focused regression fixture creates
+  both `alice/activities` and `bob/activities`, proves the selected path is
+  neither the global nor the other athlete's path, and covers retained-path
+  replacement. On Windows the test accepts the platform's stronger retained-
+  handle protection only after verifying that the original selected-athlete
+  path remains usable. This resolves ARCH-004B3d1 through ARCH-004B3d3.
+- ARCH-004B3d verification: The focused test was observed red before the helper
+  existed. The complete Local API input suite passes 47/47 with Qt 6.8.3 and
+  47/47 with Qt 6.4.2 ASan/UBSan (leak detection disabled). The production
+  `APIWebService`, endpoint-input, and generated RideDB parser objects compile
+  with Qt 6.8.3; only the established bison warnings remain. Independent
+  contract analysis confirmed the directory-plus-filename invariant, and
+  independent implementation review found no commit blocker. Native Windows
+  and macOS execution remains a platform verification prerequisite.
 - ARCH-004C (prerequisite recorded): `listAthletes` initializes per-athlete
   settings through the global `appsettings` path API after filesystem
   validation. Inventory those settings files and add a generation-aware
