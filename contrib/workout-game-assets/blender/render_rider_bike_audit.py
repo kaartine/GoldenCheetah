@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -36,6 +37,14 @@ VIEWS = (
     ("side", (3.15, 1.14, 0.18), (0.0, 0.88, 0.18)),
     ("chase", (1.80, 1.60, -2.80), (0.0, 0.94, 0.10)),
 )
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def normalize_png(path: Path) -> None:

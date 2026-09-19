@@ -15,6 +15,10 @@ second="$temporary/second"
 alternate="$temporary/alternate-axes"
 
 "$blender" --background --factory-startup \
+    --python "$blender_directory/render_candidate_audit.py" -- \
+    --help >/dev/null
+
+"$blender" --background --factory-startup \
     --python "$test_directory/create_synthetic_input.py" -- \
     --output "$raw"
 
