@@ -447,6 +447,12 @@ writing, then replaces each manifest atomically; a conflict with an external
 edit is rejected. A multi-asset save is not one filesystem transaction, so a
 later write failure can leave earlier validated manifests committed.
 
+The launcher requires OpenGL 4.3. In `auto` mode it uses the current GPU when
+supported, tries `DRI_PRIME=1` for a supported discrete GPU, and otherwise
+falls back to Mesa llvmpipe. Set `WG_GALLERY_RENDERER=hardware` or
+`WG_GALLERY_RENDERER=software` to override that selection. A user-provided
+`DRI_PRIME` value is forwarded to the Docker container in hardware mode.
+
 Run a development GoldenCheetah build against the same canonical files with:
 
 ```bash

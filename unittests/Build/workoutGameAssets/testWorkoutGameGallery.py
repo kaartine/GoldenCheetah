@@ -163,7 +163,12 @@ class WorkoutGameGalleryTest(unittest.TestCase):
         ):
             subprocess.run(["bash", "-n", str(path)], check=True)
 
-    def _capture_docker_launcher(self, *arguments: str) -> list[str]:
+    def _capture_docker_launcher(
+        self,
+        *arguments: str,
+        default_opengl: str = "4.6",
+        prime_opengl: str = "4.6",
+    ) -> list[str]:
         binary = self.external_root / "bin"
         binary.mkdir(exist_ok=True)
         capture = self.external_root / "docker-arguments"
@@ -175,6 +180,17 @@ class WorkoutGameGalleryTest(unittest.TestCase):
             encoding="utf-8",
         )
         docker.chmod(0o755)
+        glxinfo = binary / "glxinfo"
+        glxinfo.write_text(
+            "#!/bin/sh\n"
+            f'default_opengl="{default_opengl}"\n'
+            f'prime_opengl="{prime_opengl}"\n'
+            'if [ "${DRI_PRIME:-}" = 1 ]; then version="$prime_opengl"; '
+            'else version="$default_opengl"; fi\n'
+            'printf "Max core profile version: %s (Core Profile)\\n" "$version"\n',
+            encoding="utf-8",
+        )
+        glxinfo.chmod(0o755)
         environment = dict(os.environ)
         environment.update({
             "DISPLAY": ":99",
@@ -188,6 +204,24 @@ class WorkoutGameGalleryTest(unittest.TestCase):
             env=environment,
         )
         return capture.read_text(encoding="utf-8").splitlines()
+
+    def test_docker_launcher_selects_supported_discrete_gpu(self) -> None:
+        arguments = self._capture_docker_launcher(
+            default_opengl="4.2", prime_opengl="4.3"
+        )
+
+        self.assertIn("DRI_PRIME=1", arguments)
+        self.assertNotIn("LIBGL_ALWAYS_SOFTWARE=1", arguments)
+        self.assertNotIn("GALLIUM_DRIVER=llvmpipe", arguments)
+
+    def test_docker_launcher_falls_back_for_unsupported_hardware(self) -> None:
+        arguments = self._capture_docker_launcher(
+            default_opengl="4.2", prime_opengl="4.2"
+        )
+
+        self.assertIn("LIBGL_ALWAYS_SOFTWARE=1", arguments)
+        self.assertIn("GALLIUM_DRIVER=llvmpipe", arguments)
+        self.assertNotIn("/dev/dri:/dev/dri", arguments)
 
     def test_docker_launcher_is_read_only_by_default(self) -> None:
         arguments = self._capture_docker_launcher("--asset", "FT-01-tabletop-greybox")
