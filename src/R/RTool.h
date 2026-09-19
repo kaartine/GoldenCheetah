@@ -18,6 +18,7 @@
 
 #include "RChart.h"
 #include "Context.h"
+#include "RDeferredUiWork.h"
 #include "RExecutionGate.h"
 
 #include <atomic>
@@ -40,6 +41,8 @@ class RTool {
             RCanvas *executionCanvas,
             Perspective *executionPerspective,
             RChart *executionChart);
+        bool requestChartRerun(RChart *target);
+        bool requestConsolePrompt(RConsole *target);
 
         REmbed *R;
         RGraphicsDevice *dev;
@@ -134,8 +137,10 @@ class RTool {
 
     private:
         bool hasValidAthleteBinding() const;
+        void dispatchDeferredUiWork();
 
         QPointer<Athlete> boundAthlete;
+        RDeferredUiWork deferredUiWork;
         RExecutionGate executionGate;
         std::atomic_bool appearanceRefreshPending{false};
 

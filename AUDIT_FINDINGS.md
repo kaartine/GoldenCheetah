@@ -7900,11 +7900,57 @@ commit before the next finding begins.
   only after the outer lease has cleared its bindings and released the gate.
   Preserve this release ordering in the dependency-light gate tests and verify
   the appearance semantics against a real embedded R graphics device.
-- ARCH-003A3 (queued behavior item recorded during review): A nested console
+- ARCH-003A3 (FIXED; behavior item recorded during review): A nested console
   attempt reports that R is busy but skips the normal prompt, while a nested
   chart refresh is silently dropped. Decide and test prompt plus chart-rerun
   coalescing after ARCH-003B establishes a guarded chart lifetime; do not queue
   raw `RChart *` callbacks through the current event-pumping lifetime gap.
+- ARCH-003A3a (FIXED; deferred-dispatch constraints found in pre-implementation review
+  and recorded before correction): a busy/invalid acquisition can also mean a
+  wrong-thread call, so request methods must verify an active owner-thread gate
+  before touching pending UI state. Move and clear guarded target snapshots
+  before posting, post chart reruns before console prompts, bind each queued
+  call to its QObject receiver, and make a prompt that runs during a newer
+  lease re-defer itself. Prompt detection must also recognize typed text after
+  an existing `> ` or `>>` prefix. Define coalescing as one queued callback per
+  live target per active lease; later state changes may request one subsequent
+  queued generation but must not recurse synchronously.
+- ARCH-003A3b (FIXED; ordinary-prompt regression and build metadata found in
+  post-implementation review and recorded before correction): prefix-based
+  prompt deduplication is valid only for deferred recovery. Applying it to the
+  ordinary completed-command path suppresses the required new prompt when R
+  output itself ends in a block beginning with `> ` or `>>`; keep an
+  unconditional normal `appendPrompt()` path and use prefix detection only in
+  `ensurePrompt()`. Also register both new production headers in `src/src.pro`
+  so qmake distribution and source metadata do not depend on transitive
+  includes.
+- ARCH-003A3 resolution: busy chart reruns and console-prompt recovery now enter
+  an owner-thread-only deferred UI queue while the R gate is active. Targets
+  are deduplicated per active lease in `QPointer` storage, moved out before
+  dispatch, and posted as receiver-bound queued calls only after binding
+  cleanup and gate release; chart reruns precede prompts. A prompt delivered
+  during a newer lease re-defers itself. The ordinary completed-command path
+  always appends a prompt, while only deferred recovery suppresses an already
+  visible `> ` or `>>` prefix and uses the shared continuation policy. Deleted
+  targets vanish safely before batch creation or Qt event delivery, and idle
+  or wrong-thread callers cannot mutate the pending lists.
+- ARCH-003A3 verification: the focused gate/lifetime/queued-dispatch suite
+  passes 17/17 on Qt 6.4.2 normally and 17/17 under ASan/UBSan with leak
+  detection disabled. It covers owner/idle/wrong-thread admission, duplicate
+  and distinct targets, deletion before drain and after posting,
+  chart-before-prompt ordering, a prompt encountering and re-deferring across
+  a newer lease, exception unwinding, subsequent queued generations, prompt
+  prefixes/continuations, and prompt-like ordinary output. Production source
+  contracts pin both busy branches, ordinary versus deferred prompt paths, and
+  qmake metadata for both helpers. The complete production R source set
+  compiles and links with staged R 4.3.3/Rcpp/RInside headers under
+  `GC_WANT_R` and `STRICT_R_HEADERS`; the source dependency suite passes 14/14
+  and `git diff --check` is clean. Independent design review, post-review, and
+  blocker re-review returned GO. LSan remains unavailable under ptrace. A full
+  RConsole/QTextDocument plus live-R event-order run remains a UI release
+  check; deferred recovery intentionally treats an intervening line beginning
+  with `> ` or `>>` as an existing prompt. Raw global `rtool` and cross-thread
+  QObject ownership remain ARCH-003C rather than this behavior item.
 - ARCH-003A resolution: Added an owner-thread-bound, non-reentrant
   `RExecutionGate` and RAII lease. `RConsole`, `RChart`, and appearance
   configuration now acquire it before evaluating R. Rejected calls cannot

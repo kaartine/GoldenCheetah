@@ -18,6 +18,7 @@
 
 #include "RTool.h"
 #include "RChart.h"
+#include "RConsolePromptPolicy.h"
 #include "RSyntax.h"
 
 #include "Colors.h"
@@ -25,6 +26,8 @@
 #include "GenericChart.h"
 #include "HelpWhatsThis.h"
 #include "RWidgetExecutionGuard.h"
+
+#include <QTextBlock>
 
 // unique identifier for each chart
 static int id=0;
@@ -120,6 +123,27 @@ void RConsole::putData(QString data)
 
     QScrollBar *bar = verticalScrollBar();
     bar->setValue(bar->maximum());
+}
+
+void RConsole::ensurePrompt()
+{
+    // A queued prompt can run from processEvents() inside a newer R lease.
+    // Re-defer it so the console never advertises false readiness.
+    if (rtool && rtool->requestConsolePrompt(this)) return;
+
+    if (!RConsolePromptPolicy::shouldAppendDeferred(
+            document()->lastBlock().text())) return;
+
+    appendPrompt();
+}
+
+void RConsole::appendPrompt()
+{
+    const bool continuation =
+        rtool && rtool->R && !rtool->R->program.isEmpty();
+    putData(
+        GCColor::invertColor(GColor(CPLOTBACKGROUND)),
+        RConsolePromptPolicy::prompt(continuation));
 }
 
 void RConsole::setLocalEchoEnabled(bool set)
@@ -226,6 +250,7 @@ void RConsole::keyPressEvent(QKeyEvent *e)
                     QColor(Qt::red),
                     "R execution is already active or was requested "
                     "from a non-owner thread.\n");
+                rtool->requestConsolePrompt(this);
                 break;
             }
 
@@ -275,11 +300,9 @@ void RConsole::keyPressEvent(QKeyEvent *e)
 
         }
 
-        // prompt ">" for new command and ">>" for a continuation line
-        if (rtool->R->program.count()==0)
-            putData(GCColor::invertColor(GColor(CPLOTBACKGROUND)), "> ");
-        else
-            putData(GCColor::invertColor(GColor(CPLOTBACKGROUND)), ">>");
+        // The ordinary command path always appends a new prompt. Prefix
+        // deduplication belongs only to queued recovery in ensurePrompt().
+        appendPrompt();
     }
     break;
 
@@ -596,7 +619,10 @@ RChart::runScript()
                 canvas,
                 myPerspective,
                 this);
-        if (!executionLease) return;
+        if (!executionLease) {
+            rtool->requestChartRerun(this);
+            return;
+        }
 
         // hourglass .. for long running ones this helps user know its busy
         OverrideCursorGuard cursorGuard;

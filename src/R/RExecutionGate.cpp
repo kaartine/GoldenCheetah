@@ -111,3 +111,10 @@ RExecutionGate::tryAcquire(Cleanup cleanup, Cleanup afterRelease)
         std::move(cleanup),
         std::move(afterRelease));
 }
+
+bool
+RExecutionGate::canDeferFromCurrentThread() const noexcept
+{
+    return std::this_thread::get_id() == state_->ownerThread
+        && state_->active.load(std::memory_order_acquire);
+}

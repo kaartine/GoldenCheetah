@@ -50,6 +50,7 @@ signals:
 public slots:
     void configChanged(qint32);
     void rMessage(QString);
+    void ensurePrompt();
 
 public:
     explicit RConsole(Context *context, RChart *parent = 0);
@@ -73,6 +74,8 @@ protected:
     virtual void contextMenuEvent(QContextMenuEvent *e);
 
 private:
+    void appendPrompt();
+
     Context *context;
     bool localEchoEnabled;
     RChart *parent;

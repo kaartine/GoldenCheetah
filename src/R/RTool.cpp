@@ -417,8 +417,14 @@ RTool::tryAcquireExecution(
         [this]() {
             if (appearanceRefreshPending.exchange(
                     false, std::memory_order_acq_rel)) {
-                configChanged();
+                try {
+                    configChanged();
+                } catch (...) {
+                    dispatchDeferredUiWork();
+                    throw;
+                }
             }
+            dispatchDeferredUiWork();
         });
     if (!lease) return lease;
 
@@ -428,6 +434,26 @@ RTool::tryAcquireExecution(
     perspective = executionPerspective;
     chart = executionChart;
     return lease;
+}
+
+bool
+RTool::requestChartRerun(RChart *target)
+{
+    if (!executionGate.canDeferFromCurrentThread()) return false;
+    return deferredUiWork.requestChartRerun(target);
+}
+
+bool
+RTool::requestConsolePrompt(RConsole *target)
+{
+    if (!executionGate.canDeferFromCurrentThread()) return false;
+    return deferredUiWork.requestConsolePrompt(target);
+}
+
+void
+RTool::dispatchDeferredUiWork()
+{
+    RDeferredUiWork::post(deferredUiWork.take());
 }
 
 bool

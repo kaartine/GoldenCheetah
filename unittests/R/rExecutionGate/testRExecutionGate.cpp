@@ -8,8 +8,11 @@
  */
 
 #include "R/RExecutionGate.h"
+#include "R/RDeferredUiWork.h"
+#include "Charts/RConsolePromptPolicy.h"
 #include "Charts/RWidgetExecutionGuard.h"
 
+#include <QCoreApplication>
 #include <QFile>
 #include <QTest>
 
@@ -20,6 +23,54 @@
 #include <utility>
 
 namespace {
+
+class DeferredUiTarget : public QObject
+{
+    Q_OBJECT
+
+public:
+    DeferredUiTarget(QString name, QStringList &order)
+        : name_(std::move(name)), order_(order)
+    {
+    }
+
+public slots:
+    void runScript() { order_ << name_ + QStringLiteral(":chart"); }
+    void ensurePrompt() { order_ << name_ + QStringLiteral(":prompt"); }
+
+private:
+    QString name_;
+    QStringList &order_;
+};
+
+class RedeferPromptTarget : public QObject
+{
+    Q_OBJECT
+
+public:
+    RedeferPromptTarget(
+        RExecutionGate &gate,
+        RDeferredUiWork &pending,
+        QStringList &order)
+        : gate_(gate), pending_(pending), order_(order)
+    {
+    }
+
+public slots:
+    void ensurePrompt()
+    {
+        if (gate_.canDeferFromCurrentThread()) {
+            pending_.requestConsolePrompt(this);
+            return;
+        }
+        order_ << QStringLiteral("prompt");
+    }
+
+private:
+    RExecutionGate &gate_;
+    RDeferredUiWork &pending_;
+    QStringList &order_;
+};
 
 void returnEarly(RExecutionGate &gate, int &cleanupCount)
 {
@@ -40,12 +91,17 @@ private slots:
     void acquiresCleansAndReleases();
     void rejectsNestedAcquireDuringEventPump();
     void rejectsWrongThread();
+    void exposesOnlyActiveOwnerForDeferral();
     void cleansOnExceptionAndEarlyReturn();
     void moveTransfersSingleCleanup();
     void runsCoalescedWorkAfterCleanupAndRelease();
     void guardsEvaluationContinuations();
     void guardsPumpedObjectLists();
     void guardsActiveExecutionBindings();
+    void coalescesAndPostsGuardedUiWork();
+    void redefersPromptAcrossNewLease();
+    void drainsDeferredWorkOnException();
+    void appliesConsolePromptPolicy();
     void productionEntrypointsUseGate();
 };
 
@@ -116,6 +172,28 @@ TestRExecutionGate::rejectsWrongThread()
     QVERIFY(!acquired.load(std::memory_order_acquire));
     QVERIFY(!cleanupCalled.load(std::memory_order_acquire));
     QVERIFY(gate.tryAcquire([]() {}).isValid());
+}
+
+void
+TestRExecutionGate::exposesOnlyActiveOwnerForDeferral()
+{
+    RExecutionGate gate;
+    QVERIFY(!gate.canDeferFromCurrentThread());
+
+    RExecutionGate::Lease lease = gate.tryAcquire([]() {});
+    QVERIFY(lease);
+    QVERIFY(gate.canDeferFromCurrentThread());
+
+    std::atomic_bool wrongThreadCouldDefer{true};
+    std::thread caller([&]() {
+        wrongThreadCouldDefer.store(
+            gate.canDeferFromCurrentThread(), std::memory_order_release);
+    });
+    caller.join();
+    QVERIFY(!wrongThreadCouldDefer.load(std::memory_order_acquire));
+
+    lease = RExecutionGate::Lease();
+    QVERIFY(!gate.canDeferFromCurrentThread());
 }
 
 void
@@ -313,6 +391,140 @@ TestRExecutionGate::guardsActiveExecutionBindings()
 }
 
 void
+TestRExecutionGate::coalescesAndPostsGuardedUiWork()
+{
+    QStringList order;
+    auto *firstChart = new DeferredUiTarget(QStringLiteral("first"), order);
+    auto *deletedBeforeTake =
+        new DeferredUiTarget(QStringLiteral("before"), order);
+    auto *secondChart = new DeferredUiTarget(QStringLiteral("second"), order);
+    auto *firstPrompt = new DeferredUiTarget(QStringLiteral("first"), order);
+    auto *deletedAfterPost =
+        new DeferredUiTarget(QStringLiteral("after"), order);
+
+    RDeferredUiWork pending;
+    QVERIFY(pending.requestChartRerun(firstChart));
+    QVERIFY(pending.requestChartRerun(firstChart));
+    QVERIFY(pending.requestChartRerun(deletedBeforeTake));
+    QVERIFY(pending.requestChartRerun(secondChart));
+    QVERIFY(pending.requestConsolePrompt(firstPrompt));
+    QVERIFY(pending.requestConsolePrompt(firstPrompt));
+    QVERIFY(pending.requestConsolePrompt(deletedAfterPost));
+    QVERIFY(!pending.requestChartRerun(nullptr));
+
+    delete deletedBeforeTake;
+    RDeferredUiWork::Batch batch = pending.take();
+    QCOMPARE(batch.chartReruns.size(), 3);
+    QCOMPARE(batch.consolePrompts.size(), 2);
+    QVERIFY(pending.take().isEmpty());
+
+    RDeferredUiWork::post(std::move(batch));
+    delete deletedAfterPost;
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::processEvents();
+
+    QCOMPARE(
+        order,
+        QStringList({
+            QStringLiteral("first:chart"),
+            QStringLiteral("second:chart"),
+            QStringLiteral("first:prompt")}));
+
+    // A later active lease may request one subsequent queued generation.
+    QVERIFY(pending.requestChartRerun(firstChart));
+    RDeferredUiWork::post(pending.take());
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::processEvents();
+    QCOMPARE(order.count(QStringLiteral("first:chart")), 2);
+
+    delete firstChart;
+    delete secondChart;
+    delete firstPrompt;
+}
+
+void
+TestRExecutionGate::redefersPromptAcrossNewLease()
+{
+    RExecutionGate gate;
+    RDeferredUiWork pending;
+    QStringList order;
+    RedeferPromptTarget prompt(gate, pending, order);
+    bool releasedBeforePost = false;
+
+    QVERIFY(pending.requestConsolePrompt(&prompt));
+    RDeferredUiWork::post(pending.take());
+    {
+        RExecutionGate::Lease later = gate.tryAcquire(
+            []() {},
+            [&]() {
+                releasedBeforePost = !gate.canDeferFromCurrentThread();
+                RDeferredUiWork::post(pending.take());
+            });
+        QVERIFY(later);
+
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        QVERIFY(order.isEmpty());
+        QCOMPARE(pending.take().consolePrompts.size(), 1);
+        QVERIFY(pending.requestConsolePrompt(&prompt));
+    }
+
+    QVERIFY(releasedBeforePost);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::processEvents();
+    QCOMPARE(order, QStringList({QStringLiteral("prompt")}));
+}
+
+void
+TestRExecutionGate::drainsDeferredWorkOnException()
+{
+    RExecutionGate gate;
+    RDeferredUiWork pending;
+    QStringList order;
+    DeferredUiTarget chart(QStringLiteral("throw"), order);
+    int drainCount = 0;
+
+    try {
+        RExecutionGate::Lease lease = gate.tryAcquire(
+            []() {},
+            [&]() {
+                ++drainCount;
+                RDeferredUiWork::post(pending.take());
+            });
+        QVERIFY(lease);
+        QVERIFY(pending.requestChartRerun(&chart));
+        throw std::runtime_error("simulated deferred execution failure");
+    } catch (const std::runtime_error &) {
+    }
+
+    QCOMPARE(drainCount, 1);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::processEvents();
+    QCOMPARE(order, QStringList({QStringLiteral("throw:chart")}));
+    QVERIFY(pending.take().isEmpty());
+}
+
+void
+TestRExecutionGate::appliesConsolePromptPolicy()
+{
+    QVERIFY(!RConsolePromptPolicy::hasPromptPrefix(QString()));
+    QVERIFY(RConsolePromptPolicy::hasPromptPrefix(QStringLiteral("> ")));
+    QVERIFY(RConsolePromptPolicy::hasPromptPrefix(QStringLiteral("> typed")));
+    QVERIFY(RConsolePromptPolicy::hasPromptPrefix(QStringLiteral(">>")));
+    QVERIFY(RConsolePromptPolicy::hasPromptPrefix(QStringLiteral(">>typed")));
+    QVERIFY(!RConsolePromptPolicy::hasPromptPrefix(
+        QStringLiteral("output > ")));
+    QCOMPARE(RConsolePromptPolicy::prompt(false), QStringLiteral("> "));
+    QCOMPARE(RConsolePromptPolicy::prompt(true), QStringLiteral(">>"));
+    QVERIFY(!RConsolePromptPolicy::shouldAppendDeferred(
+        QStringLiteral("> result")));
+
+    QString ordinaryOutput = QStringLiteral("> result");
+    ordinaryOutput += RConsolePromptPolicy::prompt(false);
+    QCOMPARE(ordinaryOutput, QStringLiteral("> result> "));
+}
+
+void
 TestRExecutionGate::productionEntrypointsUseGate()
 {
     QFile chart(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/Charts/RChart.cpp"));
@@ -324,6 +536,12 @@ TestRExecutionGate::productionEntrypointsUseGate()
     QVERIFY(source.contains("lifetimeGuard.runAndValidate("));
     QVERIFY(source.contains("OverrideCursorGuard cursorGuard;"));
     QVERIFY(source.contains("WidgetUpdatesGuard updatesGuard(this);"));
+    QVERIFY(source.contains("rtool->requestChartRerun(this);"));
+    QCOMPARE(source.count("rtool->requestConsolePrompt(this)"), 2);
+    QVERIFY(source.contains("void RConsole::ensurePrompt()"));
+    QVERIFY(source.contains(
+        "RConsolePromptPolicy::shouldAppendDeferred("));
+    QCOMPARE(source.count("appendPrompt();"), 2);
     QCOMPARE(source.count("QApplication::setOverrideCursor("), 1);
     QCOMPARE(source.count("QApplication::restoreOverrideCursor("), 1);
     QCOMPARE(source.count("setUpdatesEnabled(false)"), 1);
@@ -358,6 +576,11 @@ TestRExecutionGate::productionEntrypointsUseGate()
     QVERIFY(toolSource.contains(
         "boundContext->athlete == athlete"));
     QCOMPARE(
+        toolSource.count("executionGate.canDeferFromCurrentThread()"),
+        2);
+    QVERIFY(toolSource.contains(
+        "RDeferredUiWork::post(deferredUiWork.take());"));
+    QCOMPARE(
         toolSource.count("!rtool->hasValidAthleteBinding()"),
         16);
     QCOMPARE(toolSource.count("if (rtool->perspective)"), 3);
@@ -378,7 +601,13 @@ TestRExecutionGate::productionEntrypointsUseGate()
     QVERIFY(!toolHeaderSource.contains("Perspective *perspective;"));
     QVERIFY(!toolHeaderSource.contains("RChart *chart;"));
     QVERIFY(!toolHeaderSource.contains("Context *context;"));
+
+    QFile project(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/src.pro"));
+    QVERIFY2(project.open(QIODevice::ReadOnly), qPrintable(project.errorString()));
+    const QByteArray projectSource = project.readAll();
+    QVERIFY(projectSource.contains("R/RDeferredUiWork.h"));
+    QVERIFY(projectSource.contains("Charts/RConsolePromptPolicy.h"));
 }
 
-QTEST_APPLESS_MAIN(TestRExecutionGate)
+QTEST_GUILESS_MAIN(TestRExecutionGate)
 #include "testRExecutionGate.moc"

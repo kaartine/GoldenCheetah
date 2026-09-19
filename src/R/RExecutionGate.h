@@ -62,6 +62,10 @@ public:
     // thread. A valid lease invokes cleanup before making the gate available.
     Lease tryAcquire(Cleanup cleanup, Cleanup afterRelease = {});
 
+    // Deferred owner-thread work is accepted only while an outer lease is
+    // active. Wrong-thread and already-released callers must fail closed.
+    bool canDeferFromCurrentThread() const noexcept;
+
 private:
     std::shared_ptr<State> state_;
 };
