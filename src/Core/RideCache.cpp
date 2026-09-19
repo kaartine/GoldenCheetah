@@ -326,6 +326,30 @@ RideCache::settleForOpenDataSnapshot(QString &error)
 }
 
 bool
+RideCache::settleBeforeRideOpen(
+    const RideItem *item, QString &error)
+{
+    error.clear();
+    if (!item || !rideRefreshMutableItemThreadAllowed(
+            QThread::currentThread(), item->thread(), thread())) {
+        error = QStringLiteral(
+            "Cached activities can only be opened on the owner thread");
+        return false;
+    }
+    if (item->thread() != thread()) return true;
+    if (!ownsLiveRide(item)) return true;
+
+    bool refreshActive = false;
+    {
+        QMutexLocker locker(&updateMutex);
+        refreshActive = !refreshThreads.isEmpty()
+            || refreshGeneration_.hasActive()
+            || refreshGeneration_.hasPending();
+    }
+    return !refreshActive || settleRefreshForSave(error);
+}
+
+bool
 RideCache::enqueueSaveSnapshot(
     const std::shared_ptr<const RideCacheSave::Snapshot> &snapshot)
 {
@@ -2374,6 +2398,7 @@ void RideCacheRefreshThread::run()
         RideItem *const item = work ? work->target : nullptr;
         if (item
             && item->checkStale(*environment, work->inputs)) {
+            if (!work->inputs.backgroundRefreshAllowed) continue;
             item->refresh();
             QMutexLocker locker(&target->updateMutex);
             const auto disposition =

@@ -177,6 +177,16 @@ RideFile *RideItem::ride(bool open)
 {
     if (!open || ride_) return ride_;
 
+    if (context && context->athlete
+        && context->athlete->rideCache) {
+        QString barrierError;
+        if (!context->athlete->rideCache->settleBeforeRideOpen(
+                this, barrierError)) {
+            if (!barrierError.isEmpty()) errors_ << barrierError;
+            return nullptr;
+        }
+    }
+
     // open the ride file
     QFile file(path + "/" + fileName);
     ride_ = RideFileFactory::instance().openRideFile(context, file, errors_);
@@ -286,6 +296,18 @@ RideItem::fileCache()
 void
 RideItem::setRide(RideFile *overwrite)
 {
+    if (overwrite && !ride_ && context && context->athlete
+        && context->athlete->rideCache) {
+        QString barrierError;
+        if (!context->athlete->rideCache->settleBeforeRideOpen(
+                this, barrierError)) {
+            qWarning().noquote()
+                << "Cannot replace activity ride data:"
+                << barrierError;
+            return;
+        }
+    }
+
     RideFile *old = ride_;
     ride_ = overwrite; // overwrite
 
@@ -468,6 +490,17 @@ RideItem::rebindSourceProvenance()
 void
 RideItem::setDirty(bool val)
 {
+    if (val && !isdirty && context && context->athlete
+        && context->athlete->rideCache) {
+        QString barrierError;
+        if (!context->athlete->rideCache->settleBeforeRideOpen(
+                this, barrierError)) {
+            qWarning().noquote()
+                << "Cannot mark activity dirty:"
+                << barrierError;
+            return;
+        }
+    }
     if (val && ride_)
         ride_->invalidateSourceProvenance();
     if (isdirty == val) return; // np change
@@ -534,6 +567,9 @@ RideItem::captureRefreshInputs(
     inputs.generation = environment.generation();
     if (!rideRefreshCaptureThreadAllowed(
             QThread::currentThread(), thread())) return inputs;
+    inputs.backgroundRefreshAllowed =
+        rideRefreshBackgroundBuildAllowed(
+            ride_ != nullptr, isdirty, isedit);
     inputs.initiallyStale = isstale;
     inputs.color = environment.colorFor(
         rideRefreshItemText(

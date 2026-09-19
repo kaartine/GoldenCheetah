@@ -52,6 +52,7 @@ inline unsigned long rideRefreshMetadataCrc(
 
 struct RideRefreshItemStaleInputs {
     quint64 generation = 0;
+    bool backgroundRefreshAllowed = false;
     bool initiallyStale = true;
     QColor color;
     int storedUserMetricSchemaVersion = 0;
@@ -102,6 +103,21 @@ inline bool rideRefreshWorksetCaptureAllowed(
     bool empty, bool generationAccepted)
 {
     return empty || generationAccepted;
+}
+
+inline bool rideRefreshBackgroundBuildAllowed(
+    bool open, bool dirty, bool editing)
+{
+    return !open && !dirty && !editing;
+}
+
+inline bool rideRefreshMutableItemThreadAllowed(
+    const QThread *current,
+    const QThread *itemOwner,
+    const QThread *cacheOwner)
+{
+    return current && itemOwner && cacheOwner
+        && current == itemOwner;
 }
 
 inline RideRefreshItemGateDecision rideRefreshItemGateDecision(

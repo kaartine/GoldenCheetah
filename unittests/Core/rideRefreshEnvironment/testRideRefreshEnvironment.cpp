@@ -69,6 +69,8 @@ private slots:
     void rideItemWeightMilligramsRejectsUnsafeConversions();
     void cacheInputsAndStoragePathsAreGenerationBound();
     void itemStaleGateIsGenerationBoundAndPreservesWriteOrder();
+    void backgroundRefreshRejectsMutableOwnerState();
+    void mutableItemAccessPreservesWorkerOwnedStaging();
     void measuresSnapshotIsRetainedByTheGeneration();
     void routesSnapshotIsRetainedByTheGeneration();
     void zonesSnapshotIsRetainedByTheGeneration();
@@ -76,6 +78,37 @@ private slots:
     void publicationIsOwnerThreadOnlyAndClosedByLifecycle();
     void productionWorkersRetainTheirPublishedGeneration();
 };
+
+void TestRideRefreshEnvironment::
+backgroundRefreshRejectsMutableOwnerState()
+{
+    QVERIFY(rideRefreshBackgroundBuildAllowed(false, false, false));
+    QVERIFY(!rideRefreshBackgroundBuildAllowed(true, false, false));
+    QVERIFY(!rideRefreshBackgroundBuildAllowed(false, true, false));
+    QVERIFY(!rideRefreshBackgroundBuildAllowed(false, false, true));
+    QVERIFY(!rideRefreshBackgroundBuildAllowed(true, true, true));
+}
+
+void TestRideRefreshEnvironment::
+mutableItemAccessPreservesWorkerOwnedStaging()
+{
+    QThread cacheOwner;
+    QThread worker;
+    QThread otherOwner;
+
+    QVERIFY(rideRefreshMutableItemThreadAllowed(
+        &cacheOwner, &cacheOwner, &cacheOwner));
+    QVERIFY(rideRefreshMutableItemThreadAllowed(
+        &worker, &worker, &cacheOwner));
+    QVERIFY(!rideRefreshMutableItemThreadAllowed(
+        &worker, &cacheOwner, &cacheOwner));
+    QVERIFY(!rideRefreshMutableItemThreadAllowed(
+        &worker, &otherOwner, &cacheOwner));
+    QVERIFY(!rideRefreshMutableItemThreadAllowed(
+        &cacheOwner, &worker, &cacheOwner));
+    QVERIFY(!rideRefreshMutableItemThreadAllowed(
+        nullptr, &worker, &cacheOwner));
+}
 
 void TestRideRefreshEnvironment::
 settingsAreImmutableAndDefaultsAreCallSpecific()
@@ -856,6 +889,10 @@ productionWorkersRetainTheirPublishedGeneration()
         "target->nextRefresh(\n            generation, workset->count())", run);
     const qsizetype staleCheck = source.indexOf(
         "item->checkStale(*environment, work->inputs)", nextRefresh);
+    const qsizetype backgroundGate = source.indexOf(
+        "!work->inputs.backgroundRefreshAllowed", staleCheck);
+    const qsizetype refreshCall = source.indexOf(
+        "item->refresh()", backgroundGate);
     const qsizetype constructor = source.indexOf(
         "RideCacheRefreshThread::RideCacheRefreshThread(");
     const qsizetype retained = source.indexOf(
@@ -874,6 +911,8 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(loop > guard);
     QVERIFY(nextRefresh > loop);
     QVERIFY(staleCheck > nextRefresh);
+    QVERIFY(backgroundGate > staleCheck);
+    QVERIFY(refreshCall > backgroundGate);
     QVERIFY(constructor >= 0);
     QVERIFY(retained > constructor);
     QVERIFY(retainedWorkset > retained);
@@ -890,6 +929,33 @@ productionWorkersRetainTheirPublishedGeneration()
     QFile itemSourceFile(root.filePath(QStringLiteral("src/Core/RideItem.cpp")));
     QVERIFY(itemSourceFile.open(QIODevice::ReadOnly));
     const QByteArray itemSource = itemSourceFile.readAll();
+    const qsizetype rideOpen = itemSource.indexOf(
+        "RideFile *RideItem::ride(bool open)");
+    const qsizetype openBarrier = itemSource.indexOf(
+        "settleBeforeRideOpen(", rideOpen);
+    const qsizetype sourceOpen = itemSource.indexOf(
+        "QFile file(path + \"/\" + fileName)", openBarrier);
+    const qsizetype setRide = itemSource.indexOf(
+        "RideItem::setRide(RideFile *overwrite)");
+    const qsizetype setRideBarrier = itemSource.indexOf(
+        "settleBeforeRideOpen(", setRide);
+    const qsizetype setRideAssignment = itemSource.indexOf(
+        "ride_ = overwrite", setRideBarrier);
+    const qsizetype setDirty = itemSource.indexOf(
+        "RideItem::setDirty(bool val)");
+    const qsizetype setDirtyBarrier = itemSource.indexOf(
+        "settleBeforeRideOpen(", setDirty);
+    const qsizetype dirtyAssignment = itemSource.indexOf(
+        "isdirty = val", setDirtyBarrier);
+    QVERIFY(rideOpen >= 0);
+    QVERIFY(openBarrier > rideOpen);
+    QVERIFY(sourceOpen > openBarrier);
+    QVERIFY(setRide >= 0);
+    QVERIFY(setRideBarrier > setRide);
+    QVERIFY(setRideAssignment > setRideBarrier);
+    QVERIFY(setDirty >= 0);
+    QVERIFY(setDirtyBarrier > setDirty);
+    QVERIFY(dirtyAssignment > setDirtyBarrier);
     const qsizetype captureInputs = itemSource.indexOf(
         "RideItem::captureRefreshInputs(");
     const qsizetype boundOverload = itemSource.indexOf(
@@ -930,6 +996,11 @@ productionWorkersRetainTheirPublishedGeneration()
         "inputs.initiallyStale = isstale");
     QVERIFY(ownerGuard >= 0);
     QVERIFY(firstItemRead > ownerGuard);
+    const qsizetype backgroundPolicy = captureBody.indexOf(
+        "rideRefreshBackgroundBuildAllowed(", ownerGuard);
+    QVERIFY(backgroundPolicy > ownerGuard);
+    QVERIFY(backgroundPolicy < firstItemRead);
+    QVERIFY(captureBody.contains("ride_ != nullptr, isdirty, isedit"));
     QVERIFY(captureBody.contains("QStringLiteral(\"Weight\")"));
     QVERIFY(captureBody.contains("metaCRC()"));
     QVERIFY(captureBody.contains("cacheStoragePathsComplete = storage.isComplete()"));

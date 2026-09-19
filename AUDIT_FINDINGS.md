@@ -9023,6 +9023,20 @@ commit before the next finding begins.
   construction while leaving them stale for an owner-thread operation. Bind
   acceptance to a monotonic item mutation revision; pointer identity and the
   dirty flag alone do not detect same-object edits.
+- ARCH-003F2c3a1 (capture-to-build open-state TOCTOU recorded before
+  correction): A capture-time closed/clean/edit-free flag is not a lifetime
+  barrier. The owner thread can open the same item after workset capture, after
+  which a worker trusting the old flag deep-copies a newly live `RideFile`
+  QObject. Serialize canonical ride opening with the active refresh barrier
+  (or capture pure ride data before worker admission); an instantaneous worker
+  recheck cannot make the preceding cross-thread read safe.
+- ARCH-003F2c3a2 (transient-item barrier regression found by independent review
+  and recorded before correction): Applying the cache owner-thread requirement
+  before distinguishing membership rejects worker-owned staging `RideItem`
+  objects that intentionally share Context but cannot belong to the cache.
+  Admit mutable access only on the cache owner thread or on a distinct
+  transient item's own thread; reject a cache-affine item from every worker,
+  and inspect cache membership only where the cache-owned containers are safe.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9311,6 +9325,13 @@ commit before the next finding begins.
   `isstale` in the worker before refresh construction. Return those fields as a
   detached proposal. A clean proposal and a complete refresh result must cross
   the same generation gate; a rejected generation publishes neither.
+- ARCH-003F3c2a (failed-build clean-state defect recorded before correction):
+  `RideItem::refresh()` returns `void`, so the worker marks an accepted item
+  clean and marks the cache changed even when source open, fingerprinting,
+  computation, or cache preparation returned early without a result. Give the
+  detached build an explicit success/failure disposition; only a successfully
+  published clean proposal or refresh result may clear stale state or set the
+  generation's changed flag.
 - ARCH-003F3c3 (completion, cancellation, and save barrier recorded before
   correction): `threadCompleted`, `cancel`, and synchronous-save settlement
   currently reason only about worker threads. They must also close/discard or
@@ -9331,6 +9352,14 @@ commit before the next finding begins.
   becomes one logical accepted transaction, and newer work remains pending
   until its drain completes. Configuration quiescence may discard Computing
   work, but must drain/join Publishing before mutating captured dependencies.
+- ARCH-003F3c5 (cross-thread request ordering recorded before correction): A
+  non-owner `RideCache::refresh()` currently queues the entire request to the
+  owner thread. An active worker can finish and its completion callback can
+  accept/publish the old generation before that queued request reserves a newer
+  generation. Reserve invalidation thread-safely before queueing, or make the
+  request API owner-thread-only with every caller explicitly marshalled; test
+  the request-before-completion linearization rather than relying on event
+  delivery order across senders.
 - ARCH-003F4 (required deterministic verification recorded before correction):
   Add latch-controlled tests for config transition and teardown joining,
   generation N rejection while N+1 is requested, exception/early-exit lease
@@ -9338,6 +9367,13 @@ commit before the next finding begins.
   suppression, and multi-key snapshot consistency. Run the focused suite under
   ASan/UBSan; retain a TSan run as a release prerequisite if the available Qt
   build is not TSan-instrumented.
+- ARCH-003F4a (ride-open barrier integration gap recorded before correction):
+  The F2c3a focused evidence composes an executable thread-admission matrix,
+  the already tested refresh-settlement state machine, and a production-order
+  contract. Add a real latch-controlled cache/item integration that proves an
+  active or pending refresh physically settles before `ride()`, `setRide()`, or
+  clean-to-dirty assignment, and that barrier failure leaves `ride_` and
+  `isdirty` unchanged.
 - ARCH-003F5 (adjacent worker defect found by independent F review and recorded
   before correction): `Estimator::run` also dereferences the replaceable global
   `RideMetadata` object, while configuration reload can delete it. Its teardown
@@ -9773,6 +9809,30 @@ commit before the next finding begins.
   `RideItem::refresh()` before generation acceptance. F3 must compute a
   detached result and publish it on the owner thread only after revalidating
   generation and target liveness.
+- ARCH-003F2c3a/F2c3a1-F2c3a2 resolution: each owner-captured work item now
+  carries an explicit fail-closed background-build policy. Only a closed,
+  clean, non-editing item may reach the worker refresh builder. Canonical
+  closed-to-open `ride()`/`setRide()` transitions and clean-to-dirty changes
+  settle every active or pending refresh generation on the cache owner thread
+  before visible mutation, closing the capture-to-build TOCTOU. Mutable item
+  access always requires the item's QObject owner thread; worker-owned staging
+  objects remain usable on that worker, while a cache-affine item is rejected
+  there and the cache owner cannot mutate a worker-owned transient. Cache
+  membership is inspected only on the cache owner thread.
+- ARCH-003F2c3a verification: the environment suite passes 20/20 normally and
+  under ASan/UBSan. It covers the complete open/dirty/edit policy and mutable-
+  thread admission matrix, including both cross-owner directions, null input,
+  owner canonical use, and worker-owned staging. Its production contract pins
+  ride-open, null-to-non-null setRide, and clean-to-dirty barriers before their
+  respective source open or assignment, and pins the worker builder skip.
+  `RideItem.cpp` and `RideCache.cpp` compile with warnings as errors, source
+  dependencies pass 14/14, and `git diff --check` is clean. Independent review
+  first found the open-state TOCTOU and transient/cross-owner admission gaps;
+  final re-review returned GO with no remaining blocker or major finding.
+- ARCH-003F2c3a residual: generation-bound `checkStale` still writes color,
+  weight, CRC, and stale state in the worker, as tracked by ARCH-003F3c2. The
+  builder's remaining live environment consumers are tracked by ARCH-003F2c3,
+  and the real latch-controlled barrier composition remains ARCH-003F4a.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

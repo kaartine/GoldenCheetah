@@ -489,6 +489,8 @@ class RideCache : public QObject
 
     private:
         bool activityMutationIsBlocked() const;
+        bool settleBeforeRideOpen(
+            const RideItem *item, QString &error);
         bool ownsLiveRide(const RideItem *item) const {
             RideItem *const address = const_cast<RideItem*>(item);
             return address
