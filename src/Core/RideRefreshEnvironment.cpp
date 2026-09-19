@@ -16,6 +16,8 @@
 #include <QDate>
 #include <QTime>
 
+#include <cmath>
+#include <limits>
 #include <utility>
 
 QStringList RideRefreshEnvironment::globalSettingKeys()
@@ -204,4 +206,42 @@ std::optional<unsigned long> RideRefreshEnvironment::rideItemFingerprint(
         QStringLiteral("<athlete-preferences>intervals/discovery"), 57)
                        .toInt();
     return fingerprint;
+}
+
+std::optional<double> RideRefreshEnvironment::rideItemWeight(
+    const QDate &date, const QString &metadataWeight) const
+{
+    if (!measures_) return std::nullopt;
+
+    const auto valid = [](double value) {
+        return value > 0.0
+            && RideRefreshEnvironment::rideItemWeightMilligrams(value);
+    };
+    double resolved = 0.0;
+    if (measures_->group(QStringLiteral("Body"))) {
+        const auto *observation = measures_->observationForDate(
+            QStringLiteral("Body"), date);
+        if (observation) resolved = observation->values[0];
+    }
+    if (!valid(resolved)) resolved = metadataWeight.toDouble();
+    if (!valid(resolved)) {
+        resolved = athleteSetting(
+            QStringLiteral("<athlete-preferences>weight"),
+            QStringLiteral("75.0")).toString().toDouble();
+    }
+    if (!valid(resolved)) resolved = 80.0;
+    return resolved;
+}
+
+std::optional<unsigned long> RideRefreshEnvironment::rideItemWeightMilligrams(
+    double kilograms)
+{
+    const double milligrams = 1000.0f * kilograms;
+    if (!std::isfinite(milligrams) || milligrams < 0.0
+        || static_cast<long double>(milligrams)
+            > static_cast<long double>(
+                std::numeric_limits<unsigned long>::max())) {
+        return std::nullopt;
+    }
+    return static_cast<unsigned long>(milligrams);
 }

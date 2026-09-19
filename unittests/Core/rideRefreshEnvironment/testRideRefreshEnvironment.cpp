@@ -12,6 +12,8 @@
 #include <QFile>
 
 #include <atomic>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <thread>
 
@@ -61,6 +63,8 @@ private slots:
     void calendarFormattingPreservesFieldAndUnitSemantics();
     void rideItemFingerprintUsesOnlyImmutableGenerationValues();
     void rideItemFingerprintFailsClosedOnMissingDomains();
+    void rideItemWeightPreservesLegacyFallbacks();
+    void rideItemWeightMilligramsRejectsUnsafeConversions();
     void measuresSnapshotIsRetainedByTheGeneration();
     void routesSnapshotIsRetainedByTheGeneration();
     void zonesSnapshotIsRetainedByTheGeneration();
@@ -412,6 +416,149 @@ rideItemFingerprintFailsClosedOnMissingDomains()
                  ->rideItemFingerprint(date, QStringLiteral("Bike"), false));
 }
 
+void TestRideRefreshEnvironment::rideItemWeightPreservesLegacyFallbacks()
+{
+    RideRefreshMeasures::Group body;
+    body.symbol = QStringLiteral("Body");
+    RideRefreshMeasures::Observation observation;
+    observation.when = QDateTime(QDate(2024, 1, 1), QTime(12, 0));
+    observation.values[0] = 71.25;
+    body.observations = {observation};
+    const auto measures = RideRefreshMeasures::create({body}, 0);
+    RideRefreshEnvironment::Settings settings;
+    settings.athlete.insert(
+        QStringLiteral("<athlete-preferences>weight"),
+        QStringLiteral("76.5"));
+    const auto snapshot = RideRefreshEnvironment::create(
+        1, settings, true, {}, {}, {}, {}, {}, {}, measures, {});
+
+    QCOMPARE(snapshot->rideItemWeight(
+                 QDate(2024, 1, 1), QStringLiteral("68.0")).value(),
+             71.25);
+    QCOMPARE(snapshot->rideItemWeight(
+                 QDate(2024, 2, 1), QStringLiteral("68.0")).value(),
+             71.25); // Body carries forward
+    QCOMPARE(snapshot->rideItemWeight(
+                 QDate(2023, 12, 31), QStringLiteral("68.0")).value(),
+             68.0);
+    QCOMPARE(snapshot->rideItemWeight(
+                 QDate(2023, 12, 31), QStringLiteral("-1")).value(),
+             76.5);
+
+    const auto noBody = RideRefreshMeasures::create({}, 0);
+    QCOMPARE(RideRefreshEnvironment::create(
+                 2, settings, true, {}, {}, {}, {}, {}, {}, noBody, {})
+                 ->rideItemWeight(
+                     QDate(2024, 1, 1), QStringLiteral("69.5")).value(),
+             69.5);
+    settings.athlete.insert(
+        QStringLiteral("<athlete-preferences>weight"),
+        QStringLiteral("0"));
+    QCOMPARE(RideRefreshEnvironment::create(
+                 3, settings, true, {}, {}, {}, {}, {}, {}, noBody, {})
+                 ->rideItemWeight(
+                     QDate(2024, 1, 1), QStringLiteral("0")).value(),
+             80.0);
+    settings.athlete.clear();
+    QCOMPARE(RideRefreshEnvironment::create(
+                 4, settings, true, {}, {}, {}, {}, {}, {}, noBody, {})
+                 ->rideItemWeight(
+                     QDate(2024, 1, 1), QStringLiteral("0")).value(),
+             75.0);
+    QVERIFY(!RideRefreshEnvironment::create(
+        5, settings, true, {}, {}, {}, {}, {}, {}, {}, {})
+                 ->rideItemWeight(
+                     QDate(2024, 1, 1), QStringLiteral("69.5")));
+
+    const auto invalidBodyWeight = [&](double value) {
+        auto invalidBody = body;
+        invalidBody.observations[0].values[0] = value;
+        return RideRefreshEnvironment::create(
+            6, settings, true, {}, {}, {}, {}, {}, {},
+            RideRefreshMeasures::create({invalidBody}, 0), {});
+    };
+    QCOMPARE(invalidBodyWeight(0.0)->rideItemWeight(
+                 QDate(2024, 1, 1), QStringLiteral("68.0")).value(),
+             68.0);
+    QCOMPARE(invalidBodyWeight(-1.0)->rideItemWeight(
+                 QDate(2024, 1, 1), QStringLiteral("68.0")).value(),
+             68.0);
+    QCOMPARE(invalidBodyWeight(
+                 std::numeric_limits<double>::quiet_NaN())->rideItemWeight(
+                 QDate(2024, 1, 1), QStringLiteral("68.0")).value(),
+             68.0);
+    QCOMPARE(invalidBodyWeight(
+                 std::numeric_limits<double>::infinity())->rideItemWeight(
+                 QDate(2024, 1, 1), QStringLiteral("68.0")).value(),
+             68.0);
+    QCOMPARE(invalidBodyWeight(std::numeric_limits<double>::max())
+                 ->rideItemWeight(
+                     QDate(2024, 1, 1), QStringLiteral("68.0")).value(),
+             68.0);
+
+    settings.athlete.insert(
+        QStringLiteral("<athlete-preferences>weight"), 76.5);
+    const auto metadataFallback = RideRefreshEnvironment::create(
+        7, settings, true, {}, {}, {}, {}, {}, {}, noBody, {});
+    QCOMPARE(metadataFallback->rideItemWeight(
+                 QDate(2024, 1, 1), QStringLiteral("0")).value(),
+             76.5);
+    QCOMPARE(metadataFallback->rideItemWeight(
+                 QDate(2024, 1, 1), QStringLiteral("nan")).value(),
+             76.5);
+    QCOMPARE(metadataFallback->rideItemWeight(
+                 QDate(2024, 1, 1), QStringLiteral("inf")).value(),
+             76.5);
+    QCOMPARE(metadataFallback->rideItemWeight(
+                 QDate(2024, 1, 1),
+                 QString::number(
+                     std::numeric_limits<double>::max(), 'g', 17)).value(),
+             76.5);
+    for (const QVariant &invalidSetting : {
+             QVariant(-1.0), QVariant(0.0),
+             QVariant(std::numeric_limits<double>::quiet_NaN()),
+             QVariant(std::numeric_limits<double>::infinity()),
+             QVariant(std::numeric_limits<double>::max())}) {
+        settings.athlete.insert(
+            QStringLiteral("<athlete-preferences>weight"), invalidSetting);
+        QCOMPARE(RideRefreshEnvironment::create(
+                     8, settings, true, {}, {}, {}, {}, {}, {}, noBody, {})
+                     ->rideItemWeight(
+                         QDate(2024, 1, 1), QStringLiteral("0")).value(),
+                 80.0);
+    }
+}
+
+void TestRideRefreshEnvironment::
+rideItemWeightMilligramsRejectsUnsafeConversions()
+{
+    QCOMPARE(RideRefreshEnvironment::rideItemWeightMilligrams(0.0).value(),
+             0UL);
+    QCOMPARE(RideRefreshEnvironment::rideItemWeightMilligrams(71.2509).value(),
+             71250UL);
+    QVERIFY(!RideRefreshEnvironment::rideItemWeightMilligrams(-1.0));
+    QVERIFY(!RideRefreshEnvironment::rideItemWeightMilligrams(
+        std::numeric_limits<double>::quiet_NaN()));
+    QVERIFY(!RideRefreshEnvironment::rideItemWeightMilligrams(
+        std::numeric_limits<double>::infinity()));
+
+    const double roundedBoundary = static_cast<double>(
+        static_cast<long double>(std::numeric_limits<unsigned long>::max())
+        / 1000.0L);
+    const double belowBoundary = std::nextafter(roundedBoundary, 0.0);
+    const double aboveBoundary = std::nextafter(
+        roundedBoundary, std::numeric_limits<double>::infinity());
+    QVERIFY(static_cast<long double>(1000.0f * belowBoundary)
+            <= static_cast<long double>(
+                std::numeric_limits<unsigned long>::max()));
+    QVERIFY(static_cast<long double>(1000.0f * aboveBoundary)
+            > static_cast<long double>(
+                std::numeric_limits<unsigned long>::max()));
+    QVERIFY(RideRefreshEnvironment::rideItemWeightMilligrams(belowBoundary));
+    QVERIFY(!RideRefreshEnvironment::rideItemWeightMilligrams(
+        aboveBoundary));
+}
+
 void TestRideRefreshEnvironment::sessionPublishesWholeGenerationsAtomically()
 {
     AthleteSession session(
@@ -549,8 +696,27 @@ productionWorkersRetainTheirPublishedGeneration()
         schemaBranch, schemaLegacyBranch - schemaBranch);
     const qsizetype schemaFailClosed = itemSource.indexOf(
         "if (!userMetricSchemaVersion", schemaLegacyBranch);
+    const qsizetype weightBranch = itemSource.indexOf(
+        "if (environment) {", schemaFailClosed);
+    const qsizetype priorConversion = itemSource.indexOf(
+        "RideRefreshEnvironment::rideItemWeightMilligrams(weight)",
+        weightBranch);
+    const qsizetype immutableWeight = itemSource.indexOf(
+        "environment->rideItemWeight(", priorConversion);
+    const qsizetype weightLegacyBranch = itemSource.indexOf(
+        "} else {", immutableWeight);
+    const QByteArray immutableWeightBody = itemSource.mid(
+        weightBranch, weightLegacyBranch - weightBranch);
+    const qsizetype weightFailClosed = itemSource.indexOf(
+        "if (!priorWeight || !currentWeight)", weightLegacyBranch);
+    const qsizetype currentConversion = itemSource.indexOf(
+        "RideRefreshEnvironment::rideItemWeightMilligrams(\n"
+        "                        *currentWeight)", priorConversion);
+    const qsizetype weightComparison = itemSource.indexOf(
+        "if (!currentMilligrams || *priorWeight != *currentMilligrams)",
+        currentConversion);
     const qsizetype fingerprintValue = itemSource.indexOf(
-        "std::optional<unsigned long> refreshFingerprint;", schemaFailClosed);
+        "std::optional<unsigned long> refreshFingerprint;", weightComparison);
     const qsizetype immutableBranch = itemSource.indexOf(
         "if (environment) {", fingerprintValue);
     const qsizetype immutableFingerprint = itemSource.indexOf(
@@ -578,7 +744,18 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(schemaLegacyBranch > immutableSchema);
     QVERIFY(!immutableSchemaBody.contains("RideMetricFactory::instance"));
     QVERIFY(schemaFailClosed > schemaLegacyBranch);
-    QVERIFY(fingerprintValue > schemaFailClosed);
+    QVERIFY(weightBranch > schemaFailClosed);
+    QVERIFY(priorConversion > weightBranch);
+    QVERIFY(immutableWeight > priorConversion);
+    QVERIFY(weightLegacyBranch > immutableWeight);
+    QVERIFY(!immutableWeightBody.contains("getWeight()"));
+    QVERIFY(!immutableWeightBody.contains("context->athlete"));
+    QVERIFY(!immutableWeightBody.contains("appsettings"));
+    QVERIFY(!immutableWeightBody.contains("->measures"));
+    QVERIFY(weightFailClosed > weightLegacyBranch);
+    QVERIFY(currentConversion > weightFailClosed);
+    QVERIFY(weightComparison > currentConversion);
+    QVERIFY(fingerprintValue > weightComparison);
     QVERIFY(immutableBranch > fingerprintValue);
     QVERIFY(immutableFingerprint > immutableBranch);
     QVERIFY(legacyBranch > immutableFingerprint);

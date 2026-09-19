@@ -8925,6 +8925,29 @@ commit before the next finding begins.
   stale without consulting either process singleton; retain legacy singleton
   behavior only in the no-environment overload. Weight, file/cache/path, and
   item-metadata staging remain separate c2c work.
+- ARCH-003F2c2c2 (Body-weight worker cutover recorded before correction):
+  Resolve stale-check weight from the immutable Measures generation, current
+  item metadata value, and captured athlete setting in legacy fallback order.
+  Preserve Body carry-forward, the 75/80 defaults, milligram truncation, and
+  the cached item-weight update; a missing Measures snapshot must fail closed
+  while a valid snapshot without Body continues to metadata/settings fallback.
+  Owner-safe item metadata capture remains separate work.
+- ARCH-003F2c2c2a (weight truncation regression recorded before correction):
+  The first cutover compared an unsigned cached milligram value directly with
+  a floating current value, making sub-milligram changes stale although legacy
+  truncates both operands. Restore an explicit unsigned current-milligram value
+  and pin the typed comparison before accepting c2c2.
+- ARCH-003F2c2c2b (non-finite weight behavior recorded before correction): A
+  NaN or infinity from Body, metadata, or settings bypasses legacy `<= 0`
+  fallbacks and then reaches undefined floating-to-unsigned conversion. Define
+  the immutable bound policy to accept only finite positive sources, continue
+  fallback for invalid values, and guarantee a finite positive 80 kg terminal
+  value. Preserve finite zero/negative fallback behavior and test every source.
+- ARCH-003F2c2c2c (out-of-range weight conversion recorded before correction):
+  A finite positive value can still exceed the unsigned-long milligram range.
+  Reject such a source before multiplication/conversion, continue the same
+  fallback chain, and pin the upper boundary without relying on a rounded
+  double representation of `ULONG_MAX`.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9292,6 +9315,30 @@ commit before the next finding begins.
   Independent review: GO with no blocker, major, or minor finding.
 - ARCH-003F2c2c1 residual: c2c still needs immutable Body-weight and
   RideFileCache analysis/path inputs plus an owner-safe item metadata snapshot.
+  F3 still owns detached publication after generation acceptance.
+- ARCH-003F2c2c2/F2c2c2a-c resolution: bound stale checks now resolve weight
+  from captured Body measures, item metadata, and the captured athlete setting
+  in legacy order, including Body carry-forward and 75/80 defaults. Both the
+  cached prior and resolved current values use one checked legacy 1000x
+  conversion; normal values retain unsigned truncation, while negative,
+  non-finite, or out-of-range values fail closed instead of reaching undefined
+  floating-to-unsigned conversion. A valid Measures snapshot without Body
+  continues to fallback, while a missing snapshot marks the item stale.
+- ARCH-003F2c2c2 verification: the focused suite passes 16/16 normally and
+  under ASan/UBSan. It covers carry-forward, no Body, missing Measures,
+  metadata/settings/default fallback, zero, negative, NaN, infinity, DBL_MAX,
+  sub-thousandth equality, and independently proven values immediately below
+  and above the rounded ULONG_MAX conversion boundary. The production contract
+  pins the shared checked conversion for prior and current before comparison
+  and excludes live weight sources from the bound branch. Qt 6.8.3 production
+  builds of `RideItem.cpp` and `RideCache.cpp` pass with warnings as errors;
+  source dependencies pass 14/14 and `git diff --check` passes. Independent
+  review first found the truncation regression and then both conversion-bound
+  gaps recorded as F2c2c2a-c; final re-review: GO with no blocker, major, or
+  minor finding.
+- ARCH-003F2c2c2 residual: the metadata Weight string is still read from the
+  mutable RideItem in the worker. The remaining c2c work must stage item
+  metadata and redirect RideFileCache analysis/path checks to immutable inputs.
   F3 still owns detached publication after generation acceptance.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a

@@ -86,6 +86,10 @@ public:
         const MetricRelevance &relevant) const;
     std::optional<unsigned long> rideItemFingerprint(
         const QDate &date, const QString &sport, bool isSwim) const;
+    std::optional<double> rideItemWeight(
+        const QDate &date, const QString &metadataWeight) const;
+    static std::optional<unsigned long> rideItemWeightMilligrams(
+        double kilograms);
 
     const RideMetricRegistrySnapshot *metricRegistry() const
     {

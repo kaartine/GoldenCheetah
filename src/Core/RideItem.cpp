@@ -565,15 +565,42 @@ RideItem::checkStaleImpl(const RideRefreshEnvironment *environment)
     } else {
 
         // has weight changed?
-        unsigned long prior  = 1000.0f * weight;
-        unsigned long now = 1000.0f * getWeight();
+        std::optional<unsigned long> priorWeight;
+        if (environment) {
+            priorWeight =
+                RideRefreshEnvironment::rideItemWeightMilligrams(weight);
+        } else {
+            priorWeight = static_cast<unsigned long>(1000.0f * weight);
+        }
+        std::optional<double> currentWeight;
+        if (environment) {
+            currentWeight = environment->rideItemWeight(
+                dateTime.date(), getText(QStringLiteral("Weight"), "0.0"));
+            if (currentWeight) weight = *currentWeight;
+        } else {
+            currentWeight = getWeight();
+        }
 
-        if (prior != now) {
+        if (!priorWeight || !currentWeight) {
 
-            getWeight();
             isstale = true;
 
         } else {
+            std::optional<unsigned long> currentMilligrams;
+            if (environment) {
+                currentMilligrams =
+                    RideRefreshEnvironment::rideItemWeightMilligrams(
+                        *currentWeight);
+            } else {
+                currentMilligrams = static_cast<unsigned long>(
+                    1000.0f * *currentWeight);
+            }
+            if (!currentMilligrams || *priorWeight != *currentMilligrams) {
+
+                if (!environment) getWeight();
+                isstale = true;
+
+            } else {
 
             // or have cp / zones or routes fingerprints changed ?
             // note we now get the fingerprint from the zone range
@@ -633,6 +660,7 @@ RideItem::checkStaleImpl(const RideRefreshEnvironment *environment)
                     isstale = true;
 
             }
+        }
         }
     }
 
