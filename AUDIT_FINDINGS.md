@@ -9109,6 +9109,62 @@ commit before the next finding begins.
   environment has no Windows cross-compiler; both checks remain release
   prerequisites. A TSan-instrumented Qt run remains a prerequisite for the
   complete ARCH-003F concurrency claim.
+- ARCH-003F3b (detached item-state prerequisite recorded before correction):
+  `RideItem::refresh()` still writes each computed field and its replacement
+  interval list directly into the canonical item. Build the complete computed
+  item state in an unregistered staging item, transfer it into one move-only
+  result, and make the synchronous legacy refresh path immediately validate
+  and apply that result. The build phase must not mutate the canonical item or
+  emit item/interval notifications. A post-mutation snapshot or an unused
+  parallel DTO does not satisfy this boundary. This prerequisite deliberately
+  does not yet claim generation-gated CPX persistence, aggregate invalidation,
+  persistence-error reporting, or owner-thread publication; ARCH-003F3c owns
+  that final cutover.
+- ARCH-003F3b1 (staging ownership hazard recorded before correction): A
+  staging `RideItem` that borrows an already-open canonical `RideFile` can
+  delete it through the current destructor/`close()` path. Give borrowed ride
+  data explicit non-owning lifetime semantics, forbid side-effecting `setRide`
+  setup, and prove that both staging and result cleanup leave the canonical
+  ride alive. Detached intervals must retain neither their staging `RideItem`
+  pointer nor a `rideInterval` pointer into staging ride data.
+- ARCH-003F3b2 (interval publication ordering and no-samples leak recorded
+  before correction): `updateIntervals()` currently notifies direct observers
+  only after installing the new list and deletes the retired list after that
+  notification, but its no-samples early return never deletes the retired
+  intervals. Preserve the observer-visible ordering through result apply and
+  release retired intervals afterward on every path. Record this leak before
+  correcting it and cover exactly-once notification plus cleanup.
+- ARCH-003F3b3 (computed-state parity hazard recorded before correction): The
+  legacy refresh replaces metadata, overrides, metrics, and intervals, but it
+  inserts into existing xdata, standard-mean, and standard-variance maps
+  without clearing them. Seed the staging computation with those three maps
+  while leaving non-computed target flags such as dirty, edit, and skip-save
+  under canonical ownership. Test field parity so detachment does not silently
+  turn insertion semantics into replacement or overwrite live UI state.
+- ARCH-003F3b4 (open/closed ride policy recorded before correction): A closed
+  target is opened only for refresh and closed again, whereas an open target
+  retains the same `RideFile`, clears its user cache, and forces derived-series
+  recalculation. Make these apply directives explicit and identity-validated;
+  source-open or computation failure must produce no partial item-state apply.
+  F3c must separately reject unsafe open/dirty/edit worker targets or supply an
+  owner-thread ride snapshot because F3b's synchronous borrowed-open path is
+  not evidence of worker safety.
+- ARCH-003F3b5 (premature stale-state publication recorded before correction):
+  The bound `checkStale` path writes color, resolved weight, a newly computed
+  source CRC, and the final stale flag into the canonical item before refresh
+  computation or generation acceptance. Return these proposed changes as
+  values and include them in the same accepted publication as either a clean
+  stale-check result or a complete refresh result; a rejected generation must
+  publish none of them.
+- ARCH-003F3b6 (prepared-artifact publication blocker recorded before
+  correction): The F3a artifact is self-owned, but its type is private and its
+  commit validator still dereferences the originating `RideFileCache`, live
+  `RideFile`, and Context. Make the move-only commit request independent of
+  that cache instance and carry it with the detached refresh result. Preparation
+  may read the authenticated source and create the private artifact, but final
+  CPX replacement, aggregate-cache invalidation, and persistence-error
+  reporting must occur only in the immediate synchronous publication adapter
+  so F3c can later place one generation gate in front of all publication.
 - ARCH-003F4 (required deterministic verification recorded before correction):
   Add latch-controlled tests for config transition and teardown joining,
   generation N rejection while N+1 is requested, exception/early-exit lease
