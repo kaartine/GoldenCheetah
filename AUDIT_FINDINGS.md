@@ -8160,7 +8160,7 @@ commit before the next finding begins.
   successful instances, and has an unreachable/unconditional finalizer. Define
   initialization-state-aware ownership and tested shutdown ordering before
   enabling R finalization.
-- ARCH-003C1 (implementation item recorded before correction): give `REmbed`
+- ARCH-003C1 (FIXED; implementation item recorded before correction): give `REmbed`
   and `RTool` explicit `NotStarted`, `InterpreterInitialized`, and `Ready`
   states. Construct through a GUI-thread process-lifetime owner, publish the
   compatibility `rtool` alias only for `Ready`, destroy only a definitely
@@ -8219,13 +8219,24 @@ commit before the next finding begins.
   owner and null-safe callback lookup, and reuse the process-lifetime owner so
   only Ready is public, initialized failures cannot retry, and only definite
   pre-init failures are destroyed.
-- ARCH-003C1b2 (R non-local-jump blocker found in C1b pre-review and recorded
+- ARCH-003C1b2 (FIXED; R non-local-jump blocker found in C1b pre-review and recorded
   before correction): C++ catches and scope destructors cannot contain an R
   error that `longjmp`s across their frames. Constructor-time parsing and
   graphics-device registration still call allocation/error-capable R APIs
   outside a proven `R_ToplevelExec`/`R_UnwindProtect` boundary. Establish and
   fault-inject a boundary that returns control before claiming the private
   construction binding is exception-safe or marking all of C1b fixed.
+- ARCH-003C1b2a (FIXED; native-registration return-contract defect found by the real
+  R 4.3.3 boundary test and recorded before correction):
+  `R_registerRoutines` returns nonzero on success. Rejecting nonzero would
+  quarantine every healthy interpreter as a failed partial runtime. Require a
+  non-null embedding DLL and completed boundary, but treat zero as the
+  registration failure.
+- ARCH-003C1b2b (FIXED; verbose-evaluation GC-root defect found by independent C1b2
+  post-review and recorded before correction): after `R_tryEval` returns, its
+  answer has no durable GC root while the verbose path calls allocation-capable
+  `Rf_PrintValue`. Protect each successful answer across printing and exercise
+  the verbose path under explicit GC pressure before accepting the boundary.
 - ARCH-003C1b1a (FIXED; graphics descriptor ownership defect found during C1b1 and
   recorded before correction): `RGraphicsDevice::Close` frees the R graphics
   engine's passed `DevDesc` rather than a separately allocated
@@ -8279,9 +8290,33 @@ commit before the next finding begins.
   in both R-only and combined R/Python feature configurations. The canonical
   dependency baseline records the reviewed `R -> Core` helper edge and its
   suite passes 14/14. `git diff --check` is clean and independent review
-  returned GO. Live-R device-close/failure injection and non-local-jump
-  containment remain explicitly open in ARCH-003C1b2, so this does not claim
-  complete C1b exception safety.
+  returned GO. At this checkpoint, live-R device-close/failure injection and
+  non-local-jump containment remained explicitly open in ARCH-003C1b2, so the
+  C1b1 evidence alone did not claim complete C1b exception safety.
+- ARCH-003C1b2 resolution: the dynamically resolved `R_ToplevelExec` boundary
+  now contains the enumerated constructor-time parsing, native-registration,
+  embedded-runtime setup, and graphics create/add/select calls. Its callbacks
+  carry only C/POD state, are `noexcept`, and return boundary failure to the
+  monotonic owner as an unpublished retained partial runtime. Registration
+  obtains its embedding DLL and registers routines within one boundary, with
+  the real nonzero-success contract. Each successful evaluation result is
+  rooted across verbose printing, including printing that allocates or errors.
+  The runtime `.Call` graphics path deliberately avoids a nested top-level
+  boundary, while constructor-time device publication waits for the entire
+  create/add/select sequence.
+- ARCH-003C1b2 verification: the focused execution/lifecycle suite passes 23/23
+  on Qt 6.4.2 normally and 23/23 under ASan/UBSan with leak detection disabled.
+  A staged real R 4.3.3 process proves normal boundary return, recovery from an
+  error after an R allocation, all expected parser states, evaluation-error
+  handling, the native-registration return contract, continued use after
+  `R_gc`, and a verbose 250,000-element result whose injected print callback
+  forces `R_gc` before inspecting the rooted value. Production R sources
+  compile warning-free against the staged R 4.3.3/Rcpp/RInside headers, the
+  dependency suite passes 14/14, `git diff --check` is clean, and independent
+  post-review returned GO. Graphics partial-ownership/error recovery is
+  source-reviewed and compiled, not end-to-end fault-injected. Arbitrary
+  registered callbacks, R shutdown/finalization (ARCH-003C2), and other
+  supported R/platform combinations remain outside this claim.
 - ARCH-003D (queued lifetime work recorded before correction): `PythonEmbed` is
   another raw process global whose failed and successful instances are never
   deleted, while its empty destructor cannot balance the saved interpreter

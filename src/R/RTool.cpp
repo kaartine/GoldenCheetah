@@ -18,6 +18,7 @@
 
 #include "RTool.h"
 #include "RRuntimeInitialization.h"
+#include "RTopLevelBoundary.h"
 #include "RGraphicsDevice.h"
 #include "RProtectionScope.h"
 #include "RuntimeConstructionBinding.h"
@@ -71,6 +72,29 @@ typedef struct {
     enum { R_ARG_IN, R_ARG_OUT, R_IRRELEVANT } *styles; // deprecated in 3.4
 
 } R_CMethodDef33;
+
+namespace {
+
+struct NativeRegistrationData {
+    const R_CMethodDef *cMethods;
+    const R_CallMethodDef *callMethods;
+    DllInfo *info;
+    int result;
+    bool completed;
+};
+
+void registerNativeRoutines(void *opaque) noexcept
+{
+    NativeRegistrationData *data =
+        static_cast<NativeRegistrationData *>(opaque);
+    data->info = R_getEmbeddingDllInfo();
+    if (!data->info) return;
+    data->result = R_registerRoutines(
+        data->info, data->cMethods, data->callMethods, NULL, NULL);
+    data->completed = true;
+}
+
+}
 
 thread_local RTool *RTool::constructionInstance_ = nullptr;
 
@@ -295,12 +319,19 @@ RTool::RTool()
             goto fail;
         }
 
-        // set them up
-        DllInfo *info = R_getEmbeddingDllInfo();
-
         // future proof, 3.4 or higher use new structure, 3.3 anything lower uses older structure
-        if (majorN > 3 || (majorN == 3 && minorN > 3)) R_registerRoutines(info, (const R_CMethodDef*)(cMethods34), callMethods, NULL, NULL);
-        else R_registerRoutines(info, (const R_CMethodDef*)(cMethods33), callMethods, NULL, NULL);
+        const R_CMethodDef *cMethods =
+            majorN > 3 || (majorN == 3 && minorN > 3)
+                ? reinterpret_cast<const R_CMethodDef *>(cMethods34)
+                : reinterpret_cast<const R_CMethodDef *>(cMethods33);
+        NativeRegistrationData registration{
+            cMethods, callMethods, NULL, -1, false};
+        if (!executeAtRTopLevel(registerNativeRoutines, &registration)
+            || !registration.completed || !registration.info
+            || registration.result == 0) {
+            failed = true;
+            goto fail;
+        }
 
         // what version are we running?
         #ifdef GC_WANT_ALLDEBUG

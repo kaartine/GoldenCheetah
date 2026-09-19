@@ -20,6 +20,7 @@
 
 // graphics device
 #include "RGraphicsDevice.h"
+#include "RTopLevelBoundary.h"
 
 #include "Settings.h"
 #include "Colors.h"
@@ -37,6 +38,34 @@
 #endif
 
 const char * const gcDevice = "GoldenCheetahGD";
+
+namespace {
+
+struct DeviceRegistrationData {
+    pDevDesc device;
+    pGEDevDesc engineDevice;
+    bool completed;
+};
+
+void checkDeviceAvailable(void *opaque) noexcept
+{
+    bool *completed = static_cast<bool *>(opaque);
+    R_CheckDeviceAvailable();
+    *completed = true;
+}
+
+void registerGraphicsDevice(void *opaque) noexcept
+{
+    DeviceRegistrationData *data =
+        static_cast<DeviceRegistrationData *>(opaque);
+    data->engineDevice = GEcreateDevDesc(data->device);
+    if (!data->engineDevice) return;
+    GEaddDevice2(data->engineDevice, gcDevice);
+    Rf_selectDevice(Rf_ndevNumber(data->engineDevice->dev));
+    data->completed = true;
+}
+
+}
 
 // return a QColor from an R color spec
 static inline QColor qColor(int col) { return QColor(R_RED(col),R_GREEN(col),R_BLUE(col),R_ALPHA(col)); }
@@ -90,9 +119,7 @@ RGraphicsDevice::~RGraphicsDevice() = default;
 
 bool RGraphicsDevice::initialize()
 {
-    // set the inital graphics device to GC
-    createGD();
-    return gcGEDevDesc != NULL;
+    return createGD(true);
 }
 
 RGraphicsDevice *
@@ -365,19 +392,32 @@ SEXP RGraphicsDevice::GCdisplay()
 // routine which creates device
 SEXP RGraphicsDevice::createGD()
 {
+    createGD(false);
+    return R_NilValue;
+}
+
+bool RGraphicsDevice::createGD(bool useTopLevelBoundary)
+{
     closed_ = false;
     // error if not a version 7 graphics system
     if (::R_GE_getVersion() < 7) {
 
       qDebug()<<"R: only support v7 or higher graphics systems, this is"<<::R_GE_getVersion();
-      return R_NilValue;
+      return false;
     }
 
-    R_CheckDeviceAvailable();
+    bool deviceAvailable = false;
+    if (useTopLevelBoundary) {
+        if (!executeAtRTopLevel(checkDeviceAvailable, &deviceAvailable)
+            || !deviceAvailable) return false;
+    } else {
+        checkDeviceAvailable(&deviceAvailable);
+        if (!deviceAvailable) return false;
+    }
 
     // define device
     pDevDesc pDev = (DevDesc *) calloc(1, sizeof(DevDesc));
-    if (!pDev) return R_NilValue;
+    if (!pDev) return false;
 
     // device functions
     pDev->activate = RGraphicsDevice::Activate;
@@ -431,21 +471,27 @@ SEXP RGraphicsDevice::createGD()
     //XXXhandler::onBeforeAddDevice(pDC);
 
     // associate with device description and add it
-    gcGEDevDesc = GEcreateDevDesc(pDev);
-    GEaddDevice2(gcGEDevDesc, gcDevice);
+    DeviceRegistrationData registration{pDev, NULL, false};
+    const bool returned = useTopLevelBoundary
+        ? executeAtRTopLevel(registerGraphicsDevice, &registration)
+        : (registerGraphicsDevice(&registration), true);
+    if (!returned || !registration.completed) {
+        // Once GEcreateDevDesc has been entered, R may own or retain either
+        // descriptor even when a later error jumps back to the boundary.
+        // Keep the partial storage for OS-process teardown and publish no
+        // callback-visible device.
+        return false;
+    }
+    gcGEDevDesc = registration.engineDevice;
 
     // notify handler we have added (so it can regenerate its context)
     //XXXhandler::onAfterAddDevice(pDC);
-
-    // make us active
-    Rf_selectDevice(Rf_ndevNumber(gcGEDevDesc->dev));
 
 
     // set colors
     if (owner_) owner_->configChanged();
 
-    // done
-    return R_NilValue;
+    return true;
 }
 
 #if 0

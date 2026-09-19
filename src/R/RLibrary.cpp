@@ -48,6 +48,7 @@ typedef void (*Prot_GC_R_ReplDLLinit)(void);
 typedef void (*Prot_GC_R_DefParams)(Rstart);
 typedef void (*Prot_GC_R_SetParams)(Rstart);
 typedef SEXP (*Prot_GC_R_tryEval)(SEXP, SEXP, int *);
+typedef Rboolean (*Prot_GC_R_ToplevelExec)(void (*fun)(void *), void *data);
 typedef void (*Prot_GC_Rf_PrintValue)(SEXP);
 typedef DllInfo *(*Prot_GC_R_getEmbeddingDllInfo)(void);
 typedef int (*Prot_GC_R_registerRoutines)(DllInfo *info, const R_CMethodDef * const croutines, const R_CallMethodDef * const callRoutines, const R_FortranMethodDef * const fortranRoutines, const R_ExternalMethodDef * const externalRoutines);
@@ -119,6 +120,7 @@ Prot_GC_R_ReplDLLinit ptr_GC_R_ReplDLLinit;
 Prot_GC_R_DefParams ptr_GC_R_DefParams;
 Prot_GC_R_SetParams ptr_GC_R_SetParams;
 Prot_GC_R_tryEval ptr_GC_R_tryEval;
+Prot_GC_R_ToplevelExec ptr_GC_R_ToplevelExec;
 Prot_GC_Rf_error ptr_GC_Rf_error;
 Prot_GC_Rf_warning ptr_GC_Rf_warning;
 Prot_GC_Rf_PrintValue ptr_GC_Rf_PrintValue;
@@ -199,6 +201,9 @@ void GC_R_ReplDLLinit(void) { (*ptr_GC_R_ReplDLLinit)(); }
 void GC_R_DefParams(Rstart x) { (*ptr_GC_R_DefParams)(x); }
 void GC_R_SetParams(Rstart x) { (*ptr_GC_R_SetParams)(x); }
 SEXP GC_R_tryEval(SEXP a, SEXP b, int *c) { return (*ptr_GC_R_tryEval)(a,b,c); }
+Rboolean GC_R_ToplevelExec(void (*a)(void *), void *b) {
+    return (*ptr_GC_R_ToplevelExec)(a,b);
+}
 void GC_Rf_error(const char *, ...) { } //XXX how to pass ... ?
 void GC_Rf_warning(const char *, ...) { }
 void GC_Rf_PrintValue(SEXP x) { (*ptr_GC_Rf_PrintValue)(x); }
@@ -380,6 +385,7 @@ RLibrary::load()
     ptr_GC_R_DefParams = Prot_GC_R_DefParams(resolve("R_DefParams"));
     ptr_GC_R_SetParams = Prot_GC_R_SetParams(resolve("R_SetParams"));
     ptr_GC_R_tryEval = Prot_GC_R_tryEval(resolve("R_tryEval"));
+    ptr_GC_R_ToplevelExec = Prot_GC_R_ToplevelExec(resolve("R_ToplevelExec"));
     ptr_GC_Rf_error = Prot_GC_Rf_error(resolve("Rf_error"));
     ptr_GC_Rf_warning = Prot_GC_Rf_warning(resolve("Rf_warning"));
     ptr_GC_Rf_PrintValue = Prot_GC_Rf_PrintValue(resolve("Rf_PrintValue"));

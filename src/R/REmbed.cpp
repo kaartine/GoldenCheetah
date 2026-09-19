@@ -24,12 +24,47 @@
 
 #include "REmbed.h"
 #include "RTool.h"
+#include "RTopLevelBoundary.h"
+#include "RTopLevelEvaluation.h"
 #include "Settings.h"
 #include <stdexcept>
 
 #include <QMessageBox>
 
 static const char *name = "GoldenCheetah";
+
+namespace {
+
+struct EmbeddedSetupData {
+    bool interactive;
+    bool completed;
+};
+
+void initializeEmbeddedRuntime(void *opaque) noexcept
+{
+    EmbeddedSetupData *data = static_cast<EmbeddedSetupData *>(opaque);
+    R_ReplDLLinit();
+
+    structRstart start;
+    R_DefParams(&start);
+#ifdef WIN32
+    start.rhome = getenv("R_HOME");
+    start.home = getRUser();
+    start.CharacterMode = LinkDLL;
+    start.ReadConsole = &RTool::R_ReadConsoleWin;
+    start.WriteConsole = &RTool::R_WriteConsole;
+    start.WriteConsoleEx = &RTool::R_WriteConsoleEx;
+    start.CallBack = &RTool::R_ProcessEvents;
+    start.ShowMessage = &RTool::R_ShowMessage;
+    start.YesNoCancel = &RTool::R_YesNoCancel;
+    start.Busy = &RTool::R_Busy;
+#endif
+    start.R_Interactive = static_cast<Rboolean>(data->interactive);
+    R_SetParams(&start);
+    data->completed = true;
+}
+
+}
 
 // no setenv on windows
 #if WIN32
@@ -112,24 +147,9 @@ REmbed::initialize()
     if (initResult < 0) return;
     initializationState_ = InitializationState::InterpreterInitialized;
 
-    R_ReplDLLinit();                    // this is to populate the repl console buffers
-
-    structRstart Rst;
-    R_DefParams(&Rst);
-#ifdef WIN32
-    Rst.rhome = getenv("R_HOME");
-    Rst.home = getRUser();
-    Rst.CharacterMode = LinkDLL;
-    Rst.ReadConsole = &RTool::R_ReadConsoleWin;
-    Rst.WriteConsole = &RTool::R_WriteConsole;
-    Rst.WriteConsoleEx = &RTool::R_WriteConsoleEx;
-    Rst.CallBack = &RTool::R_ProcessEvents;
-    Rst.ShowMessage = &RTool::R_ShowMessage;
-    Rst.YesNoCancel = &RTool::R_YesNoCancel;
-    Rst.Busy = &RTool::R_Busy;
-#endif
-    Rst.R_Interactive = (Rboolean) interactive;       // sets interactive() to eval to false
-    R_SetParams(&Rst);
+    EmbeddedSetupData setup{interactive, false};
+    if (!executeAtRTopLevel(initializeEmbeddedRuntime, &setup)
+        || !setup.completed) return;
 
     loaded = true;
     initializationState_ = InitializationState::Ready;
@@ -137,31 +157,24 @@ REmbed::initialize()
 
 // this is a non-throwing version returning an error code
 int REmbed::parseEval(QString line, SEXP & ans) {
-    ParseStatus status;
-    SEXP cmdSexp, cmdexpr = R_NilValue;
-    int i, errorOccurred;
-
     program << line;
+    const QByteArray command = program.join(" ").toUtf8();
+    RTopLevelEvaluationData execution{
+        command.constData(), verbose, Rf_PrintValue,
+        PARSE_NULL, R_NilValue, 0, false};
+    if (!executeAtRTopLevel(parseAndEvaluateAtRTopLevel, &execution)
+        || !execution.completed) {
+        program.clear();
+        return 1;
+    }
+    ans = execution.answer;
 
-    PROTECT(cmdSexp = Rf_allocVector(STRSXP, 1));
-    SET_STRING_ELT(cmdSexp, 0, Rf_mkChar(program.join(" ").toStdString().c_str()));
-
-    cmdexpr = PROTECT(R_ParseVector(cmdSexp, -1, &status, R_NilValue));
-
-    switch (status){
+    switch (execution.status){
     case PARSE_OK:
-        // Loop is needed here as EXPSEXP might be of length > 1
-        for(i = 0; i < Rf_length(cmdexpr); i++){
-            ans = R_tryEval(VECTOR_ELT(cmdexpr, i), R_GlobalEnv, &errorOccurred);
-            if (errorOccurred) {
-                if (verbose) Rf_warning("%s: Error in evaluating R code (%d)\n", name, status);
-                UNPROTECT(2);
-                program.clear();
-                return 1;
-            }
-            if (verbose) {
-                Rf_PrintValue(ans);
-            }
+        if (execution.errorOccurred) {
+            if (verbose) qWarning() << name << "error evaluating R code";
+            program.clear();
+            return 1;
         }
         program.clear();
         break;
@@ -169,28 +182,22 @@ int REmbed::parseEval(QString line, SEXP & ans) {
         // need to read another line
         break;
     case PARSE_NULL:
-        if (verbose) Rf_warning("%s: ParseStatus is null (%d)\n", name, status);
-        UNPROTECT(2);
+        if (verbose) qWarning() << name << "R parse status is null";
         program.clear();
         return 1;
-        break;
     case PARSE_ERROR:
-        if (verbose) Rf_error("Parse Error: \"%s\"\n", line.toStdString().c_str());
-        UNPROTECT(2);
+        if (verbose) qWarning() << name << "R parse error:" << line;
         program.clear();
         return 1;
-        break;
     case PARSE_EOF:
-        if (verbose) Rf_warning("%s: ParseStatus is eof (%d)\n", name, status);
+        if (verbose) qWarning() << name << "R parse status is EOF";
         break;
     default:
-        if (verbose) Rf_warning("%s: ParseStatus is not documented %d\n", name, status);
-        UNPROTECT(2);
+        if (verbose) qWarning() << name << "undocumented R parse status"
+                                << static_cast<int>(execution.status);
         program.clear();
         return 1;
-        break;
     }
-    UNPROTECT(2);
     return 0;
 }
 

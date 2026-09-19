@@ -17,6 +17,8 @@ HEADERS = $$PWD/../../../src/R/RExecutionGate.h \
           $$PWD/../../../src/R/RDeferredUiWork.h \
           $$PWD/../../../src/R/RProtectionScope.h \
           $$PWD/../../../src/R/RRuntimeInitialization.h \
+          $$PWD/../../../src/R/RTopLevelBoundary.h \
+          $$PWD/../../../src/R/RTopLevelEvaluation.h \
           $$PWD/../../../src/Core/ProcessLifetimeRuntimeOwner.h \
           $$PWD/../../../src/Core/RuntimeConstructionBinding.h \
           $$PWD/../../../src/Charts/RConsolePromptPolicy.h \

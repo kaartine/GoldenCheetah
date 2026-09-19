@@ -109,6 +109,7 @@ class RGraphicsDevice {
         pGEDevDesc gcGEDevDesc;
 
     private:
+        bool createGD(bool useTopLevelBoundary);
         static RGraphicsDevice *deviceFor(pDevDesc dev);
         static RTool *toolFor(pDevDesc dev);
 

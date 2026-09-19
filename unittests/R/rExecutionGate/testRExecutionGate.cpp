@@ -145,6 +145,7 @@ private slots:
     void processOwnerPublishesOnlyReadyRuntime();
     void productionRuntimeInitializationIsTwoPhase();
     void productionRuntimeOwnershipUsesPrivateCallbacks();
+    void productionRCallsUseTopLevelBoundaries();
     void productionEntrypointsUseGate();
 };
 
@@ -692,15 +693,18 @@ TestRExecutionGate::productionRuntimeInitializationIsTwoPhase()
     const qsizetype initCheck = embedSource.indexOf("if (initResult < 0)", initCall);
     const qsizetype initializedState = embedSource.indexOf(
         "InitializationState::InterpreterInitialized", initCheck);
-    const qsizetype replSetup = embedSource.indexOf("R_ReplDLLinit()", initializedState);
+    const qsizetype setupBoundary = embedSource.indexOf(
+        "executeAtRTopLevel(initializeEmbeddedRuntime", initializedState);
     const qsizetype readyState = embedSource.indexOf(
-        "InitializationState::Ready", replSetup);
+        "InitializationState::Ready", setupBoundary);
     QVERIFY(initialize >= 0);
     QVERIFY(initCall > initialize);
     QVERIFY(initCheck > initCall);
     QVERIFY(initializedState > initCheck);
-    QVERIFY(replSetup > initializedState);
-    QVERIFY(readyState > replSetup);
+    QVERIFY(setupBoundary > initializedState);
+    QVERIFY(readyState > setupBoundary);
+    QVERIFY(embedSource.contains("void initializeEmbeddedRuntime(void *opaque) noexcept"));
+    QVERIFY(embedSource.contains("R_ReplDLLinit();"));
     QVERIFY(!embedSource.contains("Rf_endEmbeddedR("));
     QVERIFY(!embedSource.contains("R_RunExitFinalizers("));
     QVERIFY(!embedSource.contains("R_CleanTempDir("));
@@ -774,11 +778,63 @@ TestRExecutionGate::productionRuntimeOwnershipUsesPrivateCallbacks()
     QVERIFY(graphics.contains("pDev->deviceSpecific = this;"));
     QVERIFY(graphics.contains("RTool *tool = toolFor(pDev);"));
     QVERIFY(graphics.contains("if (!pDev) return;"));
-    QVERIFY(graphics.contains("if (!pDev) return R_NilValue;"));
+    QVERIFY(graphics.contains("if (!pDev) return false;"));
     QVERIFY(graphics.contains("return device ? device->owner_ : nullptr;"));
     QVERIFY(graphics.contains("if (!tool || !tool->dev) return R_NilValue;"));
     QVERIFY(graphics.contains("pDev->deviceSpecific = NULL;"));
     QVERIFY(!graphics.contains("free(device->gcGEDevDesc->dev)"));
+}
+
+void
+TestRExecutionGate::productionRCallsUseTopLevelBoundaries()
+{
+    QFile libraryFile(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RLibrary.cpp"));
+    QVERIFY2(libraryFile.open(QIODevice::ReadOnly),
+             qPrintable(libraryFile.errorString()));
+    const QByteArray library = libraryFile.readAll();
+    QVERIFY(library.contains("resolve(\"R_ToplevelExec\")"));
+    QVERIFY(library.contains("Rboolean GC_R_ToplevelExec("));
+
+    QFile embedFile(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/REmbed.cpp"));
+    QVERIFY2(embedFile.open(QIODevice::ReadOnly),
+             qPrintable(embedFile.errorString()));
+    const QByteArray embed = embedFile.readAll();
+    QVERIFY(embed.contains("RTopLevelEvaluationData execution"));
+    QVERIFY(embed.contains("executeAtRTopLevel(parseAndEvaluateAtRTopLevel, &execution)"));
+    QVERIFY(embed.contains("const QByteArray command = program.join(\" \").toUtf8();"));
+    QVERIFY(!embed.contains("Rf_error("));
+
+    QFile evaluationFile(
+        QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTopLevelEvaluation.h"));
+    QVERIFY2(evaluationFile.open(QIODevice::ReadOnly),
+             qPrintable(evaluationFile.errorString()));
+    const QByteArray evaluation = evaluationFile.readAll();
+    QVERIFY(evaluation.contains(
+        "parseAndEvaluateAtRTopLevel(void *opaque) noexcept"));
+    QVERIFY(evaluation.contains("R_ParseVector("));
+    QVERIFY(evaluation.contains("R_tryEval("));
+    QVERIFY(evaluation.contains("PROTECT(data->answer);"));
+    QVERIFY(evaluation.contains("data->printValue(data->answer);"));
+    QVERIFY(evaluation.contains("UNPROTECT(1);"));
+
+    QFile toolFile(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTool.cpp"));
+    QVERIFY2(toolFile.open(QIODevice::ReadOnly), qPrintable(toolFile.errorString()));
+    const QByteArray tool = toolFile.readAll();
+    QVERIFY(tool.contains("void registerNativeRoutines(void *opaque) noexcept"));
+    QVERIFY(tool.contains("executeAtRTopLevel(registerNativeRoutines, &registration)"));
+    QVERIFY(tool.contains("registration.result == 0"));
+
+    QFile graphicsFile(
+        QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RGraphicsDevice.cpp"));
+    QVERIFY2(graphicsFile.open(QIODevice::ReadOnly),
+             qPrintable(graphicsFile.errorString()));
+    const QByteArray graphics = graphicsFile.readAll();
+    QVERIFY(graphics.contains("return createGD(true);"));
+    QVERIFY(graphics.contains("createGD(false);"));
+    QVERIFY(graphics.contains("executeAtRTopLevel(checkDeviceAvailable"));
+    QVERIFY(graphics.contains("executeAtRTopLevel(registerGraphicsDevice"));
+    QVERIFY(graphics.contains("void registerGraphicsDevice(void *opaque) noexcept"));
+    QVERIFY(graphics.contains("gcGEDevDesc = registration.engineDevice;"));
 }
 
 void

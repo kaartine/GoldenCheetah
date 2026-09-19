@@ -65,6 +65,7 @@ extern void GC_R_ReplDLLinit(void);
 extern void GC_R_DefParams(Rstart);
 extern void GC_R_SetParams(Rstart);
 extern SEXP GC_R_tryEval(SEXP, SEXP, int *);
+extern Rboolean GC_R_ToplevelExec(void (*fun)(void *), void *data);
 typedef void (*Prot_GC_Rf_error)(const char *, ...);
 typedef void (*Prot_GC_Rf_warning)(const char *, ...);
 extern Prot_GC_Rf_error ptr_GC_Rf_error;
@@ -164,6 +165,7 @@ extern double *pGC_R_NaReal;          // XXX TODO NaReal value
 #define R_SetParams                 GC_R_SetParams
 #define R_DefParams                 GC_R_DefParams
 #define R_tryEval                   GC_R_tryEval
+#define R_ToplevelExec              GC_R_ToplevelExec
 #define R_ParseVector               GC_R_ParseVector
 #define Rf_error                    (*ptr_GC_Rf_error) // dereference directly due to varargs pass thru
 #define Rf_warning                  (*ptr_GC_Rf_warning) // dereference directly due to varargs pass thru

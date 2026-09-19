@@ -307,7 +307,7 @@ contains(DEFINES, "GC_WANT_R") {
     DEFINES += STRICT_R_HEADERS
 
     ## R integration
-    HEADERS += R/REmbed.h R/RTool.h R/RExecutionGate.h R/RDeferredUiWork.h R/RGraphicsDevice.h R/RProtectionScope.h R/RRuntimeInitialization.h R/RSyntax.h R/RLibrary.h
+    HEADERS += R/REmbed.h R/RTool.h R/RExecutionGate.h R/RDeferredUiWork.h R/RGraphicsDevice.h R/RProtectionScope.h R/RRuntimeInitialization.h R/RTopLevelBoundary.h R/RTopLevelEvaluation.h R/RSyntax.h R/RLibrary.h
     SOURCES += R/REmbed.cpp R/RTool.cpp R/RExecutionGate.cpp R/RGraphicsDevice.cpp R/RSyntax.cpp R/RLibrary.cpp
 
     ## R based charts
