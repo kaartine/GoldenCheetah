@@ -3,6 +3,9 @@
 #include "Measures.h"
 #include "RideRefreshMeasures.h"
 
+#include <QDir>
+#include <QFile>
+#include <QThread>
 #include <QTimeZone>
 
 #include <memory>
@@ -10,6 +13,9 @@
 QString gcroot;
 
 namespace {
+
+#define GC_STRINGIFY_IMPL(value) #value
+#define GC_STRINGIFY(value) GC_STRINGIFY_IMPL(value)
 
 constexpr quint16 MissingObservationFingerprint = 0x1357;
 
@@ -90,6 +96,8 @@ private slots:
     void groupIndexAndFieldMetadataLookupsAreFailClosed();
     void createPreservesGroupAndObservationOrder();
     void productionCaptureMatchesLiveMeasuresGroup();
+    void ownerThreadAssemblyPreservesAllGroupOrder();
+    void athleteWrapperRejectsBeforeReadingMeasures();
 };
 
 void TestRideRefreshMeasures::
@@ -335,6 +343,73 @@ void TestRideRefreshMeasures::productionCaptureMatchesLiveMeasuresGroup()
                      QStringLiteral("Body"), date).value(),
                  selected.getFingerprint());
     }
+}
+
+void TestRideRefreshMeasures::ownerThreadAssemblyPreservesAllGroupOrder()
+{
+    QObject owner;
+    MeasuresGroup body(
+        QStringLiteral("Body"), QStringLiteral("Body display"),
+        {QStringLiteral("WEIGHTKG")}, {QStringLiteral("Weight")},
+        {QStringLiteral("kg")}, {QStringLiteral("lbs")}, {2.2},
+        {{QStringLiteral("weightkg")}});
+    MeasuresGroup custom(
+        QStringLiteral("Custom"), QStringLiteral("Custom display"),
+        {QStringLiteral("VALUE")}, {QStringLiteral("Value")},
+        {QStringLiteral("m")}, {QStringLiteral("ft")}, {3.0},
+        {{QStringLiteral("value")}});
+
+    const auto captured = captureRideRefreshMeasuresForOwner(
+        &owner, {&custom, &body}, MissingObservationFingerprint);
+    QVERIFY(captured);
+    QCOMPARE(captured->groupSymbols(),
+             QStringList({QStringLiteral("Custom"), QStringLiteral("Body")}));
+    QCOMPARE(captured->groupNames(),
+             QStringList({QStringLiteral("Custom display"),
+                          QStringLiteral("Body display")}));
+    QCOMPARE(captured->fingerprint(
+                 QStringLiteral("Custom"), QDate(2025, 1, 1)).value(),
+             MissingObservationFingerprint);
+    QVERIFY(!captureRideRefreshMeasuresForOwner(
+        nullptr, {&body}, MissingObservationFingerprint));
+
+    QThread foreignThread;
+    QObject foreignOwner;
+    foreignOwner.moveToThread(&foreignThread);
+    foreignThread.start();
+    QVERIFY(!captureRideRefreshMeasuresForOwner(
+        &foreignOwner, {&body}, MissingObservationFingerprint));
+    QThread *testThread = QThread::currentThread();
+    QMetaObject::invokeMethod(
+        &foreignOwner,
+        [&foreignOwner, testThread]() {
+            foreignOwner.moveToThread(testThread);
+        },
+        Qt::BlockingQueuedConnection);
+    foreignThread.quit();
+    QVERIFY(foreignThread.wait());
+}
+
+void TestRideRefreshMeasures::athleteWrapperRejectsBeforeReadingMeasures()
+{
+    QFile file(QDir(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)))
+                   .filePath(QStringLiteral(
+                       "src/Core/RideRefreshMeasuresAthleteCapture.cpp")));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray source = file.readAll();
+    const qsizetype function = source.indexOf("captureRideRefreshMeasures(");
+    const qsizetype ownerCheck = source.indexOf(
+        "QThread::currentThread() != athlete->thread()", function);
+    const qsizetype nullMeasuresCheck = source.indexOf(
+        "!athlete->measures", function);
+    const qsizetype firstMeasuresRead = source.indexOf(
+        "athlete->measures->getGroups()", function);
+
+    QVERIFY(function >= 0);
+    QVERIFY(ownerCheck > function);
+    QVERIFY(nullMeasuresCheck > function);
+    QVERIFY(firstMeasuresRead > ownerCheck);
+    QVERIFY(firstMeasuresRead > nullMeasuresCheck);
 }
 
 QTEST_MAIN(TestRideRefreshMeasures)

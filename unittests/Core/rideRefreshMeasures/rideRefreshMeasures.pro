@@ -1,6 +1,4 @@
-QT += core gui widgets testlib xml sql network concurrent serialport \
-      webenginecore webenginewidgets webchannel \
-      positioning webenginequick charts openglwidgets core5compat
+QT += core gui widgets testlib
 
 TEMPLATE = app
 TARGET = tst_rideRefreshMeasures
@@ -13,7 +11,11 @@ CONFIG -= debug
 SOURCES = testRideRefreshMeasures.cpp \
           ../../../src/Core/RideRefreshMeasures.cpp \
           ../../../src/Core/RideRefreshMeasuresCapture.cpp \
+          ../../../src/Core/RideRefreshMeasuresAssembly.cpp \
           ../../../src/Core/Measures.cpp
+
+GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
+DEFINES += GC_TEST_SOURCE_ROOT="$${GC_TEST_SOURCE_ROOT}"
 
 HEADERS = ../../../src/Core/RideRefreshMeasures.h \
           ../../../src/Core/Measures.h \

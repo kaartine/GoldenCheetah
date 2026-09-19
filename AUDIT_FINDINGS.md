@@ -8801,6 +8801,19 @@ commit before the next finding begins.
   `captureRideRefreshEnvironment` measures wiring before the F2c cutover is
   accepted. Production warnings-as-errors compilation and the environment
   ownership test are sufficient for this bounded foundation commit.
+- ARCH-003F2b2e1 (focused-test dependency inflation recorded before
+  correction): The measures snapshot test declares WebEngine, Charts,
+  SerialPort, Positioning, XML, and other Qt modules that the test does not use.
+  This prevents the focused architecture boundary from building on an
+  otherwise sufficient Qt Core/Gui/Widgets/Test environment. Reduce the test
+  manifest to its actual module boundary and prove the complete suite still
+  links and runs before accepting F2b2e.
+- ARCH-003F2b2e2 (Core-to-Gui include leak recorded before correction):
+  `Measures.cpp` imports the complete `MainWindow.h` graph solely to reference
+  the process-level `gcroot` symbol. This pulls SQL, Core5Compat, and broad GUI
+  headers into the measures domain and defeats the focused snapshot boundary.
+  Replace that include-only dependency with the narrow external declaration;
+  keep the existing symbol ownership and runtime behavior unchanged.
 - ARCH-003F2b3 (route snapshot work item recorded before correction): Separate
   immutable route geometry/matching input from `IntervalItem` publication.
   Capture route identity, names, points, search parameters, and fingerprint;
@@ -8980,10 +8993,33 @@ commit before the next finding begins.
   final review: GO with no blocker or major correctness finding.
 - ARCH-003F2b2 residual: Calendar mutation quiescence/invalidation is completed
   by the subsequent ARCH-003F2b2b resolution. Broader Body invalidation remains
-  the explicitly preserved ARCH-003F2b2c debt, and Athlete assembly runtime
-  coverage remains ARCH-003F2b2e. Workers still use live Measures until
-  ARCH-003F2c binds the environment. A TSan-instrumented Qt run remains a
-  release prerequisite.
+  the explicitly preserved ARCH-003F2b2c debt. The bounded Athlete assembly
+  coverage is completed by the subsequent ARCH-003F2b2e resolution; full
+  `captureRideRefreshEnvironment` integration remains an F2c prerequisite.
+  Workers still use live Measures until ARCH-003F2c binds the environment. A
+  TSan-instrumented Qt run remains a release prerequisite.
+- ARCH-003F2b2e/F2b2e1/F2b2e2 resolution: Measures snapshot assembly now has a
+  lightweight owner-thread seam that consumes the complete ordered live-group
+  list and the already-captured legacy missing-observation fingerprint. The
+  Athlete wrapper rejects null, wrong-thread, and missing-Measures calls before
+  evaluating `getGroups()`, then delegates to the tested seam. The focused test
+  declares only Qt Core/Gui/Widgets/Test, and `Measures.cpp` no longer imports
+  `MainWindow.h` merely to reference `gcroot`; the symbol's ownership and use
+  remain unchanged while the Core-to-Gui include edge is removed.
+- ARCH-003F2b2e/F2b2e1/F2b2e2 verification: the expanded measures suite passes
+  14/14 normally and under ASan/UBSan, covering null and wrong-thread rejection,
+  pre-access guard ordering, all-group ordering, and the captured default
+  fingerprint. The environment ownership/publication suite passes 10/10 under
+  both configurations. All five affected production translation units compile
+  with warnings as errors. The source dependency suite passes 14/14 with its
+  baseline recording the removed `Core/Measures.cpp -> Gui/MainWindow.h` edge,
+  and `git diff --check` is clean. Independent final re-review: GO with no
+  remaining blocker or major finding after this record resolved the first
+  review's documentation inconsistency.
+- ARCH-003F2b2e residual: the lightweight source contract does not instantiate
+  the full Athlete graph. The F2c integration/native-runtime suite must exercise
+  `captureRideRefreshEnvironment` through the real Athlete wrapper during
+  worker cutover. A TSan-instrumented Qt run remains a release prerequisite.
 - ARCH-003F2b2b resolution: CalendarWindow now passes its matching Context to
   the measure editor. After dialog acceptance, the editor enters the athlete
   refresh lifecycle before its first live Measures mutation, writes while all

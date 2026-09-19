@@ -4921,12 +4921,6 @@
       "target_module": "FileIO"
     },
     {
-      "source": "src/Core/Measures.cpp",
-      "source_module": "Core",
-      "target": "src/Gui/MainWindow.h",
-      "target_module": "Gui"
-    },
-    {
       "source": "src/Core/Measures.h",
       "source_module": "Core",
       "target": "src/Charts/GoldenCheetah.h",

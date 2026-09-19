@@ -13,6 +13,7 @@
 #include <QDate>
 #include <QDateTime>
 #include <QHash>
+#include <QList>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -23,6 +24,7 @@
 
 class Athlete;
 class MeasuresGroup;
+class QObject;
 
 class RideRefreshMeasures final
 {
@@ -130,6 +132,13 @@ private:
 
 RideRefreshMeasures::Group captureRideRefreshMeasuresGroup(
     MeasuresGroup *source);
+
+// Lightweight owner-thread assembly seam used by Athlete capture and tests.
+std::shared_ptr<const RideRefreshMeasures>
+captureRideRefreshMeasuresForOwner(
+    const QObject *owner,
+    const QList<MeasuresGroup *> &groups,
+    quint16 missingObservationFingerprint);
 
 // Must be called on athlete's QObject owner thread. Returns null otherwise.
 std::shared_ptr<const RideRefreshMeasures>

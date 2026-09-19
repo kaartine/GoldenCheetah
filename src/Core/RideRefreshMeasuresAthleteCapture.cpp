@@ -14,8 +14,6 @@
 
 #include <QThread>
 
-#include <utility>
-
 std::shared_ptr<const RideRefreshMeasures>
 captureRideRefreshMeasures(const Athlete *athlete)
 {
@@ -24,11 +22,8 @@ captureRideRefreshMeasures(const Athlete *athlete)
         return {};
     }
 
-    QVector<RideRefreshMeasures::Group> groups;
-    const QList<MeasuresGroup *> liveGroups = athlete->measures->getGroups();
-    groups.reserve(liveGroups.size());
-    for (MeasuresGroup *group : liveGroups)
-        groups.append(captureRideRefreshMeasuresGroup(group));
-    return RideRefreshMeasures::create(
-        std::move(groups), Measure().getFingerprint());
+    return captureRideRefreshMeasuresForOwner(
+        athlete,
+        athlete->measures->getGroups(),
+        Measure().getFingerprint());
 }

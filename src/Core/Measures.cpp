@@ -18,7 +18,6 @@
 
 #include "Measures.h"
 #include "Units.h"
-#include "MainWindow.h" // for gcroot
 
 #include <QList>
 #include <QMessageBox>
@@ -28,6 +27,8 @@
 #include <QJsonObject>
 
 #include <QDebug>
+
+extern QString gcroot;
 
 ///////////////////////////// Measure class /////////////////////////////////
 
