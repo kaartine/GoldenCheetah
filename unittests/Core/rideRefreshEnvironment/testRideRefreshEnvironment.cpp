@@ -3,6 +3,7 @@
 #include "AthleteRefreshLifecycle.h"
 #include "AthleteSession.h"
 #include "RideRefreshEnvironment.h"
+#include "RideRefreshMeasures.h"
 #include "SessionServices.h"
 
 #include <atomic>
@@ -50,6 +51,7 @@ private slots:
     void fixedSettingInventoryCoversWorkerReads();
     void colorRulesPreserveEngineOrderingAndFallback();
     void calendarFormattingPreservesFieldAndUnitSemantics();
+    void measuresSnapshotIsRetainedByTheGeneration();
     void sessionPublishesWholeGenerationsAtomically();
     void publicationIsOwnerThreadOnlyAndClosedByLifecycle();
 };
@@ -176,6 +178,17 @@ calendarFormattingPreservesFieldAndUnitSemantics()
         [](const QString &, bool) { return QStringLiteral("wrong"); },
         [](const QString &) { return false; });
     QVERIFY(!irrelevant.contains(QStringLiteral("Weight")));
+}
+
+void TestRideRefreshEnvironment::measuresSnapshotIsRetainedByTheGeneration()
+{
+    auto measures = RideRefreshMeasures::create({}, 0x1234);
+    auto snapshot = RideRefreshEnvironment::create(
+        3, {}, true, {}, {}, {}, {}, {}, {}, measures);
+    measures.reset();
+
+    QVERIFY(snapshot->measures());
+    QVERIFY(snapshot->measures()->groups().isEmpty());
 }
 
 void TestRideRefreshEnvironment::sessionPublishesWholeGenerationsAtomically()

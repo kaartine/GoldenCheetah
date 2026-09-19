@@ -8766,6 +8766,19 @@ commit before the next finding begins.
   other Body fields in its combined fingerprint. Preserve that legacy scope in
   the value-foundation commit; any broader invalidation change needs a
   separately tested behavior decision before correction.
+- ARCH-003F2b2d (missing-observation fingerprint parity defect recorded before
+  correction): A known measures group with no observation for the requested
+  date fingerprints a default-constructed `Measure`. Its invalid `QDateTime`
+  conversion is not safely reproducible as `qChecksum("0")` across the active
+  Qt behavior. Capture the legacy default fingerprint alongside observation
+  fingerprints instead of recomputing or assuming its numeric value.
+- ARCH-003F2b2e (measures assembly test-coverage item recorded before
+  correction): The focused suite links the production group-value capture but
+  not the Athlete-owned assembly seam. Add lightweight runtime coverage for
+  wrong-thread and null rejection, all-group ordered assembly, and the full
+  `captureRideRefreshEnvironment` measures wiring before the F2c cutover is
+  accepted. Production warnings-as-errors compilation and the environment
+  ownership test are sufficient for this bounded foundation commit.
 - ARCH-003F2b3 (route snapshot work item recorded before correction): Separate
   immutable route geometry/matching input from `IntervalItem` publication.
   Capture route identity, names, points, search parameters, and fingerprint;
@@ -8908,6 +8921,26 @@ commit before the next finding begins.
   worker path and preserve absence/fallback behavior when removing live zone
   and `appsettings` reads. ARCH-003F2b1b and a TSan-instrumented Qt run remain
   verification prerequisites before the complete F2 safety claim.
+- ARCH-003F2b2/F2b2a/F2b2d resolution: `RideRefreshMeasures` now captures every
+  resolved measures group in its existing order, complete field metadata, all
+  sixteen value slots, observation metadata, and the observation list order as
+  immutable generation data. Only the exact `Body` symbol carries the latest
+  earlier value forward; other groups retain exact-date behavior. Known-group
+  missing values remain zero, while unknown group/field lookups fail closed.
+  Both observation and default-`Measure` fingerprints are captured from the
+  legacy objects rather than reconstructed. The same published refresh
+  environment owns this snapshot alongside zones and registry data.
+- ARCH-003F2b2 verification: the focused pure/live-class equivalence suite
+  passes 12/12 normally and under ASan/UBSan. The environment publication and
+  ownership suite passes 9/9 normally and under ASan/UBSan. All five changed
+  production translation units compile with warnings as errors; the source
+  dependency suite passes 14/14 and `git diff --check` is clean. Independent
+  final review: GO with no blocker or major correctness finding.
+- ARCH-003F2b2 residual: Calendar mutation quiescence/invalidation remains
+  ARCH-003F2b2b, broader Body invalidation remains the explicitly preserved
+  ARCH-003F2b2c debt, and Athlete assembly runtime coverage remains
+  ARCH-003F2b2e. Workers still use live Measures until ARCH-003F2c binds the
+  environment. A TSan-instrumented Qt run remains a release prerequisite.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

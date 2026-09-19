@@ -8,6 +8,7 @@
  */
 
 #include "RideRefreshEnvironment.h"
+#include "RideRefreshMeasures.h"
 #include "RideRefreshZones.h"
 
 #include "Athlete.h"
@@ -134,6 +135,8 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
         settings.athlete,
         useMetricUnits);
     Q_ASSERT(zones);
+    const auto measures = captureRideRefreshMeasures(context->athlete);
+    Q_ASSERT(measures);
 
     return RideRefreshEnvironment::create(
         generation,
@@ -145,5 +148,6 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
         std::move(sports),
         std::make_shared<const RideMetricRegistrySnapshot>(
             RideMetricFactory::instance().snapshot()),
-        zones);
+        zones,
+        measures);
 }

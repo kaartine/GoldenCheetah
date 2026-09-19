@@ -11,11 +11,13 @@ CONFIG -= debug
 SOURCES = testRideRefreshEnvironment.cpp \
           ../../../src/Core/AthleteRefreshLifecycle.cpp \
           ../../../src/Core/AthleteSession.cpp \
-          ../../../src/Core/RideRefreshEnvironment.cpp
+          ../../../src/Core/RideRefreshEnvironment.cpp \
+          ../../../src/Core/RideRefreshMeasures.cpp
 
 HEADERS = ../../../src/Core/AthleteRefreshLifecycle.h \
           ../../../src/Core/AthleteSession.h \
           ../../../src/Core/RideRefreshEnvironment.h \
+          ../../../src/Core/RideRefreshMeasures.h \
           ../../../src/Core/SessionServices.h
 
 INCLUDEPATH += ../../../src/Core
