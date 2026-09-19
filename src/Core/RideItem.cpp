@@ -18,7 +18,10 @@
 
 #include "RideItem.h"
 #include "AthleteSession.h"
+#include "SessionServices.h"
 #include "RideCache.h"
+#include "RideCacheSnapshot.h"
+#include "RideItemRefreshResult.h"
 #include "RideMetric.h"
 #include "RideFile.h"
 #include "RideFileCache.h"
@@ -254,7 +257,8 @@ RideItem::~RideItem()
 
     //qDebug()<<"deleting:"<<fileName;
     if (isOpen()) close();
-    if (fileCache_) delete fileCache_;
+    if (fileCache_ && ownsFileCache_) delete fileCache_;
+    fileCache_ = nullptr;
     //XXX need to consider what to do here for the intervalitem
     //XXX used by the RideDB parser - we don't want to wipe away
     //XXX the intervals we just passed into setFrom()
@@ -306,6 +310,22 @@ RideItem::setRide(RideFile *overwrite)
     //XXX this is only used by MergeActivityWizard and causes issues
     //XXX because the data is accessed in separate threads (Wizard is a dialog)
     //XXX because it is such an edge case (Merge) we will leave it for now
+}
+
+void
+RideItem::borrowRideForRefresh(RideFile *ride)
+{
+    Q_ASSERT(!ride_);
+    ride_ = ride;
+    ownsRide_ = false;
+}
+
+void
+RideItem::borrowFileCacheForRefresh(RideFileCache *cache)
+{
+    Q_ASSERT(!fileCache_);
+    fileCache_ = cache;
+    ownsFileCache_ = false;
 }
 
 void
@@ -485,14 +505,16 @@ RideItem::close()
     if (ride_) {
         // break link to ride file
         foreach(IntervalItem *x, intervals()) x->rideInterval = NULL;
-        delete ride_;
+        if (ownsRide_) delete ride_;
         ride_ = NULL;
+        ownsRide_ = true;
     }
 
     // and the cpx data
     if (fileCache_) {
-    	delete fileCache_;
-	fileCache_=NULL;
+        if (ownsFileCache_) delete fileCache_;
+        fileCache_=NULL;
+        ownsFileCache_ = true;
     }
 }
 
@@ -814,150 +836,219 @@ RideItem::refresh()
 {
     if (!isstale) return;
 
-    // update current state coz we'll fix it below
-    isstale = false;
+    const bool targetWasOpen = isOpen();
+    RideFile *const expectedOpenRide = ride_;
+    const QString expectedPath = path;
+    const QString expectedFileName = fileName;
+    const QDateTime expectedDateTime = dateTime;
+    const QString sourcePath =
+        RideFileCacheIntegrity::activitySourcePath(path, fileName);
 
-    // open ride file will extract details too, but only if not
-    // already open since its a user entry point and will call
-    // refresh when opened. We don't want a recursion here.
-    // And if already open no need to close
-    RideFile *f;
-    bool doclose = false;
-    if (!isOpen()) { 
-        doclose = true;
-        f = ride(); // will call us but isstale is false above
-    } else f=ride_;
+    RideFileCRC::ContentFingerprint sourceFingerprint;
+    if (!RideFileCRC::computeFileFingerprint(
+            sourcePath, sourceFingerprint)) {
+        return;
+    }
 
-    if (f) {
-
-        // get the metadata
-        metadata_ = f->tags();
-
-        // get xdata definitions
-        QMapIterator<QString, XDataSeries *>ie(f->xdata());
-        ie.toFront();
-        while(ie.hasNext()) {
-            ie.next();
-
-            // xdata and series names
-            xdata_.insert(ie.value()->name, ie.value()->valuename);
-        }
-
-        // overrides
-        overrides_.clear();
-        QMap<QString,QMap<QString, QString> >::const_iterator k;
-        for (k=ride_->metricOverrides.constBegin(); k != ride_->metricOverrides.constEnd(); k++) {
-            overrides_ << k.key();
-        }
-
-        // get weight that applies to the date
-        getWeight();
-
-        // first class stuff
-        sport = f->sport();
-        isBike = f->isBike();
-        isRun = f->isRun();
-        isSwim = f->isSwim();
-        isXtrain = f->isXtrain();
-        isAero = f->isAero();
-        color = GlobalContext::context()->colorEngine->colorFor(f->getTag(GlobalContext::context()->rideMetadata->getColorField(), ""));
-        present = f->getTag("Data", "");
-        samples = f->dataPoints().count() > 0;
-
-        // zone ranges
-        if (context->athlete->zones(sport)) zoneRange = context->athlete->zones(sport)->whichRange(dateTime.date());
-        else zoneRange = -1;
-
-        if (context->athlete->hrZones(sport)) hrZoneRange = context->athlete->hrZones(sport)->whichRange(dateTime.date());
-        else hrZoneRange = -1;
-
-        if (context->athlete->paceZones(isSwim)) paceZoneRange = context->athlete->paceZones(isSwim)->whichRange(dateTime.date());
-        else paceZoneRange = -1;
-
-        // RideFile cache refresh before metrics, as meanmax may be used in user formulas
-        RideFileCache updater(
-            context,
-            RideFileCacheIntegrity::activitySourcePath(
-                path, fileName),
-            getWeight(),
-            ride_,
-            true,
-            true,
-            &context->athleteSession().persistenceService());
-
-        // refresh metrics etc
-        const RideMetricRegistrySnapshot metricRegistry =
-            RideMetricFactory::instance().snapshot();
-
-        // ressize and initialize so we can store metric values at
-        // RideMetric::index offsets into the metrics_ qvector
-        metrics_.fill(0, metricRegistry.metricCount());
-        count_.fill(0, metricRegistry.metricCount());
-
-        // we compute all with not specification (not an interval)
-        QHash<QString,RideMetricPtr> computed = RideMetric::computeMetrics(
-            this, Specification(), metricRegistry.allMetrics(),
-            metricRegistry);
-
-        // snaffle away all the computed values into the array
-        QHashIterator<QString, RideMetricPtr> i(computed);
-        while (i.hasNext()) {
-            i.next();
-            //DEBUG if (i.value()->isUser()) qDebug()<<dateTime.date()<<i.value()->symbol()<<i.value()->value();
-            metrics_[i.value()->index()] = i.value()->value();
-            count_[i.value()->index()] = i.value()->count();
-            double stdmean = i.value()->stdmean();
-            double stdvariance = i.value()->stdvariance();
-            if (stdmean || stdvariance) {
-                stdmean_.insert(i.value()->index(), stdmean);
-                stdvariance_.insert(i.value()->index(), stdvariance);
-            }
-        }
-
-        // clean any bad values
-        for(int j=0; j<metricRegistry.metricCount(); j++)
-            if (std::isinf(metrics_[j]) || std::isnan(metrics_[j])) {
-                metrics_[j] = 0.00f;
-                count_[j] = 0.00f;
-            }
-
-        // Update auto intervals AFTER ridefilecache as used for bests
-        updateIntervals();
-
-        // update fingerprints etc, crc done above
-        fingerprint = static_cast<unsigned long>(context->athlete->zones(sport)->getFingerprint(dateTime.date()))
-                    + (appsettings->cvalue(context->athlete->cyclist, context->athlete->zones(sport)->useCPforFTPSetting(), 0).toInt() ? 1 : 0)
-                    + static_cast<unsigned long>(context->athlete->paceZones(isSwim)->getFingerprint(dateTime.date()))
-                    + static_cast<unsigned long>(context->athlete->hrZones(sport)->getFingerprint(dateTime.date()))
-                    + static_cast<unsigned long>(context->athlete->routes->getFingerprint()) +
-                    + static_cast<unsigned long>(getHrvFingerprint())
-                    + appsettings->cvalue(context->athlete->cyclist, GC_DISCOVERY, 57).toInt(); // 57 does not include search for PEAKS
-
-        dbversion = DBSchemaVersion;
-        udbversion = metricRegistry.userMetricSchemaVersion();
-        timestamp = QDateTime::currentDateTime().toSecsSinceEpoch();
-
-        // we now match
-        metacrc = metaCRC();
-
-        // Construct the summary text used on the calendar
-        metadata_.insert("Calendar Text", GlobalContext::context()->rideMetadata->calendarText(this));
-
-        // close if we opened it
-        if (doclose) {
-            close();
-        } else {
-
-            // if it is open then recompute
-            userCache.clear();
-            ride_->wstale = true;
-            ride_->recalculateDerivedSeries(true);
-        }
-
+    std::unique_ptr<RideFile> computationRide;
+    QStringList sourceErrors = errors_;
+    if (expectedOpenRide) {
+        computationRide = expectedOpenRide->detachedCopy();
     } else {
+        QFile sourceFile(sourcePath);
+        computationRide.reset(RideFileFactory::instance().openRideFile(
+            context, sourceFile, sourceErrors));
+    }
+    RideFile *const sourceRide = computationRide.get();
+    if (!sourceRide) {
         qDebug()<<"** FILE READ ERROR: "<<fileName;
+        return;
+    }
+
+    // Compute against an unregistered item.  It borrows both collaborators;
+    // its destructor must not close the canonical/opened RideFile or delete
+    // the stack-owned cache builder.
+    RideItem staging;
+    staging.context = context;
+    staging.path = path;
+    staging.fileName = fileName;
+    staging.dateTime = dateTime;
+    staging.planned = planned;
+    staging.isdirty = isdirty;
+    staging.isstale = true;
+    staging.isedit = isedit;
+    staging.skipsave = skipsave;
+    staging.crc = crc;
+    staging.xdata_ = xdata_;
+    staging.stdmean_ = stdmean_;
+    staging.stdvariance_ = stdvariance_;
+    staging.errors_ = sourceErrors;
+    staging.borrowRideForRefresh(sourceRide);
+
+    staging.metadata_ = sourceRide->tags();
+    QMapIterator<QString, XDataSeries *> xdata(sourceRide->xdata());
+    while (xdata.hasNext()) {
+        xdata.next();
+        staging.xdata_.insert(
+            xdata.value()->name, xdata.value()->valuename);
+    }
+    staging.overrides_.clear();
+    for (auto override = sourceRide->metricOverrides.constBegin();
+         override != sourceRide->metricOverrides.constEnd();
+         ++override) {
+        staging.overrides_ << override.key();
+    }
+
+    staging.getWeight();
+    staging.sport = sourceRide->sport();
+    staging.isBike = sourceRide->isBike();
+    staging.isRun = sourceRide->isRun();
+    staging.isSwim = sourceRide->isSwim();
+    staging.isXtrain = sourceRide->isXtrain();
+    staging.isAero = sourceRide->isAero();
+    staging.color = GlobalContext::context()->colorEngine->colorFor(
+        sourceRide->getTag(
+            GlobalContext::context()->rideMetadata->getColorField(), ""));
+    staging.present = sourceRide->getTag("Data", "");
+    staging.samples = !sourceRide->dataPoints().isEmpty();
+
+    if (context->athlete->zones(staging.sport))
+        staging.zoneRange = context->athlete->zones(
+            staging.sport)->whichRange(dateTime.date());
+    if (context->athlete->hrZones(staging.sport))
+        staging.hrZoneRange = context->athlete->hrZones(
+            staging.sport)->whichRange(dateTime.date());
+    if (context->athlete->paceZones(staging.isSwim))
+        staging.paceZoneRange = context->athlete->paceZones(
+            staging.isSwim)->whichRange(dateTime.date());
+
+    RideFileCache updater(
+        context, sourcePath, staging.weight, sourceRide,
+        false, false,
+        &context->athleteSession().persistenceService());
+    staging.borrowFileCacheForRefresh(&updater);
+    RideFileCache::PreparedRefresh cachePreparation =
+        updater.preparePersistentRefresh(
+            sourceRide, !targetWasOpen || !isdirty);
+    if (cachePreparation.outcome
+        == RideFileCache::PreparedRefresh::Outcome::Invalid) {
+        return;
+    }
+
+    const RideMetricRegistrySnapshot metricRegistry =
+        RideMetricFactory::instance().snapshot();
+    staging.metrics_.fill(0, metricRegistry.metricCount());
+    staging.count_.fill(0, metricRegistry.metricCount());
+    const QHash<QString,RideMetricPtr> computed =
+        RideMetric::computeMetrics(
+            &staging, Specification(), metricRegistry.allMetrics(),
+            metricRegistry);
+    for (auto metric = computed.constBegin();
+         metric != computed.constEnd(); ++metric) {
+        staging.metrics_[metric.value()->index()] =
+            metric.value()->value();
+        staging.count_[metric.value()->index()] =
+            metric.value()->count();
+        const double stdmean = metric.value()->stdmean();
+        const double stdvariance = metric.value()->stdvariance();
+        if (stdmean || stdvariance) {
+            staging.stdmean_.insert(metric.value()->index(), stdmean);
+            staging.stdvariance_.insert(
+                metric.value()->index(), stdvariance);
+        }
+    }
+    for (int index = 0; index < metricRegistry.metricCount(); ++index) {
+        if (std::isinf(staging.metrics_[index])
+            || std::isnan(staging.metrics_[index])) {
+            staging.metrics_[index] = 0.0;
+            staging.count_[index] = 0.0;
+        }
+    }
+
+    staging.updateIntervals(false);
+    staging.fingerprint = static_cast<unsigned long>(
+            context->athlete->zones(staging.sport)->getFingerprint(
+                dateTime.date()))
+        + (appsettings->cvalue(
+               context->athlete->cyclist,
+               context->athlete->zones(staging.sport)->useCPforFTPSetting(),
+               0).toInt() ? 1 : 0)
+        + static_cast<unsigned long>(
+            context->athlete->paceZones(staging.isSwim)->getFingerprint(
+                dateTime.date()))
+        + static_cast<unsigned long>(
+            context->athlete->hrZones(staging.sport)->getFingerprint(
+                dateTime.date()))
+        + static_cast<unsigned long>(
+            context->athlete->routes->getFingerprint())
+        + static_cast<unsigned long>(staging.getHrvFingerprint())
+        + appsettings->cvalue(
+            context->athlete->cyclist, GC_DISCOVERY, 57).toInt();
+    staging.dbversion = DBSchemaVersion;
+    staging.udbversion = metricRegistry.userMetricSchemaVersion();
+    staging.timestamp = QDateTime::currentDateTime().toSecsSinceEpoch();
+    staging.metacrc = staging.metaCRC();
+    staging.metadata_.insert(
+        "Calendar Text",
+        GlobalContext::context()->rideMetadata->calendarText(&staging));
+
+    RideItemRefreshResult result;
+    result.state = RideItemComputedState::takeFrom(staging);
+    result.cache = std::move(cachePreparation);
+    result.expected = {
+        expectedPath, expectedFileName, expectedDateTime,
+        targetWasOpen, expectedOpenRide};
+    result.sourcePath = sourcePath;
+    result.sourceFingerprint = sourceFingerprint;
+
+    // The synchronous adapter still validates identity before crossing the
+    // publication boundary.  F3c will put the generation gate here.
+    const QString currentSourcePath =
+        RideFileCacheIntegrity::activitySourcePath(path, fileName);
+    RideFileCRC::ContentFingerprint currentSourceFingerprint;
+    if (!RideFileCRC::computeFileFingerprint(
+            currentSourcePath, currentSourceFingerprint)
+        || !result.accepts(
+            {path, fileName, dateTime, isOpen(), ride_},
+            currentSourcePath,
+            currentSourceFingerprint)) {
+        return;
+    }
+
+    // Complete every allocating/throwing part of item publication before
+    // the irreversible CPX/report side effect.  Accepted publication below
+    // consists only of no-throw swaps, scalar assignments, and notification.
+    result.state.prepareFor(*this);
+
+    if (result.cache.outcome
+        == RideFileCache::PreparedRefresh::Outcome::Prepared) {
+        const RideFileCache::PreparedCommitOutcome outcome =
+            RideFileCache::publishPreparedCommit(
+                std::move(result.cache.commit), context,
+                result.expected.open ? ride_ : nullptr,
+                &context->athleteSession().persistenceService());
+        if (outcome
+            == RideFileCache::PreparedCommitOutcome::SourceRejected) {
+            return;
+        }
+    } else if (result.cache.outcome
+               == RideFileCache::PreparedRefresh::Outcome::
+                      PersistencePreparationFailed) {
+        context->athleteSession().persistenceService().
+            reportCacheWriteFailure(
+                result.cache.failurePath,
+                result.cache.failureDetail);
+    }
+
+    result.state.publishTo(*this, [this]() {
         isstale = false;
-        samples = false;
+        context->notifyIntervalsUpdate(this);
+    });
+
+    if (result.expected.open) {
+        userCache.clear();
+        ride_->wstale = true;
+        ride_->recalculateDerivedSeries(true);
     }
 }
 
@@ -1131,7 +1222,7 @@ static bool intervalGreaterThanZone(const IntervalItem *a, const IntervalItem *b
 }
 
 void
-RideItem::updateIntervals()
+RideItem::updateIntervals(bool notify)
 {
     // what do we need ?
     int discovery = appsettings->cvalue(context->athlete->cyclist, GC_DISCOVERY, 57).toInt(); // 57 does not include search for PEAKS
@@ -1144,7 +1235,8 @@ RideItem::updateIntervals()
 
     // no ride data available ?
     if (!samples) {
-        context->notifyIntervalsUpdate(this);
+        if (notify) context->notifyIntervalsUpdate(this);
+        qDeleteAll(deletelist);
         return;
     }
 
@@ -1840,7 +1932,7 @@ RideItem::updateIntervals()
     }
 
     // tell the world we changed
-    context->notifyIntervalsUpdate(this);
+    if (notify) context->notifyIntervalsUpdate(this);
 
     // wipe them away now
     foreach(IntervalItem *x, deletelist) delete x;

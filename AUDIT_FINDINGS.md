@@ -9189,6 +9189,88 @@ commit before the next finding begins.
   with warnings as errors, the source-module dependency suite passes 14/14,
   and `git diff --check` is clean. Carrying this request inside the complete
   detached item result remains part of ARCH-003F3b rather than this foundation.
+- ARCH-003F3b7 (borrowed-open computation mutation found by independent review
+  and recorded before correction): The first detached-result implementation
+  borrowed the canonical open `RideFile` while CPX and metric preparation can
+  recalculate derived series and W' state. Rejection after preparation could
+  therefore leave mutations outside the item-state publication gate. Build
+  from an owned ride snapshot, or prove an immutable computation boundary;
+  retain open-ride cache clearing and derived-series recalculation solely as
+  post-acceptance apply directives.
+- ARCH-003F3b8 (split result ownership found by independent review and recorded
+  before correction): The first implementation held the prepared CPX request
+  and computed item state in separate local variables. Put both values and the
+  open/closed apply policy in one move-only result so F3c can accept, publish,
+  or destroy the complete generation with one gate.
+- ARCH-003F3b9 (publication parity and identity gaps found by independent
+  review and recorded before correction): The first implementation forced a
+  CPX recomputation and publication even when the legacy `check=true` path
+  accepted an already-current cache, and its apply identity omitted the item
+  path. Preserve the no-rewrite fast path and bind every result to path,
+  filename, date/time, open state, and open-ride identity. Cover these rules,
+  failure atomicity, interval lifetime/order, field parity, and borrowed-object
+  cleanup with behavioral tests before F3b is complete.
+- ARCH-003F3b10 (ambiguous preparation outcome found by independent review and
+  recorded before correction): A null prepared-artifact result currently
+  conflates no persistent target, computation failure, source/provenance
+  rejection, and artifact I/O failure. Skipping publication for every null
+  result can apply stale item state without the final source validator. Return
+  an explicit preparation outcome: discard source-invalid or computation-
+  invalid work, distinguish an intentionally absent persistence target, and
+  retain the legacy policy for a reportable cache-write failure.
+- ARCH-003F3b/F3b1-F3b10 resolution: `RideItem::refresh()` now builds metrics,
+  metadata, xdata, interval values, and CPX preparation against an unregistered
+  staging item and an owned deep copy of the source ride. The canonical open
+  `RideFile`, item state, and observers remain untouched during construction.
+  One move-only `RideItemRefreshResult` owns the complete computed state,
+  prepared CPX request, open/closed policy identity, source path, and full
+  content fingerprint. The synchronous adapter rejects any path, filename,
+  date/time, open-state, open-ride, source-path, size, digest, or legacy-CRC
+  change before publication. CPX preparation exposes distinct Current,
+  Prepared, ValidWithoutPersistence, PersistencePreparationFailed, and Invalid
+  outcomes, preserving the no-rewrite current-cache path, intentional
+  nonpersistent computation, reportable write preparation failures, and
+  fail-closed source/computation rejection.
+- ARCH-003F3b publication atomicity: all replacement `IntervalItem` allocation,
+  USER-interval ordinal rebinding, and old-list ownership capacity are prepared
+  before CPX publication or persistence-error reporting. The accepted item
+  commit is `noexcept` and uses only compile-time-checked no-throw swaps and
+  scalar assignments. Observers see the complete replacement list exactly
+  once while retired intervals remain alive; those intervals are released
+  immediately after notification. An injected allocation failure leaves the
+  canonical fields/list unchanged and emits no notification. The no-samples
+  early return now also deletes its retired interval list.
+- ARCH-003F3b verification: the dedicated computed-state suite passes 9/9 and
+  covers field parity, preserved canonical UI flags, normal and empty interval
+  publication ordering, retired-object lifetime, injected allocation failure,
+  USER-interval ordinal rebinding, startup-snapshot parity, and rejected
+  snapshot immutability. The refresh/cache focus passes 7/7 across all five
+  preparation outcomes, complete owned `RideFile` copy state, and every
+  identity/fingerprint dimension. The copy regression covers points,
+  references, intervals, calibrations, xdata, CIQ metadata, data-presence,
+  source provenance, first-class fields, wind/weight, summary points/counters,
+  and mutation independence. Both suites pass their affected cases under
+  ASan/UBSan with leak detection disabled only because LSan cannot run under
+  this sandbox's ptrace policy. The full refresh suite passes 54/55; its sole
+  failure remains the pre-existing documented
+  `savedRideRebindsAndPersistsAtomically` baseline. The four affected
+  production translation units compile with warnings as errors, the
+  source-module dependency suite passes 14/14, and `git diff --check` is clean.
+  Independent final review first rejected an allocating `std::function`
+  conversion between CPX publication and item-state apply. The notification
+  callback is now invoked through a non-owning template boundary with no
+  conversion or copy; the normal and ASan/UBSan state suites still pass 9/9,
+  the affected production units compile with warnings as errors, and final
+  re-review returned GO with no remaining blocker or major finding.
+- ARCH-003F3b residual/prerequisites: this is the immediate synchronous adapter,
+  not the final worker cutover. ARCH-003F3c must carry the same move-only result
+  across the owner-thread generation gate and make stale-check values part of
+  that accepted publication. `RideItemRefreshResult` currently records the
+  existing Core-to-FileIO coupling by directly naming CPX and fingerprint
+  types; the dependency baseline makes those edges explicit, and F3c should
+  reassess placement when the worker-facing contract is finalized. A
+  TSan-instrumented Qt run and native Windows build/run remain release
+  prerequisites for the complete ARCH-003F concurrency claim.
 - ARCH-003F4 (required deterministic verification recorded before correction):
   Add latch-controlled tests for config transition and teardown joining,
   generation N rejection while N+1 is requested, exception/early-exit lease

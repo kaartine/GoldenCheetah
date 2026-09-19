@@ -108,6 +108,61 @@ RideFile::RideFile(RideFile *p) :
 
 }
 
+std::unique_ptr<RideFile>
+RideFile::detachedCopy() const
+{
+    auto copy = std::make_unique<RideFile>();
+    copy->context = context;
+    copy->id_ = id_;
+    copy->startTime_ = startTime_;
+    copy->recIntSecs_ = recIntSecs_;
+    copy->fileFormat_ = fileFormat_;
+    copy->tags_ = tags_;
+    copy->metricOverrides = metricOverrides;
+    copy->ciqinfo_ = ciqinfo_;
+    copy->dataPresent = dataPresent;
+    copy->sourceProvenance_ = sourceProvenance_;
+    copy->weight_ = weight_;
+    copy->windSpeed_ = windSpeed_;
+    copy->windHeading_ = windHeading_;
+
+    copy->dataPoints_.reserve(dataPoints_.size());
+    for (const RideFilePoint *point : dataPoints_) {
+        if (point)
+            copy->dataPoints_.append(new RideFilePoint(*point));
+    }
+    copy->referencePoints_.reserve(referencePoints_.size());
+    for (const RideFilePoint *point : referencePoints_) {
+        if (point)
+            copy->referencePoints_.append(new RideFilePoint(*point));
+    }
+    for (const RideFileInterval *interval : intervals_) {
+        if (interval)
+            copy->intervals_.append(new RideFileInterval(*interval));
+    }
+    for (const RideFileCalibration *calibration : calibrations_) {
+        if (calibration) {
+            copy->calibrations_.append(
+                new RideFileCalibration(*calibration));
+        }
+    }
+    for (auto it = xdata_.constBegin(); it != xdata_.constEnd(); ++it) {
+        if (it.value())
+            copy->xdata_.insert(
+                it.key(), new XDataSeries(*it.value()));
+    }
+
+    *copy->minPoint = *minPoint;
+    *copy->maxPoint = *maxPoint;
+    *copy->avgPoint = *avgPoint;
+    *copy->totalPoint = *totalPoint;
+    copy->totalCount = totalCount;
+    copy->totalTemp = totalTemp;
+    copy->dstale = true;
+    copy->wstale = true;
+    return copy;
+}
+
 RideFile::RideFile() : 
     context(nullptr), wstale(true),
     recIntSecs_(0.0), data(NULL), wprime_(NULL),

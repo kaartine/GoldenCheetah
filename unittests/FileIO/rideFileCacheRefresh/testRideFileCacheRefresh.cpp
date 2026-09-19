@@ -10,6 +10,7 @@
 #include "RideFile.h"
 #include "RideFileCache.h"
 #include "RideFileCacheWriteError.h"
+#include "RideItemRefreshResult.h"
 #include "SessionServices.h"
 #include "WPrime.h"
 
@@ -44,6 +45,42 @@
 #include <cerrno>
 #include <fcntl.h>
 #endif
+
+class RideFileDetachedCopyTestAccess
+{
+public:
+    static void populatePrivateState(RideFile &ride)
+    {
+        ride.weight_ = 73.5;
+        ride.windSpeed_ = 8.5;
+        ride.windHeading_ = 225.0;
+        ride.minPoint->watts = 100.0;
+        ride.maxPoint->watts = 500.0;
+        ride.avgPoint->watts = 250.0;
+        ride.totalPoint->watts = 750.0;
+        ride.totalCount = 3.0;
+        ride.totalTemp = 42.0;
+    }
+
+    static void verifyPrivateState(
+        const RideFile &copy,
+        const RideFile &source)
+    {
+        QCOMPARE(copy.weight_, source.weight_);
+        QCOMPARE(copy.windSpeed_, source.windSpeed_);
+        QCOMPARE(copy.windHeading_, source.windHeading_);
+        QCOMPARE(copy.minPoint->watts, source.minPoint->watts);
+        QCOMPARE(copy.maxPoint->watts, source.maxPoint->watts);
+        QCOMPARE(copy.avgPoint->watts, source.avgPoint->watts);
+        QCOMPARE(copy.totalPoint->watts, source.totalPoint->watts);
+        QCOMPARE(copy.totalCount, source.totalCount);
+        QCOMPARE(copy.totalTemp, source.totalTemp);
+        QVERIFY(copy.minPoint != source.minPoint);
+        QVERIFY(copy.maxPoint != source.maxPoint);
+        QVERIFY(copy.avgPoint != source.avgPoint);
+        QVERIFY(copy.totalPoint != source.totalPoint);
+    }
+};
 
 namespace {
 
@@ -495,6 +532,11 @@ private slots:
     void cleanup();
     void immutableStaleInputsFailClosedAndAcceptCurrentCache();
     void refreshRestoresFixedZoneStorage();
+    void detachedRideCopyIsCompleteAndIndependent();
+    void nonPersistentRefreshHasExplicitOutcome();
+    void artifactPreparationFailurePreservesComputedOutcome();
+    void persistentRefreshOutcomeMatrix();
+    void detachedRefreshIdentityRejectsEveryChangedDimension();
     void repeatedRefreshClearsZoneValues();
     void temporaryActivityComputesWithoutPersistentCache();
     void standalonePowerActivityComputesWithoutContext();
@@ -621,6 +663,277 @@ void TestRideFileCacheRefresh::refreshRestoresFixedZoneStorage()
     QCOMPARE(cache.paceZoneArray().size(), 10);
     QCOMPARE(cache.paceCPZoneArray().size(), 4);
     QCOMPARE(cache.wbalZoneArray().size(), 4);
+}
+
+void TestRideFileCacheRefresh::detachedRideCopyIsCompleteAndIndependent()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(QStringLiteral("source.fit"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-generation"));
+
+    RideFile ride;
+    ride.setId(QStringLiteral("ride-id"));
+    const QDateTime startTime(
+        QDate(2026, 9, 19), QTime(8, 15), QTimeZone::UTC);
+    ride.setStartTime(startTime);
+    ride.setRecIntSecs(1.0);
+    ride.setFileFormat(QStringLiteral("FIT"));
+    ride.setTag(QStringLiteral("Sport"), QStringLiteral("Bike"));
+    ride.setDataPresent(RideFile::watts, true);
+    ride.metricOverrides[QStringLiteral("workout_time")].insert(
+        QStringLiteral("value"), QStringLiteral("42"));
+    RideFilePoint point;
+    point.secs = 1.0;
+    point.watts = 250.0;
+    ride.appendPoint(point);
+    RideFilePoint reference;
+    reference.secs = 0.5;
+    reference.watts = 175.0;
+    ride.appendReference(reference);
+    ride.newInterval(
+        QStringLiteral("Lap"), 0.0, 1.0, Qt::red, true);
+    ride.addCalibration(0.25, 123, QStringLiteral("Zero offset"));
+    CIQinfo ciq(QStringLiteral("app-id"), 42, 7);
+    ride.addCIQ(ciq);
+    auto series = new XDataSeries;
+    series->name = QStringLiteral("EXTRA");
+    series->valuename = {QStringLiteral("value")};
+    series->datapoints.append(new XDataPoint);
+    ride.addXData(QStringLiteral("EXTRA"), series);
+    RideFileDetachedCopyTestAccess::populatePrivateState(ride);
+    QVERIFY(ride.bindSourceProvenanceForTest(sourcePath));
+
+    std::unique_ptr<RideFile> copy = ride.detachedCopy();
+    QVERIFY(copy);
+    QVERIFY(copy.get() != &ride);
+    QCOMPARE(copy->id(), ride.id());
+    QCOMPARE(copy->startTime(), startTime);
+    QCOMPARE(copy->recIntSecs(), 1.0);
+    QCOMPARE(copy->fileFormat(), QStringLiteral("FIT"));
+    QCOMPARE(copy->tags(), ride.tags());
+    QCOMPARE(copy->metricOverrides, ride.metricOverrides);
+    QVERIFY(copy->isDataPresent(RideFile::watts));
+    QCOMPARE(copy->ciqinfo().size(), 1);
+    QCOMPARE(copy->ciqinfo().constFirst().appid, QStringLiteral("app-id"));
+    QCOMPARE(copy->ciqinfo().constFirst().devid, 42);
+    QCOMPARE(copy->ciqinfo().constFirst().ver, 7);
+    QCOMPARE(copy->dataPoints().size(), 1);
+    QVERIFY(copy->dataPoints().constFirst()
+            != ride.dataPoints().constFirst());
+    QCOMPARE(copy->dataPoints().constFirst()->watts, 250.0);
+    QCOMPARE(copy->referencePoints().size(), 1);
+    QVERIFY(copy->referencePoints().constFirst()
+            != ride.referencePoints().constFirst());
+    QCOMPARE(copy->referencePoints().constFirst()->watts, 175.0);
+    QCOMPARE(copy->intervals().size(), 1);
+    QVERIFY(copy->intervals().constFirst()
+            != ride.intervals().constFirst());
+    QCOMPARE(copy->calibrations().size(), 1);
+    QVERIFY(copy->calibrations().constFirst()
+            != ride.calibrations().constFirst());
+    QCOMPARE(copy->calibrations().constFirst()->value, 123);
+    QVERIFY(copy->xdata(QStringLiteral("EXTRA"))
+            != ride.xdata(QStringLiteral("EXTRA")));
+    QVERIFY(copy->sourceProvenanceMatchesForTest(sourcePath));
+    RideFileDetachedCopyTestAccess::verifyPrivateState(*copy, ride);
+
+    copy->setTag(QStringLiteral("Sport"), QStringLiteral("Run"));
+    copy->setPointValue(0, RideFile::watts, 999.0);
+    copy->referencePoints().constFirst()->watts = 888.0;
+    copy->intervals().constFirst()->name = QStringLiteral("Changed");
+    copy->calibrations().constFirst()->value = 999;
+    copy->xdata(QStringLiteral("EXTRA"))->datapoints.constFirst()->number[0]
+        = 7.0;
+    QCOMPARE(ride.getTag(QStringLiteral("Sport"), {}),
+             QStringLiteral("Bike"));
+    QCOMPARE(ride.dataPoints().constFirst()->watts, 250.0);
+    QCOMPARE(ride.referencePoints().constFirst()->watts, 175.0);
+    QCOMPARE(ride.intervals().constFirst()->name, QStringLiteral("Lap"));
+    QCOMPARE(ride.calibrations().constFirst()->value, 123);
+    QCOMPARE(ride.xdata(QStringLiteral("EXTRA"))
+                 ->datapoints.constFirst()->number[0],
+             0.0);
+}
+
+void TestRideFileCacheRefresh::nonPersistentRefreshHasExplicitOutcome()
+{
+    RideFile ride;
+    ride.setRecIntSecs(1.0);
+    RideFilePoint point;
+    point.secs = 1.0;
+    point.watts = 200.0;
+    ride.appendPoint(point);
+
+    RideFileCache cache(
+        &ride, RideFileCache::NoPersistentTargetForTest {});
+    RideFileCache::PreparedRefresh prepared =
+        cache.preparePersistentRefresh(&ride, false);
+
+    QCOMPARE(
+        prepared.outcome,
+        RideFileCache::PreparedRefresh::Outcome::
+            ValidWithoutPersistence);
+    QVERIFY(!prepared.commit);
+    QVERIFY(prepared.failurePath.isEmpty());
+    QVERIFY(prepared.failureDetail.isEmpty());
+    QVERIFY(!cache.incomplete);
+}
+
+void TestRideFileCacheRefresh::
+artifactPreparationFailurePreservesComputedOutcome()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("source.provenance"));
+    const QString cachePath = directory.filePath(
+        QStringLiteral("cache/source.cpx"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors));
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+
+    RideFileCache cache(
+        ride.get(), RideFileCache::SkipInitialComputeForTest {});
+    RideFileCache::PreparedRefresh prepared =
+        cache.preparePersistentRefreshForTest(
+            sourcePath, cachePath, ride.get(), true);
+
+    QCOMPARE(
+        prepared.outcome,
+        RideFileCache::PreparedRefresh::Outcome::
+            PersistencePreparationFailed);
+    QVERIFY(!prepared.commit);
+    QCOMPARE(prepared.failurePath, cachePath);
+    QVERIFY(!prepared.failureDetail.isEmpty());
+    QVERIFY(!cache.incomplete);
+    QVERIFY(!QFileInfo::exists(cachePath));
+}
+
+void TestRideFileCacheRefresh::persistentRefreshOutcomeMatrix()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("source.provenance"));
+    const QString preparedPath = directory.filePath(
+        QStringLiteral("cache/prepared.cpx"));
+    const QString currentPath = directory.filePath(
+        QStringLiteral("cache/current.cpx"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors));
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+
+    RideFileCache preparedCache(
+        ride.get(), RideFileCache::SkipInitialComputeForTest {});
+    RideFileCache::PreparedRefresh prepared =
+        preparedCache.preparePersistentRefreshForTest(
+            sourcePath, preparedPath, ride.get(), false);
+    QCOMPARE(
+        prepared.outcome,
+        RideFileCache::PreparedRefresh::Outcome::Prepared);
+    QVERIFY(prepared.commit);
+    QVERIFY(!QFileInfo::exists(preparedPath));
+
+    RideFileCache currentCache(
+        ride.get(), RideFileCache::SkipInitialComputeForTest {});
+    RideFileCache::PreparedRefresh current =
+        currentCache.preparePersistentRefreshForTest(
+            sourcePath, currentPath, ride.get(), false, true);
+    QCOMPARE(
+        current.outcome,
+        RideFileCache::PreparedRefresh::Outcome::Current);
+    QVERIFY(!current.commit);
+    QVERIFY(!QFileInfo::exists(currentPath));
+
+    RideFile unprovenanced;
+    unprovenanced.setRecIntSecs(1.0);
+    RideFilePoint point;
+    point.secs = 1.0;
+    point.watts = 200.0;
+    unprovenanced.appendPoint(point);
+    RideFileCache invalidCache(
+        &unprovenanced,
+        RideFileCache::SkipInitialComputeForTest {});
+    RideFileCache::PreparedRefresh invalid =
+        invalidCache.preparePersistentRefreshForTest(
+            sourcePath,
+            directory.filePath(QStringLiteral("cache/invalid.cpx")),
+            &unprovenanced,
+            false);
+    QCOMPARE(
+        invalid.outcome,
+        RideFileCache::PreparedRefresh::Outcome::Invalid);
+    QVERIFY(!invalid.commit);
+}
+
+void TestRideFileCacheRefresh::
+detachedRefreshIdentityRejectsEveryChangedDimension()
+{
+    RideFile openRide;
+    RideFile otherRide;
+    const QDateTime dateTime(
+        QDate(2026, 9, 19), QTime(12, 30), QTimeZone::UTC);
+    RideItemRefreshGate result;
+    result.expected = {
+        QStringLiteral("/activities"),
+        QStringLiteral("activity.fit"),
+        dateTime,
+        true,
+        &openRide};
+    result.sourcePath = QStringLiteral("/activities/activity.fit");
+    result.sourceFingerprint.byteSize = 8;
+    result.sourceFingerprint.sha256 = QByteArray(32, 'a');
+    result.sourceFingerprint.legacyCrc16 = 17;
+
+    RideItemRefreshIdentity current = result.expected;
+    auto fingerprint = result.sourceFingerprint;
+    const auto accepts = [&]() {
+        return result.accepts(
+            current, QStringLiteral("/activities/activity.fit"),
+            fingerprint);
+    };
+    QVERIFY(accepts());
+
+    current.path = QStringLiteral("/planned");
+    QVERIFY(!accepts());
+    current = result.expected;
+    current.fileName = QStringLiteral("other.fit");
+    QVERIFY(!accepts());
+    current = result.expected;
+    current.dateTime = dateTime.addSecs(1);
+    QVERIFY(!accepts());
+    current = result.expected;
+    current.open = false;
+    QVERIFY(!accepts());
+    current = result.expected;
+    current.openRide = &otherRide;
+    QVERIFY(!accepts());
+    current = result.expected;
+    fingerprint.sha256[0] = 'b';
+    QVERIFY(!accepts());
+    fingerprint = result.sourceFingerprint;
+    ++fingerprint.byteSize;
+    QVERIFY(!accepts());
+    fingerprint = result.sourceFingerprint;
+    ++fingerprint.legacyCrc16;
+    QVERIFY(!accepts());
+    fingerprint = result.sourceFingerprint;
+    QVERIFY(!result.accepts(
+        current, QStringLiteral("/planned/activity.fit"), fingerprint));
 }
 
 void TestRideFileCacheRefresh::repeatedRefreshClearsZoneValues()

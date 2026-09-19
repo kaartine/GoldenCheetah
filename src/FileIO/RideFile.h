@@ -30,6 +30,8 @@
 #include <QObject>
 #include <QRegExp>
 
+#include <memory>
+
 class RideItem;
 class RideCache;
 class RideFileCache;
@@ -240,6 +242,7 @@ class RideFile : public QObject // QObject to emit signals
             "Use computeFileCRC(filename, checksum) to distinguish errors")
         static unsigned int computeFileCRC(QString filename);
 #ifdef GC_RIDE_FILE_SOURCE_PROVENANCE_TEST_HOOKS
+        friend class RideFileDetachedCopyTestAccess;
         bool sourceProvenanceMatchesForTest(
             const QString &filename) const;
         bool bindSourceProvenanceForTest(
@@ -252,6 +255,7 @@ class RideFile : public QObject // QObject to emit signals
         // Constructor / Destructor
         RideFile();
         RideFile(RideFile*);
+        std::unique_ptr<RideFile> detachedCopy() const;
         RideFile(const QDateTime &startTime, double recIntSecs);
         virtual ~RideFile();
 

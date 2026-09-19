@@ -475,22 +475,26 @@ RideFileCache::RideFileCache(
         context->athlete->home->planned().absolutePath(),
         rideFileName);
     if (cacheFileName.isEmpty()) {
+        persistentTargetAvailable_ = false;
         computeWithoutPersistentCache(refresh, weight);
         return;
     }
     const QByteArray expectedAnalysisFingerprint =
         analysisFingerprintForSource(
             context, rideFileName, passedride, weight);
-    if ((check
-         && cacheIsCurrentForSource(
-             rideFileName,
-             cacheFileName,
-             weight,
-             expectedAnalysisFingerprint))
-        || (!check
-            && readCache(
-                weight,
-                expectedAnalysisFingerprint))) {
+    if (check
+        && cacheIsCurrentForSource(
+            rideFileName,
+            cacheFileName,
+            weight,
+            expectedAnalysisFingerprint)) {
+        persistentCacheCurrent_ = true;
+        return;
+    }
+    if (!check
+        && readCache(weight, expectedAnalysisFingerprint)) {
+        persistentCacheCurrent_ = true;
+        persistentCacheLoaded_ = true;
         return;
     }
 
@@ -1416,6 +1420,7 @@ RideFileCache::RideFileCache(
           ride,
           SkipInitialComputeForTest {})
 {
+    persistentTargetAvailable_ = false;
     context = ride ? ride->context : nullptr;
     computeWithoutPersistentCache(
         true, target.weight);
@@ -1486,6 +1491,25 @@ RideFileCache::preparePersistentCommitForTest(
     rideFileName = sourcePath;
     cacheFileName = cachePath;
     return preparePersistentCommit();
+}
+
+RideFileCache::PreparedRefresh
+RideFileCache::preparePersistentRefreshForTest(
+    const QString &sourcePath,
+    const QString &cachePath,
+    RideFile *file,
+    bool failArtifactPreparation,
+    bool cacheCurrent)
+{
+    rideFileName = sourcePath;
+    cacheFileName = cachePath;
+    persistentCacheCurrent_ = cacheCurrent;
+    persistentCacheLoaded_ = cacheCurrent;
+    persistentTargetAvailable_ = !cachePath.isEmpty();
+    failArtifactPreparationForTest_ = failArtifactPreparation;
+    PreparedRefresh result = preparePersistentRefresh(file);
+    failArtifactPreparationForTest_ = false;
+    return result;
 }
 
 RideFileCache::PreparedCommitOutcome
@@ -1957,8 +1981,9 @@ RideFileCache::commitPreparedCache(
 }
 
 std::unique_ptr<RideFileCache::PreparedCacheCommit>
-RideFileCache::prepareCacheCommit()
+RideFileCache::prepareCacheCommit(PrepareCacheStatus *status)
 {
+    if (status) *status = PrepareCacheStatus::Invalid;
     if (!ride)
         return {};
     const double analysisWeight = ride->getWeight();
@@ -2006,6 +2031,16 @@ RideFileCache::prepareCacheCommit()
         sourceFingerprint.crc;
     if (!persistedSourceFingerprint.isValid())
         return {};
+
+    // Computation and source/provenance validation are complete.  Failures
+    // while materializing the optional persistence artifact must not discard
+    // the valid in-memory refresh result.
+    if (status)
+        *status = PrepareCacheStatus::PersistenceFailed;
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+    if (failArtifactPreparationForTest_)
+        return {};
+#endif
 
     // The serialized header is part of the prepared generation and must be
     // bound before the artifact digest is computed.
@@ -2070,6 +2105,7 @@ RideFileCache::prepareCacheCommit()
         };
 
     QStringList verificationErrors;
+    if (status) *status = PrepareCacheStatus::Invalid;
     QFile verificationSource(rideFileName);
     std::unique_ptr<RideFile> verifiedRide(
         RideFileFactory::instance().openRideFile(
@@ -2106,6 +2142,9 @@ RideFileCache::prepareCacheCommit()
         return {};
     }
 
+    if (status)
+        *status = PrepareCacheStatus::PersistenceFailed;
+
     const int duplicateDescriptor =
         duplicateFileDescriptor(artifact.handle());
     if (duplicateDescriptor < 0)
@@ -2136,6 +2175,7 @@ RideFileCache::prepareCacheCommit()
         }
     }
 #endif
+    if (status) *status = PrepareCacheStatus::Prepared;
     return prepared;
 }
 
@@ -2159,6 +2199,57 @@ std::unique_ptr<RideFileCache::PreparedCacheCommit>
 RideFileCache::preparePersistentCommit()
 {
     return prepareCacheCommit();
+}
+
+RideFileCache::PreparedRefresh
+RideFileCache::preparePersistentRefresh(
+    RideFile *file,
+    bool persistenceAllowed)
+{
+    if (file) ride = file;
+    if (!ride) return {};
+    WEIGHT = ride->getWeight();
+    if (persistenceAllowed && persistentCacheCurrent_) {
+        if (!persistentCacheLoaded_) {
+            const QByteArray expectedAnalysisFingerprint =
+                analysisFingerprintForSource(
+                    context, rideFileName, ride, WEIGHT);
+            persistentCacheLoaded_ = readCache(
+                WEIGHT, expectedAnalysisFingerprint);
+        }
+        if (persistentCacheLoaded_)
+            return {PreparedRefresh::Outcome::Current, {}, {}, {}};
+    }
+    if (!persistenceAllowed || !persistentTargetAvailable_) {
+        ride->recalculateDerivedSeries(true);
+        if (ride->context && ride->context->athlete
+            && ride->isDataPresent(RideFile::watts)) {
+            ride->wprimeData()->setRide(ride);
+        }
+        return {
+            compute()
+                ? PreparedRefresh::Outcome::ValidWithoutPersistence
+                : PreparedRefresh::Outcome::Invalid,
+            {}, {}, {}};
+    }
+    PrepareCacheStatus status = PrepareCacheStatus::Invalid;
+    std::unique_ptr<PreparedCacheCommit> prepared =
+        prepareCacheCommit(&status);
+    switch (status) {
+    case PrepareCacheStatus::Prepared:
+        return {
+            PreparedRefresh::Outcome::Prepared,
+            std::move(prepared), {}, {}};
+    case PrepareCacheStatus::PersistenceFailed:
+        return {
+            PreparedRefresh::Outcome::PersistencePreparationFailed,
+            {}, cacheFileName,
+            QStringLiteral(
+                "Cannot prepare authenticated CPX cache artifact")};
+    case PrepareCacheStatus::Invalid:
+        return {};
+    }
+    return {};
 }
 
 RideFileCache::PreparedCommitOutcome

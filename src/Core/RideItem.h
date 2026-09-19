@@ -39,7 +39,11 @@ class Context;
 class UserData;
 class ComparePane;
 class RideCacheItemSnapshot;
+class RideItemComputedState;
 class RideRefreshEnvironment;
+#ifdef GC_RIDE_ITEM_REFRESH_TEST_HOOKS
+class RideItemRefreshTestAccess;
+#endif
 
 class RideItem : public QObject
 {
@@ -57,10 +61,16 @@ class RideItem : public QObject
         friend class ::UserData;
         friend class ::ComparePane;
         friend class ::RideCacheItemSnapshot;
+        friend class ::RideItemComputedState;
+#ifdef GC_RIDE_ITEM_REFRESH_TEST_HOOKS
+        friend class ::RideItemRefreshTestAccess;
+#endif
 
         // ridefile
         RideFile *ride_;
         RideFileCache *fileCache_;
+        bool ownsRide_ = true;
+        bool ownsFileCache_ = true;
 
         // precomputed metrics & user overrides
         QVector<double> metrics_;
@@ -247,7 +257,9 @@ class RideItem : public QObject
 
     private:
         bool checkStaleImpl(const RideRefreshEnvironment *environment);
-        void updateIntervals();
+        void updateIntervals(bool notify = true);
+        void borrowRideForRefresh(RideFile *ride);
+        void borrowFileCacheForRefresh(RideFileCache *cache);
 };
 
 Q_DECLARE_OPAQUE_POINTER(RideItem*);

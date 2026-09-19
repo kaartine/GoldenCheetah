@@ -148,6 +148,22 @@ class RideFileCache
             WriteFailed
         };
 
+        struct PreparedRefresh
+        {
+            enum class Outcome {
+                Current,
+                Prepared,
+                ValidWithoutPersistence,
+                PersistencePreparationFailed,
+                Invalid
+            };
+
+            Outcome outcome = Outcome::Invalid;
+            std::unique_ptr<PreparedCacheCommit> commit;
+            QString failurePath;
+            QString failureDetail;
+        };
+
         enum cachetype { meanmax, distribution, none };
         typedef enum cachetype CacheType;
         QDate start, end;
@@ -176,6 +192,9 @@ class RideFileCache
         // computation and every externally visible persistence side effect.
         std::unique_ptr<PreparedCacheCommit>
             preparePersistentCommit();
+        PreparedRefresh preparePersistentRefresh(
+            RideFile *ride,
+            bool persistenceAllowed = true);
         static PreparedCommitOutcome publishPreparedCommit(
             std::unique_ptr<PreparedCacheCommit> prepared,
             Context *context,
@@ -346,6 +365,12 @@ class RideFileCache
             preparePersistentCommitForTest(
                 const QString &sourcePath,
                 const QString &cachePath);
+        PreparedRefresh preparePersistentRefreshForTest(
+            const QString &sourcePath,
+            const QString &cachePath,
+            RideFile *ride,
+            bool failArtifactPreparation,
+            bool cacheCurrent = false);
         static PreparedCommitOutcome publishPreparedCommitForTest(
             std::unique_ptr<PreparedCacheCommit> prepared,
             Context *context,
@@ -451,8 +476,13 @@ class RideFileCache
 
     private:
 
+        enum class PrepareCacheStatus {
+            Invalid,
+            PersistenceFailed,
+            Prepared
+        };
         std::unique_ptr<PreparedCacheCommit>
-            prepareCacheCommit();
+            prepareCacheCommit(PrepareCacheStatus *status = nullptr);
         static bool commitPreparedCache(
             PreparedCacheCommit &prepared,
             Context *context,
@@ -470,6 +500,12 @@ class RideFileCache
 
         Context *context;
         AthletePersistenceService *persistenceService_;
+        bool persistentCacheCurrent_ = false;
+        bool persistentCacheLoaded_ = false;
+        bool persistentTargetAvailable_ = true;
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+        bool failArtifactPreparationForTest_ = false;
+#endif
         QString rideFileName; // filename of ride
         QString cacheFileName; // filename of cache file
         RideFile *ride;

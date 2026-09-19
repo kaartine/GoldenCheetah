@@ -5227,6 +5227,12 @@
       "target_module": "FileIO"
     },
     {
+      "source": "src/Core/RideCacheSnapshot.cpp",
+      "source_module": "Core",
+      "target": "src/FileIO/RideFile.h",
+      "target_module": "FileIO"
+    },
+    {
       "source": "src/Core/RideDB.h",
       "source_module": "Core",
       "target": "src/Charts/GoldenCheetah.h",
@@ -5339,6 +5345,18 @@
       "source_module": "Core",
       "target": "src/Metrics/RideMetric.h",
       "target_module": "Metrics"
+    },
+    {
+      "source": "src/Core/RideItemRefreshResult.h",
+      "source_module": "Core",
+      "target": "src/FileIO/RideFileCRC.h",
+      "target_module": "FileIO"
+    },
+    {
+      "source": "src/Core/RideItemRefreshResult.h",
+      "source_module": "Core",
+      "target": "src/FileIO/RideFileCache.h",
+      "target_module": "FileIO"
     },
     {
       "source": "src/Core/RideRefreshEnvironmentCapture.cpp",
