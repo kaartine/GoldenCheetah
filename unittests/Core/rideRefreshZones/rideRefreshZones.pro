@@ -11,8 +11,7 @@ CONFIG += console testcase c++17 release
 CONFIG -= debug
 GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
 DEFINES += GC_TEST_SOURCE_ROOT="$${GC_TEST_SOURCE_ROOT}"
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 
 SOURCES = testRideRefreshZones.cpp \
           ../../../src/Core/RideRefreshZones.cpp \

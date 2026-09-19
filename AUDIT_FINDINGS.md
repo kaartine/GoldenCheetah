@@ -8753,6 +8753,11 @@ commit before the next finding begins.
   crosses the ownership boundary before rejection. Keep a wrapper-level
   owner-thread check before every Athlete member access and pin that ordering
   in the focused production contract.
+- ARCH-003F2b1d (focused-zone linker-policy drift recorded before correction):
+  The new zone snapshot project duplicated ELF-only section-GC flags instead of
+  consuming the repository's portable `section-gc.prf`. The build-policy suite
+  rejects this silent platform divergence. Route the test through the shared
+  policy and rerun its normal/sanitized suite plus the linker-policy check.
 - ARCH-003F2b2 (measures breadth gap recorded before correction): The initial
   F2b wording names Body/HRV, but refresh-time user metrics can query every
   configured Measures group and field, date range, and series through both
@@ -8819,6 +8824,26 @@ commit before the next finding begins.
   Capture route identity, names, points, search parameters, and fingerprint;
   return value-only matches. Creating/publishing interval QObjects remains an
   F3 owner-thread result-handoff responsibility.
+- ARCH-003F2b3a (route value-matcher foundation recorded before correction):
+  Extract the legacy route search into an immutable, QObject-free value model
+  with explicit ride samples/bounds and result DTOs. Preserve bounding-box
+  admission, GPS validity quirks, scan/look-ahead/divergence/restart behavior,
+  route order, distance conversion, occurrence numbering, and captured
+  fingerprint in focused tests before adding Athlete-owned capture and
+  generation-environment wiring in F2b3b.
+- ARCH-003F2b3a1 (legacy final-point divergence behavior recorded before
+  correction): When divergence exceeds the reset threshold while evaluating a
+  segment's final route point, the current implementation still publishes a
+  match before applying its restart. Preserve and pin that compatibility quirk
+  in the immutable foundation. Deciding whether to reject such partial matches
+  changes user-visible interval discovery and requires a separate fixture-led
+  behavior migration before any correction.
+- ARCH-003F2b3b (route assembly and environment wiring recorded before
+  correction): Capture every live route segment and its fingerprint on the
+  Routes owner thread, retain the immutable snapshot in
+  `RideRefreshEnvironment`, and cover null/wrong-thread rejection plus complete
+  ordered assembly. Keep `IntervalItem` construction outside the value model;
+  worker cutover and owner-thread publication remain F2c/F3 responsibilities.
 - ARCH-003F2b4 (RideFileCache input work item recorded before correction):
   Express analysis fingerprints and distribution-zone inputs solely through
   the immutable zone/settings values, including absent-domain semantics, so
@@ -8976,6 +9001,10 @@ commit before the next finding begins.
   the complete Athlete object graph. The F2c integration/native-runtime suite
   must exercise the real wrapper during worker cutover, and a TSan-instrumented
   Qt run remains a prerequisite for the complete F2 concurrency claim.
+- ARCH-003F2b1d resolution and verification: the zone snapshot test now consumes
+  the shared portable `section-gc.prf` rather than spelling ELF flags locally.
+  Its 15/15 cases still pass normally and under ASan/UBSan, and the repository
+  linker-policy suite passes with no custom-project exception.
 - ARCH-003F2b2/F2b2a/F2b2d resolution: `RideRefreshMeasures` now captures every
   resolved measures group in its existing order, complete field metadata, all
   sixteen value slots, observation metadata, and the observation list order as
@@ -9036,6 +9065,31 @@ commit before the next finding begins.
   finding. The full Calendar/RideCache behavior test remains ARCH-003F2b2b1 /
   ARCH-003F4; scoped-guard and write-failure semantics remain the separately
   queued F2b2b2/F2b2b3 items.
+- ARCH-003F2b3a/F2b3a1 resolution: `RideRefreshRoutes` is an immutable,
+  QObject-free geometry and matching value model. It owns ordered route ids,
+  names, points, bounds, captured fingerprint, and explicit search parameters;
+  accepts value-only ride samples/bounds; and returns value-only match DTOs
+  including occurrence, time, and distance. The matcher preserves the legacy
+  strict bounds test, distinct outer/look-ahead GPS predicates, 51-sample far
+  skip, mutable look-ahead, divergence/restart behavior, route order, great-
+  circle distance, and lower-bound time-to-distance conversion. The documented
+  final-point divergence publication quirk remains compatibility behavior.
+- ARCH-003F2b3a verification: the registered focused suite passes 11/11 normally
+  and under ASan/UBSan. It covers immutable ownership/fingerprint, exact
+  matching, strict bounds, 0/180/540 GPS validity differences, lower-bound and
+  out-of-range distance lookup, route order, far skip/look-ahead, final-point
+  divergence/restart, custom restart skip, and occurrence numbering. The
+  production value translation unit compiles with warnings as errors; source
+  dependencies pass 14/14, and CI-runner, header-path, linker-policy, and `git
+  diff --check` checks pass. Independent final re-review: GO with the initial
+  matrix-registration and edge-case coverage blockers resolved and no remaining
+  major finding.
+- ARCH-003F2b3a residual: F2b3b must still capture the complete live Routes
+  collection on its owner thread and retain it in the generation environment.
+  F2c must provide immutable ride samples and cut worker matching over; F3 must
+  construct and publish `IntervalItem` objects only after generation acceptance.
+  Changing the F2b3a1 partial-match quirk remains a separate behavior migration,
+  and a TSan-instrumented integration run remains a release prerequisite.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

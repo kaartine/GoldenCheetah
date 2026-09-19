@@ -60,6 +60,7 @@ exists(unittests.pri) {
 			   Core/rideCachePerformance \
 			   Core/rideRefreshEnvironment \
 			   Core/rideRefreshMeasures \
+			   Core/rideRefreshRoutes \
 			   Core/rideRefreshZones \
 			   Core/rideCacheRemoval \
 			   Core/seasonOffset \
