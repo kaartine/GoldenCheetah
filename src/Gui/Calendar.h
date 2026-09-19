@@ -37,6 +37,7 @@
 #include "TimeUtils.h"
 #include "Measures.h"
 
+class Context;
 
 class CalendarOverview : public QCalendarWidget {
     Q_OBJECT
@@ -249,7 +250,11 @@ class CalendarDayView : public QWidget {
     Q_OBJECT
 
 public:
-    explicit CalendarDayView(const QDate &date, Measures * const athleteMeasures = nullptr, QWidget *parent = nullptr);
+    explicit CalendarDayView(
+        const QDate &date,
+        Measures * const athleteMeasures = nullptr,
+        QWidget *parent = nullptr,
+        Context *context = nullptr);
 
     bool setDay(const QDate &date);
     void setFirstDayOfWeek(Qt::DayOfWeek firstDayOfWeek);
@@ -294,6 +299,7 @@ signals:
 
 private:
     Measures * const athleteMeasures;
+    Context * const context;
     CalendarOverview *dayDateSelector;
     QTabWidget *measureTabs;
     CalendarDayTable *dayTable;
@@ -360,7 +366,12 @@ class Calendar : public QWidget {
     Q_OBJECT
 
 public:
-    explicit Calendar(const QDate &dateInMonth, Qt::DayOfWeek firstDayOfWeek = Qt::Monday, Measures * const athleteMeasures = nullptr, QWidget *parent = nullptr);
+    explicit Calendar(
+        const QDate &dateInMonth,
+        Qt::DayOfWeek firstDayOfWeek = Qt::Monday,
+        Measures * const athleteMeasures = nullptr,
+        QWidget *parent = nullptr,
+        Context *context = nullptr);
 
     void setDate(const QDate &dateInMonth, bool allowKeepMonth = false);
     void fillEntries(const QHash<QDate, QList<CalendarEntry>> &activityEntries, const QList<CalendarSummary> &summaries, const QHash<QDate, QList<CalendarEntry>> &headlineEntries, bool isFiltered);

@@ -8761,6 +8761,21 @@ commit before the next finding begins.
   lifecycle barrier or requesting a new generation. Add pre-mutation
   quiescence and deterministic invalidation before claiming the measures
   snapshot cutover complete.
+- ARCH-003F2b2b1 (Calendar refresh integration coverage recorded before
+  correction): The source-wiring test and lifecycle suite prove ordering,
+  nested transition depth, and resume-once behavior separately, but do not run
+  the Calendar editor and real RideCache together. Cover exactly one deferred
+  replacement generation in the latch-controlled ARCH-003F4 integration suite.
+- ARCH-003F2b2b2 (scoped transition hardening recorded before correction): The
+  bounded Calendar mutation has no early return or throwing call after its
+  successful begin today, but its begin/finish pair is manual. Introduce a
+  reusable owner-thread scoped transition guard before expanding this seam or
+  adding fallible control flow between begin and finish.
+- ARCH-003F2b2b3 (measures persistence behavior debt recorded before
+  correction): Calendar preserves legacy behavior by applying and refreshing
+  the in-memory measure even when `MeasuresGroup::write()` fails. Decide and
+  test rollback-versus-retry/error semantics separately; do not silently fold
+  a persistence contract change into the concurrency barrier.
 - ARCH-003F2b2c (existing Body invalidation debt recorded before correction):
   Current stale detection compares Body weight separately but does not include
   other Body fields in its combined fingerprint. Preserve that legacy scope in
@@ -8936,11 +8951,28 @@ commit before the next finding begins.
   production translation units compile with warnings as errors; the source
   dependency suite passes 14/14 and `git diff --check` is clean. Independent
   final review: GO with no blocker or major correctness finding.
-- ARCH-003F2b2 residual: Calendar mutation quiescence/invalidation remains
-  ARCH-003F2b2b, broader Body invalidation remains the explicitly preserved
-  ARCH-003F2b2c debt, and Athlete assembly runtime coverage remains
-  ARCH-003F2b2e. Workers still use live Measures until ARCH-003F2c binds the
-  environment. A TSan-instrumented Qt run remains a release prerequisite.
+- ARCH-003F2b2 residual: Calendar mutation quiescence/invalidation is completed
+  by the subsequent ARCH-003F2b2b resolution. Broader Body invalidation remains
+  the explicitly preserved ARCH-003F2b2c debt, and Athlete assembly runtime
+  coverage remains ARCH-003F2b2e. Workers still use live Measures until
+  ARCH-003F2c binds the environment. A TSan-instrumented Qt run remains a
+  release prerequisite.
+- ARCH-003F2b2b resolution: CalendarWindow now passes its matching Context to
+  the measure editor. After dialog acceptance, the editor enters the athlete
+  refresh lifecycle before its first live Measures mutation, writes while all
+  refresh/Estimator work is quiescent, and issues a nested `CONFIG_ATHLETE`
+  notification while admission is still closed. RideCache therefore defers a
+  replacement generation until the outer finish reopens admission and resumes
+  exactly once. Missing Context, wrong-thread, shutdown, or refused admission
+  fails before mutation.
+- ARCH-003F2b2b verification: the lifecycle and production-wiring suite passes
+  7/7 normally and under ASan/UBSan. Both changed production translation units
+  compile with warnings as errors. The source dependency suite passes 14/14
+  with the reviewed `Gui/Calendar.cpp -> Core/ConfigFlags.h` edge, and `git
+  diff --check` is clean. Independent final review: GO with no blocker or major
+  finding. The full Calendar/RideCache behavior test remains ARCH-003F2b2b1 /
+  ARCH-003F4; scoped-guard and write-failure semantics remain the separately
+  queued F2b2b2/F2b2b3 items.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

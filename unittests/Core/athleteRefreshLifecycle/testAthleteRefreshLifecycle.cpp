@@ -161,10 +161,16 @@ productionWiringStartsBarrierBeforeWrites()
         QStringLiteral("src/Core/Context.cpp"));
     const QByteArray cache = source(
         QStringLiteral("src/Core/RideCache.cpp"));
+    const QByteArray calendar = source(
+        QStringLiteral("src/Gui/Calendar.cpp"));
+    const QByteArray calendarWindow = source(
+        QStringLiteral("src/Charts/CalendarWindow.cpp"));
     QVERIFY(!athleteDialog.isEmpty());
     QVERIFY(!globalDialog.isEmpty());
     QVERIFY(!context.isEmpty());
     QVERIFY(!cache.isEmpty());
+    QVERIFY(!calendar.isEmpty());
+    QVERIFY(!calendarWindow.isEmpty());
 
     const qsizetype athleteBegin = athleteDialog.indexOf(
         "context->beginConfigTransition()");
@@ -206,6 +212,24 @@ productionWiringStartsBarrierBeforeWrites()
     QVERIFY(cache.contains("if (estimator) estimator->stop();"));
     QVERIFY(cache.contains("cancel();"));
     QVERIFY(!cache.contains("estimator->terminate()"));
+
+    const qsizetype measureDialog = calendar.indexOf(
+        "CalendarDayView::measureDialog");
+    const qsizetype measureBegin = calendar.indexOf(
+        "context->beginConfigTransition()", measureDialog);
+    const qsizetype measureMutation = calendar.indexOf(
+        "measuresGroup->setMeasures(measures);", measureDialog);
+    const qsizetype measureNotify = calendar.indexOf(
+        "context->notifyConfigChanged(CONFIG_ATHLETE);", measureMutation);
+    const qsizetype measureFinish = calendar.indexOf(
+        "context->finishConfigTransition()", measureNotify);
+    QVERIFY(measureDialog >= 0);
+    QVERIFY(measureBegin > measureDialog);
+    QVERIFY(measureMutation > measureBegin);
+    QVERIFY(measureNotify > measureMutation);
+    QVERIFY(measureFinish > measureNotify);
+    QVERIFY(calendarWindow.contains(
+        "context->athlete->measures,\n        nullptr,\n        context"));
 
     const QByteArray estimator = source(
         QStringLiteral("src/Metrics/Estimator.cpp"));

@@ -7755,6 +7755,12 @@
     {
       "source": "src/Gui/Calendar.cpp",
       "source_module": "Gui",
+      "target": "src/Core/ConfigFlags.h",
+      "target_module": "Core"
+    },
+    {
+      "source": "src/Gui/Calendar.cpp",
+      "source_module": "Gui",
       "target": "src/Core/Context.h",
       "target_module": "Core"
     },

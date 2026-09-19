@@ -34,6 +34,7 @@
 #include <QDebug>
 
 #include "Colors.h"
+#include "ConfigFlags.h"
 #include "Settings.h"
 #include "Context.h"
 
@@ -1521,8 +1522,9 @@ CalendarMonthTable::showContextMenu
 // CalendarDayView
 
 CalendarDayView::CalendarDayView
-(const QDate &dateInMonth, Measures * const athleteMeasures, QWidget *parent)
-: QWidget(parent), athleteMeasures(athleteMeasures)
+(const QDate &dateInMonth, Measures * const athleteMeasures, QWidget *parent,
+ Context *context)
+: QWidget(parent), athleteMeasures(athleteMeasures), context(context)
 {
     dayDateSelector = new CalendarOverview();
     dayDateSelector->setFixedHeight(std::max(static_cast<int>(280 * dpiYFactor), dayDateSelector->sizeHint().height()));
@@ -1821,6 +1823,10 @@ CalendarDayView::measureDialog
     if (dialogRet != QDialog::Accepted) {
         return false;
     }
+    if (!context || !context->beginConfigTransition()) {
+        qCritical() << "Could not protect Calendar measures mutation";
+        return false;
+    }
 
     for (i = 0; i < valuesEdit.count(); ++i) {
         measure.values[i] = valuesEdit[i]->value();
@@ -1844,6 +1850,13 @@ CalendarDayView::measureDialog
     std::reverse(measures.begin(), measures.end());
     measuresGroup->setMeasures(measures);
     measuresGroup->write();
+
+    // The nested notification requests a replacement refresh while admission
+    // remains closed. The outer finish then resumes exactly that generation.
+    context->notifyConfigChanged(CONFIG_ATHLETE);
+    if (!context->finishConfigTransition()) {
+        qCritical() << "Could not finish Calendar measures mutation";
+    }
 
     return true;
 }
@@ -1993,13 +2006,15 @@ CalendarWeekView::selectedDate
 // Calendar
 
 Calendar::Calendar
-(const QDate &dateInMonth, Qt::DayOfWeek firstDayOfWeek, Measures * const athleteMeasures, QWidget *parent)
+(const QDate &dateInMonth, Qt::DayOfWeek firstDayOfWeek,
+ Measures * const athleteMeasures, QWidget *parent, Context *context)
 : QWidget(parent)
 {
     qRegisterMetaType<CalendarDay>("CalendarDay");
     qRegisterMetaType<CalendarSummary>("CalendarSummary");
 
-    dayView = new CalendarDayView(dateInMonth, athleteMeasures);
+    dayView = new CalendarDayView(
+        dateInMonth, athleteMeasures, nullptr, context);
     weekView = new CalendarWeekView(dateInMonth);
     monthView = new CalendarMonthTable(dateInMonth, firstDayOfWeek);
 

@@ -516,7 +516,12 @@ CalendarWindow::CalendarWindow(Context *context)
 {
     mkControls();
 
-    calendar = new Calendar(QDate::currentDate(), static_cast<Qt::DayOfWeek>(getFirstDayOfWeek()), context->athlete->measures);
+    calendar = new Calendar(
+        QDate::currentDate(),
+        static_cast<Qt::DayOfWeek>(getFirstDayOfWeek()),
+        context->athlete->measures,
+        nullptr,
+        context);
 
     setStartHour(8);
     setEndHour(21);
