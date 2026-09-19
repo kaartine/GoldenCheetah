@@ -9,6 +9,14 @@ Node {
     property var instanceTable: null
     property bool transparent: false
 
+    WorkoutGameDevelopmentAsset {
+        id: development
+        assetId: "EN-08-forest-floor-props"
+        variantKey: String(root.variant)
+        instanceTable: root.instanceTable
+        allowed: !root.transparent
+    }
+
     PrincipledMaterial {
         id: vertexColorMaterial
         baseColor: "white"
@@ -38,6 +46,7 @@ Node {
         "assets/meshes/geo_LeafySapling_LOD0_mesh.mesh"
     ]
     Model {
+        visible: !development.ready
         source: root.meshSources[root.variant]
         materials: vertexColorMaterial
         instancing: root.instanceTable

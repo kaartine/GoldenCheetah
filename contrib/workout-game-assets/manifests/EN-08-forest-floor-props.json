@@ -206,6 +206,24 @@
       "maxTextureBytes": 0
     }
   },
+  "runtimeVariants": [
+    { "key": "0", "rootNodes": ["GEO_GraniteLow_LOD0"] },
+    { "key": "1", "rootNodes": ["GEO_GraniteUpright_LOD0"] },
+    { "key": "2", "rootNodes": ["GEO_GraniteSlab_LOD0"] },
+    { "key": "3", "rootNodes": ["GEO_StumpRooted_LOD0"] },
+    { "key": "4", "rootNodes": ["GEO_DeadwoodFallen_LOD0"] },
+    { "key": "5", "rootNodes": ["GEO_UnderstoryFern_LOD0"] },
+    { "key": "6", "rootNodes": ["GEO_UnderstoryBilberry_LOD0"] },
+    { "key": "7", "rootNodes": ["GEO_UnderstoryHeather_LOD0"] },
+    { "key": "8", "rootNodes": ["GEO_GranitePair_LOD0"] },
+    { "key": "9", "rootNodes": ["GEO_UnderstoryShrub_LOD0"] },
+    { "key": "10", "rootNodes": ["GEO_UnderstoryGrass_LOD0"] },
+    { "key": "11", "rootNodes": ["GEO_WildflowerPatch_LOD0"] },
+    { "key": "12", "rootNodes": ["GEO_MushroomCluster_LOD0"] },
+    { "key": "13", "rootNodes": ["GEO_TwigPile_LOD0"] },
+    { "key": "14", "rootNodes": ["GEO_PineSapling_LOD0"] },
+    { "key": "15", "rootNodes": ["GEO_LeafySapling_LOD0"] }
+  ],
   "review": {
     "status": "approved",
     "trademarkStatus": "not-applicable",

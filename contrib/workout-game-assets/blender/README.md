@@ -432,12 +432,35 @@ contrib/workout-game-assets/open_gallery.sh
 
 Pass `--asset RB-01-rider-bike` to choose the initial model. The launcher uses
 an installed Blender when available and otherwise runs the pinned repository
-Docker image. It does not open or modify athlete data, source models or runtime
-assets.
+Docker image. It does not open or modify athlete data. The repository is
+mounted read-only unless `--edit` is supplied; edit mode grants write access
+only to the canonical manifest directory.
 
 The **Workout Game** tab in Blender's 3D viewport sidebar contains the model
 selector, previous/next controls, fixed review views, framing and a wireframe
 toggle. Blender's normal viewport controls provide orbit, pan and zoom. The
-gallery imports the reviewed GLBs directly; production continues to use the
-validated Balsam `.mesh` output. When launched from a local SSH shell, the
-launcher can attach to the same user's active GNOME Xwayland display.
+gallery imports the reviewed GLBs directly. In `--edit` mode it also exposes
+the selected material's color, roughness and metallic factors plus the
+manifest-backed interaction, friction, rolling resistance, restitution and
+collision-proxy settings. **Save** validates every dirty document before
+writing, then replaces each manifest atomically; a conflict with an external
+edit is rejected. A multi-asset save is not one filesystem transaction, so a
+later write failure can leave earlier validated manifests committed.
+
+Run a development GoldenCheetah build against the same canonical files with:
+
+```bash
+GC_WORKOUT_GAME_ASSET_WORKSPACE="$PWD" /path/to/GoldenCheetah
+```
+
+This opt-in mode watches both the manifest and generated-GLB directories. A
+valid gallery save updates material properties in the running 3D view without
+restarting GoldenCheetah. Replacing a canonical GLB updates the opaque feature
+and forest models through Qt Quick 3D's runtime loader. The animated rider keeps
+its packaged articulated geometry but consumes the same live material
+overrides. Invalid or partially written input never replaces the last valid
+snapshot, and packaged Balsam `.mesh` assets remain the fallback. Normal
+production launches do not read external assets.
+
+When launched from a local SSH shell, the launcher can attach to the same
+user's active GNOME Xwayland display.

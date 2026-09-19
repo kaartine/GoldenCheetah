@@ -13,6 +13,7 @@
 #include "WorkoutGameCourseDocument.h"
 #include "WorkoutGame3DTerrainProfile.h"
 #include "WorkoutGame3DWindow.h"
+#include "WorkoutGameDevelopmentAssets.h"
 #include "WorkoutGameDistancePlayback.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameForestComposition.h"
@@ -37,6 +38,7 @@
 #include <QImage>
 #include <QImageWriter>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QPainter>
 #include <QPointer>
@@ -48,6 +50,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QScreen>
+#include <QSaveFile>
 #include <QSet>
 #include <QSignalSpy>
 #include <QSGRendererInterface>
@@ -1942,6 +1945,156 @@ private slots:
     void initTestCase()
     {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+    }
+
+    void developmentAssetManifestHotReloadsIntoLiveQml()
+    {
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        const QString manifests = QDir(workspace.path()).filePath(
+                QStringLiteral("contrib/workout-game-assets/manifests"));
+        const QString generated = QDir(workspace.path()).filePath(
+                QStringLiteral("contrib/workout-game-assets/generated"));
+        QVERIFY(QDir().mkpath(manifests));
+        QVERIFY(QDir().mkpath(generated));
+
+        const QString sourceManifest = QFINDTESTDATA(
+                "../../../contrib/workout-game-assets/manifests/RB-01-rider-bike.json");
+        const QString sourceGlb = QFINDTESTDATA(
+                "../../../contrib/workout-game-assets/generated/WG_RiderBike.glb");
+        QVERIFY2(!sourceManifest.isEmpty(), "rider manifest test data missing");
+        QVERIFY2(!sourceGlb.isEmpty(), "rider GLB test data missing");
+        const QString manifestPath = QDir(manifests).filePath(
+                QStringLiteral("RB-01-rider-bike.json"));
+        const QString glbPath = QDir(generated).filePath(
+                QStringLiteral("WG_RiderBike.glb"));
+        QVERIFY(QFile::copy(sourceManifest, manifestPath));
+        QVERIFY(QFile::copy(sourceGlb, glbPath));
+
+        ScopedEnvironmentVariable assetWorkspace(
+                "GC_WORKOUT_GAME_ASSET_WORKSPACE");
+        qputenv("GC_WORKOUT_GAME_ASSET_WORKSPACE",
+                workspace.path().toUtf8());
+        WorkoutGameDevelopmentAssets developmentAssets;
+        QTRY_VERIFY_WITH_TIMEOUT(developmentAssets.revision() > 0, 5000);
+
+        WorkoutGame3DViewModel viewModel;
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGameDevelopmentAssets"),
+                &developmentAssets);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        QObject *bikeMaterial = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("riderBikeMaterial"));
+        QVERIFY(bikeMaterial);
+        QCOMPARE(bikeMaterial->property("baseColor").value<QColor>(),
+                 QColor(QStringLiteral("#b88935")));
+
+        QFile manifestFile(manifestPath);
+        QVERIFY(manifestFile.open(QIODevice::ReadOnly));
+        QJsonDocument manifestDocument = QJsonDocument::fromJson(
+                manifestFile.readAll());
+        manifestFile.close();
+        QVERIFY(manifestDocument.isObject());
+        QJsonObject manifest = manifestDocument.object();
+        QJsonObject override;
+        override.insert(QStringLiteral("materialName"),
+                        QStringLiteral("MAT_Frame_HighVizAmber"));
+        override.insert(QStringLiteral("baseColorSrgb"),
+                        QStringLiteral("#1b75d0"));
+        override.insert(QStringLiteral("roughness"), 0.41);
+        override.insert(QStringLiteral("metallic"), 0.57);
+        manifest.insert(QStringLiteral("materialOverrides"),
+                        QJsonArray{override});
+
+        const qulonglong previousRevision = developmentAssets.revision();
+        QSaveFile output(manifestPath);
+        output.setDirectWriteFallback(false);
+        QVERIFY(output.open(QIODevice::WriteOnly));
+        const QByteArray encoded = QJsonDocument(manifest).toJson(
+                QJsonDocument::Indented);
+        QCOMPARE(output.write(encoded), qint64(encoded.size()));
+        QVERIFY(output.commit());
+
+        QTRY_VERIFY_WITH_TIMEOUT(
+                developmentAssets.revision() > previousRevision, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+                bikeMaterial->property("baseColor").value<QColor>(),
+                QColor(QStringLiteral("#1b75d0")), 5000);
+        QVERIFY(std::abs(
+                    bikeMaterial->property("roughness").toDouble() - 0.41)
+                < 1e-5);
+        QVERIFY(std::abs(
+                    bikeMaterial->property("metalness").toDouble() - 0.57)
+                < 1e-5);
+    }
+
+    void canonicalDevelopmentGlbLoadsAndReplacesPackagedFallback()
+    {
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        const QString manifests = QDir(workspace.path()).filePath(
+                QStringLiteral("contrib/workout-game-assets/manifests"));
+        const QString generated = QDir(workspace.path()).filePath(
+                QStringLiteral("contrib/workout-game-assets/generated"));
+        QVERIFY(QDir().mkpath(manifests));
+        QVERIFY(QDir().mkpath(generated));
+
+        const QString sourceManifest = QFINDTESTDATA(
+                "../../../contrib/workout-game-assets/manifests/EN-03-distant-ridges.json");
+        const QString sourceGlb = QFINDTESTDATA(
+                "../../../contrib/workout-game-assets/generated/WG_DistantRidges.glb");
+        QVERIFY2(!sourceManifest.isEmpty(), "ridge manifest test data missing");
+        QVERIFY2(!sourceGlb.isEmpty(), "ridge GLB test data missing");
+        QVERIFY(QFile::copy(
+                sourceManifest,
+                QDir(manifests).filePath(
+                    QStringLiteral("EN-03-distant-ridges.json"))));
+        QVERIFY(QFile::copy(
+                sourceGlb,
+                QDir(generated).filePath(
+                    QStringLiteral("WG_DistantRidges.glb"))));
+
+        ScopedEnvironmentVariable assetWorkspace(
+                "GC_WORKOUT_GAME_ASSET_WORKSPACE");
+        qputenv("GC_WORKOUT_GAME_ASSET_WORKSPACE",
+                workspace.path().toUtf8());
+        WorkoutGameDevelopmentAssets developmentAssets;
+        QTRY_VERIFY_WITH_TIMEOUT(developmentAssets.revision() > 0, 5000);
+
+        WorkoutGame3DViewModel viewModel;
+        QQuickView window;
+        window.setResizeMode(QQuickView::SizeRootObjectToView);
+        window.resize(640, 360);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGame3D"), &viewModel);
+        window.rootContext()->setContextProperty(
+                QStringLiteral("workoutGameDevelopmentAssets"),
+                &developmentAssets);
+        window.setSource(QUrl(QStringLiteral("qrc:/qml/WorkoutGame3D.qml")));
+        QCOMPARE(window.status(), QQuickView::Ready);
+        window.show();
+
+        QObject *developmentAsset = nullptr;
+        const QList<QObject *> objects = window.rootObject()->findChildren<QObject *>();
+        for (QObject *object : objects) {
+            if (object->property("assetId").toString()
+                    == QStringLiteral("EN-03-distant-ridges")) {
+                developmentAsset = object;
+                break;
+            }
+        }
+        QVERIFY2(developmentAsset, "distant ridge development asset missing");
+        QObject *fallback = window.rootObject()->findChild<QObject *>(
+                QStringLiteral("distantRidgeModel"));
+        QVERIFY(fallback);
+        QTRY_VERIFY_WITH_TIMEOUT(
+                developmentAsset->property("ready").toBool(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!fallback->property("visible").toBool(), 5000);
     }
 
     void ordinaryResidentFramesDoNotRegenerateModels()

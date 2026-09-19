@@ -9,6 +9,14 @@ Node {
     readonly property bool scotsPine: variant === 3
     readonly property bool birch: variant === 2
 
+    WorkoutGameDevelopmentAsset {
+        id: development
+        assetId: "EN-01-conifer-set"
+        variantKey: String(root.variant)
+        instanceTable: root.instanceTable
+        allowed: !root.transparent
+    }
+
     PrincipledMaterial {
         id: barkMaterial
         baseColor: "#56371f"
@@ -54,7 +62,7 @@ Node {
     }
 
     Model {
-        visible: !root.scotsPine && !root.birch
+        visible: !development.ready && !root.scotsPine && !root.birch
         source: "assets/meshes/geo_ConiferTrunk_LOD0_mesh.mesh"
         instancing: root.instanceTable
         materials: barkMaterial
@@ -62,7 +70,7 @@ Node {
         receivesShadows: false
     }
     Model {
-        visible: root.variant === 0
+        visible: !development.ready && root.variant === 0
         source: "assets/meshes/geo_ConiferNarrow_LOD0_mesh.mesh"
         instancing: root.instanceTable
         materials: darkFoliageMaterial
@@ -70,7 +78,7 @@ Node {
         receivesShadows: false
     }
     Model {
-        visible: root.variant === 1
+        visible: !development.ready && root.variant === 1
         source: "assets/meshes/geo_ConiferLayered_LOD0_mesh.mesh"
         instancing: root.instanceTable
         materials: lightFoliageMaterial
@@ -79,7 +87,7 @@ Node {
     }
     Model {
         objectName: "workoutGameScotsPineTrunk"
-        visible: root.scotsPine
+        visible: !development.ready && root.scotsPine
         source: "assets/meshes/geo_ScotsPineTrunk_LOD0_mesh.mesh"
         instancing: root.instanceTable
         materials: pineBarkMaterial
@@ -88,7 +96,7 @@ Node {
     }
     Model {
         objectName: "workoutGameScotsPineCrown"
-        visible: root.scotsPine
+        visible: !development.ready && root.scotsPine
         source: "assets/meshes/geo_ScotsPineCrown_LOD0_mesh.mesh"
         instancing: root.instanceTable
         materials: lightFoliageMaterial
@@ -97,7 +105,7 @@ Node {
     }
     Model {
         objectName: "workoutGameBirchTrunk"
-        visible: root.birch
+        visible: !development.ready && root.birch
         source: "assets/meshes/geo_BirchTrunk_LOD0_mesh.mesh"
         instancing: root.instanceTable
         materials: birchBarkMaterial
@@ -106,7 +114,7 @@ Node {
     }
     Model {
         objectName: "workoutGameBirchCrown"
-        visible: root.birch
+        visible: !development.ready && root.birch
         source: "assets/meshes/geo_BirchCrown_LOD0_mesh.mesh"
         instancing: root.instanceTable
         materials: birchFoliageMaterial

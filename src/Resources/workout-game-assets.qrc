@@ -21,6 +21,7 @@
         <file alias="qml/assets/meshes/geo_GapJumpGround_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_GapJumpGround_LOD0_mesh.mesh</file>
         <file alias="qml/assets/meshes/geo_GapJumpTread_LOD0_mesh.mesh">../Train/qml/assets/meshes/geo_GapJumpTread_LOD0_mesh.mesh</file>
         <file alias="qml/WorkoutGameRiderBike.qml">../Train/qml/WorkoutGameRiderBike.qml</file>
+        <file alias="qml/WorkoutGameDevelopmentAsset.qml">../Train/qml/WorkoutGameDevelopmentAsset.qml</file>
         <file alias="qml/WorkoutGameConifer.qml">../Train/qml/WorkoutGameConifer.qml</file>
         <file alias="qml/WorkoutGameForestFloorProp.qml">../Train/qml/WorkoutGameForestFloorProp.qml</file>
         <file alias="qml/WorkoutGameForestVergeCluster.qml">../Train/qml/WorkoutGameForestVergeCluster.qml</file>

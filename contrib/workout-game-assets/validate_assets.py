@@ -556,6 +556,22 @@ def _validate_glb_document(
             f"material override names unknown GLB material: {unknown_materials[0]}"
         )
 
+    runtime_variants = manifest.get("runtimeVariants", [])
+    variant_keys = [variant["key"] for variant in runtime_variants]
+    if len(variant_keys) != len(set(variant_keys)):
+        raise AssetValidationError("duplicate runtime variant key")
+    for variant in runtime_variants:
+        root_node_names = variant["rootNodes"]
+        if len(root_node_names) != len(set(root_node_names)):
+            raise AssetValidationError(
+                f"duplicate runtime variant node: {variant['key']}"
+            )
+        unknown_nodes = sorted(set(root_node_names) - set(names))
+        if unknown_nodes:
+            raise AssetValidationError(
+                f"runtime variant names unknown GLB node: {unknown_nodes[0]}"
+            )
+
     physics = manifest.get("physics")
     if physics is not None:
         interaction = physics["interaction"]

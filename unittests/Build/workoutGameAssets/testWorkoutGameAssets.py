@@ -338,6 +338,31 @@ class TestWorkoutGameAssets(unittest.TestCase):
         finally:
             fixture.close()
 
+    def test_runtime_variants_must_name_unique_glb_nodes(self) -> None:
+        fixture = AssetFixture()
+        try:
+            fixture.manifest["runtimeVariants"] = [{
+                "key": "main",
+                "rootNodes": ["MISSING_NODE"],
+            }]
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "unknown GLB node"
+            ):
+                assets.validate_repository(fixture.root)
+
+            fixture.manifest["runtimeVariants"] = [
+                {"key": "main", "rootNodes": ["ROOT_Tabletop"]},
+                {"key": "main", "rootNodes": ["GEO_Tabletop_LOD0"]},
+            ]
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "duplicate runtime variant key"
+            ):
+                assets.validate_repository(fixture.root)
+        finally:
+            fixture.close()
+
     def test_repository_file_hashes_are_not_duplicated_in_manifests(self) -> None:
         manifest = assets.load_json_file(MANIFEST_PATH)
         for entry in manifest["files"]:
@@ -917,8 +942,10 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertGreaterEqual(
             runtime_qml.count("baseColorMap: riderPixelTexture"), 4
         )
-        self.assertIn('baseColor: "#2f68b2"', runtime_qml)
-        self.assertIn('baseColor: "#d7dad8"', runtime_qml)
+        self.assertIn('"MAT_Rider_Cobalt", "#2f68b2"', runtime_qml)
+        self.assertIn('"MAT_Helmet_White", "#d7dad8"', runtime_qml)
+        self.assertIn("baseColor: root.jerseyProperties.baseColor", runtime_qml)
+        self.assertIn("baseColor: root.helmetProperties.baseColor", runtime_qml)
         for material_id in ("skinMaterial", "helmetMaterial", "riderDarkMaterial"):
             material_block = runtime_qml.split(
                 f"id: {material_id}", 1

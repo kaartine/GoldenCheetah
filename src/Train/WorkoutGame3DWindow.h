@@ -21,6 +21,7 @@
 #include <atomic>
 
 class QTimer;
+class WorkoutGameDevelopmentAssets;
 
 class WorkoutGameActiveSessionClock
 {
@@ -125,6 +126,7 @@ private:
     void reportFailure(const QString &message);
 
     WorkoutGame3DViewModel *viewModel;
+    WorkoutGameDevelopmentAssets *developmentAssets;
     WorkoutGameVisualSmoother visualSmoother;
     WorkoutGameFrameRateCounter frameRateCounter;
     WorkoutGameColdStartFrameCapture coldStartFrameCapture;

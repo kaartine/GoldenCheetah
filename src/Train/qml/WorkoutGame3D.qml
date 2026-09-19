@@ -389,7 +389,7 @@ Item {
 
         Repeater3D {
             model: workoutGame3D.gapJumpFeatures
-            delegate: WorkoutGameAssets.Wg_GapJumpThreeLine {
+            delegate: Node {
                 required property var modelData
                 objectName: "gapJumpAssetInstance"
                 position: Qt.vector3d(
@@ -404,12 +404,19 @@ Item {
                     1,
                     modelData.assetScaleY || 1,
                     modelData.assetScaleZ || 1)
+                WorkoutGameAssets.Wg_GapJumpThreeLine {
+                    visible: !development.ready
+                }
+                WorkoutGameDevelopmentAsset {
+                    id: development
+                    assetId: "FT-12-gap-jump-three-line"
+                }
             }
         }
 
         Repeater3D {
             model: workoutGame3D.features
-            delegate: WorkoutGameAssets.Wg_BunnyHop_Greybox {
+            delegate: Node {
                 required property var modelData
                 visible: modelData.kind === 5
                          && modelData.assetScaleY !== undefined
@@ -425,12 +432,19 @@ Item {
                     1,
                     modelData.assetScaleY || 1,
                     modelData.assetScaleZ || 1)
+                WorkoutGameAssets.Wg_BunnyHop_Greybox {
+                    visible: !development.ready
+                }
+                WorkoutGameDevelopmentAsset {
+                    id: development
+                    assetId: "FT-03-bunny-hop-greybox"
+                }
             }
         }
 
         Repeater3D {
             model: workoutGame3D.features
-            delegate: WorkoutGameAssets.Wg_LogOver_Greybox {
+            delegate: Node {
                 required property var modelData
                 visible: modelData.kind === 9
                          && modelData.assetScaleY !== undefined
@@ -446,12 +460,19 @@ Item {
                     1,
                     modelData.assetScaleY || 1,
                     modelData.assetScaleZ || 1)
+                WorkoutGameAssets.Wg_LogOver_Greybox {
+                    visible: !development.ready
+                }
+                WorkoutGameDevelopmentAsset {
+                    id: development
+                    assetId: "FT-02-log-over-greybox"
+                }
             }
         }
 
         Repeater3D {
             model: workoutGame3D.features
-            delegate: WorkoutGameAssets.Wg_Drop_Greybox {
+            delegate: Node {
                 required property var modelData
                 visible: modelData.kind === 6
                          && modelData.assetScaleY !== undefined
@@ -467,6 +488,13 @@ Item {
                     1,
                     modelData.assetScaleY || 1,
                     modelData.assetScaleZ || 1)
+                WorkoutGameAssets.Wg_Drop_Greybox {
+                    visible: !development.ready
+                }
+                WorkoutGameDevelopmentAsset {
+                    id: development
+                    assetId: "FT-04-drop-greybox"
+                }
             }
         }
 

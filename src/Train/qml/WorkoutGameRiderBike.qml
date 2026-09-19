@@ -57,6 +57,44 @@ Node {
     readonly property real frameHeave: -0.5 * (rearTravel + frontTravel)
     readonly property real framePitch: Math.atan2(
         rearTravel - frontTravel, wheelbase) * 180 / Math.PI
+    readonly property var developmentAssetService:
+        typeof workoutGameDevelopmentAssets === "undefined"
+        ? null : workoutGameDevelopmentAssets
+
+    function materialProperties(name, color, roughness, metallic) {
+        if (root.developmentAssetService === null) {
+            return {
+                "baseColor": color,
+                "roughness": roughness,
+                "metallic": metallic
+            }
+        }
+        return root.developmentAssetService.materialProperties(
+            "RB-01-rider-bike",
+            name,
+            color,
+            roughness,
+            metallic,
+            root.developmentAssetService.revision)
+    }
+    readonly property var bikeProperties: materialProperties(
+        "MAT_Frame_HighVizAmber", "#b88935", 0.34, 0.68)
+    readonly property var tireProperties: materialProperties(
+        "MAT_Tire_Black", "#252c2e", 0.92, 0.0)
+    readonly property var componentProperties: materialProperties(
+        "MAT_Component_Black", "#293235", 0.52, 0.28)
+    readonly property var jerseyProperties: materialProperties(
+        "MAT_Rider_Cobalt", "#2f68b2", 0.84, 0.0)
+    readonly property var darkProperties: materialProperties(
+        "MAT_Rider_Black", "#303a3e", 0.90, 0.0)
+    readonly property var riderDarkProperties: materialProperties(
+        "MAT_Rider_Black", "#2b3437", 0.82, 0.0)
+    readonly property var skinProperties: materialProperties(
+        "MAT_Skin", "#dc9a6a", 0.90, 0.0)
+    readonly property var helmetProperties: materialProperties(
+        "MAT_Helmet_White", "#d7dad8", 0.54, 0.0)
+    readonly property var shadowProperties: materialProperties(
+        "MAT_Shadow", "#171c1b", 1.0, 0.0)
 
     function tailwhipPoint(point, amount) {
         const radians = tailwhip * amount * Math.PI / 180
@@ -252,64 +290,71 @@ Node {
     PrincipledMaterial {
         id: bikeMaterial
         objectName: "riderBikeMaterial"
-        baseColor: "#b88935"
+        baseColor: root.bikeProperties.baseColor
         baseColorMap: riderPixelTexture
-        metalness: 0.68
-        roughness: 0.34
+        metalness: root.bikeProperties.metallic
+        roughness: root.bikeProperties.roughness
     }
     PrincipledMaterial {
         id: tireMaterial
         objectName: "riderTireMaterial"
-        baseColor: "#252c2e"
-        roughness: 0.92
+        baseColor: root.tireProperties.baseColor
+        metalness: root.tireProperties.metallic
+        roughness: root.tireProperties.roughness
     }
     PrincipledMaterial {
         id: componentMaterial
         objectName: "riderComponentMaterial"
-        baseColor: "#293235"
-        metalness: 0.28
-        roughness: 0.52
+        baseColor: root.componentProperties.baseColor
+        metalness: root.componentProperties.metallic
+        roughness: root.componentProperties.roughness
     }
     PrincipledMaterial {
         id: jerseyMaterial
         objectName: "riderJerseyMaterial"
-        baseColor: "#2f68b2"
+        baseColor: root.jerseyProperties.baseColor
         baseColorMap: riderPixelTexture
-        roughness: 0.84
+        metalness: root.jerseyProperties.metallic
+        roughness: root.jerseyProperties.roughness
     }
     PrincipledMaterial {
         id: shortsMaterial
         objectName: "riderShortsMaterial"
-        baseColor: "#303a3e"
+        baseColor: root.darkProperties.baseColor
         baseColorMap: riderPixelTexture
-        roughness: 0.90
+        metalness: root.darkProperties.metallic
+        roughness: root.darkProperties.roughness
     }
     PrincipledMaterial {
         id: skinMaterial
-        baseColor: "#dc9a6a"
-        roughness: 0.90
+        baseColor: root.skinProperties.baseColor
+        metalness: root.skinProperties.metallic
+        roughness: root.skinProperties.roughness
         cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: helmetMaterial
         objectName: "riderHelmetMaterial"
-        baseColor: "#d7dad8"
+        baseColor: root.helmetProperties.baseColor
         baseColorMap: riderPixelTexture
-        roughness: 0.54
+        metalness: root.helmetProperties.metallic
+        roughness: root.helmetProperties.roughness
         cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: riderDarkMaterial
         objectName: "riderDarkMaterial"
-        baseColor: "#2b3437"
+        baseColor: root.riderDarkProperties.baseColor
         baseColorMap: riderPixelTexture
-        roughness: 0.82
+        metalness: root.riderDarkProperties.metallic
+        roughness: root.riderDarkProperties.roughness
         cullMode: Material.NoCulling
     }
     PrincipledMaterial {
         id: shadowMaterial
-        baseColor: "#171c1b"
-        roughness: 1
+        baseColor: root.shadowProperties.baseColor
+        metalness: root.shadowProperties.metallic
+        roughness: root.shadowProperties.roughness
         alphaMode: PrincipledMaterial.Blend
     }
 

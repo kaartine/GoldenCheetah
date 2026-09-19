@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGame3DWindow.h"
+#include "WorkoutGameDevelopmentAssets.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -205,7 +206,8 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
         bool rendererEnabled,
         QWindow *parent) :
     QQuickView(parent),
-    viewModel(new WorkoutGame3DViewModel(this))
+    viewModel(new WorkoutGame3DViewModel(this)),
+    developmentAssets(new WorkoutGameDevelopmentAssets(this))
 {
     QSurfaceFormat surfaceFormat = format();
     surfaceFormat.setSwapInterval(0);
@@ -222,6 +224,9 @@ WorkoutGame3DWindow::WorkoutGame3DWindow(
     setColor(QColor(105, 154, 184));
     rootContext()->setContextProperty(
             QStringLiteral("workoutGame3D"), viewModel);
+    rootContext()->setContextProperty(
+            QStringLiteral("workoutGameDevelopmentAssets"),
+            developmentAssets);
     connect(this, &QQuickView::statusChanged,
             this, &WorkoutGame3DWindow::handleStatusChanged);
     connect(this, &QQuickWindow::afterSynchronizing, this, [this]() {

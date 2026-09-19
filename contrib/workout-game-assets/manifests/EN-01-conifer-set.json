@@ -119,6 +119,36 @@
       "maxTextureBytes": 0
     }
   },
+  "runtimeVariants": [
+    {
+      "key": "0",
+      "rootNodes": [
+        "GEO_ConiferTrunk_LOD0",
+        "GEO_ConiferNarrow_LOD0"
+      ]
+    },
+    {
+      "key": "1",
+      "rootNodes": [
+        "GEO_ConiferTrunk_LOD0",
+        "GEO_ConiferLayered_LOD0"
+      ]
+    },
+    {
+      "key": "2",
+      "rootNodes": [
+        "GEO_BirchTrunk_LOD0",
+        "GEO_BirchCrown_LOD0"
+      ]
+    },
+    {
+      "key": "3",
+      "rootNodes": [
+        "GEO_ScotsPineTrunk_LOD0",
+        "GEO_ScotsPineCrown_LOD0"
+      ]
+    }
+  ],
   "review": {
     "status": "candidate",
     "trademarkStatus": "not-applicable",

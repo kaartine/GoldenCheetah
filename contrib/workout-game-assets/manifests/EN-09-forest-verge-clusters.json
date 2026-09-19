@@ -150,6 +150,14 @@
       "maxTextureBytes": 0
     }
   },
+  "runtimeVariants": [
+    { "key": "0", "rootNodes": ["GEO_VergeGraniteBilberry_LOD0"] },
+    { "key": "1", "rootNodes": ["GEO_VergeStumpFern_LOD0"] },
+    { "key": "2", "rootNodes": ["GEO_VergeDeadwoodHeather_LOD0"] },
+    { "key": "3", "rootNodes": ["GEO_VergeRockGrass_LOD0"] },
+    { "key": "4", "rootNodes": ["GEO_VergeShrubFlowers_LOD0"] },
+    { "key": "5", "rootNodes": ["GEO_VergeSaplingMushroom_LOD0"] }
+  ],
   "review": {
     "status": "approved",
     "trademarkStatus": "not-applicable",

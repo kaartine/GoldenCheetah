@@ -182,6 +182,7 @@ exists(unittests.pri) {
 			   Train/workoutRideTargetPlanner \
 			   Train/ftmsTargetReadiness \
 			   Train/bluetoothTelemetryRouter
+	unix:SUBDIRS += Train/workoutGameDevelopmentAssets
 	linux:SUBDIRS += Build/appImagePackaging
 	!win32:SUBDIRS += Train/usbXpressSafety
 	CI_ENABLED_TESTS = $$SUBDIRS

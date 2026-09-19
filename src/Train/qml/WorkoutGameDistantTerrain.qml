@@ -6,7 +6,13 @@ Node {
 
     required property var surfaceTexture
 
+    WorkoutGameDevelopmentAsset {
+        id: development
+        assetId: "EN-03-distant-ridges"
+    }
+
     Model {
+        visible: !development.ready
         objectName: "distantRidgeModel"
         source: "assets/meshes/geo_DistantRidges_LOD0_mesh.mesh"
         materials: PrincipledMaterial {
