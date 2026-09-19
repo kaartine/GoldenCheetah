@@ -9012,6 +9012,103 @@ commit before the next finding begins.
   it on the owner thread only after validating the generation, or provide an
   equivalent transaction that proves rejected generations publish no item,
   notification, or save mutations.
+- ARCH-003F3a (prepared CPX boundary recorded before correction): The current
+  cache refresh verifies a detached recomputation but then serializes the
+  mutable live `RideFileCache` again inside the final-file writer. Split this
+  into preparation of a self-owned, bounded-memory CPX artifact and an explicit
+  commit step. Preparation must not create or replace the final CPX, invalidate
+  aggregate caches, report persistence failures, or retain `RideFileCache` /
+  `RideFile` pointers. The existing refresh path must immediately compose the
+  two steps so this is a used production boundary rather than parallel dead
+  infrastructure. Preserve pre-commit source/analysis validation, digest
+  equivalence, bounded output writes, atomic replacement, and failure-reporting
+  behavior. This is the first prerequisite for ARCH-003F3; detached item state
+  and owner-thread generation publication remain separate subsequent items.
+- ARCH-003F3a1 (prepared-state regression recorded before correction): The
+  initial split populated the prepared source fingerprint but serialized before
+  assigning its legacy CRC to the computed cache header. Independent digest
+  verification therefore rejected every normal preparation before reaching the
+  writer. Bind the header CRC before artifact serialization and retain a test
+  that proves the prepared artifact reaches the explicit commit boundary.
+- ARCH-003F3a2 (obsolete mutation expectation recorded before correction): The
+  prior verification test required a live cache mutation inside the persistence
+  callback to invalidate serialization. A correctly detached prepared artifact
+  must instead remain byte-stable across that mutation. Replace the obsolete
+  expectation with a parsed-artifact regression that proves the callback sees
+  the pre-mutation value, while source/analysis pre-commit validation still
+  runs and the final CPX path did not exist before the commit boundary.
+- ARCH-003F3a3 (cross-thread artifact ownership recorded before correction):
+  The first prepared value retained an open `QTemporaryFile`, which is a
+  QObject-based I/O device created in the computation thread. F3 ultimately
+  transfers prepared results to the owner thread, so carrying that object
+  would make cleanup and commit depend on cross-thread QObject lifetime rules.
+  Create a private temporary directory during preparation, close its bounded
+  artifact before returning, and let the move-only prepared value own only the
+  directory/file paths plus deterministic RAII removal. Commit must open a
+  short-lived local reader and revalidate the copied digest.
+- ARCH-003F3a4 (review blocker recorded before correction): Closing the first
+  artifact and reopening its pathname did not provide strong ownership. A
+  replacement, append, FIFO, or device could be consumed until EOF before the
+  digest rejection, and cleanup could remove a replacement rather than the
+  original artifact. Retain a duplicated, thread-neutral file descriptor for
+  the prepared generation, cap commit reads at the exact verified byte count,
+  require immediate EOF after that count, and never reopen the pathname for
+  publication. Unlink the pathname as soon as the platform permits and clean
+  up any retained private artifact only after closing the pinned descriptor.
+  Cover corruption, append/replacement isolation, exact read bounds, and
+  success/failure cleanup before accepting F3a.
+- ARCH-003F3a5 (descriptor-inheritance blocker recorded before correction):
+  Plain POSIX `dup` clears `FD_CLOEXEC`, and Windows `_dup` can create an
+  inheritable descriptor. A spawned child could therefore retain the pinned,
+  unlinked CPX generation after its RAII owner is destroyed. Duplicate
+  fail-closed with close-on-exec semantics on POSIX and clear native handle
+  inheritance on Windows, closing the duplicate on every setup failure. Test
+  the live descriptor flags before commit.
+- ARCH-003F3a6 (Windows test-safety blocker recorded before correction): The
+  initial cleanup regression called `_get_osfhandle` on an already closed CRT
+  descriptor; Microsoft's invalid-parameter handler may terminate the process
+  instead of returning `-1`. Capture the valid native handle before commit and
+  use non-crashing `GetHandleInformation` after cleanup, requiring an invalid-
+  handle result. Retain the `fcntl(F_GETFD)`/`EBADF` check on POSIX.
+- ARCH-003F3a/F3a1-F3a6 resolution: The production refresh path now immediately
+  composes preparation and commit around a move-only prepared CPX value. The
+  prepared value retains no `RideFileCache` or `RideFile` pointer and owns a
+  non-inheritable pinned descriptor plus its verified byte count and digest.
+  Preparation assigns the legacy header CRC before bounded serialization,
+  independently recomputes the expected bytes, and creates no final CPX,
+  aggregate invalidation, or persistence notification. POSIX unlinks the
+  private artifact immediately; Windows retains its private path only until
+  the descriptor-owning value is destroyed. Commit never reopens that path:
+  it rewinds the pinned descriptor, copies at most 64 KiB per write, requires
+  exactly the verified byte count followed by immediate EOF, verifies the
+  digest, revalidates source and analysis state, and delegates only those
+  authenticated bytes to the existing atomic final-file writer. Error
+  reporting and aggregate invalidation retain their legacy success/failure
+  placement. Every descriptor-setup failure closes its duplicate, and RAII
+  cleanup closes the accepted descriptor before removing any retained private
+  artifact.
+- ARCH-003F3a verification: The 49-case refresh suite passes 48 cases normally
+  and under ASan/UBSan; its sole failure is the pre-existing documented
+  `savedRideRebindsAndPersistsAtomically` baseline. Both new regressions pass
+  in each configuration and cover byte stability across live-cache mutation,
+  no premature final CPX, corruption and appended-byte rejection, exact read
+  bounds, 64-KiB maximum writes, descriptor non-inheritance, and deterministic
+  success/failure cleanup. The affected production translation unit compiles
+  with warnings as errors against Qt 6.8.3, the source-module dependency suite
+  passes 14/14, and `git diff --check` is clean. Independent final review: GO
+  with no remaining blocker or major correctness finding after the path-
+  replacement, unbounded-read, descriptor-inheritance, and Windows test-safety
+  blockers were corrected.
+- ARCH-003F3a residual/prerequisites: This step detaches only the authenticated
+  CPX artifact. Preparation still computes from the current `RideFileCache`,
+  and the synchronous legacy wrapper's commit validation still refers to the
+  current ride/context. ARCH-003F3b must introduce and immediately consume a
+  detached interval/item-state result; ARCH-003F3c must then move publication
+  behind owner-thread generation acceptance. The Windows branch is source-
+  reviewed but could not be MinGW-compiled or exercised natively because this
+  environment has no Windows cross-compiler; both checks remain release
+  prerequisites. A TSan-instrumented Qt run remains a prerequisite for the
+  complete ARCH-003F concurrency claim.
 - ARCH-003F4 (required deterministic verification recorded before correction):
   Add latch-controlled tests for config transition and teardown joining,
   generation N rejection while N+1 is requested, exception/early-exit lease

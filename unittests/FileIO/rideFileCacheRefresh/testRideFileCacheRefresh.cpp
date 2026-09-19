@@ -37,6 +37,14 @@
 #include <utility>
 #include <vector>
 
+#ifdef Q_OS_WIN
+#include <io.h>
+#include <qt_windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#endif
+
 namespace {
 
 constexpr int FixedZoneFloatCount =
@@ -525,7 +533,8 @@ private slots:
     void directPointMutationSkipsPersistence();
     void sourceChangeBeforeCommitSkipsPersistence();
     void verifiedRefreshStreamsPayloadInBoundedWrites();
-    void verifiedRefreshRejectsMutationBeforePublication();
+    void preparedArtifactIgnoresLiveCacheMutation();
+    void preparedArtifactPinsBoundsAndCleansUp();
     void concurrentPersistenceFailuresKeepComputedResults();
 };
 
@@ -2460,7 +2469,7 @@ TestRideFileCacheRefresh::verifiedRefreshStreamsPayloadInBoundedWrites()
 
 void
 TestRideFileCacheRefresh::
-verifiedRefreshRejectsMutationBeforePublication()
+preparedArtifactIgnoresLiveCacheMutation()
 {
     registerProvenanceTestReader();
     QTemporaryDir directory;
@@ -2478,24 +2487,257 @@ verifiedRefreshRejectsMutationBeforePublication()
     RideFileCache cache(
         ride.get(),
         RideFileCache::SkipInitialComputeForTest {});
+    const QString cachePath =
+        directory.filePath(QStringLiteral("cache/source.cpx"));
     int writeCalls = 0;
-    QVERIFY(!cache.refreshCacheWithValidatorForTest(
+    int validationCalls = 0;
+    float preparedZoneValue = 0.0f;
+    float mutatedZoneValue = 0.0f;
+    qintptr artifactDescriptor = -1;
+#ifdef Q_OS_WIN
+    quintptr nativeArtifactHandle = 0;
+#endif
+    bool artifactIsNonInheritable = false;
+    QString artifactPath;
+    QString artifactDirectoryPath;
+    QVERIFY(cache.refreshCacheWithValidatorForTest(
         sourcePath,
-        directory.filePath(QStringLiteral("cache/source.cpx")),
+        cachePath,
         [&](const QString &,
             const RideFileCacheIntegrity::CacheWriteOperation &write,
-            const RideFileCacheIntegrity::CachePreCommitValidator &,
+            const RideFileCacheIntegrity::CachePreCommitValidator &validate,
             QString *error) {
             ++writeCalls;
+            if (QFileInfo::exists(cachePath))
+                return false;
+            const float beforeMutation =
+                cache.wattsZoneArray().at(0);
             cache.wattsZoneArray()[0] += 1.0f;
+            mutatedZoneValue = cache.wattsZoneArray().at(0);
             QByteArray bytes;
             QBuffer output(&bytes);
-            return output.open(QIODevice::WriteOnly)
-                && write(output, error);
+            if (!output.open(QIODevice::WriteOnly)
+                || !write(output, error)) {
+                return false;
+            }
+            QBuffer input(&bytes);
+            if (!input.open(QIODevice::ReadOnly))
+                return false;
+            RideFileCacheIntegrity::CacheData data;
+            if (!RideFileCacheIntegrity::readCache(
+                    input, data, error)) {
+                return false;
+            }
+            preparedZoneValue = data.zones.at(
+                RideFileCacheIntegrity::WattsTimeInZone).at(0);
+            if (preparedZoneValue != beforeMutation)
+                return false;
+            ++validationCalls;
+            return validate(error);
         },
-        {}));
+        {},
+        [&](qintptr descriptor,
+            const QString &path,
+            const QString &directoryPath,
+            qint64) {
+            artifactDescriptor = descriptor;
+#ifdef Q_OS_WIN
+            const intptr_t native = ::_get_osfhandle(
+                static_cast<int>(descriptor));
+            if (native != -1) {
+                nativeArtifactHandle = static_cast<quintptr>(native);
+                DWORD flags = 0;
+                artifactIsNonInheritable =
+                    GetHandleInformation(
+                        reinterpret_cast<HANDLE>(
+                            nativeArtifactHandle),
+                        &flags)
+                    && !(flags & HANDLE_FLAG_INHERIT);
+            }
+#else
+            const int flags = ::fcntl(
+                static_cast<int>(descriptor), F_GETFD);
+            artifactIsNonInheritable =
+                flags >= 0 && (flags & FD_CLOEXEC);
+#endif
+            artifactPath = path;
+            artifactDirectoryPath = directoryPath;
+        }));
     QCOMPARE(writeCalls, 1);
+    QCOMPARE(validationCalls, 1);
+    QCOMPARE(mutatedZoneValue, preparedZoneValue + 1.0f);
+    QVERIFY(artifactIsNonInheritable);
+    QVERIFY(!QFileInfo::exists(cachePath));
+    if (!artifactPath.isEmpty())
+        QVERIFY(!QFileInfo::exists(artifactPath));
+    if (!artifactDirectoryPath.isEmpty())
+        QVERIFY(!QFileInfo::exists(artifactDirectoryPath));
+#ifdef Q_OS_WIN
+    DWORD closedHandleFlags = 0;
+    SetLastError(ERROR_SUCCESS);
+    QVERIFY(!GetHandleInformation(
+        reinterpret_cast<HANDLE>(nativeArtifactHandle),
+        &closedHandleFlags));
+    QCOMPARE(GetLastError(), DWORD(ERROR_INVALID_HANDLE));
+#else
+    errno = 0;
+    QCOMPARE(::fcntl(
+                 static_cast<int>(artifactDescriptor),
+                 F_GETFD),
+             -1);
+    QCOMPARE(errno, EBADF);
+    QVERIFY(artifactPath.isEmpty());
+#endif
     QVERIFY(!cache.incomplete);
+}
+
+void
+TestRideFileCacheRefresh::
+preparedArtifactPinsBoundsAndCleansUp()
+{
+    enum Mutation { Corrupt, Append };
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("source.provenance"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("large:4096"));
+
+    for (const Mutation mutation : {Corrupt, Append}) {
+        QFile source(sourcePath);
+        QStringList errors;
+        std::unique_ptr<RideFile> ride(
+            RideFileFactory::instance().openRideFile(
+                nullptr, source, errors));
+        QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+        RideFileCache cache(
+            ride.get(),
+            RideFileCache::SkipInitialComputeForTest {});
+
+        int writeCalls = 0;
+        int reportCalls = 0;
+        bool mutationSucceeded = false;
+        qintptr artifactDescriptor = -1;
+#ifdef Q_OS_WIN
+        quintptr nativeArtifactHandle = 0;
+#endif
+        bool artifactIsNonInheritable = false;
+        QString artifactPath;
+        QString artifactDirectoryPath;
+        qint64 expectedBytes = 0;
+        qint64 copiedBytes = 0;
+        qint64 largestWrite = 0;
+        const QString cachePath = directory.filePath(
+            mutation == Corrupt
+                ? QStringLiteral("cache/corrupt.cpx")
+                : QStringLiteral("cache/append.cpx"));
+
+        QVERIFY(!cache.refreshCacheWithValidatorForTest(
+            sourcePath,
+            cachePath,
+            [&](const QString &,
+                const RideFileCacheIntegrity::CacheWriteOperation &write,
+                const RideFileCacheIntegrity::CachePreCommitValidator &,
+                QString *error) {
+                ++writeCalls;
+                CountingWriteDevice output;
+                const bool result = write(output, error);
+                copiedBytes = output.totalBytes();
+                largestWrite = output.largestWrite();
+                return result;
+            },
+            [&](const QString &, const QString &) {
+                ++reportCalls;
+            },
+            [&](qintptr descriptor,
+                const QString &path,
+                const QString &directoryPath,
+                qint64 byteCount) {
+                artifactDescriptor = descriptor;
+#ifdef Q_OS_WIN
+                const intptr_t native = ::_get_osfhandle(
+                    static_cast<int>(descriptor));
+                if (native != -1) {
+                    nativeArtifactHandle =
+                        static_cast<quintptr>(native);
+                    DWORD flags = 0;
+                    artifactIsNonInheritable =
+                        GetHandleInformation(
+                            reinterpret_cast<HANDLE>(
+                                nativeArtifactHandle),
+                            &flags)
+                        && !(flags & HANDLE_FLAG_INHERIT);
+                }
+#else
+                const int flags = ::fcntl(
+                    static_cast<int>(descriptor), F_GETFD);
+                artifactIsNonInheritable =
+                    flags >= 0 && (flags & FD_CLOEXEC);
+#endif
+                artifactPath = path;
+                artifactDirectoryPath = directoryPath;
+                expectedBytes = byteCount;
+                QFile pinned;
+                if (!pinned.open(
+                        descriptor,
+                        QIODevice::ReadWrite,
+                        QFileDevice::DontCloseHandle)) {
+                    return;
+                }
+                if (mutation == Corrupt) {
+                    if (!pinned.seek(byteCount / 2))
+                        return;
+                    QByteArray byte = pinned.read(1);
+                    if (byte.size() != 1)
+                        return;
+                    byte[0] = static_cast<char>(byte[0] ^ 0x5a);
+                    if (!pinned.seek(byteCount / 2)
+                        || pinned.write(byte) != 1) {
+                        return;
+                    }
+                } else {
+                    const QByteArray appended(
+                        2 * RideFileCacheIntegrity::CacheWriteChunkBytes,
+                        'x');
+                    if (!pinned.seek(byteCount)
+                        || pinned.write(appended)
+                            != appended.size()) {
+                        return;
+                    }
+                }
+                mutationSucceeded = pinned.flush();
+            }));
+
+        QVERIFY(mutationSucceeded);
+        QVERIFY(artifactIsNonInheritable);
+        QCOMPARE(writeCalls, 1);
+        QCOMPARE(reportCalls, 1);
+        QVERIFY(expectedBytes > 0);
+        QCOMPARE(copiedBytes, expectedBytes);
+        QVERIFY(largestWrite
+                <= RideFileCacheIntegrity::CacheWriteChunkBytes);
+        QVERIFY(!QFileInfo::exists(cachePath));
+        if (!artifactPath.isEmpty())
+            QVERIFY(!QFileInfo::exists(artifactPath));
+        if (!artifactDirectoryPath.isEmpty())
+            QVERIFY(!QFileInfo::exists(artifactDirectoryPath));
+#ifdef Q_OS_WIN
+        DWORD closedHandleFlags = 0;
+        SetLastError(ERROR_SUCCESS);
+        QVERIFY(!GetHandleInformation(
+            reinterpret_cast<HANDLE>(nativeArtifactHandle),
+            &closedHandleFlags));
+        QCOMPARE(GetLastError(), DWORD(ERROR_INVALID_HANDLE));
+#else
+        errno = 0;
+        QCOMPARE(::fcntl(
+                     static_cast<int>(artifactDescriptor),
+                     F_GETFD),
+                 -1);
+        QCOMPARE(errno, EBADF);
+        QVERIFY(artifactPath.isEmpty());
+#endif
+    }
 }
 
 void

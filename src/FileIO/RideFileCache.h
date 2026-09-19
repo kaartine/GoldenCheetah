@@ -25,6 +25,7 @@
 #include <QPair>
 #include <QVector>
 
+#include <memory>
 #include <thread>
 
 class Context;
@@ -288,7 +289,12 @@ class RideFileCache
                 QString *)> &writeCache,
             const std::function<void(
                 const QString &,
-                const QString &)> &reportError);
+                const QString &)> &reportError,
+            const std::function<void(
+                qintptr,
+                const QString &,
+                const QString &,
+                qint64)> &beforePreparedCommit = {});
 #endif
 
         // Rank is the one-based descending insertion position before ties.
@@ -352,6 +358,11 @@ class RideFileCache
             std::function<void(
                 const QString &,
                 const QString &)> reportError;
+            std::function<void(
+                qintptr,
+                const QString &,
+                const QString &,
+                qint64)> beforePreparedCommit;
         };
 
         bool refreshCache(
@@ -375,6 +386,15 @@ class RideFileCache
 
 
     private:
+
+        struct PreparedCacheCommit;
+        std::unique_ptr<PreparedCacheCommit>
+            prepareCacheCommit();
+        bool commitPreparedCache(
+            PreparedCacheCommit &prepared,
+            const PersistenceOperations *operations,
+            bool &sourceValidationRejected,
+            QString *error);
 
         Context *context;
         AthletePersistenceService *persistenceService_;
