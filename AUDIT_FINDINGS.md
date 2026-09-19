@@ -8885,6 +8885,22 @@ commit before the next finding begins.
   not that start validation precedes publication, the constructor retains the
   shared pointer, or the run guard precedes its first item-work operation. Pin
   those order and ownership relationships before accepting F2c1.
+- ARCH-003F2c2a (stale fingerprint value recorded before correction): Express
+  the RideItem legacy zone/route/HRV/discovery fingerprint solely through one
+  immutable environment. Preserve the additive unsigned-long compatibility
+  value and setting defaults, but return no value when a required captured
+  domain is missing so the later worker cutover cannot fall back to live state.
+- ARCH-003F2c2a1 (missing-domain isolation gap recorded before correction): The
+  first fail-closed fixture uses an already invalid empty zone snapshot while
+  attempting to test missing measures and routes, so those branches are not
+  proven. Supply otherwise complete domains and remove exactly one dependency
+  per assertion before accepting F2c2a.
+- ARCH-003F2c2a2 (stale-fingerprint fallback matrix gap recorded before
+  correction): The first parity matrix omits a present Measures snapshot with
+  no Hrv group, non-Bike fallback and exact-null suppression, asymmetric
+  run/swim pace selection, zero/negative raw CP-setting truthiness, and signed
+  discovery addition. Pin these legacy and fail-closed branches before the
+  value is admitted to worker code.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9192,6 +9208,30 @@ commit before the next finding begins.
   environment into each item/cache/metric consumer and reject missing domains
   without live Context, Athlete, GlobalContext, appsettings, or registry
   fallback. F3 still owns detached result publication after generation
+  acceptance.
+- ARCH-003F2c2a/F2c2a1/F2c2a2 resolution: `RideRefreshEnvironment` now computes
+  the legacy RideItem zone/route/HRV/discovery fingerprint entirely from the
+  retained immutable generation. The additive unsigned-long value preserves
+  Bike fallback, exact-null fallback suppression, asymmetric run/swim pace
+  selection, raw CP-setting truthiness, the discovery default, and signed
+  discovery wrap. Missing snapshot pointers or required captured domains fail
+  closed instead of reaching live Athlete, Context, settings, zones, measures,
+  or routes.
+- ARCH-003F2c2a verification: the focused environment suite passes 14/14
+  normally and under ASan/UBSan. The matrix independently covers every missing
+  pointer and domain, a non-null Measures snapshot without Hrv, absent-sport
+  fallback, exact-null suppression, run/swim selection, CP settings 0 and -1,
+  signed discovery addition, the default discovery value, and dates before the
+  first zone range. `RideRefreshEnvironment.cpp` compiles with warnings as
+  errors, source dependencies pass 14/14, and `git diff --check` passes.
+  Independent review first returned NO-GO for the incomplete fallback matrix;
+  F2c2a2 records that finding. Final re-review: GO with no blocker, major, or
+  minor finding.
+- ARCH-003F2c2a residual: this commit supplies the immutable compatibility
+  value but does not yet change the worker call site. The next F2c item must
+  pass the retained generation into `RideItem::checkStale`, reject a missing
+  value, and remove its live schema, color, cache, zone, measure, route, and
+  settings reads. F3 still owns detached publication after generation
   acceptance.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a

@@ -11,6 +11,7 @@
 #define GC_RIDEREFRESHENVIRONMENT_H
 
 #include <QColor>
+#include <QDate>
 #include <QHash>
 #include <QMap>
 #include <QStringList>
@@ -19,6 +20,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 
 class Context;
 class RideMetricRegistrySnapshot;
@@ -82,6 +84,8 @@ public:
         const TextLookup &text,
         const MetricLookup &metric,
         const MetricRelevance &relevant) const;
+    std::optional<unsigned long> rideItemFingerprint(
+        const QDate &date, const QString &sport, bool isSwim) const;
 
     const RideMetricRegistrySnapshot *metricRegistry() const
     {

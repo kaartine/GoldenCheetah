@@ -59,6 +59,8 @@ private slots:
     void fixedSettingInventoryCoversWorkerReads();
     void colorRulesPreserveEngineOrderingAndFallback();
     void calendarFormattingPreservesFieldAndUnitSemantics();
+    void rideItemFingerprintUsesOnlyImmutableGenerationValues();
+    void rideItemFingerprintFailsClosedOnMissingDomains();
     void measuresSnapshotIsRetainedByTheGeneration();
     void routesSnapshotIsRetainedByTheGeneration();
     void zonesSnapshotIsRetainedByTheGeneration();
@@ -222,6 +224,192 @@ void TestRideRefreshEnvironment::zonesSnapshotIsRetainedByTheGeneration()
 
     QVERIFY(snapshot->zones());
     QVERIFY(!snapshot->zones()->power(QStringLiteral("Bike")));
+}
+
+void TestRideRefreshEnvironment::
+rideItemFingerprintUsesOnlyImmutableGenerationValues()
+{
+    const QDate date(2024, 2, 1);
+    RideRefreshZones::PowerRange powerRange;
+    powerRange.begin = QDate(2024, 1, 1);
+    powerRange.cp = 301;
+    RideRefreshZones::PowerHistory power;
+    power.present = true;
+    power.sport = QStringLiteral("Bike");
+    power.rawCpForFtpSetting = 1;
+    power.ranges = {powerRange};
+    RideRefreshZones::HeartRateRange heartRateRange;
+    heartRateRange.begin = QDate(2024, 1, 1);
+    heartRateRange.lt = 171;
+    RideRefreshZones::HeartRateHistory heartRate;
+    heartRate.present = true;
+    heartRate.sport = QStringLiteral("Bike");
+    heartRate.ranges = {heartRateRange};
+    RideRefreshZones::PaceRange paceRange;
+    paceRange.begin = QDate(2024, 1, 1);
+    paceRange.cv = 12.5;
+    RideRefreshZones::PaceHistory pace;
+    pace.present = true;
+    pace.ranges = {paceRange};
+    const auto zones = RideRefreshZones::create(
+        {{QStringLiteral("Bike"), power}},
+        {{QStringLiteral("Bike"), heartRate}}, pace, {});
+
+    RideRefreshMeasures::Group hrv;
+    hrv.symbol = QStringLiteral("Hrv");
+    RideRefreshMeasures::Observation observation;
+    observation.when = QDateTime(date, QTime(12, 0));
+    observation.legacyFingerprint = 0x1234;
+    hrv.observations = {observation};
+    const auto measures = RideRefreshMeasures::create({hrv}, 0x4321);
+    const auto routes = RideRefreshRoutes::create({}, 0x2222);
+    RideRefreshEnvironment::Settings settings;
+    settings.athlete.insert(
+        QStringLiteral("<athlete-preferences>intervals/discovery"), 61);
+    const auto snapshot = RideRefreshEnvironment::create(
+        8, settings, true, {}, {}, {}, {}, {}, zones, measures, routes);
+
+    unsigned long expected = power.fingerprint(date);
+    expected += 1;
+    expected += pace.fingerprint(date);
+    expected += heartRate.fingerprint(date);
+    expected += routes->fingerprint();
+    expected += observation.fingerprint();
+    expected += 61;
+    QCOMPARE(snapshot->rideItemFingerprint(
+                 date, QStringLiteral("Bike"), false).value(),
+             expected);
+    QCOMPARE(snapshot->rideItemFingerprint(
+                 date, QStringLiteral("Run"), false).value(),
+             expected); // absent Run domains use the legacy Bike fallback
+    QVERIFY(!snapshot->rideItemFingerprint(
+        date, QStringLiteral("Bike"), true));
+
+    RideRefreshZones::PaceHistory swimPace;
+    swimPace.present = true;
+    RideRefreshZones::PaceRange swimRange;
+    swimRange.begin = QDate(2024, 1, 1);
+    swimRange.cv = 3.75;
+    swimPace.ranges = {swimRange};
+    const auto zonesWithSwim = RideRefreshZones::create(
+        {{QStringLiteral("Bike"), power}},
+        {{QStringLiteral("Bike"), heartRate}}, pace, swimPace);
+    const auto swimSnapshot = RideRefreshEnvironment::create(
+        8, settings, true, {}, {}, {}, {}, {},
+        zonesWithSwim, measures, routes);
+    QCOMPARE(swimSnapshot->rideItemFingerprint(
+                 date, QStringLiteral("Swim"), true).value(),
+             expected - pace.fingerprint(date)
+                 + swimPace.fingerprint(date));
+
+    auto zeroPower = power;
+    zeroPower.rawCpForFtpSetting = 0;
+    const auto zeroSettingZones = RideRefreshZones::create(
+        {{QStringLiteral("Bike"), zeroPower}},
+        {{QStringLiteral("Bike"), heartRate}}, pace, {});
+    QCOMPARE(RideRefreshEnvironment::create(
+                 8, settings, true, {}, {}, {}, {}, {},
+                 zeroSettingZones, measures, routes)
+                 ->rideItemFingerprint(
+                     date, QStringLiteral("Bike"), false).value(),
+             expected - 1UL);
+    auto negativePower = power;
+    negativePower.rawCpForFtpSetting = -1;
+    const auto negativeSettingZones = RideRefreshZones::create(
+        {{QStringLiteral("Bike"), negativePower}},
+        {{QStringLiteral("Bike"), heartRate}}, pace, {});
+    QCOMPARE(RideRefreshEnvironment::create(
+                 8, settings, true, {}, {}, {}, {}, {},
+                 negativeSettingZones, measures, routes)
+                 ->rideItemFingerprint(
+                     date, QStringLiteral("Bike"), false).value(),
+             expected);
+
+    auto exactNullPower = QHash<QString, RideRefreshZones::PowerHistory>{
+        {QStringLiteral("Bike"), power},
+        {QStringLiteral("Run"), {}}};
+    const auto exactNullZones = RideRefreshZones::create(
+        exactNullPower, {{QStringLiteral("Bike"), heartRate}}, pace, {});
+    QVERIFY(!RideRefreshEnvironment::create(
+        8, settings, true, {}, {}, {}, {}, {},
+        exactNullZones, measures, routes)
+                 ->rideItemFingerprint(
+                     date, QStringLiteral("Run"), false));
+
+    settings.athlete.insert(
+        QStringLiteral("<athlete-preferences>intervals/discovery"), -3);
+    unsigned long signedExpected = expected - 61UL;
+    signedExpected += -3;
+    QCOMPARE(RideRefreshEnvironment::create(
+                 8, settings, true, {}, {}, {}, {}, {},
+                 zones, measures, routes)
+                 ->rideItemFingerprint(
+                     date, QStringLiteral("Bike"), false).value(),
+             signedExpected);
+
+    settings.athlete.clear();
+    const auto defaulted = RideRefreshEnvironment::create(
+        9, settings, true, {}, {}, {}, {}, {}, zones, measures, routes);
+    QCOMPARE(defaulted->rideItemFingerprint(
+                 date, QStringLiteral("Bike"), false).value(),
+             expected - 61 + 57);
+    QCOMPARE(defaulted->rideItemFingerprint(
+                 QDate(2023, 1, 1), QStringLiteral("Bike"), false).value(),
+             static_cast<unsigned long>(power.fingerprint(QDate(2023, 1, 1)))
+                 + 1UL
+                 + pace.fingerprint(QDate(2023, 1, 1))
+                 + heartRate.fingerprint(QDate(2023, 1, 1))
+                 + routes->fingerprint() + 0x4321UL + 57UL);
+}
+
+void TestRideRefreshEnvironment::
+rideItemFingerprintFailsClosedOnMissingDomains()
+{
+    const QDate date(2024, 2, 1);
+    RideRefreshZones::PowerHistory power;
+    power.present = true;
+    power.sport = QStringLiteral("Bike");
+    RideRefreshZones::HeartRateHistory heartRate;
+    heartRate.present = true;
+    heartRate.sport = QStringLiteral("Bike");
+    RideRefreshZones::PaceHistory pace;
+    pace.present = true;
+    const auto zones = RideRefreshZones::create(
+        {{QStringLiteral("Bike"), power}},
+        {{QStringLiteral("Bike"), heartRate}}, pace, {});
+    const auto missingPower = RideRefreshZones::create(
+        {}, {{QStringLiteral("Bike"), heartRate}}, pace, {});
+    const auto missingHeartRate = RideRefreshZones::create(
+        {{QStringLiteral("Bike"), power}}, {}, pace, {});
+    const auto missingPace = RideRefreshZones::create(
+        {{QStringLiteral("Bike"), power}},
+        {{QStringLiteral("Bike"), heartRate}}, {}, {});
+    RideRefreshMeasures::Group hrv;
+    hrv.symbol = QStringLiteral("Hrv");
+    const auto measures = RideRefreshMeasures::create({hrv}, 0);
+    const auto missingHrv = RideRefreshMeasures::create({}, 0x9999);
+    const auto routes = RideRefreshRoutes::create({}, 0);
+    QVERIFY(!RideRefreshEnvironment::create(
+        1, {}, true, {}, {}, {}, {}, {}, {}, measures, routes)
+                 ->rideItemFingerprint(date, QStringLiteral("Bike"), false));
+    QVERIFY(!RideRefreshEnvironment::create(
+        1, {}, true, {}, {}, {}, {}, {}, zones, {}, routes)
+                 ->rideItemFingerprint(date, QStringLiteral("Bike"), false));
+    QVERIFY(!RideRefreshEnvironment::create(
+        1, {}, true, {}, {}, {}, {}, {}, zones, missingHrv, routes)
+                 ->rideItemFingerprint(date, QStringLiteral("Bike"), false));
+    QVERIFY(!RideRefreshEnvironment::create(
+        1, {}, true, {}, {}, {}, {}, {}, zones, measures, {})
+                 ->rideItemFingerprint(date, QStringLiteral("Bike"), false));
+    QVERIFY(!RideRefreshEnvironment::create(
+        1, {}, true, {}, {}, {}, {}, {}, missingPower, measures, routes)
+                 ->rideItemFingerprint(date, QStringLiteral("Bike"), false));
+    QVERIFY(!RideRefreshEnvironment::create(
+        1, {}, true, {}, {}, {}, {}, {}, missingHeartRate, measures, routes)
+                 ->rideItemFingerprint(date, QStringLiteral("Bike"), false));
+    QVERIFY(!RideRefreshEnvironment::create(
+        1, {}, true, {}, {}, {}, {}, {}, missingPace, measures, routes)
+                 ->rideItemFingerprint(date, QStringLiteral("Bike"), false));
 }
 
 void TestRideRefreshEnvironment::sessionPublishesWholeGenerationsAtomically()

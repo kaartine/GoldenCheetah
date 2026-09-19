@@ -9,6 +9,10 @@
 
 #include "RideRefreshEnvironment.h"
 
+#include "RideRefreshMeasures.h"
+#include "RideRefreshRoutes.h"
+#include "RideRefreshZones.h"
+
 #include <QDate>
 #include <QTime>
 
@@ -176,4 +180,28 @@ QString RideRefreshEnvironment::calendarText(
         result += formatCalendarField(field, value);
     }
     return result;
+}
+
+std::optional<unsigned long> RideRefreshEnvironment::rideItemFingerprint(
+    const QDate &date, const QString &sport, bool isSwim) const
+{
+    if (!zones_ || !measures_ || !routes_) return std::nullopt;
+    const auto *power = zones_->power(sport);
+    const auto *heartRate = zones_->heartRate(sport);
+    const auto *pace = zones_->pace(isSwim);
+    const auto hrv = measures_->fingerprint(
+        QStringLiteral("Hrv"), date);
+    if (!power || !heartRate || !pace || !hrv) return std::nullopt;
+
+    unsigned long fingerprint =
+        static_cast<unsigned long>(power->fingerprint(date));
+    fingerprint += power->rawCpForFtpSetting ? 1UL : 0UL;
+    fingerprint += static_cast<unsigned long>(pace->fingerprint(date));
+    fingerprint += static_cast<unsigned long>(heartRate->fingerprint(date));
+    fingerprint += static_cast<unsigned long>(routes_->fingerprint());
+    fingerprint += static_cast<unsigned long>(*hrv);
+    fingerprint += athleteSetting(
+        QStringLiteral("<athlete-preferences>intervals/discovery"), 57)
+                       .toInt();
+    return fingerprint;
 }
