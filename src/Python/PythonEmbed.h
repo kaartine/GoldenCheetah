@@ -27,6 +27,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <string>
 
 #include "PythonExecutionGate.h"
 #include "RideItem.h"
@@ -132,6 +133,7 @@ class PythonEmbed {
     bool loaded;
 
 private:
+    std::wstring programNameStorage_;
     PythonExecutionGate executionGate;
     unsigned long activeThreadId = 0;
     quint64 activeRunToken;

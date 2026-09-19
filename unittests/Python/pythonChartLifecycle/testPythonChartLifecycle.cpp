@@ -14,6 +14,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QList>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -76,6 +77,7 @@ private slots:
     void executionGateCancelsWaitingCaller();
     void executionGateSerializesWaitingCallers();
     void executionGateRejectsInterpreterLockHolderAndAllocatesTokens();
+    void programNameStorageOutlivesPythonInitialization();
 };
 
 void
@@ -946,6 +948,30 @@ executionGateRejectsInterpreterLockHolderAndAllocatesTokens()
     QVERIFY(!gate.isPublishedToken(0));
     gate.publishToken(0);
     QVERIFY(!gate.isPublishedToken(firstToken));
+}
+
+void
+TestPythonChartLifecycle::programNameStorageOutlivesPythonInitialization()
+{
+    QFile header(QStringLiteral(
+        GC_TEST_SOURCE_ROOT "/src/Python/PythonEmbed.h"));
+    QVERIFY2(header.open(QIODevice::ReadOnly), qPrintable(header.errorString()));
+    const QByteArray headerSource = header.readAll();
+
+    QFile implementation(QStringLiteral(
+        GC_TEST_SOURCE_ROOT "/src/Python/PythonEmbed.cpp"));
+    QVERIFY2(
+        implementation.open(QIODevice::ReadOnly),
+        qPrintable(implementation.errorString()));
+    const QByteArray implementationSource = implementation.readAll();
+
+    QVERIFY(headerSource.contains("std::wstring programNameStorage_;"));
+    QVERIFY(implementationSource.contains(
+        "programNameStorage_ = pybin.toStdWString();"));
+    QVERIFY(implementationSource.contains(
+        "Py_SetProgramName(programNameStorage_.data());"));
+    QVERIFY(!implementationSource.contains(
+        "pybin.toStdWString().c_str()"));
 }
 
 QTEST_GUILESS_MAIN(TestPythonChartLifecycle)

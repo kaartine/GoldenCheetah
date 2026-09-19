@@ -7943,11 +7943,24 @@ commit before the next finding begins.
   another raw process global whose failed and successful instances are never
   deleted, while its empty destructor cannot balance the saved interpreter
   thread state. Define explicit shutdown ownership before finalization changes.
-- ARCH-003E (queued concrete defect recorded before correction):
+- ARCH-003E (FIXED; concrete defect recorded before correction):
   `Py_SetProgramName` receives storage from a temporary `std::wstring`, although
   CPython requires that storage to remain valid for the interpreter lifetime.
   Give the program-name buffer explicit `PythonEmbed` lifetime and cover the
   initialization contract before correcting it.
+- ARCH-003E resolution: `PythonEmbed` now owns the converted program name in a
+  `std::wstring` member and passes that member's writable C++17 buffer to
+  `Py_SetProgramName`; the storage therefore remains valid for the full embed
+  object lifetime instead of ending at the initialization statement.
+- ARCH-003E verification: The production-wiring test first failed on the absent
+  owned member, then the complete Python chart lifecycle suite passed 14/14 on
+  Qt 6.4.2 after the correction. The rebuilt suite compiles the changed header,
+  asserts the owned-storage assignment and call site, and rejects the former
+  temporary `toStdWString().c_str()` expression. Production `PythonEmbed.cpp`
+  also compiles as C++17 against Python 3.12 headers; only the already-known
+  upstream deprecation warnings for `Py_SetProgramName` and
+  `PyEval_InitThreads` remain. Interpreter ownership/finalization is still the
+  separate ARCH-003D work item.
 - ARCH-003F (queued high-risk seam recorded before correction): RideCache
   refresh workers directly dereference replaceable `GlobalContext`
   `RideMetadata`/`ColorEngine` QObject state and read multi-key `appsettings`

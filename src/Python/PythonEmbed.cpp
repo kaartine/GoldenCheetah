@@ -316,7 +316,8 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
 
         // tell python our program name - pretend to be the usual interpreter
         printd("Py_SetProgramName: %s\n", pybin.toStdString().c_str()); // not wide char string as printd uses printf not wprintf
-        Py_SetProgramName((wchar_t*) pybin.toStdWString().c_str());
+        programNameStorage_ = pybin.toStdWString();
+        Py_SetProgramName(programNameStorage_.data());
 
         // our own module
         printd("PyImport_AppendInittab: goldencheetah\n");

@@ -7,6 +7,9 @@ CONFIG -= debug
 
 include(../../unittests.pri)
 
+GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
+DEFINES += GC_TEST_SOURCE_ROOT=\\\"$${GC_TEST_SOURCE_ROOT}\\\"
+
 SOURCES = testPythonChartLifecycle.cpp \
           PythonChartLifecycleTestStubs.cpp \
           $$PWD/../../../src/Python/PythonExecutionGate.cpp \
