@@ -415,8 +415,11 @@ refreshTargetTokensRejectStaleIdentity()
     QCOMPARE(registry.resolve(initial), &target);
     QCOMPARE(registry.registerTarget(&target), initial);
 
+    QVERIFY(registry.invalidateTarget(&target)
+        == RideRefreshTargetRegistry<QObject>::
+               InvalidationResult::Advanced);
     const RideRefreshTargetToken revised =
-        registry.advanceRevision(&target);
+        registry.registerTarget(&target);
     QCOMPARE(revised.targetId, initial.targetId);
     QCOMPARE(revised.revision, quint64(2));
     QVERIFY(!registry.resolve(initial));
@@ -429,19 +432,26 @@ refreshTargetTokensRejectStaleIdentity()
     bool registeredOffOwner = true;
     bool resolvedOffOwner = true;
     bool retiredOffOwner = true;
+    bool invalidatedOffOwner = true;
     std::thread wrongThread([&]() {
         registeredOffOwner =
             registry.registerTarget(&target).isValid();
         resolvedOffOwner = registry.resolve(revised) != nullptr;
         retiredOffOwner = registry.retire(&target);
+        invalidatedOffOwner = registry.invalidateTarget(&target)
+            != RideRefreshTargetRegistry<QObject>::
+                   InvalidationResult::Rejected;
     });
     wrongThread.join();
     QVERIFY(!registeredOffOwner);
     QVERIFY(!resolvedOffOwner);
     QVERIFY(!retiredOffOwner);
+    QVERIFY(!invalidatedOffOwner);
     QCOMPARE(registry.resolve(revised), &target);
 
-    QVERIFY(registry.retire(&target));
+    QObject *retiredLiveTarget = nullptr;
+    QVERIFY(registry.retire(&target, &retiredLiveTarget));
+    QCOMPARE(retiredLiveTarget, &target);
     QVERIFY(!registry.resolve(revised));
     const RideRefreshTargetToken registeredAgain =
         registry.registerTarget(&target);
@@ -459,6 +469,17 @@ refreshTargetTokensRejectStaleIdentity()
         last.targetId,
         std::numeric_limits<quint64>::max());
     QVERIFY(!exhausted.registerTarget(&rejectedTarget).isValid());
+
+    RideRefreshTargetRegistry<QObject> unregisteredMutation;
+    QVERIFY(unregisteredMutation.initialize(
+        QThread::currentThread(), 46));
+    QObject notYetRegistered;
+    QVERIFY(unregisteredMutation.invalidateTarget(&notYetRegistered)
+        == RideRefreshTargetRegistry<QObject>::
+               InvalidationResult::Unregistered);
+    QCOMPARE(
+        unregisteredMutation.registerTarget(&notYetRegistered).targetId,
+        quint64(1));
 
     alignas(QObject) std::byte storage[sizeof(QObject)];
     RideRefreshTargetRegistry<QObject> reusedAddress;
@@ -478,6 +499,33 @@ refreshTargetTokensRejectStaleIdentity()
     QCOMPARE(reusedAddress.resolve(secondToken), second);
     second->~QObject();
 
+    alignas(QObject) std::byte retiredStorage[sizeof(QObject)];
+    RideRefreshTargetRegistry<QObject> staleRetirement;
+    QVERIFY(staleRetirement.initialize(QThread::currentThread(), 47));
+    QObject *destroyed = new (retiredStorage) QObject;
+    staleRetirement.registerTarget(destroyed);
+    destroyed->~QObject();
+    QObject *unexpectedLiveTarget = &target;
+    QVERIFY(staleRetirement.retire(destroyed, &unexpectedLiveTarget));
+    QVERIFY(!unexpectedLiveTarget);
+
+    alignas(QObject) std::byte invalidationStorage[sizeof(QObject)];
+    RideRefreshTargetRegistry<QObject> staleInvalidation;
+    QVERIFY(staleInvalidation.initialize(QThread::currentThread(), 48));
+    QObject *oldTarget = new (invalidationStorage) QObject;
+    const RideRefreshTargetToken oldToken =
+        staleInvalidation.registerTarget(oldTarget);
+    oldTarget->~QObject();
+    QObject *replacement = new (invalidationStorage) QObject;
+    QVERIFY(staleInvalidation.invalidateTarget(replacement)
+        == RideRefreshTargetRegistry<QObject>::
+               InvalidationResult::Retired);
+    QVERIFY(!staleInvalidation.resolve(oldToken));
+    const RideRefreshTargetToken replacementToken =
+        staleInvalidation.registerTarget(replacement);
+    QVERIFY(replacementToken.targetId > oldToken.targetId);
+    replacement->~QObject();
+
     RideRefreshTargetRegistry<QObject> exhaustedRevision;
     QVERIFY(exhaustedRevision.initialize(
         QThread::currentThread(), 45, 1,
@@ -488,12 +536,14 @@ refreshTargetTokensRejectStaleIdentity()
     QCOMPARE(
         maximumRevision.revision,
         std::numeric_limits<quint64>::max());
-    QVERIFY(!exhaustedRevision.advanceRevision(
-        &revisionTarget).isValid());
+    QVERIFY(exhaustedRevision.invalidateTarget(&revisionTarget)
+        == RideRefreshTargetRegistry<QObject>::
+               InvalidationResult::Retired);
     QVERIFY(!exhaustedRevision.resolve(maximumRevision));
     QCOMPARE(exhaustedRevision.entryCount(), qsizetype(0));
-    QVERIFY(!exhaustedRevision.advanceRevision(
-        &revisionTarget).isValid());
+    QVERIFY(exhaustedRevision.invalidateTarget(&revisionTarget)
+        == RideRefreshTargetRegistry<QObject>::
+               InvalidationResult::Unregistered);
 }
 
 void TestRideCachePerformance::

@@ -41,6 +41,7 @@ struct RideItemRefreshIdentity
     QString path;
     QString fileName;
     QDateTime dateTime;
+    bool planned = false;
     bool open = false;
     RideFile *openRide = nullptr;
 };
@@ -56,6 +57,7 @@ public:
         return current.path == expected.path
             && current.fileName == expected.fileName
             && current.dateTime == expected.dateTime
+            && current.planned == expected.planned
             && current.open == expected.open
             && (!expected.open
                 || current.openRide == expected.openRide)

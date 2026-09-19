@@ -289,7 +289,7 @@ FixLapSwim::postProcess(RideFile *ride, DataProcessorConfig *config=0, QString o
     if (op != "NEW") {
         // rebuild intervals and force metric update
         ride->fillInIntervals();
-        ride->context->rideItem()->isstale = true;
+        ride->context->rideItem()->markStale();
         ride->context->rideItem()->refresh();
     }
 

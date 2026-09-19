@@ -11,7 +11,11 @@
 #include "SessionServices.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
+#include <QRegularExpression>
+#include <QSet>
 
 #include <atomic>
 #include <cmath>
@@ -76,6 +80,7 @@ private slots:
     void zonesSnapshotIsRetainedByTheGeneration();
     void sessionPublishesWholeGenerationsAtomically();
     void publicationIsOwnerThreadOnlyAndClosedByLifecycle();
+    void productionRideItemMutationInventoryIsClosed();
     void productionWorkersRetainTheirPublishedGeneration();
 };
 
@@ -860,6 +865,270 @@ publicationIsOwnerThreadOnlyAndClosedByLifecycle()
 }
 
 void TestRideRefreshEnvironment::
+productionRideItemMutationInventoryIsClosed()
+{
+    const QDir root(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)));
+    const QRegularExpression assignment(
+        QStringLiteral(
+            R"(->\s*(?:isdirty|isstale|isedit|path|fileName|dateTime|present|planned|sport|isBike|isRun|isSwim|isXtrain|isAero|samples|zoneRange|hrZoneRange|paceZoneRange|fingerprint|metacrc|crc|timestamp|dbversion|udbversion|weight)\s*(?<![=!<>])=(?!=))"));
+    QVERIFY(assignment.isValid());
+    const QRegularExpression containerMutation(
+        QStringLiteral(
+            R"(->\s*(?:metrics|counts|stdmeans|stdvariances|metadata|xdata|intervals)\(\)\s*(?:\.\s*(?:clear|insert|remove|resize|fill|append|prepend|push_back|push_front|erase)\s*\(|\[[^\]]+\]\s*(?<![=!<>])=(?!=)))"));
+    QVERIFY(containerMutation.isValid());
+    const QRegularExpression directContainerMutation(
+        QStringLiteral(
+            R"(->\s*(?:metrics_|count_|stdmean_|stdvariance_|metadata_|xdata_|errors_|overrides_|intervals_)\s*(?:(?<![=!<>])=(?!=)|\.\s*(?:clear|insert|remove|resize|fill|append|prepend|push_back|push_front|erase)\s*\(|\[[^\]]+\]\s*(?<![=!<>])=(?!=)))"));
+    QVERIFY(directContainerMutation.isValid());
+    const QRegularExpression intervalDeclaration(
+        QStringLiteral(
+            R"(\b(?:const\s+)?IntervalItem(?:\s+const)?\s*[*&]\s*(?:const\s+)?([A-Za-z_]\w*)|\bIntervalItem\s+([A-Za-z_]\w*)\s*(?:[;({=])|\b(?:QPointer|QSharedPointer|QScopedPointer)\s*<\s*(?:const\s+)?IntervalItem\s*>\s+([A-Za-z_]\w*))"));
+    QVERIFY(intervalDeclaration.isValid());
+    const QString intervalWritePattern = QStringLiteral(
+        R"((?:(?:name|type|start|stop|startKM|stopKM|displaySequence|color|route|test|selected|rideInterval)\s*(?<![=!<>])=(?!=)|(?:metrics_|count_|stdmean_|stdvariance_)\s*(?:(?<![=!<>])=(?!=)|\.\s*(?:clear|insert|remove|resize|fill|append|prepend|push_back|push_front|erase)\s*\(|\[[^\]]+\]\s*(?<![=!<>])=(?!=))|(?:metrics|counts|stdmeans|stdvariances)\(\)\s*(?:\.\s*(?:clear|insert|remove|resize|fill|append|prepend|push_back|push_front|erase)\s*\(|\[[^\]]+\]\s*(?<![=!<>])=(?!=))))");
+    const QRegularExpression intervalMemberMutation(
+        QStringLiteral(
+            R"(\bintervals_\s*(?:\.\s*(?:at|value)\s*\([^;]*\)|\[[^\]]+\])\s*->\s*%1)")
+            .arg(intervalWritePattern));
+    QVERIFY(intervalMemberMutation.isValid());
+
+    QSet<QString> actual;
+    QMap<QString, int> intervalWrites;
+    QDirIterator files(
+        root.filePath(QStringLiteral("src")),
+        {QStringLiteral("*.cpp"), QStringLiteral("*.h"),
+         QStringLiteral("*.y")},
+        QDir::Files, QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        const QString absolutePath = files.next();
+        if (absolutePath.endsWith(QStringLiteral("_yacc.cpp"))
+            || absolutePath.endsWith(QStringLiteral("_yacc.h"))
+            || absolutePath.endsWith(QStringLiteral("_lex.cpp"))) {
+            continue;
+        }
+        QFile file(absolutePath);
+        QVERIFY2(file.open(QIODevice::ReadOnly),
+                 qPrintable(absolutePath));
+        const QString relativePath = root.relativeFilePath(absolutePath);
+        QString content = QString::fromUtf8(file.readAll());
+        QString declarationContent = content;
+        if (absolutePath.endsWith(QStringLiteral(".cpp"))
+            || absolutePath.endsWith(QStringLiteral(".y"))) {
+            QFile siblingHeader(
+                QFileInfo(absolutePath).absolutePath()
+                + QLatin1Char('/')
+                + QFileInfo(absolutePath).completeBaseName()
+                + QStringLiteral(".h"));
+            if (siblingHeader.open(QIODevice::ReadOnly)) {
+                declarationContent += QLatin1Char('\n')
+                    + QString::fromUtf8(siblingHeader.readAll());
+            }
+        }
+        QSet<QString> intervalIdentifiers;
+        auto declarations = intervalDeclaration.globalMatch(
+            declarationContent);
+        while (declarations.hasNext()) {
+            const QRegularExpressionMatch match = declarations.next();
+            QString identifier;
+            for (int capture = 1; capture <= 3; ++capture) {
+                if (!match.captured(capture).isEmpty()) {
+                    identifier = match.captured(capture);
+                    break;
+                }
+            }
+            if (!identifier.isEmpty()) intervalIdentifiers.insert(identifier);
+        }
+        QStringList escapedIntervalIdentifiers;
+        for (const QString &identifier : intervalIdentifiers) {
+            escapedIntervalIdentifiers.append(
+                QRegularExpression::escape(identifier));
+        }
+        const QRegularExpression intervalMutation(
+            escapedIntervalIdentifiers.isEmpty()
+                ? QStringLiteral("(?!)")
+                : QStringLiteral(
+                    R"(\b(?:%1)\s*(?:->|\.)\s*%2)")
+                    .arg(escapedIntervalIdentifiers.join(
+                        QLatin1Char('|')), intervalWritePattern));
+        QVERIFY(intervalMutation.isValid());
+        const QStringList lines = content.split(QLatin1Char('\n'));
+        for (const QString &rawLine : lines) {
+            const QString line = rawLine.trimmed();
+            if (assignment.match(line).hasMatch()
+                || containerMutation.match(line).hasMatch()
+                || directContainerMutation.match(line).hasMatch()) {
+                actual.insert(relativePath + QStringLiteral(":") + line);
+            }
+            if (intervalMutation.match(line).hasMatch()
+                || intervalMemberMutation.match(line).hasMatch()) {
+                const QString key =
+                    relativePath + QStringLiteral(":") + line;
+                intervalWrites[key] += 1;
+            }
+        }
+    }
+
+    // Every pointer-form write to a publication-relevant field is classified.
+    // RideItem.cpp owns guarded setters, cache transaction files either mutate
+    // before membership or carry an explicit revision hook, and the remaining
+    // entries are non-RideItem types or deliberately unregistered temporaries.
+    const QSet<QString> expected = {
+        QStringLiteral("src/Charts/IntervalSummaryWindow.cpp:fake->samples = f.dataPoints().count() > 0;"),
+        QStringLiteral("src/Charts/IntervalSummaryWindow.cpp:fake->intervals_.clear(); // don't accidentally wipe these!!!!"),
+        QStringLiteral("src/Charts/IntervalSummaryWindow.cpp:notfake->samples = notf.dataPoints().count() > 0;"),
+        QStringLiteral("src/Core/RideCache.cpp:item->isstale = disposition.keepStale;"),
+        QStringLiteral("src/Core/RideCache.cpp:item->metadata_.insert("),
+        QStringLiteral("src/Core/RideCacheCalendarMutations.cpp:item->dateTime = entry.targetDateTime;"),
+        QStringLiteral("src/Core/RideCacheCalendarMutations.cpp:item->metadata_.insert("),
+        QStringLiteral("src/Core/RideCacheCalendarMutations.cpp:item->metadata_.remove("),
+        QStringLiteral("src/Core/RideCacheImport.cpp:item->path = path;"),
+        QStringLiteral("src/Core/RideCacheImport.cpp:item->fileName = name;"),
+        QStringLiteral("src/Core/RideCacheImport.cpp:item->planned = itemPlanned;"),
+        QStringLiteral("src/Core/RideCacheImport.cpp:item->isdirty = false;"),
+        QStringLiteral("src/Core/RideCacheRemoval.cpp:item->path = canonicalPlannedRoot;"),
+        QStringLiteral("src/Core/RideCacheRemoval.cpp:item->fileName = fileName;"),
+        QStringLiteral("src/Core/RideCacheRemoval.cpp:item->dateTime = dateTime;"),
+        QStringLiteral("src/Core/RideCacheRemoval.cpp:item->planned = true;"),
+        QStringLiteral("src/Core/RideCacheRemoval.cpp:item->isdirty = false;"),
+        QStringLiteral("src/Core/RideCacheRemoval.cpp:item->isstale = true;"),
+        QStringLiteral("src/Core/RideCacheSnapshot.cpp:interval->metrics_ = std::move(value.metrics);"),
+        QStringLiteral("src/Core/RideCacheSnapshot.cpp:interval->count_ = std::move(value.counts);"),
+        QStringLiteral("src/Core/RideCacheSnapshot.cpp:interval->stdmean_ = std::move(value.stdmeans);"),
+        QStringLiteral("src/Core/RideCacheSnapshot.cpp:interval->stdvariance_ = std::move(value.stdvariances);"),
+        QStringLiteral("src/Core/RideItem.cpp:this->path = path;"),
+        QStringLiteral("src/Core/RideItem.cpp:this->fileName = fileName;"),
+        QStringLiteral("src/FileIO/FixPyScriptsDialog.cpp:pyFixScript->path = path;"),
+        QStringLiteral("src/FileIO/FixPySettings.cpp:script->path = fixPath;"),
+        QStringLiteral("src/FileIO/RideFile.cpp:copy->intervals_.append(new RideFileInterval(*interval));"),
+        QStringLiteral("src/FileIO/RideFile.cpp:copy->xdata_.insert("),
+        QStringLiteral("src/FileIO/RideFileCommand.cpp:ride->xdata().remove(name);"),
+        QStringLiteral("src/FileIO/RideFileCommand.cpp:ride->xdata().insert(name, series);"),
+        QStringLiteral("src/FileIO/RideFileCommand.cpp:ride->xdata().insert(series->name, series);"),
+        QStringLiteral("src/FileIO/RideFileCommand.cpp:ride->xdata().remove(series->name);"),
+        QStringLiteral("src/FileIO/RideFileCache.h:void    setFileName(QString fileName) { this->fileName = fileName; }"),
+        QStringLiteral("src/FileIO/SrdRideFile.cpp:w->samples = (w->bytes - offset)/sample_size;"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->isRun = add.data->isRun();"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->isSwim = add.data->isSwim();"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->sport = add.data->sport();"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->present = add.data->getTag(\"Data\", \"\");"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->samples = add.data->dataPoints().count() > 0;"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->metadata_ = add.data->tags();"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->metrics_.fill(0, factory.metricCount());"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->count_.fill(0, factory.metricCount());"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->metrics_[l.value()->index()] = l.value()->value();"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->count_[l.value()->index()] = l.value()->count();"),
+        QStringLiteral("src/Gui/ComparePane.cpp:add.rideItem->metrics_[j] = 0.00f;"),
+        QStringLiteral("src/Gui/SaveDialogs.cpp:guardedCandidate->path = currentIdentity.path;"),
+        QStringLiteral("src/Gui/SaveDialogs.cpp:guardedCandidate->fileName = currentIdentity.fileName;"),
+        QStringLiteral("src/Gui/SaveDialogs.cpp:guardedCandidate->planned = currentIdentity.planned;"),
+        QStringLiteral("src/Metrics/RideMetric.cpp:item->metrics().resize(factory.metricCount());"),
+        QStringLiteral("src/Metrics/RideMetric.cpp:spec.interval()->metrics().resize(factory.metricCount());"),
+        QStringLiteral("src/Metrics/RideMetric.cpp:if (spec.interval()) spec.interval()->metrics()[m->index()] = m->value();"),
+        QStringLiteral("src/Metrics/RideMetric.cpp:else item->metrics()[m->index()] = m->value();"),
+        QStringLiteral("src/R/RGraphicsDevice.cpp:pDev->path = RGraphicsDevice::Path;"),
+        QStringLiteral("src/Train/Fortius.cpp:this->weight = weight;"),
+        QStringLiteral("src/Train/Imagic.cpp:this->weight = weight;"),
+        QStringLiteral("src/Train/StravaRoutesDownloadPipeline.cpp:staging->path = staging->directory.displayPath();"),
+        QStringLiteral("src/Train/TrainDB.cpp:generation->path = info.absoluteFilePath();")
+    };
+    QCOMPARE(actual, expected);
+    // Classify each occurrence matched through explicit IntervalItem pointer,
+    // reference, value, or Qt smart-pointer declarations and the known
+    // intervals_.at/value/index member receivers. RideDB and IntervalSummary
+    // use detached temporaries; RideItem and Route initialize new/staged
+    // intervals; RideCacheSnapshot materializes a prepared snapshot behind the
+    // target fence; and the GUI paths fence their live owner before the first
+    // write. Internal direct-field mutators are checked below. Inferred aliases
+    // and multiline/compound expressions remain outside this lexical grammar.
+    const QStringList expectedIntervalWriteList = QStringLiteral(R"GC(src/Charts/IntervalSummaryWindow.cpp:temp.metrics()[i.value()->index()] = i.value()->value();
+src/Charts/IntervalSummaryWindow.cpp:temp.metrics()[i.value()->index()] = i.value()->value();
+src/Charts/IntervalSummaryWindow.cpp:temp.metrics().fill(0, factory.metricCount());
+src/Charts/IntervalSummaryWindow.cpp:temp.metrics().fill(0, factory.metricCount());
+src/Charts/IntervalSummaryWindow.cpp:temp.metrics()[j] = 0.00f;
+src/Charts/IntervalSummaryWindow.cpp:temp.metrics()[j] = 0.00f;
+src/Charts/IntervalSummaryWindow.cpp:temp.name = QString(tr("%1 selected intervals")).arg(intervals.count());
+src/Charts/IntervalSummaryWindow.cpp:temp.name = QString(tr("Excluding %1 selected")).arg(intervals.count());
+src/Charts/RideMapWindow.cpp:last->rideInterval->start = last->start = point->secs;
+src/Charts/RideMapWindow.cpp:last->rideInterval->start = last->start = secondPoint->secs;
+src/Charts/RideMapWindow.cpp:last->rideInterval->stop = last->stop = point->secs;
+src/Charts/RideMapWindow.cpp:last->rideInterval->stop = last->stop = secondPoint->secs;
+src/Charts/RideMapWindow.cpp:last->startKM = last->rideItem()->ride()->timeToDistance(last->start);
+src/Charts/RideMapWindow.cpp:last->stopKM = last->rideItem()->ride()->timeToDistance(last->stop);
+src/Core/RideCacheSnapshot.cpp:interval->color = std::move(value.color);
+src/Core/RideCacheSnapshot.cpp:interval->count_ = std::move(value.counts);
+src/Core/RideCacheSnapshot.cpp:interval->displaySequence = value.displaySequence;
+src/Core/RideCacheSnapshot.cpp:interval->metrics_ = std::move(value.metrics);
+src/Core/RideCacheSnapshot.cpp:interval->name = std::move(value.name);
+src/Core/RideCacheSnapshot.cpp:interval->rideInterval = nullptr;
+src/Core/RideCacheSnapshot.cpp:interval->rideInterval = target.ride_->intervals().at(
+src/Core/RideCacheSnapshot.cpp:interval->route = std::move(value.route);
+src/Core/RideCacheSnapshot.cpp:interval->selected = value.selected;
+src/Core/RideCacheSnapshot.cpp:interval->start = value.start;
+src/Core/RideCacheSnapshot.cpp:interval->startKM = value.startKm;
+src/Core/RideCacheSnapshot.cpp:interval->stdmean_ = std::move(value.stdmeans);
+src/Core/RideCacheSnapshot.cpp:interval->stdvariance_ = std::move(value.stdvariances);
+src/Core/RideCacheSnapshot.cpp:interval->stop = value.stop;
+src/Core/RideCacheSnapshot.cpp:interval->stopKM = value.stopKm;
+src/Core/RideCacheSnapshot.cpp:interval->test = value.test;
+src/Core/RideCacheSnapshot.cpp:interval->type = static_cast<RideFileInterval::IntervalType>(
+src/Core/RideItem.cpp:add->rideInterval = NULL;
+src/Core/RideItem.cpp:add->rideInterval = ride()->newInterval(name, start, stop, color, test);
+src/Core/RideItem.cpp:entire->rideInterval = NULL;
+src/Core/RideItem.cpp:foreach(IntervalItem *x, intervals()) x->rideInterval = NULL;
+src/Core/RideItem.cpp:intervalItem->name = QString(tr("L%1 %5 %2 (%3w %4 kJ)"))
+src/Core/RideItem.cpp:intervalItem->rideInterval = NULL;
+src/Core/RideItem.cpp:intervalItem->rideInterval = NULL;
+src/Core/RideItem.cpp:intervalItem->rideInterval = NULL;
+src/Core/RideItem.cpp:intervalItem->rideInterval = NULL;
+src/Core/RideItem.cpp:intervalItem->rideInterval = NULL;
+src/Core/RideItem.cpp:intervalItem->rideInterval = NULL;
+src/Core/RideItem.cpp:intervalItem->rideInterval = interval;
+src/Core/RideItem.cpp:intervals_.at(index)->rideInterval = ride_->intervals().at(findex);
+src/Core/Route.cpp:intervalItem->route = id();
+src/Gui/AnalysisSidebar.cpp:activeInterval->color = temp.color;
+src/Gui/AnalysisSidebar.cpp:activeInterval->name = temp.name;
+src/Gui/AnalysisSidebar.cpp:activeInterval->start = temp.start;
+src/Gui/AnalysisSidebar.cpp:activeInterval->startKM = activeInterval->rideItem()->ride()->timeToDistance(temp.start);
+src/Gui/AnalysisSidebar.cpp:activeInterval->stop = temp.stop;
+src/Gui/AnalysisSidebar.cpp:activeInterval->stopKM = activeInterval->rideItem()->ride()->timeToDistance(temp.stop);
+src/Gui/AnalysisSidebar.cpp:activeInterval->test = temp.test;
+src/Gui/AnalysisSidebar.cpp:item->rideInterval->name = item->name =
+src/Gui/AnalysisSidebar.cpp:item->rideInterval->test = item->test = true;
+src/Core/RideDB.y:else if ($1 == "color") jc->interval.color = QColor($3);
+src/Core/RideDB.y:else if ($1 == "route") jc->interval.route = QUuid($3);
+src/Core/RideDB.y:else if ($1 == "seq") jc->interval.displaySequence = $3.toInt();
+src/Core/RideDB.y:else if ($1 == "start") jc->interval.start = $3.toDouble();
+src/Core/RideDB.y:else if ($1 == "startKM") jc->interval.startKM = $3.toDouble();
+src/Core/RideDB.y:else if ($1 == "stop") jc->interval.stop = $3.toDouble();
+src/Core/RideDB.y:else if ($1 == "stopKM") jc->interval.stopKM = $3.toDouble();
+src/Core/RideDB.y:else if ($1 == "test") jc->interval.test = $3 == "true" ? true : false;
+src/Core/RideDB.y:else if ($1 == "type") jc->interval.type = static_cast<RideFileInterval::intervaltype>($3.toInt());
+src/Core/RideDB.y:if ($1 == "name") jc->interval.name = $3;
+src/Core/RideDB.y:jc->interval.counts().fill(0.0f);
+src/Core/RideDB.y:jc->interval.counts().fill(0.0f);
+src/Core/RideDB.y:jc->interval.counts()[m->index()] = $6.toDouble();
+src/Core/RideDB.y:jc->interval.counts()[m->index()] = $6.toDouble();
+src/Core/RideDB.y:jc->interval.counts()[m->index()] = 0; /* we don't write zeroes */
+src/Core/RideDB.y:jc->interval.metrics().fill(0.0f);
+src/Core/RideDB.y:jc->interval.metrics().fill(0.0f);
+src/Core/RideDB.y:jc->interval.metrics()[m->index()] = $3.toDouble();
+src/Core/RideDB.y:jc->interval.metrics()[m->index()] = $4.toDouble();
+src/Core/RideDB.y:jc->interval.metrics()[m->index()] = $4.toDouble();
+src/Core/RideDB.y:jc->interval.route = QUuid();
+src/Core/RideDB.y:jc->interval.stdmeans().clear();
+src/Core/RideDB.y:jc->interval.stdmeans().clear();
+src/Core/RideDB.y:jc->interval.stdmeans().insert(m->index(), $8.toDouble());
+src/Core/RideDB.y:jc->interval.stdvariances().clear();
+src/Core/RideDB.y:jc->interval.stdvariances().clear();
+src/Core/RideDB.y:jc->interval.stdvariances().insert(m->index(), $10.toDouble());)GC")
+        .split(QLatin1Char('\n'));
+    QMap<QString, int> expectedIntervalWrites;
+    for (const QString &entry : expectedIntervalWriteList)
+        expectedIntervalWrites[entry] += 1;
+    QCOMPARE(intervalWrites, expectedIntervalWrites);
+}
+
+void TestRideRefreshEnvironment::
 productionWorkersRetainTheirPublishedGeneration()
 {
     const QDir root(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)));
@@ -971,6 +1240,19 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(!source.mid(nonOwner, queued - nonOwner).contains(
         "&RideCache::refresh"));
 
+    const qsizetype advanceRevision = source.indexOf(
+        "RideCache::advanceRefreshTargetRevision(RideItem *item)");
+    const qsizetype advanceThreadGuard = source.indexOf(
+        "QThread::currentThread() != thread()", advanceRevision);
+    const qsizetype advanceMembership = source.indexOf(
+        "ownsLiveRide(item)", advanceThreadGuard);
+    const qsizetype advanceRegistry = source.indexOf(
+        "refreshTargets_->invalidateTarget(item)", advanceMembership);
+    QVERIFY(advanceRevision >= 0);
+    QVERIFY(advanceThreadGuard > advanceRevision);
+    QVERIFY(advanceMembership > advanceThreadGuard);
+    QVERIFY(advanceRegistry > advanceMembership);
+
     QFile headerFile(root.filePath(QStringLiteral("src/Core/RideCache.h")));
     QVERIFY(headerFile.open(QIODevice::ReadOnly));
     const QByteArray header = headerFile.readAll();
@@ -1029,6 +1311,30 @@ productionWorkersRetainTheirPublishedGeneration()
         "cache->retireRefreshTarget(this)", itemDestructor);
     QVERIFY(itemDestructor >= 0);
     QVERIFY(destructorRetirement > itemDestructor);
+    const qsizetype mutationFence = itemSource.indexOf(
+        "RideItem::prepareForRefreshRelevantMutation()");
+    const qsizetype registrationCheck = itemSource.indexOf(
+        "refreshTargetRegistered_.load", mutationFence);
+    const qsizetype revisionAdvance = itemSource.indexOf(
+        "advanceRefreshTargetRevision(this)", registrationCheck);
+    QVERIFY(mutationFence >= 0);
+    QVERIFY(registrationCheck > mutationFence);
+    QVERIFY(revisionAdvance > registrationCheck);
+    QVERIFY(itemSource.count("prepareForRefreshRelevantMutation()") >= 14);
+    QVERIFY(itemSource.contains("RideItem::markStale()"));
+    QVERIFY(itemSource.contains("RideItem::clearIntervals()"));
+    const qsizetype weightGetter = itemSource.indexOf(
+        "RideItem::getWeight(int type)");
+    const qsizetype localWeight = itemSource.indexOf(
+        "double resolvedWeight = m", weightGetter);
+    const qsizetype weightFence = itemSource.indexOf(
+        "prepareForRefreshRelevantMutation()", localWeight);
+    const qsizetype weightWrite = itemSource.indexOf(
+        "weight = resolvedWeight", weightFence);
+    QVERIFY(weightGetter >= 0);
+    QVERIFY(localWeight > weightGetter);
+    QVERIFY(weightFence > localWeight);
+    QVERIFY(weightWrite > weightFence);
     const qsizetype rideOpen = itemSource.indexOf(
         "RideFile *RideItem::ride(bool open)");
     const qsizetype openBarrier = itemSource.indexOf(
@@ -1135,6 +1441,195 @@ productionWorkersRetainTheirPublishedGeneration()
         "const RideRefreshItemStaleInputs &inputs"));
     QVERIFY(itemHeader.contains(
         "bool checkStaleImpl(const RideRefreshEnvironment *environment);"));
+    QVERIFY(itemHeader.contains(
+        "std::atomic<bool> refreshTargetRegistered_{false};"));
+    QVERIFY(itemHeader.contains("bool markStale();"));
+    QVERIFY(!itemHeader.contains(
+        "void clearIntervals() { intervals_.clear(); }"));
+
+    QFile calendarFile(root.filePath(
+        QStringLiteral("src/Core/RideCacheCalendarMutations.cpp")));
+    QVERIFY(calendarFile.open(QIODevice::ReadOnly));
+    const QByteArray calendarSource = calendarFile.readAll();
+    const qsizetype calendarFence = calendarSource.indexOf(
+        "prepareForRefreshRelevantMutation()");
+    const qsizetype calendarPublish = calendarSource.indexOf(
+        "journal->publishAndCommit", calendarFence);
+    const qsizetype calendarIdentityWrite = calendarSource.indexOf(
+        "item->dateTime = entry.targetDateTime", calendarPublish);
+    QVERIFY(calendarFence >= 0);
+    QVERIFY(calendarPublish > calendarFence);
+    QVERIFY(calendarIdentityWrite > calendarPublish);
+
+    QFile snapshotFile(root.filePath(
+        QStringLiteral("src/Core/RideCacheSnapshot.cpp")));
+    QVERIFY(snapshotFile.open(QIODevice::ReadOnly));
+    const QByteArray snapshotSource = snapshotFile.readAll();
+    const qsizetype snapshotApply = snapshotSource.indexOf(
+        "RideCacheItemSnapshot::applyTo(RideItem &target)");
+    const qsizetype snapshotFence = snapshotSource.indexOf(
+        "target.prepareForRefreshRelevantMutation()", snapshotApply);
+    const qsizetype computedApply = snapshotSource.indexOf(
+        "computed_.applyTo(target)", snapshotFence);
+    QVERIFY(snapshotApply >= 0);
+    QVERIFY(snapshotFence > snapshotApply);
+    QVERIFY(computedApply > snapshotFence);
+    const QList<QByteArray> computedSurface = {
+        "target.metrics_", "target.count_", "target.stdmean_",
+        "target.stdvariance_", "target.metadata_", "target.xdata_",
+        "target.errors_", "target.intervals_", "target.zoneRange",
+        "target.hrZoneRange", "target.paceZoneRange",
+        "target.fingerprint", "target.metacrc", "target.crc",
+        "target.timestamp", "target.dbversion", "target.udbversion",
+        "target.color", "target.present", "target.sport",
+        "target.isBike", "target.isRun", "target.isSwim",
+        "target.isXtrain", "target.isAero", "target.weight",
+        "target.overrides_", "target.samples"
+    };
+    for (const QByteArray &field : computedSurface)
+        QVERIFY2(snapshotSource.contains(field), field.constData());
+
+    QFile intervalFile(root.filePath(
+        QStringLiteral("src/Core/IntervalItem.cpp")));
+    QVERIFY(intervalFile.open(QIODevice::ReadOnly));
+    const QByteArray intervalSource = intervalFile.readAll();
+    const qsizetype intervalSetFrom = intervalSource.indexOf(
+        "IntervalItem::setFrom");
+    const qsizetype setFromFence = intervalSource.indexOf(
+        "prepareForMutation()", intervalSetFrom);
+    const qsizetype setFromWrite = intervalSource.indexOf(
+        "*this = other", setFromFence);
+    const qsizetype intervalSetValues = intervalSource.indexOf(
+        "IntervalItem::setValues");
+    const qsizetype setValuesFence = intervalSource.indexOf(
+        "prepareForMutation()", intervalSetValues);
+    const qsizetype setValuesWrite = intervalSource.indexOf(
+        "this->name = name", setValuesFence);
+    const qsizetype intervalRefresh = intervalSource.indexOf(
+        "IntervalItem::refresh()");
+    const qsizetype refreshFence = intervalSource.indexOf(
+        "prepareForMutation()", intervalRefresh);
+    const qsizetype refreshWrite = intervalSource.indexOf(
+        "metrics_.fill", refreshFence);
+    const qsizetype intervalSetSelected = intervalSource.indexOf(
+        "IntervalItem::setSelected(bool value)");
+    const qsizetype setSelectedFence = intervalSource.indexOf(
+        "prepareForMutation()", intervalSetSelected);
+    const qsizetype setSelectedWrite = intervalSource.indexOf(
+        "selected = value", setSelectedFence);
+    QVERIFY(intervalSetFrom >= 0);
+    QVERIFY(setFromFence > intervalSetFrom);
+    QVERIFY(setFromWrite > setFromFence);
+    QVERIFY(setFromWrite < intervalSetValues);
+    QVERIFY(intervalSetValues >= 0);
+    QVERIFY(setValuesFence > intervalSetValues);
+    QVERIFY(setValuesWrite > setValuesFence);
+    QVERIFY(setValuesWrite < intervalSetSelected);
+    QVERIFY(intervalSetSelected >= 0);
+    QVERIFY(setSelectedFence > intervalSetSelected);
+    QVERIFY(setSelectedWrite > setSelectedFence);
+    QVERIFY(setSelectedWrite < intervalRefresh);
+    QVERIFY(intervalRefresh >= 0);
+    QVERIFY(refreshFence > intervalRefresh);
+    QVERIFY(refreshWrite > refreshFence);
+
+    QFile intervalHeaderFile(root.filePath(
+        QStringLiteral("src/Core/IntervalItem.h")));
+    QVERIFY(intervalHeaderFile.open(QIODevice::ReadOnly));
+    const QByteArray intervalHeader = intervalHeaderFile.readAll();
+    const qsizetype displaySetter = intervalHeader.indexOf(
+        "void setDisplaySequence(int seq)");
+    const qsizetype displayFence = intervalHeader.indexOf(
+        "prepareForMutation()", displaySetter);
+    const qsizetype displayWrite = intervalHeader.indexOf(
+        "displaySequence = seq", displayFence);
+    QVERIFY(displaySetter >= 0);
+    QVERIFY(displayFence > displaySetter);
+    QVERIFY(displayWrite > displayFence);
+
+    QFile metricFile(root.filePath(
+        QStringLiteral("src/Metrics/RideMetric.cpp")));
+    QVERIFY(metricFile.open(QIODevice::ReadOnly));
+    const QByteArray metricSource = metricFile.readAll();
+    const qsizetype metricFence = metricSource.indexOf(
+        "item->prepareForRefreshRelevantMutation()");
+    const qsizetype intervalResize = metricSource.indexOf(
+        "spec.interval()->metrics().resize", metricFence);
+    const qsizetype userMetricFence = metricSource.indexOf(
+        "if (hasUserMetrics", intervalResize);
+    const qsizetype intervalMetricWrite = metricSource.indexOf(
+        "spec.interval()->metrics()[m->index()] = m->value()",
+        userMetricFence);
+    QVERIFY(metricFence >= 0);
+    QVERIFY(intervalResize > metricFence);
+    QVERIFY(userMetricFence > intervalResize);
+    QVERIFY(intervalMetricWrite > userMetricFence);
+
+    QFile sidebarFile(root.filePath(
+        QStringLiteral("src/Gui/AnalysisSidebar.cpp")));
+    QVERIFY(sidebarFile.open(QIODevice::ReadOnly));
+    const QByteArray sidebarSource = sidebarFile.readAll();
+    QVERIFY(sidebarSource.contains("ride->markStale()"));
+    QVERIFY(!sidebarSource.contains("->selected ="));
+    const qsizetype performanceInterval = sidebarSource.indexOf(
+        "AnalysisSidebar::perfTestIntervalSelected()");
+    const qsizetype performanceFence = sidebarSource.indexOf(
+        "item->prepareForMutation()", performanceInterval);
+    const qsizetype performanceWrite = sidebarSource.indexOf(
+        "item->rideInterval->test", performanceFence);
+    const qsizetype renameIntervals = sidebarSource.indexOf(
+        "AnalysisSidebar::renameIntervalsSelected()");
+    const qsizetype renameFence = sidebarSource.indexOf(
+        "item->prepareForMutation()", renameIntervals);
+    const qsizetype renameWrite = sidebarSource.indexOf(
+        "item->rideInterval->name", renameFence);
+    QVERIFY(performanceInterval >= 0);
+    QVERIFY(performanceFence > performanceInterval);
+    QVERIFY(performanceWrite > performanceFence);
+    QVERIFY(renameIntervals >= 0);
+    QVERIFY(renameFence > renameIntervals);
+    QVERIFY(renameWrite > renameFence);
+    const qsizetype editInterval = sidebarSource.indexOf(
+        "AnalysisSidebar::editInterval()");
+    const qsizetype editFence = sidebarSource.indexOf(
+        "activeInterval->prepareForMutation()", editInterval);
+    const qsizetype editWrite = sidebarSource.indexOf(
+        "activeInterval->name = temp.name", editFence);
+    QVERIFY(editInterval >= 0);
+    QVERIFY(editFence > editInterval);
+    QVERIFY(editWrite > editFence);
+
+    QFile mapFile(root.filePath(
+        QStringLiteral("src/Charts/RideMapWindow.cpp")));
+    QVERIFY(mapFile.open(QIODevice::ReadOnly));
+    const QByteArray mapSource = mapFile.readAll();
+    QVERIFY(!mapSource.contains("->selected ="));
+    const qsizetype mapFence = mapSource.indexOf(
+        "last->prepareForMutation()");
+    const qsizetype mapWrite = mapSource.indexOf(
+        "last->rideInterval->start", mapFence);
+    QVERIFY(mapFence >= 0);
+    QVERIFY(mapWrite > mapFence);
+
+    QFile plotIntervalFile(root.filePath(
+        QStringLiteral("src/Charts/AllPlotInterval.cpp")));
+    QVERIFY(plotIntervalFile.open(QIODevice::ReadOnly));
+    const QByteArray plotIntervalSource = plotIntervalFile.readAll();
+    QVERIFY(!plotIntervalSource.contains("interval->selected ="));
+    QVERIFY(plotIntervalSource.contains("interval->setSelected("));
+
+    QFile plotWindowFile(root.filePath(
+        QStringLiteral("src/Charts/AllPlotWindow.cpp")));
+    QVERIFY(plotWindowFile.open(QIODevice::ReadOnly));
+    const QByteArray plotWindowSource = plotWindowFile.readAll();
+    QVERIFY(!plotWindowSource.contains("interval->selected ="));
+    QVERIFY(plotWindowSource.contains("interval->setSelected(true)"));
+
+    QFile swimFixFile(root.filePath(
+        QStringLiteral("src/FileIO/FixLapSwim.cpp")));
+    QVERIFY(swimFixFile.open(QIODevice::ReadOnly));
+    QVERIFY(swimFixFile.readAll().contains(
+        "ride->context->rideItem()->markStale()"));
 }
 
 QTEST_GUILESS_MAIN(TestRideRefreshEnvironment)

@@ -2059,7 +2059,7 @@ MapWebBridge::toggleInterval(int x)
 
     IntervalItem *current = rideItem->intervals().at(x);
     if (current) {
-        current->selected = !current->selected;
+        if (!current->setSelected(!current->selected)) return;
         context->notifyIntervalItemSelectionChanged(current);
     }
 }
@@ -2144,7 +2144,7 @@ MapWebBridge::hoverPath(double lat, double lng)
 
             // Create interval.
             IntervalItem *add = rideItem->newInterval(name, point->secs, point->secs, 0, 0, Qt::black, false);
-            add->selected = true;
+            if (!add || !add->setSelected(true)) return;
 
             // rebuild list in sidebar
             context->notifyIntervalsUpdate(rideItem);
@@ -2160,6 +2160,7 @@ MapWebBridge::hoverPath(double lat, double lng)
                 RideFilePoint const *secondPoint = searchPoint(lat, lng);
 
                 if (secondPoint != nullptr) {
+                    if (!last->prepareForMutation()) return;
                     if (secondPoint->secs > point->secs) {
                         if (last->stop == secondPoint->secs) {
                             return;

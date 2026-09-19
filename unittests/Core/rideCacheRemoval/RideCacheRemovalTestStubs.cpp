@@ -1175,6 +1175,15 @@ void RideItem::setDirty(bool dirty)
 {
     isdirty = dirty;
 }
+bool RideItem::markStale()
+{
+    isstale = true;
+    return true;
+}
+bool RideItem::prepareForRefreshRelevantMutation()
+{
+    return true;
+}
 
 void RideItem::setFileName(
     QString ridePath, QString rideFileName)
@@ -1391,6 +1400,10 @@ void RideCache::cancel() { ++removalCancelCount; }
 RideRefreshTargetToken RideCache::ensureRefreshTarget(RideItem *)
 {
     return {};
+}
+bool RideCache::advanceRefreshTargetRevision(RideItem *)
+{
+    return true;
 }
 void RideCache::retireRefreshTarget(RideItem *) {}
 RideItem *RideCache::resolveRefreshTarget(

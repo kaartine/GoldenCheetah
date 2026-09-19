@@ -500,6 +500,7 @@ class RideCache : public QObject
                 && rides_.contains(address);
         }
         RideRefreshTargetToken ensureRefreshTarget(RideItem *item);
+        bool advanceRefreshTargetRevision(RideItem *item);
         void retireRefreshTarget(RideItem *item);
         RideItem *resolveRefreshTarget(
             const RideRefreshTargetToken &token) const;

@@ -892,6 +892,7 @@ detachedRefreshIdentityRejectsEveryChangedDimension()
         QStringLiteral("/activities"),
         QStringLiteral("activity.fit"),
         dateTime,
+        false,
         true,
         &openRide};
     result.sourcePath = QStringLiteral("/activities/activity.fit");
@@ -915,6 +916,9 @@ detachedRefreshIdentityRejectsEveryChangedDimension()
     QVERIFY(!accepts());
     current = result.expected;
     current.dateTime = dateTime.addSecs(1);
+    QVERIFY(!accepts());
+    current = result.expected;
+    current.planned = true;
     QVERIFY(!accepts());
     current = result.expected;
     current.open = false;
@@ -2326,8 +2330,9 @@ savedRideRebindsAndPersistsAtomically()
         RideFileCache::SkipInitialComputeForTest {});
     int writeCalls = 0;
     int reportCalls = 0;
+    QString reportedError;
 
-    QVERIFY(cache.refreshCacheWithValidatorForTest(
+    QVERIFY2(cache.refreshCacheWithValidatorForTest(
         sourcePath,
         cachePath,
         [&](const QString &path,
@@ -2339,9 +2344,10 @@ savedRideRebindsAndPersistsAtomically()
             return RideFileCacheIntegrity::writeCacheAtomically(
                 path, write, validate, error);
         },
-        [&](const QString &, const QString &) {
+        [&](const QString &, const QString &error) {
             ++reportCalls;
-        }));
+            reportedError = error;
+        }), qPrintable(reportedError));
 
     QCOMPARE(writeCalls, 1);
     QCOMPARE(reportCalls, 0);

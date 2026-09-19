@@ -78,6 +78,7 @@ PORTABLE_SECTION_PROJECTS = (
     "Core/plannedActivityFileStager/plannedActivityFileStager.pro",
     "Core/rideCacheAtomicSave/rideCacheAtomicSave.pro",
     "Core/rideCacheRemoval/rideCacheRemoval.pro",
+    "Core/rideItemMutationFence/rideItemMutationFence.pro",
     "FileIO/fitReaderIntegrity/fitReaderIntegrity.pro",
     "FileIO/jsonImportIntegrity/jsonImportIntegrity.pro",
     "FileIO/rideFileCacheRefresh/rideFileCacheRefresh.pro",

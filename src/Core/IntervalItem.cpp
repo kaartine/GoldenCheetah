@@ -51,9 +51,27 @@ IntervalItem::IntervalItem() : rideItem_(NULL), selected(false), name(""), type(
     count_.fill(0, RideMetricFactory::instance().metricCount());
 }
 
+#ifdef GC_RIDE_ITEM_MUTATION_TEST
+IntervalItem::IntervalItem(MutationTestTag, RideItem *rideItem)
+    : rideItem_(rideItem)
+    , selected(false)
+    , type(RideFileInterval::USER)
+    , start(0)
+    , stop(0)
+    , startKM(0)
+    , stopKM(0)
+    , displaySequence(0)
+    , color(Qt::black)
+    , test(false)
+    , rideInterval(nullptr)
+{
+}
+#endif
+
 void
 IntervalItem::setFrom(IntervalItem &other)
 {
+    if (!prepareForMutation()) return;
     *this = other;
     rideItem_ = other.rideItem_;
     rideInterval = NULL;
@@ -65,6 +83,8 @@ IntervalItem::setValues(QString name, double duration1, double duration2,
                                       double distance1, double distance2,
                                       QColor color, bool test)
 {
+    if (!prepareForMutation()) return;
+
     // apply the update
     this->name = name;
     this->test = test;
@@ -93,9 +113,26 @@ IntervalItem::setValues(QString name, double duration1, double duration2,
 
 }
 
+bool
+IntervalItem::prepareForMutation()
+{
+    return !rideItem_
+        || rideItem_->prepareForRefreshRelevantMutation();
+}
+
+bool
+IntervalItem::setSelected(bool value)
+{
+    if (!prepareForMutation()) return false;
+    selected = value;
+    return true;
+}
+
 void
 IntervalItem::refresh()
 {
+    if (!prepareForMutation()) return;
+
     // metrics
     const RideMetricFactory &factory = RideMetricFactory::instance();
 

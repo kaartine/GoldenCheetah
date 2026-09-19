@@ -34,6 +34,10 @@ class IntervalItem
         // constructors and accessors
         IntervalItem(const RideItem *, QString, double, double, double, double, int, QColor, bool test, RideFileInterval::IntervalType);
         IntervalItem();
+#ifdef GC_RIDE_ITEM_MUTATION_TEST
+        struct MutationTestTag {};
+        IntervalItem(MutationTestTag, RideItem *rideItem);
+#endif
 
         // ride item we are in
         RideItem* rideItem() { return rideItem_; }
@@ -46,6 +50,8 @@ class IntervalItem
         void setValues(QString name, double duration1, double duration2, 
                                      double distance1, double distance2,
                                      QColor color, bool test);
+        bool prepareForMutation();
+        bool setSelected(bool value);
 
         // is this interval currently selected ?
         bool selected;
@@ -70,7 +76,9 @@ class IntervalItem
         bool test;                            // is a performance test
 
         // order to show on plot
-        void setDisplaySequence(int seq) { displaySequence = seq; }
+        void setDisplaySequence(int seq) {
+            if (prepareForMutation()) displaySequence = seq;
+        }
 
         // precomputed metrics
         void refresh();
@@ -136,4 +144,3 @@ class EditIntervalDialog : public QDialog
 };
 
 #endif // _GC_IntervalItem_h
-

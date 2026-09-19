@@ -9338,6 +9338,51 @@ commit before the next finding begins.
   a complete publication fence; the final gate must additionally compare the
   source path, full fingerprint, and open-ride identity. Until then F3c1 remains
   open even after the target-registry foundation lands.
+- ARCH-003F3c1b1 (planned-identity omission found by independent design review
+  and recorded before correction): The detached refresh identity gate binds
+  path, filename, date/time, open state, and open `RideFile`, but omits whether
+  the target belongs to the planned or completed activity namespace. Add the
+  captured `planned` value to both expected and current identity and reject a
+  mismatch alongside the existing source-path and full-fingerprint checks.
+- ARCH-003F3c1b2 (destroyed-target flag hazard found during implementation
+  review): Clearing an item's registration flag through the raw address passed
+  to retirement would dereference a destroyed `RideItem` when LiveView purges
+  a tombstoned row. Have registry retirement return a live target only when its
+  `QPointer` still equals that address, clear the flag only through that proven
+  live pointer, and cover both live and already-destroyed retirement.
+- ARCH-003F3c1b3 (computed-state test-composition regression found during
+  verification and recorded before correction): The computed-state target
+  links production `RideCacheSnapshot.cpp` against a local `RideItem` double,
+  not production `RideItem.cpp`. Calling the new private mutation-fence helper
+  from snapshot publication therefore leaves that symbol undefined in this
+  deliberately narrow target. Add a policy-neutral helper definition to the
+  test double, then rebuild and run the target normally and with ASan/UBSan.
+- ARCH-003F3c1b4 (full refresh-suite regression found during verification and
+  recorded before correction): The complete `rideFileCacheRefresh` run, beyond
+  the focused identity-gate cases, rejects
+  `savedRideRebindsAndPersistsAtomically`. Preserve the persistence failure
+  reason in that test, determine whether the mutation-fence work exposed or
+  caused the invalidation, correct the narrowest responsible contract, and
+  rerun the full target normally and with ASan/UBSan before acceptance.
+- ARCH-003F3c1b5 (registration-state fail-open found during implementation
+  review and recorded before correction): A target whose atomic registered bit
+  remains set while the registry has no reverse entry currently maps
+  `Unregistered` to successful mutation admission. Treat only an advanced or
+  conclusively retired token as safe; a genuinely absent entry must fail
+  closed, while a stale reverse entry that the registry removes may report
+  retirement and clear the live target's registration bit.
+- ARCH-003F3c1b6 (interval/weight fence gaps and verification overclaim found
+  by independent review and recorded before correction): Live interval metric,
+  geometry, identity, performance-test, rename, drag, and selection writes can
+  occur before a later dirty fence or with no fence, `RideMetric` guards only
+  its non-interval branch, and `getWeight()` writes canonical `weight` as a
+  side effect. The pointer-form source allowlist neither covers the full
+  detached interval/state surface nor behaviorally proves that production
+  mutators invalidate old tokens. Fence each publication-relevant live write
+  before its first mutation (or remove ephemeral owner-only state from detached
+  replacement), make weight resolution local before any guarded assignment,
+  expand the inventory contract, and add production-composed token-invalidation
+  tests for scalar/container, interval, and identity/open mutation families.
 - ARCH-003F3c1a1 (removal-test composition regression found during F3c1a
   verification and recorded before correction): The removal target composes
   `RideCacheImport`, `RideCacheLiveView`, and `RideCacheRemoval` with local
@@ -9388,6 +9433,122 @@ commit before the next finding begins.
   F3c1b must make revision coverage complete, and F3c/F3c2-F3c4 must return a
   detached result and resolve the token exclusively on the owner thread before
   any publication side effect. Therefore F3c1 remains open.
+- ARCH-003F3c1b resolution: Every inventoried external mutation of a registered
+  live `RideItem` now advances its target revision on the cache owner thread
+  before changing identity, open-file state, metadata, intervals, computed
+  fields, source state, or stale state. A registration bit keeps temporary and
+  pre-membership objects off the registry path without consuming target IDs;
+  registered wrong-thread and inconsistent unregistered states fail closed.
+  Revision exhaustion conclusively retires the old token so the next capture
+  receives a never-reused target ID. Snapshot and calendar transactions fence
+  before publication, metric writes fence once per operation, and a checked
+  source allowlist keeps the remaining historical public-field writes closed
+  under review. The detached identity gate now also binds the planned/completed
+  namespace.
+- ARCH-003F3c1b1/F3c1b2/F3c1b5 resolution: Expected and current refresh
+  identities compare `planned`. Retirement clears the registration bit only
+  through a live `QPointer` proven equal to the supplied address, so purging a
+  destroyed tombstone never dereferences it. Mutation admission accepts only
+  an advanced or conclusively retired token; a missing reverse entry is
+  rejected, while a stale address-reuse entry is removed, reported retired,
+  and covered through replacement at the same storage address.
+- ARCH-003F3c1b6 resolution: `IntervalItem` now exposes one mutation admission
+  boundary used before value, metric, selection, and display-order writes;
+  performance-test, rename, edit, drag, map selection, and plot selection paths
+  enter it before their first write or callback. `RideMetric` also enters the
+  owning item fence before interval resize or user-metric publication. Weight
+  resolution is side-effect free until a changed value is known, then fences
+  immediately before the single canonical assignment. The inventory contract
+  now includes direct protected-container mutations, enumerates the complete
+  computed-state replacement surface, inventories one-line direct
+  `IntervalItem` scalar/container writes through explicit pointer, reference,
+  value, Qt smart-pointer, and known member-container receivers, preserves
+  occurrence counts in a reviewed allowlist, and checks fence-before-write
+  ordering in internal interval mutators plus metric, weight, sidebar, map,
+  and plot paths. A focused target
+  compiles the production `RideItem.cpp` and `IntervalItem.cpp` mutators with a
+  registry-backed test seam and proves scalar, container, interval selection/
+  order, and open-identity mutations reject the captured token and expose only
+  a higher revision; it passes 3/3 normally and under ASan/UBSan.
+- ARCH-003F3c1b3 resolution: The computed-state composition supplies the
+  policy-neutral successful mutation-fence definition appropriate to its local
+  `RideItem` double. The target rebuilds and passes 10/10 normally and 10/10
+  under ASan/UBSan.
+- ARCH-003F3c1b4 resolution: Capturing the persistence callback's error exposed
+  `No such file or directory` only inside the restricted workspace sandbox.
+  The unchanged atomic persistence operation and the complete target pass
+  outside that sandbox, matching the already documented `QTemporaryFile`/
+  `QSaveFile` execution constraint. The test retains the diagnostic message;
+  no production storage behavior was weakened or changed.
+- ARCH-003F3c1b7 (clean-qmake dependency defect recorded before correction):
+  The new production-mutator target rebuilt only while its earlier generated
+  Makefile still carried a local GSL include path. A fresh qmake invocation
+  with an incorrect assumed dependency root fails at `gsl/gsl_rng.h`, so the
+  target is not yet reproducible from its checked-in project definition and
+  canonical repository dependency settings. Route the target through the same
+  GSL configuration used by the existing unit-test build and prove both clean
+  normal and sanitizer configurations before claiming the target verified.
+- ARCH-003F3c1b7 resolution: The target already consumes the canonical
+  `GSL_INCLUDES` qmake variable after `unittests.pri`; the failure came from
+  this checkout's ignored development `gcconfig.pri`, which points at
+  `/usr/include` although its staged GSL headers live under `.build-tools`.
+  No machine-local path was added to the checked-in project. Fresh normal and
+  sanitizer qmake configurations, with the local include supplied as a late
+  build override, rebuild from clean objects and pass 3/3. LeakSanitizer alone
+  is disabled for the sanitizer run because it is incompatible with the
+  execution environment's ptrace policy; ASan and UBSan remain enabled.
+- ARCH-003F3c1b8 (portable-link contract gap recorded before correction): The
+  new production-mutator target includes the shared `section-gc.prf`, but the
+  centralized linker-section contract does not name the project in its
+  portable-project inventory. Add it so a future replacement with hard-coded
+  GNU flags fails the repository's build-policy check.
+- ARCH-003F3c1b8 resolution: The target is now part of the portable-section
+  project inventory, and the complete linker-section policy check passes.
+- ARCH-003F3c1b9 (inventory multiplicity/receiver gap recorded before
+  correction): Independent re-review found that the interval inventory stores
+  path-and-line spellings in a `QSet`, so repeated identical writes collapse
+  and a new unsafe duplicate would not change the contract. Its identifier
+  grammar also misses member-container receivers such as
+  `intervals_.at(index)->rideInterval`, and the audit overstates coverage of
+  references, inferred aliases, multiline expressions, compound assignments,
+  and internal direct-field writes. Preserve occurrence counts, cover known
+  member receivers and internal mutation methods explicitly, and state the
+  checked grammar plus residual alias limitation accurately before commit.
+- ARCH-003F3c1b9 resolution: The inventory now compares a deterministic map of
+  path-and-line spellings to occurrence counts, so adding a duplicate write
+  changes the contract. It recognizes explicit pointer/reference/value and Qt
+  smart-pointer declarations, covers the concrete `intervals_.at/value/index`
+  member receiver, and separately proves fence-before-first-write ordering for
+  `setFrom`, `setValues`, `setSelected`, `setDisplaySequence`, and `refresh`.
+  Inferred aliases plus multiline and compound expressions remain an explicit
+  lexical source-contract limitation; the production-source-composed seam and
+  registry tests remain the executable backstop rather than a claim of a C++
+  semantic analyzer.
+- ARCH-003F3c1b10 (generated-source dependency recorded before correction): A
+  second independent review found that the repo-wide scanner includes ignored
+  generated `RideDB_yacc.cpp` output and its allowlist entries. The focused
+  test does not generate that parser, so its passing result depends on local
+  build residue and fails in a clean checkout. Inventory authored parser input
+  instead, exclude generated lexer/parser outputs explicitly, and verify with
+  those ignored outputs absent before commit.
+- ARCH-003F3c1b10 resolution: The inventory now scans authored `.y` grammar
+  files alongside C++ sources and classifies the tracked `src/Core/RideDB.y`
+  mutations. Ignored `_yacc.cpp`, `_yacc.h`, and `_lex.cpp` outputs are
+  explicitly excluded. The focused inventory test passes both with the local
+  generated RideDB outputs present and with them moved entirely outside the
+  source tree, proving the result no longer depends on build residue.
+- ARCH-003F3c1b verification: The registry/generation suite passes 18/18 and
+  the mutation-inventory/environment suite passes 21/21, each normally and
+  under ASan/UBSan. The production-mutator fence suite passes 3/3 in both
+  configurations. The full refresh-cache suite passes 55/55 normally and
+  55/55 under ASan/UBSan outside the atomic-writer sandbox constraint; the
+  complete removal suite passes 408/408 there as well. Affected production
+  units compile with warnings as errors, the source-module dependency suite
+  passes 14/14, and `git diff --check` is clean. This closes the mutation-fence
+  prerequisite only: the legacy worker's raw target, stale write, and result
+  publication remain explicit ARCH-003F3c/F3c1/F3c2 exceptions. Their detached
+  owner-thread gate must resolve the token and revision and advance it exactly
+  once before any irreversible publication or callback. F3c1 remains open.
 - ARCH-003F3c2 (stale-proposal transaction recorded before correction): Bound
   `checkStale` currently writes color, resolved weight, source CRC, and
   `isstale` in the worker before refresh construction. Return those fields as a

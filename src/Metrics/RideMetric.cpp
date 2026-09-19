@@ -522,6 +522,13 @@ RideMetric::computeMetrics(
     RideItem *item, Specification spec, const QStringList &metrics,
     const RideMetricRegistrySnapshot &factory)
 {
+    bool itemMutationPrepared = false;
+    const auto prepareItemMutation = [&]() {
+        if (itemMutationPrepared) return true;
+        itemMutationPrepared =
+            item->prepareForRefreshRelevantMutation();
+        return itemMutationPrepared;
+    };
 
     // Keep the historical builtin-before-user root ordering, but de-duplicate
     // requests before constructing the reachable dependency graph.
@@ -634,12 +641,20 @@ RideMetric::computeMetrics(
     }
 
     // resize the metric array in the interval if needed
-    if (spec.interval() && spec.interval()->metrics().size() < factory.metricCount()) 
+    if (spec.interval()
+        && spec.interval()->metrics().size() < factory.metricCount()) {
+        if (!prepareItemMutation()) return {};
         spec.interval()->metrics().resize(factory.metricCount());
+    }
 
     // resize the metric array in the interval if needed
-    if (!spec.interval() && item->metrics().size() < factory.metricCount())
+    if (!spec.interval() && item->metrics().size() < factory.metricCount()) {
+        if (!prepareItemMutation()) return {};
         item->metrics().resize(factory.metricCount());
+    }
+
+    if (hasUserMetrics
+        && !prepareItemMutation()) return {};
 
     QHash<QString, RideMetricPtr> owned;
     QHash<QString, RideMetric *> done;

@@ -473,16 +473,45 @@ RideCache::ensureRefreshTarget(RideItem *item)
     Q_ASSERT(QThread::currentThread() == thread());
     if (QThread::currentThread() != thread()) return {};
     if (!ownsLiveRide(item)) return {};
-    return refreshTargets_
+    const RideRefreshTargetToken token = refreshTargets_
         ? refreshTargets_->registerTarget(item)
         : RideRefreshTargetToken{};
+    if (token.isValid()) {
+        item->refreshTargetRegistered_.store(
+            true, std::memory_order_release);
+    }
+    return token;
+}
+
+bool
+RideCache::advanceRefreshTargetRevision(RideItem *item)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (QThread::currentThread() != thread()) return false;
+    if (!ownsLiveRide(item) || !refreshTargets_) return false;
+    using Registry = RideRefreshTargetRegistry<RideItem>;
+    const Registry::InvalidationResult result =
+        refreshTargets_->invalidateTarget(item);
+    if (result == Registry::InvalidationResult::Retired) {
+        item->refreshTargetRegistered_.store(
+            false, std::memory_order_release);
+    }
+    return result == Registry::InvalidationResult::Advanced
+        || result == Registry::InvalidationResult::Retired;
 }
 
 void
 RideCache::retireRefreshTarget(RideItem *item)
 {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (refreshTargets_) refreshTargets_->retire(item);
+    if (QThread::currentThread() != thread()) return;
+    RideItem *liveItem = nullptr;
+    if (refreshTargets_)
+        refreshTargets_->retire(item, &liveItem);
+    if (liveItem) {
+        liveItem->refreshTargetRegistered_.store(
+            false, std::memory_order_release);
+    }
 }
 
 RideItem *
@@ -622,6 +651,7 @@ RideCache::configChanged(qint32 what)
 
     if (plan.rebuildCalendarText) {
         for (RideItem *item : rides()) {
+            if (!item->prepareForRefreshRelevantMutation()) continue;
             item->metadata_.insert(
                 QStringLiteral("Calendar Text"),
                 GlobalContext::context()->rideMetadata->calendarText(item));
@@ -630,6 +660,7 @@ RideCache::configChanged(qint32 what)
 
     if (plan.recolor) {
         for (RideItem *item : rides()) {
+            if (!item->prepareForRefreshRelevantMutation()) continue;
             item->color = GlobalContext::context()->colorEngine->colorFor(
                 item->getText(
                     GlobalContext::context()->rideMetadata->getColorField(),
@@ -2154,7 +2185,7 @@ RideCache::updateFromWorkout
     }
     if (changed) {
         item->setDirty(true);
-        item->isstale = true;
+        item->markStale();
         if (autoSave) {
             QString error;
             saveActivity(item, error);
@@ -2522,6 +2553,9 @@ void RideCacheRefreshThread::run()
                     target->refreshGeneration_.accepts(
                         generation),
                     refreshed);
+            // The legacy worker-owned publication is the explicit F3c/F3c2
+            // exception.  Its stale proposal moves behind the owner gate in
+            // that change; external live mutations use markStale().
             item->isstale = disposition.keepStale;
             if (disposition.markCacheChanged) {
                 target->refreshChanged_ = true;

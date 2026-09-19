@@ -328,7 +328,10 @@ AnalysisSidebar::itemSelectionChanged()
             QVariant v = i.value()->child(j)->data(0, Qt::UserRole);
 
             // make the IntervalItem selected flag reflect the current selection state
-            static_cast<IntervalItem*>(v.value<void*>())->selected = i.value()->child(j)->isSelected();
+            if (!static_cast<IntervalItem*>(v.value<void*>())->setSelected(
+                    i.value()->child(j)->isSelected())) {
+                return;
+            }
         }
     }
 
@@ -858,6 +861,7 @@ AnalysisSidebar::perfTestIntervalSelected()
 
         // is it selected and linked ?
         if (item && item->rideInterval) {
+            if (!item->prepareForMutation()) return;
 
             // set item and ride
             item->rideInterval->test = item->test = true;
@@ -928,6 +932,7 @@ AnalysisSidebar::renameIntervalsSelected()
 
                 // is it selected and linked ?
                 if (item && item->selected && item->rideInterval) {
+                    if (!item->prepareForMutation()) return;
 
                     // set item and ride
                     item->rideInterval->name = item->name = 
@@ -1047,7 +1052,7 @@ AnalysisSidebar::editRoute()
                 foreach(IntervalItem *interval, ride->intervals(RideFileInterval::ROUTE)) {
                     if (interval->route == activeInterval->route) {
                         //Make stale
-                        ride->isstale = true;
+                        ride->markStale();
                     }
                 }
             }
@@ -1099,6 +1104,7 @@ AnalysisSidebar::editInterval()
     EditIntervalDialog dialog(this, temp); // pass by reference
 
     if (dialog.exec()) {
+        if (!activeInterval->prepareForMutation()) return;
 
         // update the interval item
         activeInterval->name = temp.name;

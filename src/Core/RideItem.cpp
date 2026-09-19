@@ -59,6 +59,37 @@ RideItem::RideItem()
     count_.fill(0, RideMetricFactory::instance().metricCount());
 }
 
+#ifdef GC_RIDE_ITEM_MUTATION_TEST
+RideItem::RideItem(MutationTestTag)
+    : ride_(nullptr)
+    , fileCache_(nullptr)
+    , context(nullptr)
+    , isdirty(false)
+    , isstale(true)
+    , isedit(false)
+    , skipsave(false)
+    , color(QColor(1, 1, 1))
+    , planned(false)
+    , isBike(false)
+    , isRun(false)
+    , isSwim(false)
+    , isXtrain(false)
+    , isAero(false)
+    , samples(false)
+    , zoneRange(-1)
+    , hrZoneRange(-1)
+    , paceZoneRange(-1)
+    , fingerprint(0)
+    , metacrc(0)
+    , crc(0)
+    , timestamp(0)
+    , dbversion(0)
+    , udbversion(0)
+    , weight(0)
+{
+}
+#endif
+
 RideItem::RideItem(RideFile *ride, Context *context) 
     : 
     ride_(ride), fileCache_(NULL), context(context), isdirty(false), isstale(true), isedit(false), skipsave(false), path(""), fileName(""),
@@ -99,6 +130,7 @@ RideItem::RideItem(RideFile *ride, QDateTime &dateTime, Context *context)
 void
 RideItem::setFrom(RideItem&here, bool temp) // used when loading cache/rideDB.json
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     ride_ = NULL;
     fileCache_ = NULL;
     metrics_ = here.metrics_;
@@ -152,6 +184,7 @@ RideItem::setFrom(RideItem&here, bool temp) // used when loading cache/rideDB.js
 void
 RideItem::setFrom(QHash<QString, RideMetricPtr> computed)
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     QHashIterator<QString, RideMetricPtr> i(computed);
     while (i.hasNext()) {
         i.next();
@@ -186,6 +219,7 @@ RideFile *RideItem::ride(bool open)
             return nullptr;
         }
     }
+    if (!prepareForRefreshRelevantMutation()) return nullptr;
 
     // open the ride file
     QFile file(path + "/" + fileName);
@@ -252,6 +286,9 @@ RideFile *RideItem::ride(bool open)
     return ride_;
 }
 
+#ifdef GC_RIDE_ITEM_MUTATION_TEST
+RideItem::~RideItem() = default;
+#else
 RideItem::~RideItem()
 {
     if (context && context->athlete
@@ -275,6 +312,7 @@ RideItem::~RideItem()
     //XXX the intervals we just passed into setFrom()
     //foreach(IntervalItem*x, intervals_) delete x;
 }
+#endif
 
 RideFileCache *
 RideItem::fileCache()
@@ -308,6 +346,8 @@ RideItem::setRide(RideFile *overwrite)
             return;
         }
     }
+
+    if (!prepareForRefreshRelevantMutation()) return;
 
     RideFile *old = ride_;
     ride_ = overwrite; // overwrite
@@ -354,7 +394,8 @@ RideItem::borrowFileCacheForRefresh(RideFileCache *cache)
 void
 RideItem::rideFileDestroyed(QObject *rideFile)
 {
-    if (ride_ == rideFile) ride_ = nullptr;
+    if (ride_ == rideFile && prepareForRefreshRelevantMutation())
+        ride_ = nullptr;
 }
 
 bool
@@ -366,6 +407,7 @@ RideItem::removeInterval(IntervalItem *x)
     if (index < 0 || index > intervals_.count()) return false; // out of bounds
     if (x->type != RideFileInterval::USER) return false; // wrong type
     if (x->rideInterval == NULL) return false; // no link to ridefileinterval
+    if (!prepareForRefreshRelevantMutation()) return false;
     if (ride_->removeInterval(x->rideInterval) == false) return false; // failed to remove from ridefile
     intervals_.removeAt(index);
 
@@ -376,6 +418,7 @@ RideItem::removeInterval(IntervalItem *x)
 void
 RideItem::moveInterval(int from, int to)
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     // Move in RideFile
     int from2 = ride()->intervals().indexOf(intervals_.at(from)->rideInterval);
     int to2 = ride()->intervals().indexOf(intervals_.at(to)->rideInterval);
@@ -388,14 +431,23 @@ RideItem::moveInterval(int from, int to)
 void
 RideItem::addInterval(IntervalItem item)
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     IntervalItem *add = new IntervalItem(item);
     add->rideItem_ = this;
     intervals_ << add;
 }
 
+void
+RideItem::clearIntervals()
+{
+    if (!prepareForRefreshRelevantMutation()) return;
+    intervals_.clear();
+}
+
 IntervalItem *
 RideItem::newInterval(QString name, double start, double stop, double startKM, double stopKM, QColor color, bool test)
 {
+    if (!prepareForRefreshRelevantMutation()) return nullptr;
     // add a new interval to the end of the list
     color = color == Qt::black ? standardColor(intervals(RideFileInterval::USER).count()) : color;
 
@@ -420,6 +472,7 @@ RideItem::newInterval(QString name, double start, double stop, double startKM, d
 void
 RideItem::notifyRideDataChanged()
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     // refresh the metrics
     isstale=true;
 
@@ -444,6 +497,7 @@ RideItem::notifyRideDataChanged()
 void
 RideItem::notifyRideMetadataChanged()
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     // refresh the metrics
     isstale=true;
     refresh();
@@ -460,6 +514,7 @@ RideItem::modified()
 void
 RideItem::saved()
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     rebindSourceProvenance();
     setDirty(false);
     isstale=true;
@@ -470,6 +525,7 @@ RideItem::saved()
 void
 RideItem::reverted()
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     rebindSourceProvenance();
     setDirty(false);
     isstale=true;
@@ -502,6 +558,7 @@ RideItem::setDirty(bool val)
             return;
         }
     }
+    if (!prepareForRefreshRelevantMutation()) return;
     if (val && ride_)
         ride_->invalidateSourceProvenance();
     if (isdirty == val) return; // np change
@@ -522,6 +579,7 @@ RideItem::setDirty(bool val)
 void
 RideItem::setFileName(QString path, QString fileName)
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     this->path = path;
     this->fileName = fileName;
 }
@@ -535,6 +593,7 @@ RideItem::isOpen()
 void
 RideItem::close()
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     // ride data
     if (ride_) {
         // break link to ride file
@@ -555,8 +614,36 @@ RideItem::close()
 void
 RideItem::setStartTime(QDateTime newDateTime)
 {
+    if (!prepareForRefreshRelevantMutation()) return;
     dateTime = newDateTime;
     ride()->setStartTime(newDateTime);
+}
+
+bool
+RideItem::markStale()
+{
+    if (!prepareForRefreshRelevantMutation()) return false;
+    isstale = true;
+    return true;
+}
+
+bool
+RideItem::prepareForRefreshRelevantMutation()
+{
+    if (!refreshTargetRegistered_.load(std::memory_order_acquire))
+        return true;
+#ifdef GC_RIDE_ITEM_MUTATION_TEST
+    return refreshMutationAdvanceForTest_
+        && refreshMutationAdvanceForTest_(
+            refreshMutationContextForTest_, this);
+#else
+    if (!context || !context->athlete
+        || !context->athlete->rideCache) {
+        return false;
+    }
+    return context->athlete->rideCache->
+        advanceRefreshTargetRevision(this);
+#endif
 }
 
 // check if we need to be refreshed
@@ -1040,7 +1127,7 @@ RideItem::refresh()
     result.cache = std::move(cachePreparation);
     result.expected = {
         expectedPath, expectedFileName, expectedDateTime,
-        targetWasOpen, expectedOpenRide};
+        planned, targetWasOpen, expectedOpenRide};
     result.sourcePath = sourcePath;
     result.sourceFingerprint = sourceFingerprint;
 
@@ -1052,7 +1139,7 @@ RideItem::refresh()
     if (!RideFileCRC::computeFileFingerprint(
             currentSourcePath, currentSourceFingerprint)
         || !result.accepts(
-            {path, fileName, dateTime, isOpen(), ride_},
+            {path, fileName, dateTime, planned, isOpen(), ride_},
             currentSourcePath,
             currentSourceFingerprint)) {
         return rideItemRefreshSucceeded(
@@ -1109,17 +1196,26 @@ RideItem::getWeight(int type)
 
     // return what was asked for!
     if (type == Measure::WeightKg) {
-        // get weight from whatever we got
-        weight = m;
+        double resolvedWeight = m;
 
         // from metadata
-        if (weight <= 0.00) weight = metadata_.value("Weight", "0.0").toDouble();
+        if (resolvedWeight <= 0.00)
+            resolvedWeight = metadata_.value(
+                "Weight", "0.0").toDouble();
 
         // global options and if not set default to 75 kg.
-        if (weight <= 0.00) weight = appsettings->cvalue(context->athlete->cyclist, GC_WEIGHT, "75.0").toString().toDouble();
+        if (resolvedWeight <= 0.00)
+            resolvedWeight = appsettings->cvalue(
+                context->athlete->cyclist,
+                GC_WEIGHT, "75.0").toString().toDouble();
 
         // No weight default is weird, we'll set to 80kg
-        if (weight <= 0.00) weight = 80.00;
+        if (resolvedWeight <= 0.00) resolvedWeight = 80.00;
+
+        if (weight != resolvedWeight) {
+            if (!prepareForRefreshRelevantMutation()) return weight;
+            weight = resolvedWeight;
+        }
 
         return weight;
     } else {

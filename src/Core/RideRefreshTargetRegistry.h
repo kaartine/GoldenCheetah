@@ -41,6 +41,13 @@ template<typename Target>
 class RideRefreshTargetRegistry final
 {
 public:
+    enum class InvalidationResult {
+        Rejected,
+        Unregistered,
+        Advanced,
+        Retired
+    };
+
     RideRefreshTargetRegistry() = default;
 
     bool initialize(
@@ -91,31 +98,43 @@ public:
         return tokenFor(targetId, entry);
     }
 
-    RideRefreshTargetToken advanceRevision(Target *target)
+    InvalidationResult invalidateTarget(Target *target)
     {
-        if (!onOwnerThread() || !target) return {};
+        if (!onOwnerThread() || !target)
+            return InvalidationResult::Rejected;
         const auto known = targetIds_.constFind(target);
-        if (known == targetIds_.cend()) return {};
+        if (known == targetIds_.cend())
+            return InvalidationResult::Unregistered;
         auto entry = targets_.find(*known);
         if (entry == targets_.end()
             || entry->target.data() != target) {
-            return {};
+            const quint64 targetId = *known;
+            targetIds_.erase(known);
+            targets_.remove(targetId);
+            return InvalidationResult::Retired;
         }
         if (entry->revision
             == std::numeric_limits<quint64>::max()) {
             retire(target);
-            return {};
+            return InvalidationResult::Retired;
         }
         ++entry->revision;
-        return tokenFor(*known, *entry);
+        return InvalidationResult::Advanced;
     }
 
-    bool retire(Target *target)
+    bool retire(Target *target, Target **liveTarget = nullptr)
     {
+        if (liveTarget) *liveTarget = nullptr;
         if (!onOwnerThread() || !target) return false;
         const auto known = targetIds_.find(target);
         if (known == targetIds_.end()) return false;
         const quint64 targetId = *known;
+        const auto entry = targets_.constFind(targetId);
+        if (liveTarget) {
+            *liveTarget = entry != targets_.cend()
+                    && entry->target.data() == target
+                ? target : nullptr;
+        }
         targetIds_.erase(known);
         targets_.remove(targetId);
         return true;

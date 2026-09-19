@@ -603,6 +603,16 @@ RideCache::changeActivityIdentitiesAtomically(
         return result;
     }
 
+    for (const PendingIdentity &entry : pending) {
+        RideItem *const item = entry.item.data();
+        if (!item || !item->prepareForRefreshRelevantMutation()) {
+            mutation.endReset();
+            rollback(tr(
+                "The activity changed before identity publication"));
+            return result;
+        }
+    }
+
     QString publishError;
     const bool publishClean =
         journal->publishAndCommit(publishError);
@@ -662,7 +672,7 @@ RideCache::changeActivityIdentitiesAtomically(
                     entry.targetLinkedFileName);
             }
             item->setDirty(false);
-            item->isstale = true;
+            item->markStale();
         }
         std::sort(
             guardedCache->rides_.begin(),

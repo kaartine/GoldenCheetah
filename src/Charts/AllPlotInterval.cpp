@@ -321,7 +321,7 @@ AllPlotInterval::intervalCurveClick(QwtPlotIntervalCurve *curve) {
     IntervalItem *interval = curves.key(curve);
 
     if (interval) {
-        interval->selected = !interval->selected;
+        if (!interval->setSelected(!interval->selected)) return;
         context->notifyIntervalItemSelectionChanged(interval);
     }
 }

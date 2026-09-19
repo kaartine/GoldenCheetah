@@ -58,6 +58,7 @@ exists(unittests.pri) {
 			   Core/rideCacheCallbackGuard \
 			   Core/rideCacheSaveSnapshot \
 			   Core/rideItemComputedState \
+			   Core/rideItemMutationFence \
 			   Core/rideCachePerformance \
 			   Core/rideRefreshEnvironment \
 			   Core/rideRefreshMeasures \

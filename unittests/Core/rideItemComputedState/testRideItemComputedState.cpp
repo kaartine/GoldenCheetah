@@ -248,6 +248,7 @@ RideItem::~RideItem()
 }
 
 bool RideItem::isOpen() { return ride_ != nullptr; }
+bool RideItem::prepareForRefreshRelevantMutation() { return true; }
 void RideItem::modified() {}
 void RideItem::saved() {}
 void RideItem::reverted() {}

@@ -254,6 +254,8 @@ RideCacheItemSnapshot::applyTo(RideItem &target)
         return false;
     }
 
+    if (!target.prepareForRefreshRelevantMutation()) return false;
+
     computed_.applyTo(target);
 
     target.isdirty = dirty_;

@@ -29,6 +29,8 @@
 #include <QMap>
 #include <QVector>
 
+#include <atomic>
+
 class RideFile;
 class RideFileCache;
 class RideCache;
@@ -48,8 +50,10 @@ class RideItemRefreshTestAccess;
 class RideItem : public QObject
 {
 
+#ifndef GC_RIDE_ITEM_MUTATION_TEST
     Q_OBJECT
     G_OBJECT
+#endif
 
 
     protected:
@@ -62,6 +66,7 @@ class RideItem : public QObject
         friend class ::ComparePane;
         friend class ::RideCacheItemSnapshot;
         friend class ::RideItemComputedState;
+        friend class ::RideMetric;
 #ifdef GC_RIDE_ITEM_REFRESH_TEST_HOOKS
         friend class ::RideItemRefreshTestAccess;
 #endif
@@ -130,7 +135,7 @@ class RideItem : public QObject
 
         // add interval e.g. during load of rideDB.json
         void addInterval(IntervalItem interval);
-        void clearIntervals() { intervals_.clear(); } // does NOT delete them
+        void clearIntervals(); // does NOT delete them
 
         // new Interval created and needs to be reflected in ridefile
         IntervalItem * newInterval(QString name, double start, double stop, double startKM, double stopKM, QColor color, bool test);
@@ -224,6 +229,10 @@ class RideItem : public QObject
         RideItem(RideFile *ride, Context *context);
         RideItem(QString path, QString fileName, QDateTime &dateTime, Context *context, bool planned);
         RideItem(RideFile *ride, QDateTime &dateTime, Context *context);
+#ifdef GC_RIDE_ITEM_MUTATION_TEST
+        struct MutationTestTag {};
+        explicit RideItem(MutationTestTag);
+#endif
 
         ~RideItem();
 
@@ -236,6 +245,7 @@ class RideItem : public QObject
             const RideRefreshEnvironment &environment,
             const RideRefreshItemStaleInputs &inputs);
         bool isStale() { return isstale; }
+        bool markStale();
 
         // Activity linking methods
         QString getLinkedFileName() const;
@@ -256,10 +266,17 @@ class RideItem : public QObject
         bool operator<(RideItem right) const { return dateTime < right.dateTime; }
 
     private:
+        bool prepareForRefreshRelevantMutation();
         bool checkStaleImpl(const RideRefreshEnvironment *environment);
         void updateIntervals(bool notify = true);
         void borrowRideForRefresh(RideFile *ride);
         void borrowFileCacheForRefresh(RideFileCache *cache);
+
+        std::atomic<bool> refreshTargetRegistered_{false};
+#ifdef GC_RIDE_ITEM_MUTATION_TEST
+        bool (*refreshMutationAdvanceForTest_)(void *, RideItem *) = nullptr;
+        void *refreshMutationContextForTest_ = nullptr;
+#endif
 };
 
 Q_DECLARE_OPAQUE_POINTER(RideItem*);
