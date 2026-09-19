@@ -20,6 +20,7 @@
 #include "RRuntimeInitialization.h"
 #include "RGraphicsDevice.h"
 #include "RProtectionScope.h"
+#include "RuntimeConstructionBinding.h"
 #include "GcUpgrade.h"
 
 #include "RideCache.h"
@@ -71,8 +72,19 @@ typedef struct {
 
 } R_CMethodDef33;
 
+thread_local RTool *RTool::constructionInstance_ = nullptr;
+
+RTool *
+RTool::callbackInstance()
+{
+    return constructionInstance_ ? constructionInstance_ : rtool;
+}
+
 RTool::RTool()
 {
+    RuntimeConstructionBinding<RTool> constructionBinding(
+        constructionInstance_, this);
+
     // setup the R runtime elements
     failed = false;
     starting = true;
@@ -84,13 +96,16 @@ RTool::RTool()
     context = NULL;
     boundAthlete = NULL;
 
+    if (!constructionBinding.acquired()) {
+        failed = true;
+        starting = false;
+        return;
+    }
+
     // if we bail we need to explain why, its in here
     QString dialogtext;
 
     try {
-
-        // yikes, self referenced during construction (!)
-        rtool = this;
 
         // set default width and height
         width = height = 500;
@@ -239,7 +254,7 @@ RTool::RTool()
         // the same as the version we built with.
         // get version just loaded from shared lib
         R->parseEvalNT("print(R.version.string)");
-        QStringList strings = rtool->messages;
+        QStringList strings = messages;
 
         if (strings.count() == 3) {
             QRegExp exp("^.*([0-9]+\\.[0-9]+\\.[0-9]+).*$");
@@ -274,7 +289,11 @@ RTool::RTool()
         }
 
         // should be safe to setup the graphics device now
-        dev = new RGraphicsDevice();
+        dev = new RGraphicsDevice(this);
+        if (!dev->initialize()) {
+            failed = true;
+            goto fail;
+        }
 
         // set them up
         DllInfo *info = R_getEmbeddingDllInfo();
@@ -288,7 +307,7 @@ RTool::RTool()
         fprintf(stderr,"R loaded. [Compiled=%s.%s, Loaded=%d.%d, Loaded DeviceEngine=%d]\n", R_MAJOR, R_MINOR, majorN, minorN, GC_R_GE_getVersion());
         #endif
 
-        rtool->messages.clear();
+        messages.clear();
 
         // load the dynamix library and create function wrapper
         // we should put this into a source file (.R)
@@ -373,7 +392,7 @@ RTool::RTool()
                        .arg(VERSION_LATEST)
                        .arg("https://cloud.r-project.org/"));
 
-        rtool->messages.clear();
+        messages.clear();
 
         configChanged();
         initializationState_ = InitializationState::Ready;
@@ -414,6 +433,9 @@ RTool::~RTool()
 void
 RTool::R_ProcessEvents()
 {
+    RTool *tool = callbackInstance();
+    if (!tool || tool->initializationState()
+        != InitializationState::Ready) return;
     QApplication::processEvents();
 }
 
@@ -486,7 +508,9 @@ void
 RTool::cancel()
 {
     // gets called when we need to stop a long running script
-    rtool->cancelled = true;
+    RTool *tool = callbackInstance();
+    if (!tool) return;
+    tool->cancelled = true;
 #ifdef WIN32
     UserBreak = true;
 #else
@@ -524,12 +548,13 @@ RTool::configChanged()
                              .arg(GColor(CPLOTMARKER).name());
 
     // fire and forget, don't care if it fails or not !!
-    rtool->R->parseEvalNT(parCommand);
+    R->parseEvalNT(parCommand);
 }
 
 SEXP
 RTool::athlete()
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -615,6 +640,7 @@ class gcZoneConfig {
 SEXP
 RTool::zones(SEXP pDate, SEXP pSport)
 {
+    RTool *rtool = callbackInstance();
     // return a dataframe with
     // date, sport, cp, w', pmax, aetp, ftp, lthr, aethr, rhr, hrmax, cv, aetv, zoneslow, hrzoneslow, pacezoneslow, zonescolor
 
@@ -953,6 +979,8 @@ RTool::zones(SEXP pDate, SEXP pSport)
 SEXP
 RTool::pageSize(SEXP width, SEXP height)
 {
+    RTool *rtool = callbackInstance();
+    if (!rtool) return Rf_allocVector(INTSXP, 0);
     width = Rf_coerceVector(width, INTSXP);
     rtool->width = INTEGER(width)[0];
 
@@ -966,11 +994,12 @@ RTool::pageSize(SEXP width, SEXP height)
 SEXP
 RTool::windowSize()
 {
+    RTool *rtool = callbackInstance();
     // return a vector of width, height
     SEXP ans;
     PROTECT(ans = Rf_allocVector(INTSXP, 2));
-    INTEGER(ans)[0] = rtool->chart ? rtool->chart->geometry().width() : 500;
-    INTEGER(ans)[1] = rtool->chart ? rtool->chart->geometry().height() : 500;
+    INTEGER(ans)[0] = rtool && rtool->chart ? rtool->chart->geometry().width() : 500;
+    INTEGER(ans)[1] = rtool && rtool->chart ? rtool->chart->geometry().height() : 500;
     UNPROTECT(1);
 
     return ans;
@@ -979,6 +1008,7 @@ RTool::windowSize()
 SEXP
 RTool::activities(SEXP filter)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -1054,6 +1084,7 @@ RTool::activities(SEXP filter)
 SEXP
 RTool::dfForRideItem(const RideItem *ri)
 {
+    RTool *rtool = this;
     RideItem *item = const_cast<RideItem*>(ri);
 
     const RideMetricFactory &factory = RideMetricFactory::instance();
@@ -1226,6 +1257,7 @@ RTool::dfForRideItem(const RideItem *ri)
 SEXP
 RTool::dfForDateRange(bool all, DateRange range, SEXP filter)
 {
+    RTool *rtool = this;
     const RideMetricFactory &factory = RideMetricFactory::instance();
     int rides = rtool->context->athlete->rideCache->count();
     int metrics = factory.metricCount();
@@ -1467,6 +1499,7 @@ RTool::dfForDateRange(bool all, DateRange range, SEXP filter)
 SEXP
 RTool::dfForDateRangeIntervals(DateRange range, QStringList types)
 {
+    RTool *rtool = this;
     const RideMetricFactory &factory = RideMetricFactory::instance();
     int intervals = 0;
     int metrics = factory.metricCount();
@@ -1703,6 +1736,7 @@ RTool::dfForDateRangeIntervals(DateRange range, QStringList types)
 SEXP
 RTool::season(SEXP pAll, SEXP pCompare)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -1803,6 +1837,7 @@ RTool::season(SEXP pAll, SEXP pCompare)
 SEXP
 RTool::seasonIntervals(SEXP pTypes, SEXP pCompare)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -1941,6 +1976,7 @@ RTool::intervalType(SEXP type)
 SEXP
 RTool::activityIntervals(SEXP pTypes, SEXP datetime)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -2138,6 +2174,7 @@ RTool::activityIntervals(SEXP pTypes, SEXP datetime)
 SEXP
 RTool::metrics(SEXP pAll, SEXP pFilter, SEXP pCompare)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -2440,6 +2477,7 @@ RTool::dfForActivity(RideFile *f, int split, QString join)
 QList<RideItem *>
 RTool::activitiesFor(SEXP datetime)
 {
+    RTool *rtool = this;
     QList<RideItem*> returning;
 
     PROTECT(datetime=Rf_coerceVector(datetime, INTSXP));
@@ -2468,6 +2506,7 @@ RTool::activitiesFor(SEXP datetime)
 SEXP
 RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -2685,6 +2724,7 @@ RTool::dfForActivityMeanmax(const RideItem *i)
 SEXP
 RTool::dfForDateRangeMeanmax(bool all, DateRange range, SEXP filter)
 {
+    RTool *rtool = this;
     // construct the date range and then get a ridefilecache
     if (all) range = DateRange(QDate(1900,01,01), QDate(2100,01,01));
 
@@ -2846,6 +2886,7 @@ RTool::dfForRideFileCache(RideFileCache *cache)
 SEXP
 RTool::seasonPeaks(SEXP pAll, SEXP pFilter, SEXP pCompare, SEXP pSeries, SEXP pDuration)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -2991,6 +3032,7 @@ RTool::seasonPeaks(SEXP pAll, SEXP pFilter, SEXP pCompare, SEXP pSeries, SEXP pD
 SEXP
 RTool::dfForDateRangePeaks(bool all, DateRange range, SEXP filter, QList<RideFile::SeriesType> series, QList<int> durations)
 {
+    RTool *rtool = this;
     // so how many vectors in the frame ? +1 is the datetime of the peak
     int listsize=series.count() * durations.count() + 1;
     SEXP df;
@@ -3133,6 +3175,7 @@ RTool::dfForDateRangePeaks(bool all, DateRange range, SEXP filter, QList<RideFil
 SEXP
 RTool::seasonMeanmax(SEXP pAll, SEXP pFilter, SEXP pCompare)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -3252,6 +3295,7 @@ RTool::seasonMeanmax(SEXP pAll, SEXP pFilter, SEXP pCompare)
 SEXP
 RTool::activityMeanmax(SEXP pCompare)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -3371,6 +3415,7 @@ RTool::activityMeanmax(SEXP pCompare)
 SEXP
 RTool::activityMetrics(SEXP pCompare)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -3490,6 +3535,7 @@ RTool::activityMetrics(SEXP pCompare)
 SEXP
 RTool::pmc(SEXP pAll, SEXP pMetric, SEXP pType)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -3666,6 +3712,7 @@ RTool::pmc(SEXP pAll, SEXP pMetric, SEXP pType)
 SEXP
 RTool::measures(SEXP pAll, SEXP pGroup)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -3780,6 +3827,7 @@ RTool::measures(SEXP pAll, SEXP pGroup)
 SEXP
 RTool::activityWBal(SEXP pCompare)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -3932,6 +3980,7 @@ RTool::dfForActivityWBal(RideFile*f)
 SEXP
 RTool::activityXData(SEXP pName, SEXP pCompare)
 {
+    RTool *rtool = callbackInstance();
     if (!rtool || !rtool->hasValidAthleteBinding())
         return Rf_allocVector(INTSXP, 0);
 
@@ -4179,6 +4228,7 @@ RTool::dfForActivityXData(RideFile*f, QString name)
 SEXP
 RTool::setChart(SEXP title, SEXP type, SEXP animate, SEXP legpos, SEXP stack, SEXP orientation)
 {
+    RTool *rtool = callbackInstance();
 
     if (rtool == NULL || rtool->context == NULL || rtool->chart == NULL)   return Rf_allocVector(INTSXP, 0);
 
@@ -4223,6 +4273,7 @@ SEXP
 RTool::addCurve(SEXP name, SEXP xseries, SEXP yseries, SEXP fseries, SEXP xname, SEXP yname, SEXP labels, SEXP colors,
               SEXP line, SEXP symbol, SEXP size, SEXP color, SEXP opacity, SEXP opengl, SEXP legend, SEXP datalabels, SEXP fill)
 {
+    RTool *rtool = callbackInstance();
     Q_UNUSED(labels) //XXX todo
     Q_UNUSED(colors) //XXX todo
 
@@ -4325,6 +4376,7 @@ SEXP
 RTool::configureAxis(SEXP name, SEXP visible, SEXP align, SEXP min, SEXP max,
                                   SEXP type, SEXP labelcolor, SEXP axiscolor, SEXP log, SEXP categories)
 {
+    RTool *rtool = callbackInstance();
     Q_UNUSED(align) // we always pass -1 for now
     Q_UNUSED(categories) // XXX TODO
 
@@ -4385,6 +4437,7 @@ RTool::configureAxis(SEXP name, SEXP visible, SEXP align, SEXP min, SEXP max,
 SEXP
 RTool::annotate(SEXP type, SEXP p1, SEXP p2, SEXP p3)
 {
+    RTool *rtool = callbackInstance();
     if (rtool == NULL || rtool->context == NULL || rtool->chart == NULL)   return Rf_allocVector(INTSXP, 0);
 
     // type

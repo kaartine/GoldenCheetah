@@ -42,6 +42,7 @@ unix {
 
 # You can also define your own local source to add to build
 HEADERS += $${LOCALHEADERS}
+HEADERS += Core/ProcessLifetimeRuntimeOwner.h Core/RuntimeConstructionBinding.h
 SOURCES += $${LOCALSOURCES}
 
 ###=====================

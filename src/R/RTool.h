@@ -43,6 +43,7 @@ class RTool {
         RTool();
         ~RTool();
         InitializationState initializationState() const { return initializationState_; }
+        static RTool *callbackInstance();
         void  configChanged();
         RExecutionGate::Lease tryAcquireExecution(
             Context *executionContext,
@@ -110,13 +111,19 @@ class RTool {
 
         // handling console output from the R runtime
         static void R_Suicide(const char *) {}
-        static void R_ShowMessage(const char *text) { rtool->messages << QString(text); }
+        static void R_ShowMessage(const char *text) {
+            if (RTool *tool = callbackInstance()) tool->messages << QString(text);
+        }
         // yep. Windows and Unix definitions in RStartup/Rinterface are different
         //      the R codebase is a mess.
         static int R_ReadConsole(const char *, unsigned char *, int, int) { return 0; }
         static int R_ReadConsoleWin(const char *, char *, int, int) { return 0; }
-        static void R_WriteConsole(const char *text, int) { rtool->messages << QString(text); }
-        static void R_WriteConsoleEx(const char *text, int, int) { rtool->messages << QString(text); }
+        static void R_WriteConsole(const char *text, int) {
+            if (RTool *tool = callbackInstance()) tool->messages << QString(text);
+        }
+        static void R_WriteConsoleEx(const char *text, int, int) {
+            if (RTool *tool = callbackInstance()) tool->messages << QString(text);
+        }
         static void R_ResetConsole() { }
         static void R_FlushConsole() { }
         static void R_ClearerrConsole() { }
@@ -152,6 +159,7 @@ class RTool {
         RExecutionGate executionGate;
         std::atomic_bool appearanceRefreshPending{false};
         InitializationState initializationState_ = InitializationState::NotStarted;
+        static thread_local RTool *constructionInstance_;
 
 };
 

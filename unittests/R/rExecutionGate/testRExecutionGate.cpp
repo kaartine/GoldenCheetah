@@ -10,6 +10,8 @@
 #include "R/RExecutionGate.h"
 #include "R/RDeferredUiWork.h"
 #include "R/RRuntimeInitialization.h"
+#include "Core/ProcessLifetimeRuntimeOwner.h"
+#include "Core/RuntimeConstructionBinding.h"
 #include "Charts/RConsolePromptPolicy.h"
 #include "Charts/RWidgetExecutionGuard.h"
 
@@ -87,6 +89,27 @@ public:
     State state = State::NotStarted;
 };
 
+struct BoundRuntime {};
+thread_local BoundRuntime *constructionRuntime = nullptr;
+
+class OwnedRuntime
+{
+public:
+    enum class InitializationState { NotStarted, InterpreterInitialized, Ready };
+
+    OwnedRuntime(InitializationState state, int &destructions)
+        : state_(state), destructions_(destructions)
+    {
+    }
+
+    ~OwnedRuntime() { ++destructions_; }
+    InitializationState initializationState() const { return state_; }
+
+private:
+    InitializationState state_;
+    int &destructions_;
+};
+
 void returnEarly(RExecutionGate &gate, int &cleanupCount)
 {
     RExecutionGate::Lease lease = gate.tryAcquire([&cleanupCount]() {
@@ -118,7 +141,10 @@ private slots:
     void drainsDeferredWorkOnException();
     void appliesConsolePromptPolicy();
     void preservesRuntimeStateAcrossInitializationException();
+    void constructionBindingIsPrivateScopedAndThreadLocal();
+    void processOwnerPublishesOnlyReadyRuntime();
     void productionRuntimeInitializationIsTwoPhase();
+    void productionRuntimeOwnershipUsesPrivateCallbacks();
     void productionEntrypointsUseGate();
 };
 
@@ -569,6 +595,93 @@ TestRExecutionGate::preservesRuntimeStateAcrossInitializationException()
 }
 
 void
+TestRExecutionGate::constructionBindingIsPrivateScopedAndThreadLocal()
+{
+    BoundRuntime first;
+    BoundRuntime second;
+    BoundRuntime *publicAlias = nullptr;
+
+    try {
+        RuntimeConstructionBinding<BoundRuntime> outer(
+            constructionRuntime, &first);
+        QVERIFY(outer.acquired());
+        QCOMPARE(constructionRuntime, &first);
+        QCOMPARE(publicAlias, nullptr);
+
+        RuntimeConstructionBinding<BoundRuntime> nested(
+            constructionRuntime, &second);
+        QVERIFY(!nested.acquired());
+        QCOMPARE(constructionRuntime, &first);
+
+        BoundRuntime *otherThreadBinding = &first;
+        std::thread other([&otherThreadBinding]() {
+            otherThreadBinding = constructionRuntime;
+        });
+        other.join();
+        QCOMPARE(otherThreadBinding, nullptr);
+        throw std::runtime_error("construction failed");
+    } catch (const std::runtime_error &) {
+    }
+
+    QCOMPARE(constructionRuntime, nullptr);
+    QCOMPARE(publicAlias, nullptr);
+}
+
+void
+TestRExecutionGate::processOwnerPublishesOnlyReadyRuntime()
+{
+    using State = OwnedRuntime::InitializationState;
+    OwnedRuntime *alias = nullptr;
+
+    int preInitDestructions = 0;
+    {
+        ProcessLifetimeRuntimeOwner<OwnedRuntime> owner(alias);
+        QCOMPARE(owner.initialize([&]() {
+            return std::make_unique<OwnedRuntime>(
+                State::NotStarted, preInitDestructions);
+        }), nullptr);
+        QCOMPARE(preInitDestructions, 1);
+        QVERIFY(!owner.hasInitializedRuntime());
+    }
+
+    int partialDestructions = 0;
+    int partialAttempts = 0;
+    OwnedRuntime *partialStorage = nullptr;
+    {
+        ProcessLifetimeRuntimeOwner<OwnedRuntime> owner(alias);
+        QCOMPARE(owner.initialize([&]() {
+            ++partialAttempts;
+            auto candidate = std::make_unique<OwnedRuntime>(
+                State::InterpreterInitialized, partialDestructions);
+            partialStorage = candidate.get();
+            return candidate;
+        }), nullptr);
+        QCOMPARE(owner.initialize([&]() {
+            ++partialAttempts;
+            return std::unique_ptr<OwnedRuntime>();
+        }), nullptr);
+        QCOMPARE(partialAttempts, 1);
+        QCOMPARE(alias, nullptr);
+    }
+    QCOMPARE(partialDestructions, 0);
+    delete partialStorage;
+
+    int readyDestructions = 0;
+    OwnedRuntime *readyStorage = nullptr;
+    {
+        ProcessLifetimeRuntimeOwner<OwnedRuntime> owner(alias);
+        readyStorage = owner.initialize([&]() {
+            return std::make_unique<OwnedRuntime>(
+                State::Ready, readyDestructions);
+        });
+        QCOMPARE(alias, readyStorage);
+    }
+    QCOMPARE(alias, nullptr);
+    QCOMPARE(readyDestructions, 0);
+    delete readyStorage;
+}
+
+void
 TestRExecutionGate::productionRuntimeInitializationIsTwoPhase()
 {
     QFile embed(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/REmbed.cpp"));
@@ -614,6 +727,58 @@ TestRExecutionGate::productionRuntimeInitializationIsTwoPhase()
     QCOMPARE(toolSource.count("R = NULL;"), 1);
     QVERIFY(toolSource.contains(
         "if (initializationState_ != InitializationState::NotStarted) return;"));
+}
+
+void
+TestRExecutionGate::productionRuntimeOwnershipUsesPrivateCallbacks()
+{
+    QFile mainSourceFile(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/Core/main.cpp"));
+    QVERIFY2(mainSourceFile.open(QIODevice::ReadOnly),
+             qPrintable(mainSourceFile.errorString()));
+    const QByteArray mainSource = mainSourceFile.readAll();
+    QVERIFY(mainSource.contains(
+        "ProcessLifetimeRuntimeOwner<RTool> rProcessLifetimeOwner(rtool);"));
+    QVERIFY(mainSource.contains("!rProcessLifetimeOwner.hasInitializedRuntime()"));
+    QVERIFY(mainSource.contains("return std::make_unique<RTool>();"));
+    QVERIFY(!mainSource.contains("rtool = new RTool()"));
+
+    QFile toolFile(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTool.cpp"));
+    QVERIFY2(toolFile.open(QIODevice::ReadOnly), qPrintable(toolFile.errorString()));
+    const QByteArray tool = toolFile.readAll();
+    QVERIFY(tool.contains("RuntimeConstructionBinding<RTool> constructionBinding"));
+    QVERIFY(tool.contains("constructionInstance_ ? constructionInstance_ : rtool"));
+    const qsizetype constructorStart = tool.indexOf("RTool::RTool()");
+    const qsizetype constructorEnd = tool.indexOf("RTool::~RTool()", constructorStart);
+    QVERIFY(constructorStart >= 0);
+    QVERIFY(constructorEnd > constructorStart);
+    QVERIFY(!tool.mid(constructorStart, constructorEnd - constructorStart)
+                 .contains("rtool = this"));
+    QVERIFY(tool.contains("new RGraphicsDevice(this)"));
+    QVERIFY(tool.contains("if (!dev->initialize())"));
+    QVERIFY(tool.contains("!= InitializationState::Ready) return;"));
+    QVERIFY(tool.count("RTool *rtool = callbackInstance();") >= 22);
+
+    QFile headerFile(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTool.h"));
+    QVERIFY2(headerFile.open(QIODevice::ReadOnly),
+             qPrintable(headerFile.errorString()));
+    const QByteArray header = headerFile.readAll();
+    QCOMPARE(header.count("if (RTool *tool = callbackInstance())"), 3);
+    QVERIFY(header.contains("static thread_local RTool *constructionInstance_;"));
+
+    QFile graphicsFile(
+        QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RGraphicsDevice.cpp"));
+    QVERIFY2(graphicsFile.open(QIODevice::ReadOnly),
+             qPrintable(graphicsFile.errorString()));
+    const QByteArray graphics = graphicsFile.readAll();
+    QVERIFY(!graphics.contains("rtool->"));
+    QVERIFY(graphics.contains("pDev->deviceSpecific = this;"));
+    QVERIFY(graphics.contains("RTool *tool = toolFor(pDev);"));
+    QVERIFY(graphics.contains("if (!pDev) return;"));
+    QVERIFY(graphics.contains("if (!pDev) return R_NilValue;"));
+    QVERIFY(graphics.contains("return device ? device->owner_ : nullptr;"));
+    QVERIFY(graphics.contains("if (!tool || !tool->dev) return R_NilValue;"));
+    QVERIFY(graphics.contains("pDev->deviceSpecific = NULL;"));
+    QVERIFY(!graphics.contains("free(device->gcGEDevDesc->dev)"));
 }
 
 void

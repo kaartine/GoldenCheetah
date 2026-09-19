@@ -42,6 +42,7 @@
 #include <QMessageBox>
 #include <QTimer>
 #include "ChooseCyclistDialog.h"
+#include "ProcessLifetimeRuntimeOwner.h"
 #ifdef GC_WANT_HTTP
 #include "httplistener.h"
 #include "httprequesthandler.h"
@@ -51,7 +52,6 @@
 #endif
 #ifdef GC_WANT_PYTHON
 #include "PythonEmbed.h"
-#include "ProcessLifetimeRuntimeOwner.h"
 #include "FixPySettings.h"
 #endif
 #include <signal.h>
@@ -517,6 +517,7 @@ main(int argc, char *argv[])
 
 #ifdef GC_WANT_R
     rtool = NULL;
+    ProcessLifetimeRuntimeOwner<RTool> rProcessLifetimeOwner(rtool);
 #endif
 #ifdef GC_WANT_PYTHON
     python = NULL;
@@ -658,11 +659,13 @@ main(int argc, char *argv[])
 #ifdef GC_WANT_R
         // create the singleton in the main thread
         // will be shared by all athletes and all charts (!!)
-        if (noR) {
-            rtool = NULL;
-        } else if (rtool == NULL && appsettings->value(NULL, GC_EMBED_R, true).toBool()) {
-            rtool = new RTool();
-            if (rtool->failed == true) rtool=NULL;
+        if (!noR && rtool == NULL
+            && !rProcessLifetimeOwner.hasInitializedRuntime()
+            && appsettings->value(NULL, GC_EMBED_R, true).toBool()) {
+            Q_ASSERT(rProcessLifetimeOwner.isOwnerThread());
+            rProcessLifetimeOwner.initialize([]() {
+                return std::make_unique<RTool>();
+            });
         }
 #endif
 

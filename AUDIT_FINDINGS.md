@@ -8212,6 +8212,76 @@ commit before the next finding begins.
   between partial and Ready, process ownership, public-alias removal, and
   callback/device null safety remain C1b release checks rather than claims of
   this prerequisite.
+- ARCH-003C1b1 (FIXED; construction-publication work recorded before correction):
+  replace `RTool` constructor self-publication with a private, owner-thread
+  construction binding used by every constructor-reachable native callback.
+  Suppress Qt event pumping before Ready, give `RGraphicsDevice` an explicit
+  owner and null-safe callback lookup, and reuse the process-lifetime owner so
+  only Ready is public, initialized failures cannot retry, and only definite
+  pre-init failures are destroyed.
+- ARCH-003C1b2 (R non-local-jump blocker found in C1b pre-review and recorded
+  before correction): C++ catches and scope destructors cannot contain an R
+  error that `longjmp`s across their frames. Constructor-time parsing and
+  graphics-device registration still call allocation/error-capable R APIs
+  outside a proven `R_ToplevelExec`/`R_UnwindProtect` boundary. Establish and
+  fault-inject a boundary that returns control before claiming the private
+  construction binding is exception-safe or marking all of C1b fixed.
+- ARCH-003C1b1a (FIXED; graphics descriptor ownership defect found during C1b1 and
+  recorded before correction): `RGraphicsDevice::Close` frees the R graphics
+  engine's passed `DevDesc` rather than a separately allocated
+  `deviceSpecific` payload, then cannot safely tolerate a repeated close.
+  Detach the injected device identity and clear the borrowed GE descriptor
+  idempotently while leaving the engine-owned descriptor to the engine.
+- ARCH-003C1b1b (FIXED; production metadata omission found during C1b1 and recorded
+  before correction): the generic process-lifetime owner is included by
+  production `main.cpp` but absent from the production qmake header manifest.
+  List both lifetime helpers explicitly so IDE/source packaging metadata
+  matches the compiled ownership design.
+- ARCH-003C1b1c (FIXED; feature-matrix build defect found by the C1b1 production
+  compile and recorded before correction): `ProcessLifetimeRuntimeOwner` was
+  included only inside `GC_WANT_PYTHON`, although R-only builds now use it.
+  Make the generic owner include unconditional so R-without-Python and the
+  combined feature configuration compile from the same ownership source.
+- ARCH-003C1b1d (FIXED; graphics initialization result gap found during C1b1 and
+  recorded before correction): the split graphics-device `initialize()` can
+  report that no GE device was installed, but `RTool` would otherwise continue
+  to Ready. Treat that result as an initialized failure so the process owner
+  retains it unpublished and prevents an unsafe retry.
+- ARCH-003C1b1e (FIXED; dependency-baseline drift found by the blocking dependency
+  test and recorded before correction): moving the construction binding to
+  reusable Core ownership support intentionally adds one exact `R -> Core`
+  include edge. Review and regenerate the canonical baseline rather than
+  bypassing the architecture gate.
+- ARCH-003C1b1f (FIXED; graphics allocation/null-callback gap found during C1b1 and
+  recorded before correction): device creation dereferences an unchecked
+  `calloc` result, and `NewPage` dereferences a null descriptor if a malformed
+  callback reaches it. Fail device initialization and return safely instead;
+  a descriptor whose injected identity has been detached must not fall back to
+  a different public/construction owner.
+- ARCH-003C1b1 resolution: construction now uses a thread-local private binding
+  that rejects nesting, is invisible on other threads, and is preferred only
+  by native callbacks. The public `rtool` alias is published by the existing
+  process-lifetime owner only after Ready; initialized failures are retained
+  unpublished without retry, while definite pre-init failures are destroyed.
+  Constructor-time Qt event pumping is suppressed. `RGraphicsDevice` now has
+  an injected owner, installs its identity in `deviceSpecific`, resolves every
+  drawing/size/close callback without the public global, treats failed device
+  setup as a partial runtime failure, and detaches the engine-owned descriptor
+  without freeing it. All registered R entry points select the private/public
+  callback instance before touching runtime state.
+- ARCH-003C1b1 verification: the focused ownership/callback suite passes 22/22
+  on Qt 6.4.2 normally and 22/22 under ASan/UBSan with leak detection disabled.
+  It covers private/public separation, nesting, wrong-thread visibility,
+  C++-exception cleanup, partial retention/no-retry, Ready publication, and
+  production callback/device wiring. `RTool.cpp`, `RGraphicsDevice.cpp`, and
+  `RChart.cpp` compile warning-free with staged R 4.3.3/Rcpp/RInside and Qt
+  headers under `GC_WANT_R`/`STRICT_R_HEADERS`; `main.cpp` compiles warning-free
+  in both R-only and combined R/Python feature configurations. The canonical
+  dependency baseline records the reviewed `R -> Core` helper edge and its
+  suite passes 14/14. `git diff --check` is clean and independent review
+  returned GO. Live-R device-close/failure injection and non-local-jump
+  containment remain explicitly open in ARCH-003C1b2, so this does not claim
+  complete C1b exception safety.
 - ARCH-003D (queued lifetime work recorded before correction): `PythonEmbed` is
   another raw process global whose failed and successful instances are never
   deleted, while its empty destructor cannot balance the saved interpreter

@@ -29,18 +29,20 @@
 #include <stdlib.h>
 #include <QDebug>
 
+class RTool;
+
 // we only have one instance, and it is used throughout
 // when it is instantiated it registers the device with
 // R so it can be used for all output.
 //
-// The global rtool pointer tells us which context to
-// plot for and which display widget should receive the
-// primitives
+// The injected owner tells us which context to plot for and which display
+// widget should receive the primitives. Native callbacks recover that owner
+// from the device descriptor or the private construction binding.
 class RGraphicsDevice {
 
     public:
 
-        RGraphicsDevice();
+        explicit RGraphicsDevice(RTool *owner);
         ~RGraphicsDevice();
 
         // exported as R methods
@@ -105,4 +107,11 @@ class RGraphicsDevice {
 
         // our graphics device
         pGEDevDesc gcGEDevDesc;
+
+    private:
+        static RGraphicsDevice *deviceFor(pDevDesc dev);
+        static RTool *toolFor(pDevDesc dev);
+
+        RTool *owner_;
+        bool closed_ = false;
 };

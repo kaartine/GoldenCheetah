@@ -79,32 +79,55 @@ static struct par parContext(pGEcontext c)
     return returning;
 }
 
-RGraphicsDevice::RGraphicsDevice ()
+RGraphicsDevice::RGraphicsDevice(RTool *owner)
+    : owner_(owner)
 {
     // first time through
     gcGEDevDesc = NULL;
+}
 
+RGraphicsDevice::~RGraphicsDevice() = default;
+
+bool RGraphicsDevice::initialize()
+{
     // set the inital graphics device to GC
     createGD();
+    return gcGEDevDesc != NULL;
+}
+
+RGraphicsDevice *
+RGraphicsDevice::deviceFor(pDevDesc dev)
+{
+    return dev ? static_cast<RGraphicsDevice *>(dev->deviceSpecific) : nullptr;
+}
+
+RTool *
+RGraphicsDevice::toolFor(pDevDesc dev)
+{
+    if (!dev) return RTool::callbackInstance();
+    RGraphicsDevice *device = deviceFor(dev);
+    return device ? device->owner_ : nullptr;
 }
 
 void RGraphicsDevice::NewPage(const pGEcontext, pDevDesc pDev)
 {
     // fire event (pass previousPageSnapshot)
-    if (!rtool || !rtool->canvas) return;
+    if (!pDev) return;
+    RTool *tool = toolFor(pDev);
+    if (!tool || !tool->canvas) return;
 
     // canvas size?
-    int w = rtool->chart ? rtool->chart->geometry().width() : 500;
-    int h = rtool->chart ? rtool->chart->geometry().height() : 500;
+    int w = tool->chart ? tool->chart->geometry().width() : 500;
+    int h = tool->chart ? tool->chart->geometry().height() : 500;
 
     // set the page size to user preference
     pDev->left = 0;
-    pDev->right = rtool->width ? rtool->width : w;
+    pDev->right = tool->width ? tool->width : w;
     pDev->bottom = 0;
-    pDev->top = rtool->height ? rtool->height : h;
+    pDev->top = tool->height ? tool->height : h;
 
     // clear the scene
-    rtool->canvas->newPage();
+    tool->canvas->newPage();
 
 }
 
@@ -124,15 +147,16 @@ void RGraphicsDevice::Mode(int, pDevDesc)
     // 2 = input active
 }
 
-void RGraphicsDevice::Size(double *left, double *right, double *bottom, double *top, pDevDesc)
+void RGraphicsDevice::Size(double *left, double *right, double *bottom, double *top, pDevDesc dev)
 {
-    int w = rtool->chart ? rtool->chart->geometry().width() : 500;
-    int h = rtool->chart ? rtool->chart->geometry().height() : 500;
+    RTool *tool = toolFor(dev);
+    int w = tool && tool->chart ? tool->chart->geometry().width() : 500;
+    int h = tool && tool->chart ? tool->chart->geometry().height() : 500;
 
     *left = 0.0f;
-    *right = rtool->width ? rtool->width : w;
+    *right = tool && tool->width ? tool->width : w;
     *bottom = 0.0f; //XXXs_height;
-    *top = rtool->height ? rtool->height : h;
+    *top = tool && tool->height ? tool->height : h;
 }
 
 void RGraphicsDevice::Clip(double , double , double , double , pDevDesc)
@@ -141,10 +165,11 @@ void RGraphicsDevice::Clip(double , double , double , double , pDevDesc)
 }
 
 
-void RGraphicsDevice::Rect(double x0, double y0, double x1, double y1, const pGEcontext gc, pDevDesc)
+void RGraphicsDevice::Rect(double x0, double y0, double x1, double y1, const pGEcontext gc, pDevDesc dev)
 {
     struct par p = parContext(gc);
-    if (rtool && rtool->canvas) rtool->canvas->rectangle(x0,y0,x1,y1,p.p,p.b);
+    RTool *tool = toolFor(dev);
+    if (tool && tool->canvas) tool->canvas->rectangle(x0,y0,x1,y1,p.p,p.b);
 }
 
 void RGraphicsDevice::Path(double *, double *, int , int *, Rboolean, const pGEcontext, pDevDesc)
@@ -158,28 +183,32 @@ void RGraphicsDevice::Raster(unsigned int *, int , int , double , double , doubl
     qDebug()<<"RGD: Raster";
 }
 
-void RGraphicsDevice::Circle(double x, double y, double r, const pGEcontext gc, pDevDesc)
+void RGraphicsDevice::Circle(double x, double y, double r, const pGEcontext gc, pDevDesc dev)
 {
     struct par p = parContext(gc);
-    if (rtool && rtool->canvas) rtool->canvas->circle(x,y,r,p.p,p.b);
+    RTool *tool = toolFor(dev);
+    if (tool && tool->canvas) tool->canvas->circle(x,y,r,p.p,p.b);
 }
 
-void RGraphicsDevice::Line(double x1, double y1, double x2, double y2, const pGEcontext gc, pDevDesc)
+void RGraphicsDevice::Line(double x1, double y1, double x2, double y2, const pGEcontext gc, pDevDesc dev)
 {
     struct par p = parContext(gc);
-    if (rtool && rtool->canvas) rtool->canvas->line(x1,y1,x2,y2,p.p);
+    RTool *tool = toolFor(dev);
+    if (tool && tool->canvas) tool->canvas->line(x1,y1,x2,y2,p.p);
 }
 
-void RGraphicsDevice::Polyline(int n, double *x, double *y, const pGEcontext gc, pDevDesc)
+void RGraphicsDevice::Polyline(int n, double *x, double *y, const pGEcontext gc, pDevDesc dev)
 {
     struct par p = parContext(gc);
-    if (rtool && rtool->canvas && n > 1) rtool->canvas->polyline(n,x,y,p.p);
+    RTool *tool = toolFor(dev);
+    if (tool && tool->canvas && n > 1) tool->canvas->polyline(n,x,y,p.p);
 }
 
-void RGraphicsDevice::Polygon(int n, double *x, double *y, const pGEcontext gc, pDevDesc)
+void RGraphicsDevice::Polygon(int n, double *x, double *y, const pGEcontext gc, pDevDesc dev)
 {
     struct par p = parContext(gc);
-    if (rtool && rtool->canvas) rtool->canvas->polygon(n,x,y,p.p,p.b);
+    RTool *tool = toolFor(dev);
+    if (tool && tool->canvas) tool->canvas->polygon(n,x,y,p.p,p.b);
 }
 
 void RGraphicsDevice::MetricInfo(int, const pGEcontext gc, double* ascent, double* descent, double* width, pDevDesc)
@@ -207,18 +236,20 @@ double RGraphicsDevice::StrWidthUTF8(const char *str, const pGEcontext gc, pDevD
     return fm.boundingRect(QString(str)).width();
 }
 
-void RGraphicsDevice::Text(double x, double y, const char *str, double rot, double hadj, const pGEcontext gc, pDevDesc)
+void RGraphicsDevice::Text(double x, double y, const char *str, double rot, double hadj, const pGEcontext gc, pDevDesc dev)
 {
     // fonts too
     struct par p = parContext(gc);
-    if (rtool && rtool->canvas) rtool->canvas->text(x,y,QString(str), rot, hadj, p.p, p.f);
+    RTool *tool = toolFor(dev);
+    if (tool && tool->canvas) tool->canvas->text(x,y,QString(str), rot, hadj, p.p, p.f);
 }
 
-void RGraphicsDevice::TextUTF8(double x, double y, const char *str, double rot, double hadj, const pGEcontext gc, pDevDesc)
+void RGraphicsDevice::TextUTF8(double x, double y, const char *str, double rot, double hadj, const pGEcontext gc, pDevDesc dev)
 {
     // fonts too
     struct par p = parContext(gc);
-    if (rtool && rtool->canvas) rtool->canvas->text(x,y,QString(str), rot, hadj, p.p, p.f);
+    RTool *tool = toolFor(dev);
+    if (tool && tool->canvas) tool->canvas->text(x,y,QString(str), rot, hadj, p.p, p.f);
 }
 
 void RGraphicsDevice::Activate(pDevDesc)
@@ -229,19 +260,22 @@ void RGraphicsDevice::Deactivate(pDevDesc)
 {
 }
 
-void RGraphicsDevice::Close(pDevDesc)
+void RGraphicsDevice::Close(pDevDesc pDev)
 {
-    if (rtool->dev->gcGEDevDesc != NULL) {
+    RGraphicsDevice *device = deviceFor(pDev);
+    if (!device) return;
 
-        // explicitly free and then null out the dev pointer of the GEDevDesc
-        // This is to avoid incompatabilities between the heap we are compiled with
-        // and the heap R is compiled with (we observed this to a problem with
-        // 64-bit R)
-        free(rtool->dev->gcGEDevDesc->dev);
-        rtool->dev->gcGEDevDesc->dev = NULL;
-
-        // set GDDevDesc to NULL so we don't reference it again
-        rtool->dev->gcGEDevDesc = NULL;
+    if (device->gcGEDevDesc != NULL
+        && device->gcGEDevDesc->dev == pDev) {
+        if (device->closed_) return;
+        device->closed_ = true;
+        // R's graphics engine owns the DevDesc. This device has no separately
+        // allocated device-specific payload, so detach our identity and clear
+        // the borrowed GE descriptor without freeing the passed descriptor.
+        pDev->deviceSpecific = NULL;
+        device->gcGEDevDesc = NULL;
+    } else {
+        pDev->deviceSpecific = NULL;
     }
 }
 
@@ -323,12 +357,15 @@ void RGraphicsDevice::resizeGraphicsDevice()
 SEXP RGraphicsDevice::GCdisplay()
 {
     //qDebug()<<"Graphics Device IS called!\n";
-    return rtool->dev->createGD();
+    RTool *tool = RTool::callbackInstance();
+    if (!tool || !tool->dev) return R_NilValue;
+    return tool->dev->createGD();
 }
 
 // routine which creates device
 SEXP RGraphicsDevice::createGD()
 {
+    closed_ = false;
     // error if not a version 7 graphics system
     if (::R_GE_getVersion() < 7) {
 
@@ -340,6 +377,7 @@ SEXP RGraphicsDevice::createGD()
 
     // define device
     pDevDesc pDev = (DevDesc *) calloc(1, sizeof(DevDesc));
+    if (!pDev) return R_NilValue;
 
     // device functions
     pDev->activate = RGraphicsDevice::Activate;
@@ -380,7 +418,7 @@ SEXP RGraphicsDevice::createGD()
     pDev->haveLocator = 0;
 
     //XXX todo - not sure what we might need
-    pDev->deviceSpecific = NULL;
+    pDev->deviceSpecific = this;
     pDev->displayListOn = FALSE;
 
     // device attributes
@@ -404,7 +442,7 @@ SEXP RGraphicsDevice::createGD()
 
 
     // set colors
-    rtool->configChanged();
+    if (owner_) owner_->configChanged();
 
     // done
     return R_NilValue;
@@ -582,9 +620,10 @@ void RGraphicsDevice::setDeviceAttributes(pDevDesc pDev)
 
 void RGraphicsDevice::setSize(pDevDesc pDev)
 {
+    if (!pDev) return;
     pDev->left = 0;
-    pDev->right = rtool->width;
-    pDev->top = rtool->height;
+    pDev->right = owner_ ? owner_->width : 0;
+    pDev->top = owner_ ? owner_->height : 0;
     pDev->bottom = 0;
 }
 
@@ -607,12 +646,12 @@ void RGraphicsDevice::setSize(int , int , double )
 
 int RGraphicsDevice::getWidth()
 {
-    return rtool->width;
+    return owner_ ? owner_->width : 0;
 }
 
 int RGraphicsDevice::getHeight()
 {
-    return rtool->height;
+    return owner_ ? owner_->height : 0;
 }
 
 double RGraphicsDevice::devicePixelRatio()
