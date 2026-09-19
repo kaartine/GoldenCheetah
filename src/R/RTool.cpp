@@ -79,6 +79,7 @@ RTool::RTool()
     perspective = NULL;
     chart = NULL;
     context = NULL;
+    boundAthlete = NULL;
 
     // if we bail we need to explain why, its in here
     QString dialogtext;
@@ -408,6 +409,7 @@ RTool::tryAcquireExecution(
     RExecutionGate::Lease lease = executionGate.tryAcquire(
         [this]() {
             context = NULL;
+            boundAthlete = NULL;
             canvas = NULL;
             perspective = NULL;
             chart = NULL;
@@ -421,10 +423,19 @@ RTool::tryAcquireExecution(
     if (!lease) return lease;
 
     context = executionContext;
+    boundAthlete = executionContext ? executionContext->athlete : nullptr;
     canvas = executionCanvas;
     perspective = executionPerspective;
     chart = executionChart;
     return lease;
+}
+
+bool
+RTool::hasValidAthleteBinding() const
+{
+    Context *boundContext = context.data();
+    Athlete *athlete = boundAthlete.data();
+    return boundContext && athlete && boundContext->athlete == athlete;
 }
 
 void
@@ -475,7 +486,8 @@ RTool::configChanged()
 SEXP
 RTool::athlete()
 {
-    if (rtool == NULL || rtool->context == NULL)   return Rf_allocVector(INTSXP, 0);
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
 
     // name, home, dob, height, weight, gender
     SEXP ans, names;
@@ -563,7 +575,8 @@ RTool::zones(SEXP pDate, SEXP pSport)
     // date, sport, cp, w', pmax, aetp, ftp, lthr, aethr, rhr, hrmax, cv, aetv, zoneslow, hrzoneslow, pacezoneslow, zonescolor
 
     // need non-null context
-    if (!rtool || !rtool->context)  return Rf_allocVector(INTSXP, 0);
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
 
     // COLLECT ALL THE CONFIG TOGETHER
     QList<gcZoneConfig> config;
@@ -922,6 +935,9 @@ RTool::windowSize()
 SEXP
 RTool::activities(SEXP filter)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     SEXP dates=NULL;
     SEXP clas;
 
@@ -1190,7 +1206,11 @@ RTool::dfForDateRange(bool all, DateRange range, SEXP filter)
     FilterSet fs;
     fs.addFilter(rtool->context->isfiltered, rtool->context->filters);
     fs.addFilter(rtool->context->ishomefiltered, rtool->context->homeFilters);
-    fs.addFilter(rtool->perspective->isFiltered(), rtool->perspective->filterlist(range));
+    if (rtool->perspective) {
+        fs.addFilter(
+            rtool->perspective->isFiltered(),
+            rtool->perspective->filterlist(range));
+    }
     specification.setFilterSet(fs);
 
     // did call contain any filters?
@@ -1415,7 +1435,11 @@ RTool::dfForDateRangeIntervals(DateRange range, QStringList types)
     FilterSet fs;
     fs.addFilter(rtool->context->isfiltered, rtool->context->filters);
     fs.addFilter(rtool->context->ishomefiltered, rtool->context->homeFilters);
-    fs.addFilter(rtool->perspective->isFiltered(), rtool->perspective->filterlist(range));
+    if (rtool->perspective) {
+        fs.addFilter(
+            rtool->perspective->isFiltered(),
+            rtool->perspective->filterlist(range));
+    }
     specification.setFilterSet(fs);
 
     // we need to count intervals that are in range...
@@ -1635,6 +1659,9 @@ RTool::dfForDateRangeIntervals(DateRange range, QStringList types)
 SEXP
 RTool::season(SEXP pAll, SEXP pCompare)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // p1 - all=TRUE|FALSE - return all metrics or just within
     //                       the currently selected date range
     pAll = Rf_coerceVector(pAll, LGLSXP);
@@ -1732,6 +1759,9 @@ RTool::season(SEXP pAll, SEXP pCompare)
 SEXP
 RTool::seasonIntervals(SEXP pTypes, SEXP pCompare)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // p1 - type of intervals to get (vector of strings)
     // p2 - compare mode (true or false)
     pTypes = Rf_coerceVector(pTypes, STRSXP);
@@ -1867,6 +1897,9 @@ RTool::intervalType(SEXP type)
 SEXP
 RTool::activityIntervals(SEXP pTypes, SEXP datetime)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // p1 - type of intervals to get (vector of strings)
     // p2 - activity (datetime)
     pTypes = Rf_coerceVector(pTypes, STRSXP);
@@ -2061,6 +2094,9 @@ RTool::activityIntervals(SEXP pTypes, SEXP datetime)
 SEXP
 RTool::metrics(SEXP pAll, SEXP pFilter, SEXP pCompare)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // p1 - all=TRUE|FALSE - return all metrics or just within
     //                       the currently selected date range
     pAll = Rf_coerceVector(pAll, LGLSXP);
@@ -2388,6 +2424,9 @@ RTool::activitiesFor(SEXP datetime)
 SEXP
 RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // p1 - compare=TRUE|FALSE - return list of compare rides if active, or just current
     pCompare = Rf_coerceVector(pCompare, LGLSXP);
     bool compare = LOGICAL(pCompare)[0];
@@ -2763,6 +2802,9 @@ RTool::dfForRideFileCache(RideFileCache *cache)
 SEXP
 RTool::seasonPeaks(SEXP pAll, SEXP pFilter, SEXP pCompare, SEXP pSeries, SEXP pDuration)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // check parameters !
     pAll = Rf_coerceVector(pAll, LGLSXP);
     bool all = LOGICAL(pAll)[0];
@@ -2922,7 +2964,11 @@ RTool::dfForDateRangePeaks(bool all, DateRange range, SEXP filter, QList<RideFil
     FilterSet fs;
     fs.addFilter(rtool->context->isfiltered, rtool->context->filters);
     fs.addFilter(rtool->context->ishomefiltered, rtool->context->homeFilters);
-    fs.addFilter(rtool->perspective->isFiltered(), rtool->perspective->filterlist(range));
+    if (rtool->perspective) {
+        fs.addFilter(
+            rtool->perspective->isFiltered(),
+            rtool->perspective->filterlist(range));
+    }
     specification.setFilterSet(fs);
 
     // did call contain any filters?
@@ -3043,6 +3089,9 @@ RTool::dfForDateRangePeaks(bool all, DateRange range, SEXP filter, QList<RideFil
 SEXP
 RTool::seasonMeanmax(SEXP pAll, SEXP pFilter, SEXP pCompare)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // p1 - all=TRUE|FALSE - return all metrics or just within
     //                       the currently selected date range
     pAll = Rf_coerceVector(pAll, LGLSXP);
@@ -3159,6 +3208,9 @@ RTool::seasonMeanmax(SEXP pAll, SEXP pFilter, SEXP pCompare)
 SEXP
 RTool::activityMeanmax(SEXP pCompare)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // a dataframe to return
     SEXP ans=NULL;
 
@@ -3275,6 +3327,9 @@ RTool::activityMeanmax(SEXP pCompare)
 SEXP
 RTool::activityMetrics(SEXP pCompare)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // a dataframe to return
     SEXP ans=NULL;
 
@@ -3391,6 +3446,9 @@ RTool::activityMetrics(SEXP pCompare)
 SEXP
 RTool::pmc(SEXP pAll, SEXP pMetric, SEXP pType)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // parse parameters
     // p1 - all=TRUE|FALSE - return all metrics or just within
     //                       the currently selected date range
@@ -3564,6 +3622,9 @@ RTool::pmc(SEXP pAll, SEXP pMetric, SEXP pType)
 SEXP
 RTool::measures(SEXP pAll, SEXP pGroup)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     // parse parameters
     // p1 - all=TRUE|FALSE - return all measures or just within
     //                       the currently selected date range
@@ -3675,6 +3736,9 @@ RTool::measures(SEXP pAll, SEXP pGroup)
 SEXP
 RTool::activityWBal(SEXP pCompare)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     SEXP ans=NULL;
 
     // p1 - compare=TRUE|FALSE - return list of compare rides if active, or just current
@@ -3824,6 +3888,9 @@ RTool::dfForActivityWBal(RideFile*f)
 SEXP
 RTool::activityXData(SEXP pName, SEXP pCompare)
 {
+    if (!rtool || !rtool->hasValidAthleteBinding())
+        return Rf_allocVector(INTSXP, 0);
+
     SEXP ans=NULL;
 
     // p1 - compare=TRUE|FALSE - return list of compare rides if active, or just current

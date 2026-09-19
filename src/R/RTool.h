@@ -47,10 +47,10 @@ class RTool {
         // the canvas to plot on, it may be null
         // if no canvas is active
         QPointer<RCanvas> canvas;
-        Perspective *perspective;
+        QPointer<Perspective> perspective;
         QPointer<RChart> chart;
 
-        Context *context;
+        QPointer<Context> context;
         QString version;
 
         // layout and page size
@@ -133,6 +133,9 @@ class RTool {
         SEXP dfForRideFileCache(RideFileCache *p);      // returns meanmax for a cache
 
     private:
+        bool hasValidAthleteBinding() const;
+
+        QPointer<Athlete> boundAthlete;
         RExecutionGate executionGate;
         std::atomic_bool appearanceRefreshPending{false};
 

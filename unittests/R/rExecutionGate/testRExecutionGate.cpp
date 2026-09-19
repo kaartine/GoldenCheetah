@@ -45,6 +45,7 @@ private slots:
     void runsCoalescedWorkAfterCleanupAndRelease();
     void guardsEvaluationContinuations();
     void guardsPumpedObjectLists();
+    void guardsActiveExecutionBindings();
     void productionEntrypointsUseGate();
 };
 
@@ -279,6 +280,39 @@ TestRExecutionGate::guardsPumpedObjectLists()
 }
 
 void
+TestRExecutionGate::guardsActiveExecutionBindings()
+{
+    QObject *contextObject = new QObject;
+    QObject *athleteObject = new QObject;
+    QObject *perspectiveObject = new QObject;
+    QObject *replacementAthlete = new QObject;
+
+    const QPointer<QObject> context(contextObject);
+    const QPointer<QObject> boundAthlete(athleteObject);
+    const QPointer<QObject> perspective(perspectiveObject);
+    const auto bindingIsValid = [&](QObject *currentAthlete) {
+        return context && boundAthlete && currentAthlete == boundAthlete.data();
+    };
+
+    QVERIFY(bindingIsValid(athleteObject));
+    QVERIFY(perspective);
+    QVERIFY(!bindingIsValid(replacementAthlete));
+
+    delete athleteObject;
+    athleteObject = nullptr;
+    QVERIFY(!bindingIsValid(replacementAthlete));
+
+    delete perspectiveObject;
+    perspectiveObject = nullptr;
+    QVERIFY(!perspective);
+
+    delete contextObject;
+    contextObject = nullptr;
+    QVERIFY(!bindingIsValid(replacementAthlete));
+    delete replacementAthlete;
+}
+
+void
 TestRExecutionGate::productionEntrypointsUseGate()
 {
     QFile chart(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/Charts/RChart.cpp"));
@@ -319,6 +353,16 @@ TestRExecutionGate::productionEntrypointsUseGate()
     QVERIFY(!toolSource.contains("UNPROTECT(3); // list and names and rownames"));
     QCOMPARE(toolSource.count("RProtectionScope protectionScope;"), 3);
     QCOMPARE(toolSource.count("protectionScope.protectValue(df);"), 3);
+    QVERIFY(toolSource.contains(
+        "boundAthlete = executionContext ? executionContext->athlete : nullptr;"));
+    QVERIFY(toolSource.contains(
+        "boundContext->athlete == athlete"));
+    QCOMPARE(
+        toolSource.count("!rtool->hasValidAthleteBinding()"),
+        16);
+    QCOMPARE(toolSource.count("if (rtool->perspective)"), 3);
+    QVERIFY(!toolSource.contains(
+        "fs.addFilter(rtool->perspective->isFiltered(),"));
 
     QFile toolHeader(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTool.h"));
     QVERIFY2(
@@ -326,9 +370,14 @@ TestRExecutionGate::productionEntrypointsUseGate()
         qPrintable(toolHeader.errorString()));
     const QByteArray toolHeaderSource = toolHeader.readAll();
     QVERIFY(toolHeaderSource.contains("QPointer<RCanvas> canvas;"));
+    QVERIFY(toolHeaderSource.contains("QPointer<Perspective> perspective;"));
     QVERIFY(toolHeaderSource.contains("QPointer<RChart> chart;"));
+    QVERIFY(toolHeaderSource.contains("QPointer<Context> context;"));
+    QVERIFY(toolHeaderSource.contains("QPointer<Athlete> boundAthlete;"));
     QVERIFY(!toolHeaderSource.contains("RCanvas *canvas;"));
+    QVERIFY(!toolHeaderSource.contains("Perspective *perspective;"));
     QVERIFY(!toolHeaderSource.contains("RChart *chart;"));
+    QVERIFY(!toolHeaderSource.contains("Context *context;"));
 }
 
 QTEST_APPLESS_MAIN(TestRExecutionGate)

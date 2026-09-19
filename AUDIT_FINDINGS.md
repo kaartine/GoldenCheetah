@@ -8068,6 +8068,47 @@ commit before the next finding begins.
   Extremely large split/compare outputs retain a proportional protection-stack
   segment until branch return and remain a scalability release-test residual;
   raw compare-RideItem lifetime is separate from this R-protection item.
+- ARCH-003B2e (FIXED; lifetime work recorded before correction): the active
+  `Context` and `Perspective` bindings remain raw pointers while embedded R can
+  pump Qt events. If that pump destroys the Context or its independently owned
+  Athlete, the next registered R-to-C++ call can pass a shallow null check and
+  dereference the stale Context/Athlete chain (some entry points reach helpers
+  such as `activitiesFor()` before checking either object). Guard all active
+  QObject bindings, capture the Athlete identity independently, reject every
+  athlete-dependent native entry point unless the Context/Athlete pair still
+  matches, and cover deletion plus replacement before addressing global
+  `rtool` ownership. The compare/current activity branches do not themselves
+  pump Qt events after entry; their RideItem references remain a broader
+  snapshot/ownership residual rather than a separately reproduced pump gap.
+- ARCH-003B2e1 (FIXED; null-binding defect found during ARCH-003B2e implementation and
+  recorded before correction): three date-range helpers unconditionally
+  dereference the active Perspective even though R console executions bind no
+  Perspective and a guarded Perspective can become null after event-pumped
+  deletion. Apply their perspective filters only while that guarded target is
+  live, matching the mean-max helper's established null behavior, and pin all
+  three call sites in the focused production-source test.
+- ARCH-003B2e resolution: the active Context and Perspective are now guarded
+  `QPointer` bindings, and the execution lease independently captures the
+  active Athlete as another guarded identity. All 16 registered native entry
+  points that depend on Athlete state reject a deleted Context, deleted
+  Athlete, or replaced Context/Athlete pair before parameter coercion, helper
+  entry, or object dereference. Lease cleanup clears both identities before
+  releasing the interpreter gate. The three date-range helpers now omit the
+  perspective filter when the console supplied no Perspective or event-pumped
+  deletion cleared it, matching the existing mean-max null behavior.
+- ARCH-003B2e verification: the focused execution/lifetime suite passes 12/12
+  on Qt 6.4.2 normally and 12/12 under ASan/UBSan with leak detection disabled.
+  It covers Context/Athlete deletion, Athlete replacement, Perspective
+  deletion, and production-source contracts for every native-entry guard and
+  null-safe perspective site. The complete production `RTool`, `RChart`,
+  `RGraphicsDevice`, and execution-gate set compiles and links with staged R
+  4.3.3/Rcpp/RInside headers under `GC_WANT_R` and `STRICT_R_HEADERS`; the
+  source dependency suite passes 14/14 and `git diff --check` is clean.
+  Independent registration-table and lifetime review returned GO. LSan remains
+  unavailable under the ptrace environment. Raw global `rtool`, cross-thread
+  QObject access, RideItem/compare snapshot ownership, a future helper adding
+  an event pump after its entry guard, and a real full-UI teardown callback are
+  outside this item and remain ARCH-003B/003C release residuals.
 - ARCH-003C (queued lifetime work recorded before correction): `rtool` is a raw
   process global, self-publishes before construction finishes, leaks failed and
   successful instances, and has an unreachable/unconditional finalizer. Define
