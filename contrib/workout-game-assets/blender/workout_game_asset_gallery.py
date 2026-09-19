@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from array import array
 from dataclasses import dataclass
 import json
 import math
@@ -142,10 +143,10 @@ def _record_gpu_evidence(path: Path) -> dict[str, str]:
 def _validate_ui_screenshot(path: Path) -> None:
     image = bpy.data.images.load(str(path), check_existing=False)
     try:
-        pixels = image.pixels
-        pixel_count = max(1, image.size[0] * image.size[1])
-        step = max(1, pixel_count // 4096) * 4
-        samples = [float(pixels[index]) for index in range(0, len(pixels), step)]
+        image.scale(64, 64)
+        values = array("f", [0.0]) * len(image.pixels)
+        image.pixels.foreach_get(values)
+        samples = values[0::4]
         if not samples or max(samples) < 0.05 or max(samples) - min(samples) < 0.02:
             raise RuntimeError("gallery UI screenshot is blank")
     finally:
