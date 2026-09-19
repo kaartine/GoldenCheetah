@@ -10,10 +10,12 @@
 #include "AthleteSession.h"
 
 #include "AthleteRefreshLifecycle.h"
+#include "RideRefreshEnvironment.h"
 #include "SessionServices.h"
 
 #include <QtGlobal>
 
+#include <atomic>
 AthleteSession::AthleteSession(
     std::unique_ptr<AthleteApplicationService> applicationService,
     std::unique_ptr<AthletePersistenceService> persistenceService)
@@ -46,4 +48,22 @@ AthleteRefreshLifecycle &AthleteSession::refreshLifecycle()
 const AthleteRefreshLifecycle &AthleteSession::refreshLifecycle() const
 {
     return *refreshLifecycle_;
+}
+
+bool AthleteSession::publishRefreshEnvironment(
+    std::shared_ptr<const RideRefreshEnvironment> environment)
+{
+    if (!refreshLifecycle_->admitsWork() || !environment)
+        return false;
+    std::atomic_store_explicit(
+        &refreshEnvironment_, std::move(environment),
+        std::memory_order_release);
+    return true;
+}
+
+std::shared_ptr<const RideRefreshEnvironment>
+AthleteSession::refreshEnvironment() const
+{
+    return std::atomic_load_explicit(
+        &refreshEnvironment_, std::memory_order_acquire);
 }

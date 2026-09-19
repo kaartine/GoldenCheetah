@@ -8695,6 +8695,44 @@ commit before the next finding begins.
   tau). Worker code must not fall back to `GlobalContext` QObjects or
   `appsettings` while such an environment is active. ARCH-004C's request-local
   anchored INI reader remains a separate boundary and must not be reused here.
+- ARCH-003F2a (snapshot foundation work item recorded before correction): Add
+  an immutable generation-environment value type and an AthleteSession-owned
+  publisher. Capture the complete settings key set, unit mode, color field and
+  ordered keyword rules, calendar field/value-to-metric mapping, and one metric
+  registry snapshot on the owner thread as one atomic publication. Prove exact
+  defaults, color ordering/fallback, calendar/unit behavior, and old-or-new
+  multi-key consistency without linking QWidget/QSettings into worker tests.
+- ARCH-003F2a1 (calendar parity defect recorded before correction): The first
+  snapshot formatter draft reversed the legacy `FIELD_TIME` -> `FIELD_DATE`
+  switch fallthrough order. Preserve the original behavior even for unusual
+  name/type combinations and cover both fallthrough directions in the focused
+  regression test before accepting F2a.
+- ARCH-003F2a2 (settings inventory gap recorded before correction): Independent
+  review found worker-reachable user-metric reads of `GC_CRANKLENGTH` and
+  `GC_HEIGHT`, RideFile post-processing reads of `GC_RR_MAX`, `GC_RR_MIN`,
+  `GC_RR_FILT`, and `GC_RR_WINDOW`, plus parser reads of
+  `GC_GARMIN_SMARTRECORD` and `GC_GARMIN_HWMARK`, missing from the first
+  capture list. Put
+  the complete fixed-key manifests in the tested value boundary and capture
+  from those manifests. Dynamic AUTOPROCESS/POSTPROCESS settings cannot be
+  enumerated here and must remain explicitly unsupported/fail-closed in F2c.
+- ARCH-003F2a3 (metadata inventory gap recorded before correction): Ride file
+  opening migrates `##` tags using each metadata field's `interval` flag. The
+  first DTO retained calendar semantics but omitted that flag. Capture it as
+  immutable metadata and test its preservation before accepting F2a.
+- ARCH-003F2b (domain snapshot work item recorded before correction): Define
+  value-only, date-queryable snapshots for power/HR/pace zones, Body/HRV
+  measures, routes, and the RideFileCache inputs discovered during the full
+  call-graph inventory. Preserve range selection, fingerprints, CP/W'/Pmax,
+  pace formatting, measure lookup, and route-match semantics in focused
+  equivalence tests before switching production readers.
+- ARCH-003F2c (worker cutover work item recorded before correction): Bind one
+  shared immutable environment to each refresh generation and route every
+  `checkStale`, `refresh`, interval discovery, RideFileCache, built-in metric,
+  calendar, color, and Estimator lookup through it. While bound, missing keys
+  or unsupported live-object access must fail closed rather than falling back
+  to Context/Athlete/GlobalContext/appsettings. Add a source/runtime guard that
+  rejects those worker-reachable fallbacks before declaring F2 complete.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -8769,6 +8807,36 @@ commit before the next finding begins.
   restart recovery, nested depth, Estimator deferral, permanent shutdown, and
   aggregate-test registration. F2/F3 and the documented TSan prerequisite are
   intentionally outside this commit.
+- ARCH-003F2a/F2a1-F2a3 resolution: `RideRefreshEnvironment` is an immutable
+  generation value owned and atomically published by `AthleteSession` only
+  while its owner-thread lifecycle admits work. One owner-thread capture now
+  copies the fixed refresh settings manifest (including parser/HRV, height,
+  crank length, wheel size, and dynamic per-sport CP-for-FTP values), unit
+  mode, color field and ordered rules, calendar and interval metadata, sport
+  values, and one metric-registry snapshot before workers are constructed.
+  Color fallback/last-match behavior and legacy TIME-to-DATE calendar
+  fallthrough are preserved exactly. Dynamic processor-specific settings are
+  deliberately not treated as an enumerable manifest.
+- ARCH-003F2a verification: the focused value/publication suite passes 8/8
+  normally and under ASan/UBSan, covering exact fixed-key manifests and
+  defaults, interval metadata, calendar edge combinations, unit behavior,
+  color ordering/fallback, old-or-new multi-key publication, wrong-thread
+  rejection, and lifecycle closure. `RideRefreshEnvironment`, its production
+  capture, `AthleteSession`, and `RideCache` compile with warnings as errors;
+  the source-module dependency suite passes 14/14 and its reviewed baseline
+  records the centralized Core-to-Metrics capture seam. Independent final
+  review: GO for this bounded foundation commit with no remaining blocker or
+  major correctness finding.
+- ARCH-003F2a residual/prerequisites: workers intentionally do not consume the
+  environment until F2b supplies zone/measure/route/RideFileCache value data
+  and F2c binds one environment to every worker path. F2c must reject dynamic
+  AUTOPROCESS/POSTPROCESS and all unsupported live fallbacks. The focused
+  suite tests the lightweight value boundary; production capture is compile-
+  checked and its manifests are asserted against `Settings.h`, but is not
+  runtime-linked into that suite because doing so imports the QWidget/settings
+  object graph. ARCH-004C must remove the HTTP endpoint's mutation of the
+  shared athlete-settings registry before multi-key capture itself can be
+  claimed transactionally consistent. TSan remains a release prerequisite.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

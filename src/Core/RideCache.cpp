@@ -33,6 +33,7 @@
 #include "Athlete.h"
 #include "AthleteRefreshLifecycle.h"
 #include "AthleteSession.h"
+#include "RideRefreshEnvironment.h"
 #include "RideFileCache.h"
 #include "RideCacheModel.h"
 #include "Specification.h"
@@ -979,6 +980,11 @@ RideCache::startLatestRefresh()
             notifyStart = !refreshNotificationActive_;
             refreshNotificationActive_ = true;
         }
+    }
+
+    if (!context->athleteSession().publishRefreshEnvironment(
+            captureRideRefreshEnvironment(context, generation))) {
+        qFatal("RideCache could not publish its refresh environment");
     }
 
     if (empty) {

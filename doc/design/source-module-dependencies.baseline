@@ -5347,6 +5347,30 @@
       "target_module": "Metrics"
     },
     {
+      "source": "src/Core/RideRefreshEnvironmentCapture.cpp",
+      "source_module": "Core",
+      "target": "src/Metrics/RideMetadata.h",
+      "target_module": "Metrics"
+    },
+    {
+      "source": "src/Core/RideRefreshEnvironmentCapture.cpp",
+      "source_module": "Core",
+      "target": "src/Metrics/RideMetric.h",
+      "target_module": "Metrics"
+    },
+    {
+      "source": "src/Core/RideRefreshEnvironmentCapture.cpp",
+      "source_module": "Core",
+      "target": "src/Metrics/SpecialFields.h",
+      "target_module": "Metrics"
+    },
+    {
+      "source": "src/Core/RideRefreshEnvironmentCapture.cpp",
+      "source_module": "Core",
+      "target": "src/Metrics/Zones.h",
+      "target_module": "Metrics"
+    },
+    {
       "source": "src/Core/Route.cpp",
       "source_module": "Core",
       "target": "src/FileIO/RideFile.h",

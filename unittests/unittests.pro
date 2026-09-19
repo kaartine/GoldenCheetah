@@ -58,6 +58,7 @@ exists(unittests.pri) {
 			   Core/rideCacheCallbackGuard \
 			   Core/rideCacheSaveSnapshot \
 			   Core/rideCachePerformance \
+			   Core/rideRefreshEnvironment \
 			   Core/rideCacheRemoval \
 			   Core/seasonOffset \
 			   Core/season \

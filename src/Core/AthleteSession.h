@@ -15,6 +15,7 @@
 class AthleteApplicationService;
 class AthletePersistenceService;
 class AthleteRefreshLifecycle;
+class RideRefreshEnvironment;
 class QWebEngineProfile;
 
 class AthleteSession final
@@ -32,11 +33,16 @@ public:
     AthletePersistenceService &persistenceService() const;
     AthleteRefreshLifecycle &refreshLifecycle();
     const AthleteRefreshLifecycle &refreshLifecycle() const;
+    bool publishRefreshEnvironment(
+        std::shared_ptr<const RideRefreshEnvironment> environment);
+    std::shared_ptr<const RideRefreshEnvironment>
+        refreshEnvironment() const;
 
 private:
     std::unique_ptr<AthleteApplicationService> applicationService_;
     std::unique_ptr<AthletePersistenceService> persistenceService_;
     std::unique_ptr<AthleteRefreshLifecycle> refreshLifecycle_;
+    std::shared_ptr<const RideRefreshEnvironment> refreshEnvironment_;
 };
 
 #endif // GC_ATHLETESESSION_H
