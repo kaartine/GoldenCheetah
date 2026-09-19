@@ -90,8 +90,10 @@ void RideCache::purgeDestroyedRowsInsideModelReset()
 {
     for (qsizetype row = rides_.size(); row > 0; --row) {
         RideItem *item = rides_.at(row - 1);
-        if (!item || deletelist.contains(item))
+        if (!item || deletelist.contains(item)) {
+            retireRefreshTarget(item);
             rides_.remove(row - 1, 1);
+        }
     }
     discardDetachedTombstones();
 }

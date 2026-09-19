@@ -261,6 +261,7 @@ RideItem::~RideItem()
             || cache->reverse_.contains(this)
             || cache->delete_.contains(this)) {
             cache->invalidateStartupSnapshots();
+            cache->retireRefreshTarget(this);
             cache->deletelist.insert(this);
         }
     }

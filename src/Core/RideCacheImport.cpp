@@ -46,6 +46,7 @@ void RideCache::retireImportedRideItems(
         }
         seen.insert(item);
         QObject::disconnect(item, nullptr, this, nullptr);
+        retireRefreshTarget(item);
         reverse_.removeAll(item);
         if (context && context->ride == item)
             context->ride = nullptr;

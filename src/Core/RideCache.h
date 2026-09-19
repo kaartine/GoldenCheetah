@@ -57,6 +57,8 @@ class RideRefreshEnvironment;
 class Estimator;
 class Banister;
 class RideCacheMutationScope;
+template<typename Target>
+class RideRefreshTargetRegistry;
 
 namespace RideCacheSave {
 struct Snapshot;
@@ -497,6 +499,10 @@ class RideCache : public QObject
                 && !deletelist.contains(address)
                 && rides_.contains(address);
         }
+        RideRefreshTargetToken ensureRefreshTarget(RideItem *item);
+        void retireRefreshTarget(RideItem *item);
+        RideItem *resolveRefreshTarget(
+            const RideRefreshTargetToken &token) const;
 
         enum class RideFileDisposition {
             Archive,
@@ -592,6 +598,8 @@ class RideCache : public QObject
             QString &error) const;
 
         RideCacheStartup::RefreshGeneration refreshGeneration_;
+        std::unique_ptr<RideRefreshTargetRegistry<RideItem>>
+            refreshTargets_;
         QMultiHash<QString, RideItem*> startupItemsByFile_;
         QHash<RideItem*, int> startupRows_;
         std::atomic<qsizetype> startupExpectedRideCount_{0};

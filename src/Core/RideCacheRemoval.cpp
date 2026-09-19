@@ -3181,6 +3181,7 @@ RideCache::replacePlannedActivityFiles(
                     if (entry.item) continue;
                     if (!entry.replacementTarget)
                         repair.unexpectedDeletion = true;
+                    guardedCache->retireRefreshTarget(entry.address);
                     guardedCache->rides_.removeOne(entry.address);
                     guardedCache->delete_.removeOne(entry.address);
                     guardedCache->deletelist.remove(entry.address);
@@ -3711,6 +3712,7 @@ RideCache::replacePlannedActivityFiles(
         return result;
     }
     for (const PendingReplacement &entry : std::as_const(pending)) {
+        guardedCache->retireRefreshTarget(entry.address);
         guardedCache->rides_.removeOne(entry.address);
     }
     guardedCache->rides_.append(incoming);
@@ -3836,6 +3838,7 @@ RideCache::replacePlannedActivityFiles(
                 RideItem *const address = incoming.at(index);
                 RideItem *const item =
                     guardedIncoming.at(index).data();
+                guardedCache->retireRefreshTarget(address);
                 guardedCache->rides_.removeOne(address);
                 guardedCache->delete_.removeOne(address);
                 guardedCache->deletelist.remove(address);
@@ -5494,6 +5497,7 @@ RideCache::removeRideEntry(
                 reentrantIndex, index);
             removalIndex = index;
         }
+        guardedCache->retireRefreshTarget(todelete);
         guardedCache->rides_.remove(
             removalIndex, 1);
     }

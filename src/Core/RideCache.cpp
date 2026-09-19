@@ -34,6 +34,7 @@
 #include "AthleteRefreshLifecycle.h"
 #include "AthleteSession.h"
 #include "RideRefreshEnvironment.h"
+#include "RideRefreshTargetRegistry.h"
 #include "RideFileCache.h"
 #include "RideCacheModel.h"
 #include "Specification.h"
@@ -66,6 +67,12 @@
 #include <QTemporaryFile>
 
 #include <exception>
+
+namespace {
+
+std::atomic<quint64> nextRideRefreshCacheEpoch{1};
+
+} // namespace
 
 QStringList
 RideCache::startupRideFiles(const QDir &directory) const
@@ -153,6 +160,14 @@ private:
 
 RideCache::RideCache(Context *context) : context(context)
 {
+    const quint64 refreshCacheEpoch =
+        reserveRideRefreshIdentity(nextRideRefreshCacheEpoch);
+    refreshTargets_ = std::make_unique<
+        RideRefreshTargetRegistry<RideItem>>();
+    if (!refreshTargets_->initialize(thread(), refreshCacheEpoch)) {
+        qFatal("RideCache could not reserve its refresh target identity");
+    }
+
     directory = context->athlete->home->activities();
     plannedDirectory = context->athlete->home->planned();
 
@@ -450,6 +465,34 @@ RideCache::startupItemFor(
         match = item;
     }
     return match;
+}
+
+RideRefreshTargetToken
+RideCache::ensureRefreshTarget(RideItem *item)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (QThread::currentThread() != thread()) return {};
+    if (!ownsLiveRide(item)) return {};
+    return refreshTargets_
+        ? refreshTargets_->registerTarget(item)
+        : RideRefreshTargetToken{};
+}
+
+void
+RideCache::retireRefreshTarget(RideItem *item)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (refreshTargets_) refreshTargets_->retire(item);
+}
+
+RideItem *
+RideCache::resolveRefreshTarget(
+    const RideRefreshTargetToken &token) const
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    RideItem *const item = refreshTargets_
+        ? refreshTargets_->resolve(token) : nullptr;
+    return ownsLiveRide(item) ? item : nullptr;
 }
 
 void
@@ -1095,8 +1138,16 @@ RideCache::startLatestRefresh()
         for (RideItem *item : reverse_) {
             RideRefreshWorkItem work;
             work.target = item;
+            work.workIndex = mutableWorkset->size();
             if (item) {
-                work.inputs = item->captureRefreshInputs(*environment);
+                work.targetToken = ensureRefreshTarget(item);
+                if (work.targetToken.isValid()) {
+                    work.inputs = item->captureRefreshInputs(*environment);
+                } else {
+                    // Exhausted identities fail closed: no untracked target
+                    // may enter the refresh workset.
+                    work.target = nullptr;
+                }
             }
             mutableWorkset->append(std::move(work));
         }

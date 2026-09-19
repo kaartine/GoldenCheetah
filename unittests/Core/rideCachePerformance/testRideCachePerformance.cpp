@@ -5,10 +5,14 @@
 
 #include "RideCacheAggregate.h"
 #include "RideCacheStartup.h"
+#include "RideRefreshItemInputs.h"
+#include "RideRefreshTargetRegistry.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cmath>
 #include <limits>
+#include <new>
 #include <thread>
 
 namespace {
@@ -42,6 +46,7 @@ private slots:
     void refreshGenerationsRejectSupersededWork();
     void crossThreadRequestReservationPrecedesOwnerCallback();
     void crossThreadReservationIsVisibleToConfigQuiesce();
+    void refreshTargetTokensRejectStaleIdentity();
     void refreshCancellationSettlesPendingWork();
     void batchAggregationPreservesMetricSemantics();
     void batchAggregationScalesWithoutRepeatedMetricReads();
@@ -385,6 +390,110 @@ crossThreadReservationIsVisibleToConfigQuiesce()
         true, 0, generations));
     QVERIFY(RideCacheStartup::refreshNeedsResume(
         false, 1, generations));
+}
+
+void TestRideCachePerformance::
+refreshTargetTokensRejectStaleIdentity()
+{
+    std::atomic<quint64> identity{
+        std::numeric_limits<quint64>::max()};
+    QCOMPARE(
+        reserveRideRefreshIdentity(identity),
+        std::numeric_limits<quint64>::max());
+    QCOMPARE(reserveRideRefreshIdentity(identity), quint64(0));
+
+    RideRefreshTargetRegistry<QObject> registry;
+    QVERIFY(registry.initialize(QThread::currentThread(), 41));
+    QVERIFY(!registry.initialize(QThread::currentThread(), 42));
+    QObject target;
+    const RideRefreshTargetToken initial =
+        registry.registerTarget(&target);
+    QVERIFY(initial.isValid());
+    QCOMPARE(initial.cacheEpoch, quint64(41));
+    QCOMPARE(initial.targetId, quint64(1));
+    QCOMPARE(initial.revision, quint64(1));
+    QCOMPARE(registry.resolve(initial), &target);
+    QCOMPARE(registry.registerTarget(&target), initial);
+
+    const RideRefreshTargetToken revised =
+        registry.advanceRevision(&target);
+    QCOMPARE(revised.targetId, initial.targetId);
+    QCOMPARE(revised.revision, quint64(2));
+    QVERIFY(!registry.resolve(initial));
+    QCOMPARE(registry.resolve(revised), &target);
+
+    RideRefreshTargetToken foreign = revised;
+    foreign.cacheEpoch = 42;
+    QVERIFY(!registry.resolve(foreign));
+
+    bool registeredOffOwner = true;
+    bool resolvedOffOwner = true;
+    bool retiredOffOwner = true;
+    std::thread wrongThread([&]() {
+        registeredOffOwner =
+            registry.registerTarget(&target).isValid();
+        resolvedOffOwner = registry.resolve(revised) != nullptr;
+        retiredOffOwner = registry.retire(&target);
+    });
+    wrongThread.join();
+    QVERIFY(!registeredOffOwner);
+    QVERIFY(!resolvedOffOwner);
+    QVERIFY(!retiredOffOwner);
+    QCOMPARE(registry.resolve(revised), &target);
+
+    QVERIFY(registry.retire(&target));
+    QVERIFY(!registry.resolve(revised));
+    const RideRefreshTargetToken registeredAgain =
+        registry.registerTarget(&target);
+    QVERIFY(registeredAgain.targetId > revised.targetId);
+
+    RideRefreshTargetRegistry<QObject> exhausted;
+    QVERIFY(exhausted.initialize(
+        QThread::currentThread(), 43,
+        std::numeric_limits<quint64>::max()));
+    QObject lastTarget;
+    QObject rejectedTarget;
+    const RideRefreshTargetToken last =
+        exhausted.registerTarget(&lastTarget);
+    QCOMPARE(
+        last.targetId,
+        std::numeric_limits<quint64>::max());
+    QVERIFY(!exhausted.registerTarget(&rejectedTarget).isValid());
+
+    alignas(QObject) std::byte storage[sizeof(QObject)];
+    RideRefreshTargetRegistry<QObject> reusedAddress;
+    QVERIFY(reusedAddress.initialize(QThread::currentThread(), 44));
+    QObject *first = new (storage) QObject;
+    const RideRefreshTargetToken firstToken =
+        reusedAddress.registerTarget(first);
+    QCOMPARE(reusedAddress.entryCount(), qsizetype(1));
+    first->~QObject();
+    QVERIFY(!reusedAddress.resolve(firstToken));
+    QCOMPARE(reusedAddress.entryCount(), qsizetype(0));
+    QObject *second = new (storage) QObject;
+    const RideRefreshTargetToken secondToken =
+        reusedAddress.registerTarget(second);
+    QVERIFY(secondToken.targetId > firstToken.targetId);
+    QVERIFY(!reusedAddress.resolve(firstToken));
+    QCOMPARE(reusedAddress.resolve(secondToken), second);
+    second->~QObject();
+
+    RideRefreshTargetRegistry<QObject> exhaustedRevision;
+    QVERIFY(exhaustedRevision.initialize(
+        QThread::currentThread(), 45, 1,
+        std::numeric_limits<quint64>::max()));
+    QObject revisionTarget;
+    const RideRefreshTargetToken maximumRevision =
+        exhaustedRevision.registerTarget(&revisionTarget);
+    QCOMPARE(
+        maximumRevision.revision,
+        std::numeric_limits<quint64>::max());
+    QVERIFY(!exhaustedRevision.advanceRevision(
+        &revisionTarget).isValid());
+    QVERIFY(!exhaustedRevision.resolve(maximumRevision));
+    QCOMPARE(exhaustedRevision.entryCount(), qsizetype(0));
+    QVERIFY(!exhaustedRevision.advanceRevision(
+        &revisionTarget).isValid());
 }
 
 void TestRideCachePerformance::

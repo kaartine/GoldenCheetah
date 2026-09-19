@@ -21,6 +21,26 @@
 
 class RideItem;
 
+struct RideRefreshTargetToken {
+    quint64 cacheEpoch = 0;
+    quint64 targetId = 0;
+    quint64 revision = 0;
+
+    bool isValid() const
+    {
+        return cacheEpoch != 0 && targetId != 0 && revision != 0;
+    }
+
+    friend bool operator==(
+        const RideRefreshTargetToken &left,
+        const RideRefreshTargetToken &right)
+    {
+        return left.cacheEpoch == right.cacheEpoch
+            && left.targetId == right.targetId
+            && left.revision == right.revision;
+    }
+};
+
 inline QString rideRefreshItemText(
     const QMap<QString, QString> &metadata,
     const QDateTime &dateTime,
@@ -78,6 +98,8 @@ struct RideRefreshItemStaleInputs {
 
 struct RideRefreshWorkItem {
     RideItem *target = nullptr;
+    RideRefreshTargetToken targetToken;
+    qsizetype workIndex = -1;
     RideRefreshItemStaleInputs inputs;
 };
 

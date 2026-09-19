@@ -9320,6 +9320,74 @@ commit before the next finding begins.
   revision, item identity, open-ride identity, source path, and full source
   fingerprint before any stale patch, CPX commit/error report, item-state swap,
   notification, aggregate invalidation, or save mutation.
+- ARCH-003F3c1a (target-registry prerequisite recorded before correction): Add
+  a cache-owner-only registry whose cache epoch and target IDs are never reused,
+  retire every cache-membership token on removal/replacement/destruction, and
+  carry the token, captured revision, and stable work index in each refresh
+  work item. Registration must fail closed on counter exhaustion and consume a
+  reserved ID even if collection publication rolls back. This foundation does
+  not make the current worker's raw target dereference safe: only the future
+  detached-result path may resolve the token, on the owner thread, before
+  publication.
+- ARCH-003F3c1b (mutation-revision coverage prerequisite recorded before
+  correction): `RideItem` still exposes publication-relevant fields for direct
+  writes across multiple translation units. A revision advanced only by the
+  obvious mutator methods cannot prove that every identity, open-ride, metadata,
+  interval, or source-state change invalidates an in-flight result. Inventory
+  and encapsulate or hook every relevant write before treating the revision as
+  a complete publication fence; the final gate must additionally compare the
+  source path, full fingerprint, and open-ride identity. Until then F3c1 remains
+  open even after the target-registry foundation lands.
+- ARCH-003F3c1a1 (removal-test composition regression found during F3c1a
+  verification and recorded before correction): The removal target composes
+  `RideCacheImport`, `RideCacheLiveView`, and `RideCacheRemoval` with local
+  `RideCache`/`RideItem` doubles instead of production `RideCache.cpp` and
+  `RideItem.cpp`. Adding target retirement therefore leaves the new cache
+  method undefined in that target, while exposing a templated
+  `QPointer<RideItem>` registry through moc also makes the double require
+  production `RideItem` meta-object symbols. Keep the owner registry behind a
+  non-moc implementation boundary and give the removal double policy-neutral
+  registry stubs; then rebuild and run the complete registered target before
+  accepting F3c1a.
+- ARCH-003F3c1a2 (registry integration gaps found by independent review and
+  recorded before correction): The new production header is absent from the
+  qmake source manifest; `ensureRefreshTarget` relies on a debug assertion and
+  can read owner-only collection state from the wrong thread in a release
+  build; an unexpectedly destroyed target can leave an unbounded stale forward
+  entry; and revision-counter exhaustion has no executable boundary test.
+  Register the header, reject the wrong thread before any collection read,
+  prune both registry indexes without dereferencing stale addresses, and prove
+  that advancing the maximum revision retires the target and rejects both the
+  old token and further revision updates.
+- ARCH-003F3c1a resolution: `RideCache` now owns a registry behind a non-moc
+  implementation boundary. Each cache instance reserves a process-unique,
+  non-wrapping epoch; registered targets receive non-reused IDs and revisions,
+  and workset capture records that token plus the stable work index before
+  immutable inputs. Registration, revision, retirement, and resolution reject
+  non-owner threads at runtime. Resolution uses a `QPointer` and then requires
+  current live cache membership. Removal, replacement, import retirement,
+  destroyed-row purge, and unexpected item destruction retire tokens. Null
+  targets are pruned from both indexes without dereferencing their recorded
+  addresses, and all identity/revision counter exhaustion fails closed.
+- ARCH-003F3c1a1/F3c1a2 resolution: The registry template moved out of moc's
+  production-header view and the removal composition supplies policy-neutral
+  stubs, restoring that target without weakening production behavior. The new
+  header is present in `src/src.pro`; owner-thread admission precedes every
+  cache-membership read; lifecycle source contracts cover import, replacement,
+  removal, purge, and destructor retirement; and focused boundaries execute
+  foreign-cache rejection, wrong-thread rejection, address reuse, stale-entry
+  pruning, target-ID exhaustion, and maximum-revision retirement.
+- ARCH-003F3c1a verification: The target-registry and generation program passes
+  18/18 normally and under ASan/UBSan. The production composition contract
+  passes 20/20 in both configurations. The full removal program rebuilds,
+  links, and passes 408/408 outside the documented atomic-writer sandbox
+  constraint. Affected production units compile with warnings as errors, the
+  source-module dependency suite passes 14/14, and `git diff --check` is clean.
+  This is only the identity-registry foundation: the current worker deliberately
+  retains its legacy raw-pointer compute path and never resolves the token.
+  F3c1b must make revision coverage complete, and F3c/F3c2-F3c4 must return a
+  detached result and resolve the token exclusively on the owner thread before
+  any publication side effect. Therefore F3c1 remains open.
 - ARCH-003F3c2 (stale-proposal transaction recorded before correction): Bound
   `checkStale` currently writes color, resolved weight, source CRC, and
   `isstale` in the worker before refresh construction. Return those fields as a

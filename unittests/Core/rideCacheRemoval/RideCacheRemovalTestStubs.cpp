@@ -11,6 +11,7 @@
 #include "GpxParser.h"
 #include "RideCache.h"
 #include "RideCacheModel.h"
+#include "RideRefreshTargetRegistry.h"
 #include "RideItem.h"
 #include "RideMetadata.h"
 #include "Settings.h"
@@ -1387,6 +1388,16 @@ QStringList RideCache::getAllFilenames()
 void RideCache::configChanged(qint32) {}
 void RideCache::progressing(int) {}
 void RideCache::cancel() { ++removalCancelCount; }
+RideRefreshTargetToken RideCache::ensureRefreshTarget(RideItem *)
+{
+    return {};
+}
+void RideCache::retireRefreshTarget(RideItem *) {}
+RideItem *RideCache::resolveRefreshTarget(
+    const RideRefreshTargetToken &) const
+{
+    return nullptr;
+}
 bool RideCache::activityMutationIsBlocked() const
 {
     return QThread::currentThread() != thread()

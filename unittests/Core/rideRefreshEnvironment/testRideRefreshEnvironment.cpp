@@ -872,9 +872,13 @@ productionWorkersRetainTheirPublishedGeneration()
     const qsizetype validation = source.indexOf(
         "!environment || environment->generation() != generation",
         capture);
+    const qsizetype workIndex = source.indexOf(
+        "work.workIndex = mutableWorkset->size()", validation);
+    const qsizetype targetToken = source.indexOf(
+        "work.targetToken = ensureRefreshTarget(item)", workIndex);
     const qsizetype worksetCapture = source.indexOf(
         "work.inputs = item->captureRefreshInputs(*environment)",
-        validation);
+        targetToken);
     const qsizetype publish = source.indexOf(
         "publishRefreshEnvironment(environment)", worksetCapture);
     const qsizetype worker = source.indexOf(
@@ -933,7 +937,9 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(start >= 0);
     QVERIFY(capture > start);
     QVERIFY(validation > capture);
-    QVERIFY(worksetCapture > validation);
+    QVERIFY(workIndex > validation);
+    QVERIFY(targetToken > workIndex);
+    QVERIFY(worksetCapture > targetToken);
     QVERIFY(publish > worksetCapture);
     QVERIFY(worker > publish);
     QVERIFY(run > worker);
@@ -973,9 +979,56 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(header.contains(
         "const std::shared_ptr<const QVector<RideRefreshWorkItem>> workset;"));
 
+    QFile inputsFile(root.filePath(
+        QStringLiteral("src/Core/RideRefreshItemInputs.h")));
+    QVERIFY(inputsFile.open(QIODevice::ReadOnly));
+    const QByteArray inputs = inputsFile.readAll();
+    QVERIFY(inputs.contains("quint64 cacheEpoch = 0;"));
+    QVERIFY(inputs.contains("quint64 targetId = 0;"));
+    QVERIFY(inputs.contains("quint64 revision = 0;"));
+    QVERIFY(inputs.contains("RideRefreshTargetToken targetToken;"));
+    QVERIFY(inputs.contains("qsizetype workIndex = -1;"));
+
+    const QByteArray workerBody = source.mid(run);
+    QVERIFY(workerBody.contains("candidate.target"));
+    QVERIFY(!workerBody.contains("resolveRefreshTarget("));
+
+    QFile removalFile(root.filePath(
+        QStringLiteral("src/Core/RideCacheRemoval.cpp")));
+    QVERIFY(removalFile.open(QIODevice::ReadOnly));
+    const QByteArray removal = removalFile.readAll();
+    QVERIFY(removal.count("retireRefreshTarget(") >= 4);
+
+    QFile liveViewFile(root.filePath(
+        QStringLiteral("src/Core/RideCacheLiveView.cpp")));
+    QVERIFY(liveViewFile.open(QIODevice::ReadOnly));
+    QVERIFY(liveViewFile.readAll().contains("retireRefreshTarget(item)"));
+
+    QFile importFile(root.filePath(
+        QStringLiteral("src/Core/RideCacheImport.cpp")));
+    QVERIFY(importFile.open(QIODevice::ReadOnly));
+    const QByteArray importSource = importFile.readAll();
+    const qsizetype retireImported = importSource.indexOf(
+        "RideCache::retireImportedRideItems(");
+    const qsizetype importRetirement = importSource.indexOf(
+        "retireRefreshTarget(item)", retireImported);
+    QVERIFY(retireImported >= 0);
+    QVERIFY(importRetirement > retireImported);
+
+    QFile projectFile(root.filePath(QStringLiteral("src/src.pro")));
+    QVERIFY(projectFile.open(QIODevice::ReadOnly));
+    QVERIFY(projectFile.readAll().contains(
+        "Core/RideRefreshTargetRegistry.h"));
+
     QFile itemSourceFile(root.filePath(QStringLiteral("src/Core/RideItem.cpp")));
     QVERIFY(itemSourceFile.open(QIODevice::ReadOnly));
     const QByteArray itemSource = itemSourceFile.readAll();
+    const qsizetype itemDestructor = itemSource.indexOf(
+        "RideItem::~RideItem()");
+    const qsizetype destructorRetirement = itemSource.indexOf(
+        "cache->retireRefreshTarget(this)", itemDestructor);
+    QVERIFY(itemDestructor >= 0);
+    QVERIFY(destructorRetirement > itemDestructor);
     const qsizetype rideOpen = itemSource.indexOf(
         "RideFile *RideItem::ride(bool open)");
     const qsizetype openBarrier = itemSource.indexOf(
