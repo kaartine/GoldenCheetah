@@ -697,8 +697,12 @@ RideCache::nextRefresh(quint64 generation)
 
 
 RideCacheRefreshThread::RideCacheRefreshThread(
-    RideCache *cache, quint64 generation)
-    : cache(cache), generation(generation)
+    RideCache *cache,
+    quint64 generation,
+    std::shared_ptr<const RideRefreshEnvironment> environment)
+    : cache(cache)
+    , generation(generation)
+    , environment(std::move(environment))
 {
     QPointer<RideCacheRefreshThread> weakSelf(this);
     connect(
@@ -982,8 +986,11 @@ RideCache::startLatestRefresh()
         }
     }
 
-    if (!context->athleteSession().publishRefreshEnvironment(
-            captureRideRefreshEnvironment(context, generation))) {
+    const auto environment =
+        captureRideRefreshEnvironment(context, generation);
+    if (!environment || environment->generation() != generation
+        || !context->athleteSession().publishRefreshEnvironment(
+            environment)) {
         qFatal("RideCache could not publish its refresh environment");
     }
 
@@ -1007,7 +1014,8 @@ RideCache::startLatestRefresh()
     workers.reserve(workerCount);
     for (int index = 0; index < workerCount; ++index) {
         workers.append(
-            new RideCacheRefreshThread(this, generation));
+            new RideCacheRefreshThread(
+                this, generation, environment));
     }
     {
         QMutexLocker locker(&updateMutex);
@@ -2314,6 +2322,8 @@ RideCache::openPlannedActivityForDeleteProcessor
 // refresh metrics
 void RideCacheRefreshThread::run()
 {
+    if (!environment || environment->generation() != generation) return;
+
     while (!isInterruptionRequested()) {
         RideCache *target = cache.data();
         if (!target) return;

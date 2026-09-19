@@ -8,11 +8,17 @@
 #include "RideRefreshZones.h"
 #include "SessionServices.h"
 
+#include <QDir>
+#include <QFile>
+
 #include <atomic>
 #include <memory>
 #include <thread>
 
 namespace {
+
+#define GC_STRINGIFY_IMPL(value) #value
+#define GC_STRINGIFY(value) GC_STRINGIFY_IMPL(value)
 
 class NullApplicationService final : public AthleteApplicationService
 {
@@ -58,6 +64,7 @@ private slots:
     void zonesSnapshotIsRetainedByTheGeneration();
     void sessionPublishesWholeGenerationsAtomically();
     void publicationIsOwnerThreadOnlyAndClosedByLifecycle();
+    void productionWorkersRetainTheirPublishedGeneration();
 };
 
 void TestRideRefreshEnvironment::
@@ -272,6 +279,56 @@ publicationIsOwnerThreadOnlyAndClosedByLifecycle()
     wrongThread.join();
     QVERIFY(!wrongThreadPublished);
     QCOMPARE(session.refreshEnvironment()->generation(), quint64(1));
+}
+
+void TestRideRefreshEnvironment::
+productionWorkersRetainTheirPublishedGeneration()
+{
+    const QDir root(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)));
+    QFile sourceFile(root.filePath(QStringLiteral("src/Core/RideCache.cpp")));
+    QVERIFY(sourceFile.open(QIODevice::ReadOnly));
+    const QByteArray source = sourceFile.readAll();
+    const qsizetype start = source.indexOf("RideCache::startLatestRefresh()");
+    const qsizetype capture = source.indexOf(
+        "captureRideRefreshEnvironment(context, generation)", start);
+    const qsizetype validation = source.indexOf(
+        "!environment || environment->generation() != generation",
+        capture);
+    const qsizetype publish = source.indexOf(
+        "publishRefreshEnvironment(\n            environment)", capture);
+    const qsizetype worker = source.indexOf(
+        "this, generation, environment", publish);
+    const qsizetype run = source.indexOf(
+        "void RideCacheRefreshThread::run()", worker);
+    const qsizetype guard = source.indexOf(
+        "!environment || environment->generation() != generation", run);
+    const qsizetype loop = source.indexOf(
+        "while (!isInterruptionRequested())", run);
+    const qsizetype nextRefresh = source.indexOf(
+        "target->nextRefresh(generation)", run);
+    const qsizetype constructor = source.indexOf(
+        "RideCacheRefreshThread::RideCacheRefreshThread(");
+    const qsizetype retained = source.indexOf(
+        "environment(std::move(environment))", constructor);
+    const qsizetype constructorBody = source.indexOf("\n{", constructor);
+    QVERIFY(start >= 0);
+    QVERIFY(capture > start);
+    QVERIFY(validation > capture);
+    QVERIFY(publish > validation);
+    QVERIFY(worker > publish);
+    QVERIFY(run > worker);
+    QVERIFY(guard > run);
+    QVERIFY(loop > guard);
+    QVERIFY(nextRefresh > loop);
+    QVERIFY(constructor >= 0);
+    QVERIFY(retained > constructor);
+    QVERIFY(constructorBody > retained);
+
+    QFile headerFile(root.filePath(QStringLiteral("src/Core/RideCache.h")));
+    QVERIFY(headerFile.open(QIODevice::ReadOnly));
+    const QByteArray header = headerFile.readAll();
+    QVERIFY(header.contains(
+        "const std::shared_ptr<const RideRefreshEnvironment> environment;"));
 }
 
 QTEST_GUILESS_MAIN(TestRideRefreshEnvironment)

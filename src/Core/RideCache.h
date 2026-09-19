@@ -52,6 +52,7 @@ class Specification;
 class RideCacheSnapshotBatch;
 class AthleteBest;
 class RideCacheModel;
+class RideRefreshEnvironment;
 class Estimator;
 class Banister;
 class RideCacheMutationScope;
@@ -629,7 +630,9 @@ class RideCacheRefreshThread : public QThread
 
     public:
         RideCacheRefreshThread(
-            RideCache *cache, quint64 generation);
+            RideCache *cache,
+            quint64 generation,
+            std::shared_ptr<const RideRefreshEnvironment> environment);
 
     protected:
 
@@ -639,6 +642,7 @@ class RideCacheRefreshThread : public QThread
     private:
         QPointer<RideCache> cache;
         quint64 generation;
+        const std::shared_ptr<const RideRefreshEnvironment> environment;
 };
 
 #endif // _GC_RideCache_h

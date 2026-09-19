@@ -8874,6 +8874,17 @@ commit before the next finding begins.
   or unsupported live-object access must fail closed rather than falling back
   to Context/Athlete/GlobalContext/appsettings. Add a source/runtime guard that
   rejects those worker-reachable fallbacks before declaring F2 complete.
+- ARCH-003F2c1 (generation binding foundation recorded before correction):
+  Capture and publish one environment before worker construction, pass the same
+  shared immutable instance into every worker, and reject missing or mismatched
+  generations before item work. Consumer-by-consumer replacement of live reads
+  remains the subsequent F2c cutover rather than reloading a mutable session
+  pointer from inside a worker.
+- ARCH-003F2c1a (worker-binding contract gap recorded before correction): The
+  first source contract proves capture/publish/constructor/guard presence but
+  not that start validation precedes publication, the constructor retains the
+  shared pointer, or the run guard precedes its first item-work operation. Pin
+  those order and ownership relationships before accepting F2c1.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9162,6 +9173,26 @@ commit before the next finding begins.
   dependency reduction remains a merge prerequisite because this worktree has
   no generated application Makefile; the focused build compiles the live
   Zones/HrZones/PaceZones sources but not every reverse-include consumer.
+- ARCH-003F2c1/F2c1a resolution: `startLatestRefresh` now captures one immutable
+  environment, validates its generation before publication, and passes that
+  same shared instance into every constructed worker. Each worker retains it
+  as a const shared pointer and rejects null or mismatched generations before
+  its loop or first item lookup. Replacement and cancellation therefore cannot
+  substitute a later session snapshot beneath an existing worker, and the
+  environment remains alive until that worker is joined and deleted.
+- ARCH-003F2c1 verification: the environment/publication suite passes 12/12
+  normally and under ASan/UBSan. Its production contract pins capture,
+  validation, publication, construction, constructor retention, run guard,
+  loop, and first lookup order. `RideCache.cpp` compiles with warnings as
+  errors, source dependencies pass 14/14, and `git diff --check` passes.
+  Independent review initially returned NO-GO for the lexical coverage gap;
+  F2c1a records it and the expanded contract closes it. Final re-review: GO
+  with no blocker, major, or minor finding.
+- ARCH-003F2c1 residual: subsequent F2c commits must pass the retained
+  environment into each item/cache/metric consumer and reject missing domains
+  without live Context, Athlete, GlobalContext, appsettings, or registry
+  fallback. F3 still owns detached result publication after generation
+  acceptance.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the
