@@ -9388,6 +9388,21 @@ commit before the next finding begins.
   atomic-writer/test-harness failure independently before treating either full
   target as current regression evidence; do not fold a storage-transaction
   change into the refresh-result fix.
+- ARCH-003F3c2a4 resolution: Linux Qt opens `QTemporaryFile` with `O_TMPFILE`
+  when available and materializes its name when `fileName()` is requested. The
+  workspace sandbox allows the unnamed open but denies that materialization,
+  so `open()` succeeds while both Qt's name and the writer's captured staging
+  path stay empty. The same freshly rebuilt binary passes all nine focused
+  atomic-publication cases outside that sandbox, including the handoff and
+  replacement-adversary cases; `gdb` and `strace` runs independently reproduced
+  the same pass and showed the named staging file and successful
+  `renameat2(RENAME_NOREPLACE)`. This is an execution-environment false
+  negative, not a production storage defect, and requires no source change.
+  With the environment constraint removed, the complete anchored-filesystem
+  suite passes 94/94 applicable cases normally and under ASan/UBSan, the full
+  snapshot suite passes 29/29, and the full removal suite passes 408/408
+  without the prior cascade or crash. Thirteen anchored cases are skipped for
+  documented platform/root prerequisites.
 - ARCH-003F3c2a verification: The outcome suite passes 10/10 normally and under
   ASan/UBSan, the four generation/success dispositions pass 3/3 normally and
   under ASan/UBSan, and the refresh-environment suite passes 20/20 in both
@@ -9396,9 +9411,10 @@ commit before the next finding begins.
   archived-removal case passes 3/3. The source-module analyzer accepts the
   baseline and its unit suite passes 14/14; `git diff --check` is clean.
   Independent review found and then cleared the stale test signature, outcome
-  coverage, and audit-wording blockers. The unresolved full-target failures are
-  recorded separately as ARCH-003F3c2a4, and the owner-thread publication work
-  remains ARCH-003F3c/F3c1-F3c4 rather than being claimed by this bounded fix.
+  coverage, and audit-wording blockers. The full-target failures recorded as
+  ARCH-003F3c2a4 were resolved as sandbox false negatives and all applicable
+  cases pass outside that constraint; the owner-thread publication work remains
+  ARCH-003F3c/F3c1-F3c4 rather than being claimed by this bounded fix.
 - ARCH-003F3c3 (completion, cancellation, and save barrier recorded before
   correction): `threadCompleted`, `cancel`, and synchronous-save settlement
   currently reason only about worker threads. They must also close/discard or
