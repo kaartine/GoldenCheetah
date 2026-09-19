@@ -1052,6 +1052,13 @@ main(int argc, char *argv[])
     if (!LocalFileStoreProcess::shutdownReaper()) {
         qWarning() << "Local Store helper reaper did not stop cleanly";
     }
+#ifdef GC_WANT_R
+    if (!rProcessLifetimeOwner.shutdown([](RTool *runtime) {
+            return runtime->shutdown();
+        })) {
+        qWarning() << "R runtime did not finalize cleanly";
+    }
+#endif
     delete application;
 
     return ret;

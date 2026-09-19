@@ -60,12 +60,16 @@ class REmbed {
         enum class InitializationState {
             NotStarted,
             InterpreterInitialized,
-            Ready
+            Ready,
+            ShuttingDown,
+            Finalized,
+            ShutdownFailed
         };
     
         REmbed(const bool verbose=false, const bool interactive=false);
         ~REmbed();
         void initialize();
+        bool shutdown();
         InitializationState initializationState() const { return initializationState_; }
 
     // modelled on equivalents for RInside to help transition
@@ -85,6 +89,7 @@ class REmbed {
 
     private:
         InitializationState initializationState_ = InitializationState::NotStarted;
+        bool shutdownAttempted_ = false;
 };
 
 #endif

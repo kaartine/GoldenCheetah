@@ -40,6 +40,10 @@ struct EmbeddedSetupData {
     bool completed;
 };
 
+struct EmbeddedShutdownData {
+    bool completed;
+};
+
 void initializeEmbeddedRuntime(void *opaque) noexcept
 {
     EmbeddedSetupData *data = static_cast<EmbeddedSetupData *>(opaque);
@@ -61,6 +65,14 @@ void initializeEmbeddedRuntime(void *opaque) noexcept
 #endif
     start.R_Interactive = static_cast<Rboolean>(data->interactive);
     R_SetParams(&start);
+    data->completed = true;
+}
+
+void shutdownEmbeddedRuntime(void *opaque) noexcept
+{
+    EmbeddedShutdownData *data =
+        static_cast<EmbeddedShutdownData *>(opaque);
+    Rf_endEmbeddedR(0);
     data->completed = true;
 }
 
@@ -153,6 +165,29 @@ REmbed::initialize()
 
     loaded = true;
     initializationState_ = InitializationState::Ready;
+}
+
+bool
+REmbed::shutdown()
+{
+    if (shutdownAttempted_) return false;
+    shutdownAttempted_ = true;
+    if (initializationState_ == InitializationState::NotStarted) return true;
+    if (initializationState_ != InitializationState::InterpreterInitialized
+        && initializationState_ != InitializationState::Ready) return false;
+
+    initializationState_ = InitializationState::ShuttingDown;
+    EmbeddedShutdownData shutdown{false};
+    if (!executeAtRTopLevel(shutdownEmbeddedRuntime, &shutdown)
+        || !shutdown.completed) {
+        loaded = false;
+        initializationState_ = InitializationState::ShutdownFailed;
+        return false;
+    }
+
+    loaded = false;
+    initializationState_ = InitializationState::Finalized;
+    return true;
 }
 
 // this is a non-throwing version returning an error code

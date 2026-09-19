@@ -37,12 +37,16 @@ class RTool {
         enum class InitializationState {
             NotStarted,
             InterpreterInitialized,
-            Ready
+            Ready,
+            ShuttingDown,
+            Finalized,
+            ShutdownFailed
         };
 
         RTool();
         ~RTool();
         InitializationState initializationState() const { return initializationState_; }
+        bool shutdown();
         static RTool *callbackInstance();
         void  configChanged();
         RExecutionGate::Lease tryAcquireExecution(
@@ -159,6 +163,7 @@ class RTool {
         RExecutionGate executionGate;
         std::atomic_bool appearanceRefreshPending{false};
         InitializationState initializationState_ = InitializationState::NotStarted;
+        bool shutdownAttempted_ = false;
         static thread_local RTool *constructionInstance_;
 
 };

@@ -8155,7 +8155,7 @@ commit before the next finding begins.
   QObject access, RideItem/compare snapshot ownership, a future helper adding
   an event pump after its entry guard, and a real full-UI teardown callback are
   outside this item and remain ARCH-003B/003C release residuals.
-- ARCH-003C (queued lifetime work recorded before correction): `rtool` is a raw
+- ARCH-003C (FIXED; queued lifetime work recorded before correction): `rtool` is a raw
   process global, self-publishes before construction finishes, leaks failed and
   successful instances, and has an unreachable/unconditional finalizer. Define
   initialization-state-aware ownership and tested shutdown ordering before
@@ -8317,6 +8317,72 @@ commit before the next finding begins.
   source-reviewed and compiled, not end-to-end fault-injected. Arbitrary
   registered callbacks, R shutdown/finalization (ARCH-003C2), and other
   supported R/platform combinations remain outside this claim.
+- ARCH-003C2 (FIXED; implementation item recorded before correction): replace the
+  successful-runtime OS-lifetime leak with one explicit owner-thread shutdown
+  after the final application restart loop and before `QApplication` teardown.
+  Permanently close the execution gate only while idle, clear queued/bound UI
+  state, keep the callback owner discoverable while R exit finalizers and
+  graphics-device close callbacks run, and then unpublish and destroy the C++
+  wrappers only after `Rf_endEmbeddedR(0)` returns successfully. Finalize an
+  `InterpreterInitialized` partial runtime as well, but retain it without
+  retry if shutdown cannot safely start or cross its R top-level boundary.
+  Emergency `_Exit`/startup-abort paths remain deliberate OS teardown rather
+  than pretending to provide orderly interpreter finalization.
+- ARCH-003C2a (FIXED; shutdown-contract correction found by independent C2 pre-review
+  and recorded before implementation): `Rf_endEmbeddedR(0)` does not invoke
+  `.Last`; upstream Unix and Windows implementations run exit finalizers,
+  device/editor and temporary-directory cleanup, warning handling, and
+  platform cleanup. Do not duplicate those internal steps or claim `.Last`;
+  verify the actual exit-finalizer and device-close contracts instead.
+- ARCH-003C2b (FIXED; failed-finalization publication defect found by independent C2
+  pre-review and recorded before implementation): retaining the public alias
+  after the shutdown boundary fails would expose an indeterminately finalized
+  runtime to raw readers that bypass the execution gate. Keep the alias only
+  while callbacks execute inside the boundary, then clear it on both success
+  and failure while retaining failed storage privately without retry.
+- ARCH-003C2c (FIXED; shutdown admission requirement found by independent C2
+  pre-review and recorded before implementation): a boolean active flag does
+  not express an irreversible shutdown. Give `RExecutionGate` atomic
+  Idle/Active/PermanentlyClosed semantics; only its owner thread may close an
+  idle gate, and every later lease, defer, wrong-thread, active, or second-close
+  attempt must fail closed.
+- ARCH-003C2d (FIXED; post-shutdown reinitialization defect found by independent C2
+  post-review and recorded before correction): successful shutdown resets the
+  private runtime storage, and an empty owner has no storage, so the existing
+  `initialize()` guard would accept a new interpreter after either owner had
+  already shut down. Make the shutdown-attempt flag a permanent initialization
+  admission barrier and prove that neither factory is invoked afterward.
+- ARCH-003C2 resolution: after the final restart loop, the process owner now
+  makes one owner-thread shutdown attempt before `QApplication` destruction.
+  The execution gate atomically transitions from Idle to PermanentlyClosed,
+  `RTool` leaves Ready and clears all execution/UI bindings and deferred work,
+  and a C/POD `R_ToplevelExec` callback invokes only `Rf_endEmbeddedR(0)`.
+  Ready runtimes remain callback-visible during R exit finalizers and device
+  close, but the alias is cleared immediately after every boundary result.
+  Successful shutdown then destroys the non-R-owning wrappers; failure retains
+  possibly partial storage privately without destruction or retry. Partial
+  initialized runtimes follow the same finalization policy, and the generic
+  owner permanently rejects reinitialization after any accepted shutdown.
+- ARCH-003C2 verification: the focused execution/lifecycle suite passes 25/25
+  on Qt 6.4.2 normally and 25/25 under ASan/UBSan with leak detection disabled.
+  It covers Idle/Active/PermanentlyClosed admission, wrong-thread/active/second
+  shutdown rejection, Ready and partial success, failure retention, alias
+  visibility and clearing, wrapper destruction, and post-success/empty/failure
+  factory rejection. A staged real R 4.3.3 child process passes with an exit
+  finalizer marker, a custom GE device `Close`/`deviceSpecific` marker, R temp
+  directory removal, and no R API call after the boundary. Modified production
+  R sources compile and link warning-free; `main.cpp` compiles warning-free in
+  R-only and R/Python configurations. The dependency suite passes 14/14,
+  `git diff --check` is clean, and independent pre/post-review returned GO.
+- ARCH-003C2 residual: the real shutdown child was exercised with staged R
+  4.3.3 on the current Unix test platform. Windows has a distinct
+  `Rf_endEmbeddedR` implementation with `app_cleanup`, and macOS, other
+  supported R versions, and a full R-enabled GUI teardown were compile/source-
+  reviewed rather than live end-to-end tested. The top-level boundary contains
+  R errors/non-local jumps, not `abort`, `exit`, native crashes, or forced
+  `_Exit`/startup-abort paths; those remain deliberate OS-process teardown. An
+  unexpectedly active execution gate makes orderly shutdown fail closed and
+  retains the runtime without finalization rather than waiting or retrying.
 - ARCH-003D (queued lifetime work recorded before correction): `PythonEmbed` is
   another raw process global whose failed and successful instances are never
   deleted, while its empty destructor cannot balance the saved interpreter

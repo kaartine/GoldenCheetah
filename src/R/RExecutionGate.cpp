@@ -16,13 +16,19 @@
 
 struct RExecutionGate::State
 {
+    enum class AdmissionState {
+        Idle,
+        Active,
+        PermanentlyClosed
+    };
+
     explicit State(std::thread::id ownerThread)
         : ownerThread(ownerThread)
     {
     }
 
     const std::thread::id ownerThread;
-    std::atomic_bool active{false};
+    std::atomic<AdmissionState> admission{AdmissionState::Idle};
 };
 
 RExecutionGate::Lease::Lease(
@@ -77,7 +83,8 @@ RExecutionGate::Lease::reset() noexcept
         // A lease destructor cannot propagate. Releasing after cleanup was
         // attempted preserves the gate's teardown contract.
     }
-    state->active.store(false, std::memory_order_release);
+    state->admission.store(
+        State::AdmissionState::Idle, std::memory_order_release);
     try {
         if (afterRelease) afterRelease();
     } catch (...) {
@@ -97,10 +104,10 @@ RExecutionGate::tryAcquire(Cleanup cleanup, Cleanup afterRelease)
         return Lease();
     }
 
-    bool expected = false;
-    if (!state_->active.compare_exchange_strong(
+    State::AdmissionState expected = State::AdmissionState::Idle;
+    if (!state_->admission.compare_exchange_strong(
             expected,
-            true,
+            State::AdmissionState::Active,
             std::memory_order_acquire,
             std::memory_order_relaxed)) {
         return Lease();
@@ -116,5 +123,25 @@ bool
 RExecutionGate::canDeferFromCurrentThread() const noexcept
 {
     return std::this_thread::get_id() == state_->ownerThread
-        && state_->active.load(std::memory_order_acquire);
+        && state_->admission.load(std::memory_order_acquire)
+            == State::AdmissionState::Active;
+}
+
+bool
+RExecutionGate::beginShutdown() noexcept
+{
+    if (std::this_thread::get_id() != state_->ownerThread) return false;
+    State::AdmissionState expected = State::AdmissionState::Idle;
+    return state_->admission.compare_exchange_strong(
+        expected,
+        State::AdmissionState::PermanentlyClosed,
+        std::memory_order_acq_rel,
+        std::memory_order_relaxed);
+}
+
+bool
+RExecutionGate::isPermanentlyClosed() const noexcept
+{
+    return state_->admission.load(std::memory_order_acquire)
+        == State::AdmissionState::PermanentlyClosed;
 }

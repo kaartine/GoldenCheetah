@@ -456,9 +456,40 @@ fail:
 
 RTool::~RTool()
 {
-    if (initializationState_ != InitializationState::NotStarted) return;
+    if (initializationState_ != InitializationState::NotStarted
+        && initializationState_ != InitializationState::Finalized) return;
     delete dev;
     delete R;
+}
+
+bool
+RTool::shutdown()
+{
+    if (shutdownAttempted_) return false;
+    shutdownAttempted_ = true;
+    if (initializationState_ == InitializationState::NotStarted) return true;
+
+    if (!executionGate.beginShutdown()) {
+        initializationState_ = InitializationState::ShutdownFailed;
+        return false;
+    }
+    initializationState_ = InitializationState::ShuttingDown;
+    starting = true;
+    appearanceRefreshPending.store(false, std::memory_order_release);
+    context = NULL;
+    boundAthlete = NULL;
+    canvas = NULL;
+    perspective = NULL;
+    chart = NULL;
+    (void)deferredUiWork.take();
+
+    if (!R || !R->shutdown()) {
+        initializationState_ = InitializationState::ShutdownFailed;
+        return false;
+    }
+
+    initializationState_ = InitializationState::Finalized;
+    return true;
 }
 
 void
@@ -554,7 +585,8 @@ void
 RTool::configChanged()
 {
     // wait until loaded
-    if (starting || failed) return;
+    if (starting || failed
+        || initializationState_ != InitializationState::Ready) return;
 
     RExecutionGate::Lease executionLease =
         tryAcquireExecution(NULL, NULL, NULL, NULL);

@@ -66,6 +66,10 @@ public:
     // active. Wrong-thread and already-released callers must fail closed.
     bool canDeferFromCurrentThread() const noexcept;
 
+    // Permanently deny new work. Only the owner thread can close an idle gate.
+    bool beginShutdown() noexcept;
+    bool isPermanentlyClosed() const noexcept;
+
 private:
     std::shared_ptr<State> state_;
 };
