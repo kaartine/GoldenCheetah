@@ -8582,7 +8582,7 @@ commit before the next finding begins.
   suite passes 14/14, and `git diff --check` is clean. Independent post-review
   found no blocker or major issue and returned GO; its test-child cleanup note
   was corrected before commit while D5 remained explicitly open.
-- ARCH-003D5 (queued post-initialization readiness defect found by independent
+- ARCH-003D5 (FIXED; post-initialization readiness defect found by independent
   D3 post-review and recorded before correction): Python setup ignores failures
   from the catcher-install and library scripts, then fetches `catchOutErr` and
   calls `PyObject_GetAttrString` on it without proving the object exists. A
@@ -8593,6 +8593,64 @@ commit before the next finding begins.
   reaches `Ready`/`PyEval_SaveThread` only after the complete binding/catcher
   contract is established. Cover each failure boundary and partial-runtime
   shutdown before correcting production.
+- ARCH-003D5 resolution: post-initialization is now a fail-closed transaction
+  with stage-specific results for `sys` import/path setup, catcher execution,
+  conditional deployed-site setup, resource read, library execution, main-
+  module lookup, and both owned output references. Local guards release all
+  intermediate new references under the GIL, contain C++ exceptions, and
+  publish catcher/clear only together after the last boundary. Failure emits an
+  unconditional C-stderr stage diagnostic, prints and clears a pending Python
+  error deliberately, retains `InterpreterInitialized`, and leaves saved state
+  and published references null for D2 partial finalization. Only success calls
+  `PyEval_SaveThread`, advances to `Ready`, publishes `loaded`, and reports
+  Python as loaded. Missing `library.py` and path-setup failure are intentionally
+  fatal now because a runtime without the complete GC API contract is unusable.
+- ARCH-003D5 verification: the focused lifecycle suite passes 23/23 normally
+  and under ASan/UBSan. It injects all nine ordered failure boundaries, proves
+  strict short-circuiting, null outputs, exact reference release, success-only
+  transfer, rejection of invalid output/hooks, exception containment, and
+  SaveThread/Ready publication ordering. A checked-in real CPython 3.12 child
+  passes separate ready, partial-catcher, deployed-site, missing-resource,
+  partial-library, missing-catcher, and missing-clear processes; every failure
+  retains partial state and then reaches exact-once `Py_FinalizeEx`/atexit with
+  no published references. Production compiles against CPython 3.12, the
+  dependency suite passes 14/14, and `git diff --check` is clean.
+- ARCH-003D5 residual: the real harness uses a stand-in catcher/library rather
+  than the generated SIP `goldencheetah` module. The full application smoke in
+  ARCH-003D2 remains a release/deployment prerequisite and must prove real
+  `GC.Bindings`, resource, deployed-site, and platform-specific success paths.
+- ARCH-003D5a (FIXED; post-review exception-ownership blocker recorded before
+  correction): after CPython reaches `InterpreterInitialized`, production
+  constructs Qt/standard strings and the hook `std::function` aggregate before
+  entering the post-initializer's internal catch boundary. An allocation or
+  copy exception there would unwind `PythonEmbed` construction before the
+  process-lifetime owner can retain the partial wrapper, leaving live CPython
+  unowned and retry protection lost. Enclose all post-interpreter preparation,
+  hook construction, invocation, and failure UI in an outer no-escape boundary;
+  perform every potentially throwing success diagnostic before SaveThread so
+  no catch path can call Python APIs after releasing the GIL. The first
+  re-review further found that throwing success-log preparation after the
+  transaction transferred catcher/clear would return `Exception` with outputs
+  still published; all such preparation must therefore precede the transfer,
+  leaving only nonthrowing C logging afterward.
+- ARCH-003D5a resolution: a templated no-escape boundary now begins immediately
+  after publishing `InterpreterInitialized` and encloses version/string
+  preparation, hook construction, the full transaction, and success-log
+  conversion. It maps any C++ exception to the stage-specific `Exception`
+  result while the GIL and partial wrapper remain owned. All formatting and
+  log conversion completes before the transaction can transfer its outputs;
+  afterward only nonthrowing C logging precedes `PyEval_SaveThread`, and after
+  that call only no-throw pointer/state/atomic publication and return remain.
+  The failure dialog has its own no-escape guard, so UI allocation cannot
+  unwind the retained partial wrapper.
+- ARCH-003D5a verification: the focused suite injects an exception through the
+  outer containment seam, separately rejects missing hooks with null outputs
+  and non-null output reuse, and still passes 23/23 normally and under
+  ASan/UBSan. Its production-order contract pins success-log conversion before
+  output transfer and rejects the former post-transfer debug allocation.
+  Production `PythonEmbed.cpp` recompiles against CPython 3.12 and `git diff
+  --check` is clean. Final independent re-review found no blocker or major
+  issue and returned GO for the D5/D5a commit.
 - ARCH-003E (FIXED, then superseded by ARCH-003D3; concrete defect recorded
   before correction):
   `Py_SetProgramName` receives storage from a temporary `std::wstring`, although

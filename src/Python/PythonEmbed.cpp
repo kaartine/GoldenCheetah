@@ -64,25 +64,6 @@ public:
     PyConfig config;
 };
 
-class PythonObjectGuard final
-{
-public:
-    explicit PythonObjectGuard(PyObject *object) : object_(object) {}
-    ~PythonObjectGuard() { Py_XDECREF(object_); }
-
-    void reset()
-    {
-        Py_XDECREF(object_);
-        object_ = nullptr;
-    }
-
-    PythonObjectGuard(const PythonObjectGuard &) = delete;
-    PythonObjectGuard &operator=(const PythonObjectGuard &) = delete;
-
-private:
-    PyObject *object_;
-};
-
 bool pythonConfigFailed(const char *operation, const PyStatus &status)
 {
     if (!PyStatus_Exception(status)) return false;
@@ -96,6 +77,27 @@ bool pythonConfigFailed(const char *operation, const PyStatus &status)
         status.exitcode);
     if (status.err_msg) fprintf(stderr, "%s\n", status.err_msg);
     return true;
+}
+
+const char *pythonPostInitializationStage(
+    const PythonRuntimePostInitializer::Result result)
+{
+    using Result = PythonRuntimePostInitializer::Result;
+    switch (result) {
+    case Result::Rejected: return "transaction validation";
+    case Result::Prepared: return "complete";
+    case Result::SysImportFailed: return "sys import";
+    case Result::PathFailed: return "sys.path setup";
+    case Result::CatcherScriptFailed: return "stdio catcher script";
+    case Result::DeploymentPathFailed: return "deployed site-packages setup";
+    case Result::LibraryResourceFailed: return "library.py resource read";
+    case Result::LibraryScriptFailed: return "library.py execution";
+    case Result::MainModuleFailed: return "__main__ lookup";
+    case Result::CatcherReferenceFailed: return "catchOutErr lookup";
+    case Result::ClearReferenceFailed: return "catchOutErr.__init__ lookup";
+    case Result::Exception: return "C++ exception containment";
+    }
+    return "unknown stage";
 }
 
 class PythonGilGuard final
@@ -457,63 +459,15 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
 
         if (initializeConfiguredPython()) {
             initializationState_ = InitializationState::InterpreterInitialized;
+            using PostInitializer = PythonRuntimePostInitializer;
+            const PostInitializer::Result postResult =
+                PostInitializer::contain([&]() {
+                printd("Py_GetVersion()\n");
+                version = QString(Py_GetVersion());
+                version.replace("\n", " ");
+                const std::string versionText = version.toStdString();
 
-        // set path - allocate storage for it...
-        //printd("set path=%s\n", pypath.toStdString().c_str());
-        //wchar_t *here = new wchar_t(pypath.length()+1);
-        //pypath.toWCharArray(here);
-        //here[pypath.length()]=0;
-        //PySys_SetPath(here);
-
-        // set the module path in the same way the interpreter would
-        printd("PyImportModule('sys')\n");
-        PyObject *sys = PyImport_ImportModule("sys");
-
-        // did module import fail (python not installed properly?)
-        if (sys != NULL)  {
-            PythonObjectGuard sysGuard(sys);
-
-            printd("Add '.' to Path\n");
-            const PythonPathAppender::Result pathResult =
-                PythonPathAppender::append(
-                    sys,
-                    {
-                        [](void *module) {
-                            return static_cast<void *>(PyObject_GetAttrString(
-                                static_cast<PyObject *>(module), "path"));
-                        },
-                        [](void *path) {
-                            return PyList_Check(static_cast<PyObject *>(path));
-                        },
-                        []() {
-                            return static_cast<void *>(PyUnicode_FromString("."));
-                        },
-                        [](void *path, void *entry) {
-                            return PyList_Append(
-                                static_cast<PyObject *>(path),
-                                static_cast<PyObject *>(entry)) == 0;
-                        },
-                        [](void *reference) {
-                            Py_DECREF(static_cast<PyObject *>(reference));
-                        }
-                    });
-            if (pathResult != PythonPathAppender::Result::Appended) {
-                fprintf(stderr, "Unable to append '.' to Python sys.path.\n");
-                PyErr_Print();
-                PyErr_Clear();
-            }
-            sysGuard.reset();
-
-            // get version
-            printd("Py_GetVersion()\n");
-            version = QString(Py_GetVersion());
-            version.replace("\n", " ");
-
-            fprintf(stderr, "Python loaded [%s]\n", version.toStdString().c_str()); fflush(stderr);
-
-            // our base code - traps stdout and loads goldencheetan module
-            // mapping all the bindings to a GC object.
-            std::string stdOutErr = ("import sys\n"
+            const std::string stdOutErr = ("import sys\n"
  #ifdef Q_OS_LINUX
                                      "import os\n"
                                      "sys.setdlopenflags(os.RTLD_NOW | os.RTLD_DEEPBIND)\n"
@@ -530,45 +484,122 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
                                      "sys.stderr = catchOutErr\n"
                                      "import goldencheetah\n"
                                      "GC=goldencheetah.Bindings()\n");
+            const std::string ensureSitePackages =
+                "import sys\n"
+                "sys.path.append(sys.prefix+'/lib/python3.'+"
+                "str(sys.version_info.minor)+'/site-packages')\n";
+            QString librarySource;
 
-            printd("Install stdio catcher\n");
-            PyRun_SimpleString(stdOutErr.c_str()); //invoke code to redirect
-
+                const PostInitializer::Result result = PostInitializer::run(
+                catcher,
+                clear,
+                {
+                    []() {
+                        printd("PyImportModule('sys')\n");
+                        return static_cast<void *>(PyImport_ImportModule("sys"));
+                    },
+                    [](void *sys) {
+                        printd("Add '.' to Path\n");
+                        return PythonPathAppender::append(
+                            sys,
+                            {
+                                [](void *module) {
+                                    return static_cast<void *>(
+                                        PyObject_GetAttrString(
+                                            static_cast<PyObject *>(module),
+                                            "path"));
+                                },
+                                [](void *path) {
+                                    return PyList_Check(
+                                        static_cast<PyObject *>(path));
+                                },
+                                []() {
+                                    return static_cast<void *>(
+                                        PyUnicode_FromString("."));
+                                },
+                                [](void *path, void *entry) {
+                                    return PyList_Append(
+                                        static_cast<PyObject *>(path),
+                                        static_cast<PyObject *>(entry)) == 0;
+                                },
+                                [](void *reference) {
+                                    Py_DECREF(
+                                        static_cast<PyObject *>(reference));
+                                }
+                            }) == PythonPathAppender::Result::Appended;
+                    },
+                    [&stdOutErr]() {
+                        printd("Install stdio catcher\n");
+                        return PyRun_SimpleString(stdOutErr.c_str()) == 0;
+                    },
+                    [&]() {
  #ifdef Q_OS_LINUX
-            // ensure site-packages is in path when using deployed Python on Linux
-            if (PYTHONHOME == deployedPython) {
-                std::string ensureSitePackages = ("import sys\n"
-                                                  "sys.path.append(sys.prefix+'/lib/python3.'+str(sys.version_info.minor)+'/site-packages')\n");
-                PyRun_SimpleString(ensureSitePackages.c_str()); //invoke code
-            }
+                        if (PYTHONHOME == deployedPython) {
+                            return PyRun_SimpleString(
+                                ensureSitePackages.c_str()) == 0;
+                        }
  #endif
+                        return true;
+                    },
+                    [&librarySource]() {
+                        printd("Load library.py\n");
+                        QFile library(":python/library.py");
+                        if (!library.open(QFile::ReadOnly)) return false;
+                        librarySource = library.readAll();
+                        const bool readSuccessfully =
+                            library.error() == QFileDevice::NoError;
+                        library.close();
+                        return readSuccessfully;
+                    },
+                    [&librarySource]() {
+                        const QByteArray encoded = librarySource.toLatin1();
+                        return PyRun_SimpleString(encoded.constData()) == 0;
+                    },
+                    []() {
+                        printd("Get catcher refs\n");
+                        return static_cast<void *>(
+                            PyImport_AddModule("__main__"));
+                    },
+                    [](void *mainModule) {
+                        return static_cast<void *>(PyObject_GetAttrString(
+                            static_cast<PyObject *>(mainModule),
+                            "catchOutErr"));
+                    },
+                    [](void *catcherReference) {
+                        return static_cast<void *>(PyObject_GetAttrString(
+                            static_cast<PyObject *>(catcherReference),
+                            "__init__"));
+                    },
+                    [](void *reference) {
+                        Py_DECREF(static_cast<PyObject *>(reference));
+                    }
+                });
 
-            // now load the library
-            printd("Load library.py\n");
-            QFile lib(":python/library.py");
-            if (lib.open(QFile::ReadOnly)) {
-                QString libstring=lib.readAll();
-                lib.close();
-                PyRun_SimpleString(libstring.toLatin1().constData());
+                if (result == PostInitializer::Result::Prepared) {
+                    fprintf(
+                        stderr,
+                        "Python loaded [%s]\n",
+                        versionText.c_str());
+                    fflush(stderr);
+                }
+                return result;
+            });
+
+            if (postResult == PostInitializer::Result::Prepared) {
+                // No potentially throwing work is permitted after the GIL is
+                // released: failure diagnostics use Python error APIs.
+                mainThreadState_ = static_cast<void *>(PyEval_SaveThread());
+                initializationState_ = InitializationState::Ready;
+                loaded = true;
+                return;
             }
 
-
-            // setup trapping of output
-            printd("Get catcher refs\n");
-            PyObject *pModule = PyImport_AddModule("__main__"); //create main module
-            catcher = static_cast<void*>(PyObject_GetAttrString(pModule,"catchOutErr"));
-            clear = static_cast<void*>(PyObject_GetAttrString(static_cast<PyObject*>(catcher), "__init__"));
-            PyErr_Print(); //make python print any errors
-            PyErr_Clear(); //and clear them !
-
-            // prepare for threaded processing
-            mainThreadState_ = static_cast<void *>(PyEval_SaveThread());
-            initializationState_ = InitializationState::Ready;
-            loaded = true;
-
-            printd("Embedding completes\n");
-            return;
-        } // sys != NULL
+            fprintf(
+                stderr,
+                "Python post-initialization failed during %s.\n",
+                pythonPostInitializationStage(postResult));
+            if (PyErr_Occurred()) PyErr_Print();
+            PyErr_Clear();
         } // configured Python initialized
     } // pythonInstalled == true
 
@@ -577,11 +608,15 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
     // Notify user of the problem (they can disable Python in preferences if they don't want to see this)
     // Note: We don't permanently disable Python here - the user might fix the issue (install Python,
     // fix PYTHONHOME, etc.) and we should try again on next startup.
-    QMessageBox msg(QMessageBox::Warning, QObject::tr("Python not available"),
-                    QObject::tr("GoldenCheetah was built with Python 3.%1 but could not initialize Python.\n\n"
-                                "Please ensure Python 3.%1 is installed and in your PATH.\n"
-                                "You can disable Python in Options > General if you don't need it.").arg(PYTHON3_VERSION));
-    msg.exec();
+    try {
+        QMessageBox msg(QMessageBox::Warning, QObject::tr("Python not available"),
+                        QObject::tr("GoldenCheetah was built with Python 3.%1 but could not initialize Python.\n\n"
+                                    "Please ensure Python 3.%1 is installed and in your PATH.\n"
+                                    "You can disable Python in Options > General if you don't need it.").arg(PYTHON3_VERSION));
+        msg.exec();
+    } catch (...) {
+        fprintf(stderr, "Unable to display the Python initialization warning.\n");
+    }
     loaded=false;
     return;
 }

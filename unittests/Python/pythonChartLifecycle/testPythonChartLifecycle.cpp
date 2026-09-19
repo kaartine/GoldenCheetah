@@ -102,6 +102,7 @@ private slots:
     void runtimeFinalizerHandlesPartialAndFlushErrors();
     void runtimeInitializerTracksFailureOwnership();
     void pathAppenderOwnsReferencesOnEveryExit();
+    void postInitializerFailsClosedAtEveryBoundary();
     void processLifetimeOwnerControlsPublication();
     void pythonConfigurationOwnsInitializationInputs();
     void pythonInitializationOwnershipWiring();
@@ -1281,6 +1282,160 @@ TestPythonChartLifecycle::pathAppenderOwnsReferencesOnEveryExit()
 }
 
 void
+TestPythonChartLifecycle::postInitializerFailsClosedAtEveryBoundary()
+{
+    using PostInitializer = PythonRuntimePostInitializer;
+    using Result = PostInitializer::Result;
+    int sysValue = 1;
+    int mainValue = 2;
+    int catcherValue = 3;
+    int clearValue = 4;
+    void *emptyCatcherOutput = nullptr;
+    void *emptyClearOutput = nullptr;
+    QCOMPARE(
+        PostInitializer::run(
+            emptyCatcherOutput, emptyClearOutput, {}),
+        Result::Rejected);
+    QCOMPARE(
+        PostInitializer::contain([]() -> Result { throw 1; }),
+        Result::Exception);
+
+    const QList<Result> failureResults{
+        Result::SysImportFailed,
+        Result::PathFailed,
+        Result::CatcherScriptFailed,
+        Result::DeploymentPathFailed,
+        Result::LibraryResourceFailed,
+        Result::LibraryScriptFailed,
+        Result::MainModuleFailed,
+        Result::CatcherReferenceFailed,
+        Result::ClearReferenceFailed
+    };
+
+    for (int failedStage = 1; failedStage <= failureResults.size();
+         ++failedStage) {
+        QList<int> calls;
+        QList<int> released;
+        void *catcherOutput = nullptr;
+        void *clearOutput = nullptr;
+        const Result result = PostInitializer::run(
+            catcherOutput,
+            clearOutput,
+            {
+                [&]() -> void * {
+                    calls.append(1);
+                    return failedStage == 1 ? nullptr : &sysValue;
+                },
+                [&](void *) {
+                    calls.append(2);
+                    return failedStage != 2;
+                },
+                [&]() { calls.append(3); return failedStage != 3; },
+                [&]() { calls.append(4); return failedStage != 4; },
+                [&]() { calls.append(5); return failedStage != 5; },
+                [&]() { calls.append(6); return failedStage != 6; },
+                [&]() -> void * {
+                    calls.append(7);
+                    return failedStage == 7 ? nullptr : &mainValue;
+                },
+                [&](void *) -> void * {
+                    calls.append(8);
+                    return failedStage == 8 ? nullptr : &catcherValue;
+                },
+                [&](void *) -> void * {
+                    calls.append(9);
+                    return failedStage == 9 ? nullptr : &clearValue;
+                },
+                [&](void *reference) {
+                    if (reference == &sysValue) released.append(1);
+                    if (reference == &catcherValue) released.append(3);
+                    if (reference == &clearValue) released.append(4);
+                }
+            });
+
+        QCOMPARE(result, failureResults.at(failedStage - 1));
+        QCOMPARE(calls.size(), failedStage);
+        for (int index = 0; index < calls.size(); ++index) {
+            QCOMPARE(calls.at(index), index + 1);
+        }
+        QCOMPARE(catcherOutput, nullptr);
+        QCOMPARE(clearOutput, nullptr);
+        if (failedStage == 1) {
+            QVERIFY(released.isEmpty());
+        } else if (failedStage == 9) {
+            QCOMPARE(released, QList<int>({1, 3}));
+        } else {
+            QCOMPARE(released, QList<int>({1}));
+        }
+    }
+
+    QList<int> calls;
+    QList<int> released;
+    void *catcherOutput = nullptr;
+    void *clearOutput = nullptr;
+    QCOMPARE(
+        PostInitializer::run(
+            catcherOutput,
+            clearOutput,
+            {
+                [&]() -> void * { calls.append(1); return &sysValue; },
+                [&](void *) { calls.append(2); return true; },
+                [&]() { calls.append(3); return true; },
+                [&]() { calls.append(4); return true; },
+                [&]() { calls.append(5); return true; },
+                [&]() { calls.append(6); return true; },
+                [&]() -> void * { calls.append(7); return &mainValue; },
+                [&](void *) -> void * {
+                    calls.append(8);
+                    return &catcherValue;
+                },
+                [&](void *) -> void * {
+                    calls.append(9);
+                    return &clearValue;
+                },
+                [&](void *reference) {
+                    released.append(reference == &sysValue ? 1 : 0);
+                }
+            }),
+        Result::Prepared);
+    QCOMPARE(calls, QList<int>({1, 2, 3, 4, 5, 6, 7, 8, 9}));
+    QCOMPARE(released, QList<int>({1}));
+    QCOMPARE(catcherOutput, static_cast<void *>(&catcherValue));
+    QCOMPARE(clearOutput, static_cast<void *>(&clearValue));
+
+    QCOMPARE(
+        PostInitializer::run(catcherOutput, clearOutput, {}),
+        Result::Rejected);
+
+    catcherOutput = nullptr;
+    clearOutput = nullptr;
+    released.clear();
+    QCOMPARE(
+        PostInitializer::run(
+            catcherOutput,
+            clearOutput,
+            {
+                [&]() -> void * { return &sysValue; },
+                [](void *) { return true; },
+                []() { return true; },
+                []() { return true; },
+                []() { return true; },
+                []() { return true; },
+                [&]() -> void * { return &mainValue; },
+                [&](void *) -> void * { return &catcherValue; },
+                [&](void *) -> void * { throw 1; },
+                [&](void *reference) {
+                    if (reference == &sysValue) released.append(1);
+                    if (reference == &catcherValue) released.append(3);
+                }
+            }),
+        Result::Exception);
+    QCOMPARE(released, QList<int>({1, 3}));
+    QCOMPARE(catcherOutput, nullptr);
+    QCOMPARE(clearOutput, nullptr);
+}
+
+void
 TestPythonChartLifecycle::processLifetimeOwnerControlsPublication()
 {
     using State = FakeEmbeddedRuntime::InitializationState;
@@ -1459,6 +1614,28 @@ TestPythonChartLifecycle::pythonInitializationOwnershipWiring()
         "initializationState_ = InitializationState::InterpreterInitialized;"));
     QVERIFY(implementationSource.contains(
         "initializationState_ = InitializationState::Ready;"));
+    const qsizetype postPrepared = implementationSource.indexOf(
+        "postResult == PostInitializer::Result::Prepared");
+    const qsizetype versionLogPreparation = implementationSource.indexOf(
+        "const std::string versionText = version.toStdString();");
+    const qsizetype postTransaction = implementationSource.indexOf(
+        "const PostInitializer::Result result = PostInitializer::run(");
+    const qsizetype saveThread = implementationSource.indexOf(
+        "mainThreadState_ = static_cast<void *>(PyEval_SaveThread());");
+    const qsizetype readyState = implementationSource.indexOf(
+        "initializationState_ = InitializationState::Ready;", saveThread);
+    const qsizetype publishLoaded = implementationSource.indexOf(
+        "loaded = true;", readyState);
+    const qsizetype postFailure = implementationSource.indexOf(
+        "Python post-initialization failed during %s.", publishLoaded);
+    QVERIFY(postPrepared >= 0);
+    QVERIFY(versionLogPreparation >= 0);
+    QVERIFY(postTransaction > versionLogPreparation);
+    QVERIFY(saveThread > postPrepared);
+    QVERIFY(readyState > saveThread);
+    QVERIFY(publishLoaded > readyState);
+    QVERIFY(postFailure > publishLoaded);
+    QVERIFY(!implementationSource.contains("printd(\"Embedding completes"));
     QVERIFY(implementationSource.contains("PyEval_RestoreThread("));
     QVERIFY(implementationSource.contains("Py_FinalizeEx();"));
     QVERIFY(!implementationSource.contains("PyGILState_Check()"));

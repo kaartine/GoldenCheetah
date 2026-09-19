@@ -33,6 +33,7 @@
 #include "PythonPathAppender.h"
 #include "PythonRuntimeFinalizer.h"
 #include "PythonRuntimeInitializer.h"
+#include "PythonRuntimePostInitializer.h"
 #include "RideItem.h"
 #include "Specification.h"
 
