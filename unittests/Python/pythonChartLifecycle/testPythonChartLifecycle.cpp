@@ -10,6 +10,7 @@
 #include "Python/PythonChartOwner.h"
 #include "Python/PythonChartRunner.h"
 #include "Python/PythonExecutionGate.h"
+#include "Python/PythonRuntimeFinalizer.h"
 #include "Core/ProcessLifetimeRuntimeOwner.h"
 
 #include <QCoreApplication>
@@ -24,6 +25,7 @@
 #include <QThread>
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -94,6 +96,10 @@ private slots:
     void executionGateCancelsWaitingCaller();
     void executionGateSerializesWaitingCallers();
     void executionGateRejectsInterpreterLockHolderAndAllocatesTokens();
+    void executionGateShutdownDrainsAndCloses();
+    void executionGateShutdownTimeoutAndWrongThreadFailClosed();
+    void runtimeFinalizerEnforcesOwnerStateAndOrdering();
+    void runtimeFinalizerHandlesPartialAndFlushErrors();
     void processLifetimeOwnerControlsPublication();
     void programNameStorageOutlivesPythonInitialization();
     void pythonInitializationOwnershipWiring();
@@ -970,6 +976,200 @@ executionGateRejectsInterpreterLockHolderAndAllocatesTokens()
 }
 
 void
+TestPythonChartLifecycle::executionGateShutdownDrainsAndCloses()
+{
+    PythonExecutionGate gate;
+    QSemaphore active;
+    QSemaphore release;
+    std::atomic_int waiterAdmission{
+        static_cast<int>(PythonExecutionGate::Admission::Acquired)};
+
+    std::thread worker([&]() {
+        PythonExecutionGate::Lease lease;
+        if (gate.acquire(false, {}, lease)
+            == PythonExecutionGate::Admission::Acquired) {
+            active.release();
+            release.acquire();
+        }
+    });
+    QVERIFY(active.tryAcquire(1, 2000));
+
+    std::thread waiter([&]() {
+        PythonExecutionGate::Lease lease;
+        waiterAdmission.store(
+            static_cast<int>(gate.acquire(false, {}, lease)),
+            std::memory_order_release);
+    });
+    QVERIFY(waitUntil([&]() { return gate.waitingCount() == 1; }));
+
+    std::thread releaser([&release]() {
+        QThread::msleep(20);
+        release.release();
+    });
+    const PythonExecutionGate::ShutdownResult shutdownResult =
+        gate.beginShutdownAndWait(std::chrono::seconds(2));
+    releaser.join();
+    worker.join();
+    waiter.join();
+
+    QCOMPARE(
+        shutdownResult,
+        PythonExecutionGate::ShutdownResult::Drained);
+    QCOMPARE(
+        static_cast<PythonExecutionGate::Admission>(
+            waiterAdmission.load(std::memory_order_acquire)),
+        PythonExecutionGate::Admission::Closed);
+    QVERIFY(gate.isPermanentlyClosed());
+    QCOMPARE(gate.allocateToken(), quint64(0));
+    PythonExecutionGate::Lease rejected;
+    QCOMPARE(
+        gate.acquire(false, {}, rejected),
+        PythonExecutionGate::Admission::Closed);
+    PythonExecutionGate::Entry rejectedEntry;
+    QVERIFY(!gate.tryEnter(rejectedEntry));
+}
+
+void
+TestPythonChartLifecycle::
+executionGateShutdownTimeoutAndWrongThreadFailClosed()
+{
+    PythonExecutionGate wrongThreadGate;
+    std::atomic_int wrongThreadResult{
+        static_cast<int>(PythonExecutionGate::ShutdownResult::Drained)};
+    std::thread wrongThread([&]() {
+        wrongThreadResult.store(
+            static_cast<int>(wrongThreadGate.beginShutdownAndWait(
+                std::chrono::milliseconds(10))),
+            std::memory_order_release);
+    });
+    wrongThread.join();
+    QCOMPARE(
+        static_cast<PythonExecutionGate::ShutdownResult>(
+            wrongThreadResult.load(std::memory_order_acquire)),
+        PythonExecutionGate::ShutdownResult::Rejected);
+    QVERIFY(!wrongThreadGate.isPermanentlyClosed());
+
+    PythonExecutionGate timeoutGate;
+    PythonExecutionGate::Entry entry;
+    QVERIFY(timeoutGate.tryEnter(entry));
+    QCOMPARE(
+        timeoutGate.beginShutdownAndWait(std::chrono::milliseconds(10)),
+        PythonExecutionGate::ShutdownResult::TimedOut);
+    QVERIFY(timeoutGate.isPermanentlyClosed());
+    entry = PythonExecutionGate::Entry();
+    QCOMPARE(
+        timeoutGate.beginShutdownAndWait(std::chrono::milliseconds(10)),
+        PythonExecutionGate::ShutdownResult::Rejected);
+}
+
+void
+TestPythonChartLifecycle::runtimeFinalizerEnforcesOwnerStateAndOrdering()
+{
+    using Finalizer = PythonRuntimeFinalizer;
+    Finalizer::State state = Finalizer::State::Ready;
+    int savedValue = 1;
+    int clearValue = 2;
+    int catcherValue = 3;
+    void *saved = &savedValue;
+    void *clear = &clearValue;
+    void *catcher = &catcherValue;
+    QList<int> calls;
+    bool finalizeSawFinalizing = false;
+    const Finalizer::Hooks hooks{
+        [&](void *value) {
+            QCOMPARE(value, static_cast<void *>(&savedValue));
+            QVERIFY(saved == nullptr);
+            QCOMPARE(state, Finalizer::State::Finalizing);
+            calls.append(1);
+        },
+        [&](void *value) {
+            QCOMPARE(state, Finalizer::State::Finalizing);
+            calls.append(value == &clearValue ? 2 : 3);
+        },
+        [&]() {
+            finalizeSawFinalizing =
+                state == Finalizer::State::Finalizing;
+            calls.append(4);
+            return 0;
+        }
+    };
+
+    QCOMPARE(
+        Finalizer::run(
+            std::this_thread::get_id(), state, saved, clear, catcher, hooks),
+        Finalizer::Result::Finalized);
+    QCOMPARE(calls, QList<int>({1, 2, 3, 4}));
+    QVERIFY(finalizeSawFinalizing);
+    QCOMPARE(state, Finalizer::State::Finalized);
+    QCOMPARE(saved, nullptr);
+    QCOMPARE(clear, nullptr);
+    QCOMPARE(catcher, nullptr);
+    QCOMPARE(
+        Finalizer::run(
+            std::this_thread::get_id(), state, saved, clear, catcher, hooks),
+        Finalizer::Result::Rejected);
+    QCOMPARE(calls, QList<int>({1, 2, 3, 4}));
+}
+
+void
+TestPythonChartLifecycle::runtimeFinalizerHandlesPartialAndFlushErrors()
+{
+    using Finalizer = PythonRuntimeFinalizer;
+    Finalizer::State state = Finalizer::State::InterpreterInitialized;
+    void *saved = nullptr;
+    void *clear = nullptr;
+    void *catcher = nullptr;
+    int restoreCalls = 0;
+    int releaseCalls = 0;
+    int finalizeCalls = 0;
+    Finalizer::Result reentrantResult = Finalizer::Result::Finalized;
+    bool finalizeSawFinalizing = false;
+    const Finalizer::Hooks hooks{
+        [&](void *) { ++restoreCalls; },
+        [&](void *) { ++releaseCalls; },
+        [&]() {
+            ++finalizeCalls;
+            finalizeSawFinalizing =
+                state == Finalizer::State::Finalizing;
+            reentrantResult = Finalizer::run(
+                std::this_thread::get_id(),
+                state, saved, clear, catcher,
+                {[](void *) {}, [](void *) {}, []() { return 0; }});
+            return -1;
+        }
+    };
+
+    QCOMPARE(
+        Finalizer::run(
+            std::this_thread::get_id(), state, saved, clear, catcher, hooks),
+        Finalizer::Result::FinalizedWithErrors);
+    QCOMPARE(state, Finalizer::State::Finalized);
+    QCOMPARE(restoreCalls, 0);
+    QCOMPARE(releaseCalls, 0);
+    QCOMPARE(finalizeCalls, 1);
+    QVERIFY(finalizeSawFinalizing);
+    QCOMPARE(reentrantResult, Finalizer::Result::Rejected);
+
+    state = Finalizer::State::InterpreterInitialized;
+    std::atomic_int wrongThreadResult{
+        static_cast<int>(Finalizer::Result::Finalized)};
+    const std::thread::id ownerThread = std::this_thread::get_id();
+    std::thread rejectedThread([&]() {
+        wrongThreadResult.store(
+            static_cast<int>(Finalizer::run(
+                ownerThread, state, saved, clear, catcher, hooks)),
+            std::memory_order_release);
+    });
+    rejectedThread.join();
+    QCOMPARE(
+        static_cast<Finalizer::Result>(
+            wrongThreadResult.load(std::memory_order_acquire)),
+        Finalizer::Result::Rejected);
+    QCOMPARE(state, Finalizer::State::InterpreterInitialized);
+    QCOMPARE(finalizeCalls, 1);
+}
+
+void
 TestPythonChartLifecycle::processLifetimeOwnerControlsPublication()
 {
     using State = FakeEmbeddedRuntime::InitializationState;
@@ -1048,6 +1248,28 @@ TestPythonChartLifecycle::processLifetimeOwnerControlsPublication()
     QCOMPARE(readyDestructions, 0);
     delete readyStorage;
     QCOMPARE(readyDestructions, 1);
+
+    int retainedDestructions = 0;
+    FakeEmbeddedRuntime *retainedStorage = nullptr;
+    {
+        ProcessLifetimeRuntimeOwner<FakeEmbeddedRuntime> owner(alias);
+        retainedStorage = owner.initialize([&]() {
+            return std::make_unique<FakeEmbeddedRuntime>(
+                State::Ready, &retainedDestructions);
+        });
+        QVERIFY(retainedStorage != nullptr);
+        QVERIFY(owner.shutdownRetainingRuntime(
+            [](FakeEmbeddedRuntime *) { return true; }));
+        QCOMPARE(alias, retainedStorage);
+        QCOMPARE(retainedDestructions, 0);
+        QVERIFY(!owner.shutdownRetainingRuntime(
+            [](FakeEmbeddedRuntime *) { return true; }));
+    }
+    QCOMPARE(retainedDestructions, 0);
+    QCOMPARE(alias, retainedStorage);
+    alias = nullptr;
+    delete retainedStorage;
+    QCOMPARE(retainedDestructions, 1);
 }
 
 void
@@ -1077,6 +1299,11 @@ TestPythonChartLifecycle::programNameStorageOutlivesPythonInitialization()
 void
 TestPythonChartLifecycle::pythonInitializationOwnershipWiring()
 {
+    QFile header(QStringLiteral(
+        GC_TEST_SOURCE_ROOT "/src/Python/PythonEmbed.h"));
+    QVERIFY2(header.open(QIODevice::ReadOnly), qPrintable(header.errorString()));
+    const QByteArray headerSource = header.readAll();
+
     QFile mainFile(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/Core/main.cpp"));
     QVERIFY2(mainFile.open(QIODevice::ReadOnly), qPrintable(mainFile.errorString()));
     const QByteArray mainSource = mainFile.readAll();
@@ -1098,6 +1325,27 @@ TestPythonChartLifecycle::pythonInitializationOwnershipWiring()
         "initializationState_ = InitializationState::InterpreterInitialized;"));
     QVERIFY(implementationSource.contains(
         "initializationState_ = InitializationState::Ready;"));
+    QVERIFY(implementationSource.contains("PyEval_RestoreThread("));
+    QVERIFY(implementationSource.contains("Py_FinalizeEx();"));
+    QVERIFY(!implementationSource.contains("PyGILState_Check()"));
+    QVERIFY(headerSource.contains("std::atomic_bool loaded{false};"));
+    QVERIFY(implementationSource.indexOf("executionGate.acquire(")
+            < implementationSource.indexOf("PythonGilGuard gil;"));
+    QVERIFY(implementationSource.indexOf("executionGate.tryEnter(entry)")
+            < implementationSource.lastIndexOf("PythonGilGuard gil;"));
+    QVERIFY(mainSource.contains(
+        "pythonProcessLifetimeOwner.shutdownRetainingRuntime("));
+    QVERIFY(mainSource.indexOf(
+        "pythonProcessLifetimeOwner.shutdownRetainingRuntime(")
+        < mainSource.indexOf("LocalFileStoreProcess::shutdownReaper()"));
+    const qsizetype shutdownFailure = mainSource.indexOf(
+        "Python runtime did not drain and finalize safely");
+    const qsizetype failStop = mainSource.indexOf("_Exit(EXIT_FAILURE);", shutdownFailure);
+    const qsizetype laterTeardown = mainSource.indexOf(
+        "LocalFileStoreProcess::shutdownReaper()", shutdownFailure);
+    QVERIFY(shutdownFailure >= 0);
+    QVERIFY(failStop > shutdownFailure);
+    QVERIFY(laterTeardown > failStop);
 }
 
 QTEST_GUILESS_MAIN(TestPythonChartLifecycle)

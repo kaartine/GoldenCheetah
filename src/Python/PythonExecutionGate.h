@@ -13,14 +13,39 @@
 #include <QtGlobal>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 class PythonExecutionGate final
 {
 public:
-    enum class Admission { Acquired, Cancelled, Busy };
+    enum class Admission { Acquired, Cancelled, Busy, Closed };
+    enum class ShutdownResult { Drained, TimedOut, Rejected };
+
+    class Entry final
+    {
+    public:
+        Entry() = default;
+        ~Entry();
+
+        Entry(Entry &&other) noexcept;
+        Entry &operator=(Entry &&other) noexcept;
+
+        Entry(const Entry &) = delete;
+        Entry &operator=(const Entry &) = delete;
+
+        explicit operator bool() const { return gate_ != nullptr; }
+
+    private:
+        friend class PythonExecutionGate;
+        explicit Entry(PythonExecutionGate *gate) : gate_(gate) {}
+        void reset();
+
+        PythonExecutionGate *gate_ = nullptr;
+    };
 
     class Lease final
     {
@@ -48,8 +73,12 @@ public:
         bool mustNotWait,
         const std::shared_ptr<std::atomic_bool> &cancelled,
         Lease &lease);
+    bool tryEnter(Entry &entry);
     void wakeWaiters();
     unsigned int waitingCount() const;
+
+    ShutdownResult beginShutdownAndWait(std::chrono::milliseconds timeout);
+    bool isPermanentlyClosed() const;
 
     quint64 allocateToken();
     void publishToken(quint64 token);
@@ -57,10 +86,16 @@ public:
 
 private:
     void release();
+    void leave();
 
-    std::mutex mutex_;
+    enum class State { Open, PermanentlyClosed };
+
+    mutable std::mutex mutex_;
     std::condition_variable ready_;
+    const std::thread::id ownerThread_{std::this_thread::get_id()};
+    State state_ = State::Open;
     bool active_ = false;
+    unsigned int entries_ = 0;
     std::atomic<unsigned int> waiting_{0};
     std::atomic<quint64> nextToken_{1};
     std::atomic<quint64> publishedToken_{0};

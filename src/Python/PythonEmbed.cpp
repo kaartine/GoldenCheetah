@@ -23,6 +23,7 @@
 #include "Utils.h"
 #include "Settings.h"
 #include <stdexcept>
+#include <chrono>
 #include <type_traits>
 #include <utility>
 
@@ -44,7 +45,6 @@
 
 // global instance of embedded python
 PythonEmbed *python;
-PyThreadState *mainThreadState;
 
 namespace {
 
@@ -131,6 +131,39 @@ PythonEmbed::buildVersion()
 
 PythonEmbed::~PythonEmbed()
 {
+}
+
+bool
+PythonEmbed::shutdown()
+{
+    using ShutdownResult = PythonExecutionGate::ShutdownResult;
+    const ShutdownResult drained =
+            executionGate.beginShutdownAndWait(std::chrono::seconds(5));
+    if (drained != ShutdownResult::Drained) return false;
+    if (!contexts.isEmpty() || activeThreadId != 0 || activeRunToken != 0) {
+        return false;
+    }
+
+    loaded = false;
+    const PythonRuntimeFinalizer::Result result = PythonRuntimeFinalizer::run(
+        initializationThread_,
+        initializationState_,
+        mainThreadState_,
+        clear,
+        catcher,
+        {
+            [](void *saved) {
+                PyEval_RestoreThread(static_cast<PyThreadState *>(saved));
+            },
+            [](void *reference) {
+                Py_DECREF(static_cast<PyObject *>(reference));
+            },
+            []() { return Py_FinalizeEx(); }
+        });
+    if (result == PythonRuntimeFinalizer::Result::FinalizedWithErrors) {
+        qWarning() << "Python finalized with buffered-data flush errors";
+    }
+    return result != PythonRuntimeFinalizer::Result::Rejected;
 }
 
 bool PythonEmbed::pythonInstalled(QString &pybin, QString &pypath, QString PYTHONHOME)
@@ -410,7 +443,7 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
             // prepare for threaded processing
             printd("PyEval_InitThreads\n");
             PyEval_InitThreads();
-            mainThreadState = PyEval_SaveThread();
+            mainThreadState_ = static_cast<void *>(PyEval_SaveThread());
             initializationState_ = InitializationState::Ready;
             loaded = true;
 
@@ -446,12 +479,6 @@ PythonEmbed::runline(
                 && cancelled->load(std::memory_order_acquire);
     };
 
-    if (!loaded) {
-        result.error = QStringLiteral("Python is not available.");
-        result.messages << result.error;
-        return result;
-    }
-
     if (cancellationRequested()) {
         result.cancelled = true;
         return result;
@@ -464,7 +491,6 @@ PythonEmbed::runline(
         return result;
     }
 
-    const bool callerHasGil = PyGILState_Check() != 0;
     const bool guiCaller =
             QCoreApplication::instance()
             && QThread::currentThread()
@@ -472,7 +498,7 @@ PythonEmbed::runline(
     PythonExecutionGate::Lease executionLease;
     const PythonExecutionGate::Admission admission =
             executionGate.acquire(
-                callerHasGil || guiCaller, cancelled, executionLease);
+                guiCaller, cancelled, executionLease);
     if (admission == PythonExecutionGate::Admission::Cancelled) {
         result.cancelled = true;
         return result;
@@ -480,6 +506,11 @@ PythonEmbed::runline(
     if (admission == PythonExecutionGate::Admission::Busy) {
         result.error = QStringLiteral(
             "Python execution is already active on another thread.");
+        result.messages << result.error;
+        return result;
+    }
+    if (admission == PythonExecutionGate::Admission::Closed || !loaded) {
+        result.error = QStringLiteral("Python is not available.");
         result.messages << result.error;
         return result;
     }
@@ -559,6 +590,8 @@ PythonEmbed::allocateRunToken()
 bool
 PythonEmbed::cancel(quint64 runToken)
 {
+    PythonExecutionGate::Entry entry;
+    if (!executionGate.tryEnter(entry)) return false;
     if (!loaded || runToken == 0) return false;
 
     executionGate.wakeWaiters();

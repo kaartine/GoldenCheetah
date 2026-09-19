@@ -1049,6 +1049,13 @@ main(int argc, char *argv[])
 
     } while (restarting);
 
+#ifdef GC_WANT_PYTHON
+    if (!pythonProcessLifetimeOwner.shutdownRetainingRuntime(
+            [](PythonEmbed *runtime) { return runtime->shutdown(); })) {
+        qCritical() << "Python runtime did not drain and finalize safely";
+        _Exit(EXIT_FAILURE);
+    }
+#endif
     if (!LocalFileStoreProcess::shutdownReaper()) {
         qWarning() << "Local Store helper reaper did not stop cleanly";
     }

@@ -8423,6 +8423,101 @@ commit before the next finding begins.
   `Py_InitializeEx` return with `Py_IsInitialized()==false` after program-name
   publication also remains for that migration (supported CPython normally
   succeeds or terminates fatally).
+- ARCH-003D2 (FIXED; implementation item recorded before correction): finalize every
+  initialized CPython runtime exactly once on its initialization thread after
+  the final application restart. Permanently close admission, drain callers,
+  restore the thread state saved by `PyEval_SaveThread`, release owned Python
+  references in dependency order, and call `Py_FinalizeEx` before R and
+  `QApplication` teardown. Treat a negative finalization result as a completed
+  runtime with an exit-status error, never as permission to retry Python.
+- ARCH-003D2a (FIXED; wrapper-lifetime defect found by independent D2 pre-review and
+  recorded before correction): raw callers snapshot `python` before entering a
+  member gate, so clearing the alias and destroying a successfully finalized
+  wrapper can race a caller that still holds the old pointer. Retain finalized
+  Python wrapper storage to OS-process lifetime with a permanently closed gate;
+  do not reclaim it until compatibility callers use a process-level lifetime
+  pin.
+- ARCH-003D2b (FIXED; shutdown-admission defect found by independent D2 pre-review and
+  recorded before correction): `runline` reads non-atomic runtime state and
+  invokes `PyGILState_Check` before gate admission, while cancellation also
+  reaches CPython without a shutdown-aware entry pin. Add counted entry pins
+  ahead of every state read/Python API call, make close reject and wake all new
+  or waiting entries, drain active execution and entry pins, return a distinct
+  Closed admission, and reject token allocation after closure. Prove that
+  run/cancel paths make no Python calls after observing Closed.
+- ARCH-003D2c (FIXED; unsafe-timeout defect found by independent D2 pre-review and
+  recorded before correction): retaining a runtime and continuing normal Qt/R
+  teardown after bounded drain failure leaves an active SIP worker able to
+  dereference destroyed application/session objects. Use a bounded owner-thread
+  drain for diagnosability, but fail-stop the process on timeout rather than
+  proceeding with teardown. A normal close must drain first and finalize Python
+  before helper, R, and `QApplication` teardown.
+- ARCH-003D2d (FIXED; alias-publication race found by implementation self-review and
+  recorded before correction): retaining the wrapper removes stale-pointer
+  reclamation, but clearing the plain non-atomic `python` alias can still race a
+  compatibility caller reading it immediately before permanent gate closure.
+  Keep the alias address stable through orderly process teardown and rely on
+  the retained wrapper's permanently closed gate to reject every post-close
+  operation. ARCH-003D2e extends that stability through owner destruction.
+- ARCH-003D2e (FIXED; process-exit alias race found by independent D2 post-review and
+  recorded before correction): clearing the non-atomic compatibility alias in
+  the retaining owner's destructor still races a caller that has not yet
+  entered the now-closed member gate. Record retained-shutdown mode explicitly
+  and, in that mode, leave both the wrapper address and compatibility alias
+  unchanged through OS process exit. This intentionally trades a tiny bounded
+  process-lifetime allocation for race-free legacy-pointer admission.
+- ARCH-003D2f (FIXED; re-entrant finalization defect found by independent D2 re-review
+  and recorded before correction): the runtime remains `Ready` while reference
+  destructors, Python atexit handlers, module teardown, and `Py_FinalizeEx`
+  execute, so a cleanup hook can re-enter the finalizer before `Finalized` is
+  published. Transition monotonically to `Finalizing` before the first cleanup
+  hook, reject every call in that state, leave it there if cleanup cannot
+  return, and publish `Finalized` only after `Py_FinalizeEx` returns.
+- ARCH-003D2 resolution: `PythonExecutionGate` now gives execution leases and
+  cancellation entries one mutex-protected drain domain, wakes waiters into a
+  distinct Closed result, permanently rejects new entries and tokens, and
+  permits owner-thread finalization only after every admitted caller leaves.
+  `PythonEmbed` restores its wrapper-owned saved thread state, releases the
+  bound clear method before its catcher, and finalizes both Ready and partial
+  initialized runtimes through the monotonic
+  Ready/InterpreterInitialized -> Finalizing -> Finalized helper. A retained
+  process owner keeps the raw wrapper address and alias stable after shutdown;
+  every later operation fails at the closed gate. Main performs this bounded
+  shutdown before helper, R, and QApplication teardown and fail-stops with
+  `_Exit` if drain/finalization cannot safely complete. A negative
+  `Py_FinalizeEx` status is reported as a flush error after completed
+  finalization and is never retried.
+- ARCH-003D2 verification: the focused lifecycle/finalizer suite passes 20/20
+  on Qt 6.4.2 normally and 20/20 under ASan/UBSan with leak detection disabled.
+  It covers waiter wakeup, active/entry drain, timeout, wrong-thread and second
+  close, Closed token/entry rejection, retained alias lifetime, partial state,
+  reference order, Finalizing visibility, recursive-finalizer rejection,
+  negative-finalize mapping, exact-once behavior, and main fail-stop ordering.
+  A checked-in real CPython 3.12 child passes separate Ready and partial modes:
+  saved-state restore, worker GIL use, clear/catcher release order, atexit,
+  exact-once finalization, and no Python API after finalize. Production
+  `PythonEmbed.cpp` compiles and links against staged Python 3.12 (only the two
+  pre-existing `Py_SetProgramName`/`PyEval_InitThreads` deprecations), Python-
+  enabled `main.cpp` passes syntax compilation, the dependency suite passes
+  14/14, `git diff --check` is clean, and independent pre/post/re-review ended
+  in GO.
+- ARCH-003D2 residual: a full Python-enabled GoldenCheetah/SIP shutdown smoke
+  was not available in this environment and is a release/deployment
+  prerequisite. It must import `goldencheetah`, create and release
+  representative wrapped Qt/C++ objects, run Python atexit callbacks, and
+  close the full application (under ASan where possible). In particular, an
+  atexit callback invoking a GC binding without a `ScriptContext` remains
+  unverified until that smoke proves it fails safely. The retained finalized
+  wrapper and alias are a bounded intentional OS-lifetime allocation required
+  by legacy raw-pointer callers; future process-level atomic lifetime pins can
+  remove it.
+- ARCH-003D3 (queued initialization-modernization work recorded before
+  correction): replace deprecated `Py_SetProgramName`, `Py_InitializeEx`, and
+  `PyEval_InitThreads` setup with one owned `PyConfig` initialization path.
+  Preserve deployed/system `PYTHONHOME`, module-search, isolated-environment,
+  built-in `goldencheetah` registration, and user-visible diagnostics; add
+  failure injection for every pre/post-initialization phase before removing the
+  legacy calls. This is separate from the now-proven D2 shutdown contract.
 - ARCH-003E (FIXED; concrete defect recorded before correction):
   `Py_SetProgramName` receives storage from a temporary `std::wstring`, although
   CPython requires that storage to remain valid for the interpreter lifetime.

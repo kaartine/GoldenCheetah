@@ -28,8 +28,10 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include "PythonExecutionGate.h"
+#include "PythonRuntimeFinalizer.h"
 #include "RideItem.h"
 #include "Specification.h"
 
@@ -91,16 +93,13 @@ class ScriptContext {
 class PythonEmbed {
 
     public:
-        enum class InitializationState {
-            NotStarted,
-            InterpreterInitialized,
-            Ready
-        };
+        using InitializationState = PythonRuntimeFinalizer::State;
     
     PythonEmbed(const bool verbose=false, const bool interactive=false);
     ~PythonEmbed();
 
     InitializationState initializationState() const { return initializationState_; }
+    bool shutdown();
 
     static QString buildVersion(); // Python version used at build time
     // find installed binary and check version and module path
@@ -137,11 +136,13 @@ class PythonEmbed {
     bool verbose;
     bool interactive;
 
-    bool loaded;
+    std::atomic_bool loaded{false};
 
 private:
     InitializationState initializationState_ = InitializationState::NotStarted;
     std::wstring programNameStorage_;
+    const std::thread::id initializationThread_{std::this_thread::get_id()};
+    void *mainThreadState_ = nullptr;
     PythonExecutionGate executionGate;
     unsigned long activeThreadId = 0;
     quint64 activeRunToken;

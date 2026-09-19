@@ -31,7 +31,7 @@ public:
 
     ~ProcessLifetimeRuntimeOwner()
     {
-        compatibilityAlias_ = nullptr;
+        if (!retainRuntimeAtProcessExit_) compatibilityAlias_ = nullptr;
         if (runtime_) {
             // Deliberate OS-lifetime retention. Destroying this wrapper while
             // its embedded runtime remains initialized would invalidate state
@@ -73,7 +73,6 @@ public:
             compatibilityAlias_ = nullptr;
             return true;
         }
-
         bool completed = false;
         try {
             completed = std::forward<Shutdown>(shutdownRuntime)(runtime_.get());
@@ -88,6 +87,35 @@ public:
         return completed;
     }
 
+    // Some compatibility callers snapshot a raw alias before entering the
+    // runtime's own shutdown gate. Keep the closed wrapper address valid until
+    // OS teardown even after its embedded runtime has finalized.
+    template <typename Shutdown>
+    bool shutdownRetainingRuntime(Shutdown &&shutdownRuntime)
+    {
+        if (std::this_thread::get_id() != ownerThread_ || shutdownAttempted_) {
+            return false;
+        }
+        shutdownAttempted_ = true;
+        if (!runtime_) {
+            compatibilityAlias_ = nullptr;
+            return true;
+        }
+        retainRuntimeAtProcessExit_ = true;
+
+        bool completed = false;
+        try {
+            completed = std::forward<Shutdown>(shutdownRuntime)(runtime_.get());
+        } catch (...) {
+            completed = false;
+        }
+        // Keep the raw compatibility address stable. The runtime-specific
+        // shutdown callback must have permanently closed its admission gate.
+        // Retained shutdown also leaves the alias untouched in the owner
+        // destructor, avoiding a final non-atomic publication race.
+        return completed;
+    }
+
     bool hasInitializedRuntime() const { return runtime_ != nullptr; }
     bool isOwnerThread() const { return std::this_thread::get_id() == ownerThread_; }
 
@@ -96,6 +124,7 @@ private:
     std::thread::id ownerThread_;
     std::unique_ptr<Runtime> runtime_;
     bool shutdownAttempted_ = false;
+    bool retainRuntimeAtProcessExit_ = false;
 };
 
 #endif
