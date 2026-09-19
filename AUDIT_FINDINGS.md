@@ -7770,16 +7770,97 @@ commit before the next finding begins.
 
 ### ARCH-002: All primary source modules form one include cycle
 
-- Status: OPEN
+- Status: IN_PROGRESS
 - Severity: MEDIUM
 - Code: `src/src.pro` and cross-module includes below `src`
 - Impact: The current directory boundaries do not provide enforceable
   dependency direction or isolated change impact.
 - Prerequisite work item: Check in a deterministic, conservative dependency
-  analyzer plus an explicitly reviewed target-direction baseline. Resolve
-  ambiguous same-named headers before using its output as a blocking gate.
+  analyzer and an explicitly reviewed descriptive debt baseline before defining
+  and enforcing the intended target directions. Resolve ambiguous same-named
+  headers before using analyzer output as a blocking gate.
 - Fix direction: First prohibit new forbidden edges, then remove cycles one
   vertical seam at a time; do not attempt a directory-wide rewrite.
+- ARCH-002A (FIXED): Add an all-platform required auxiliary test that
+  inventories direct authored includes across `ANT`, `Charts`, `Cloud`, `Core`,
+  `FileIO`, `Gui`, `Metrics`, `Planning`, `Python`, `R`, and `Train`. Scan the
+  union of platform and feature branches without evaluating local qmake state,
+  and compare it with a deterministic directed baseline.
+- ARCH-002A1 (scope finding recorded before correction): Runtime qmake input is
+  unsuitable as the architecture source set because `gcconfig.pri` can inject
+  ignored local files and Python/R plus platform sources are conditional. Use a
+  fixed first-party module list; exclude third-party roots, resources, build
+  outputs, generated parser products, and generated SIP products while keeping
+  authored parser forwarding headers and authored SIP bridge files.
+- ARCH-002A2 (ambiguity and generation finding recorded before correction): No
+  duplicate authored header basename exists today, but flat include paths make
+  a future duplicate ambiguous, and five authored forwarding headers refer to
+  not-yet-generated yacc headers. Resolve source-local, qualified, and unique
+  first-party headers in that order; fail on ambiguity, and represent generated
+  targets explicitly rather than depending on build artifacts.
+- ARCH-002A3 (opaque-input finding recorded before correction): `ANT/ANT.h`
+  includes the configuration macro `GC_ANT_LIBUSB_HEADER`, which cannot be
+  resolved without making analysis configuration-dependent. Keep it as one
+  named reviewed opaque input and reject every unreviewed macro include.
+- ARCH-002A4 (gate-strength decision recorded before correction): A 74-row
+  module-pair/count baseline has a same-count rewire blind spot and would not
+  reject a new include when another include on that pair is removed. Use the
+  stricter exact source-file-to-target-header baseline, reject stale entries,
+  and record unresolved quoted and generated inputs explicitly. The baseline
+  describes existing debt and does not approve the current dependency cycle.
+- ARCH-002A5 (cross-platform atomic-write finding recorded before correction):
+  The first baseline writer attempted to open and `fsync` its parent directory
+  on every platform. Opening a directory as a file is not portable to Windows,
+  where the required all-platform fixture test also exercises baseline writes.
+  Retain file flush plus atomic replacement everywhere, but perform the extra
+  parent-directory durability sync only on POSIX hosts.
+- ARCH-002A6 (`#import` bypass recorded before correction): The first parser
+  recognized only `#include`, although the production macOS branch already
+  uses Clang's `#import`. A feature branch could therefore add a first-party
+  dependency without changing the baseline. Parse `#import` with the same
+  resolution and drift rules while continuing to treat external imports as
+  external.
+- ARCH-002A7 (case-folding bypass recorded before correction): A wrong-case
+  angle include is unresolved on Linux and was silently classified as an
+  external header, but may resolve to a first-party header on case-insensitive
+  Windows or macOS filesystems. Detect case-folded first-party matches and fail
+  on wrong spelling or ambiguity rather than ignoring them.
+- ARCH-002A8 (source-suffix bypass recorded before correction): The initial
+  authored source union omitted standard `.cc`, `.cxx`, `.hh`, `.hxx`, and
+  inline/template implementation suffixes. A new qmake source using one of
+  those suffixes would bypass the gate. Scan the common C/C++ suffix union
+  case-insensitively and cover it with a fixture.
+- ARCH-002A9 (qualified-operand attribution recorded before correction): A
+  multi-component operand such as `bogus/Target.h` fell back to a globally
+  unique basename and could be attributed to `Core/Target.h` even though the
+  compiler preserves the operand's directory. Resolve qualified operands by
+  their path below each module root and reserve global basename matching for
+  one-component operands.
+- ARCH-002A10 (Objective-C and include-fragment bypass recorded before
+  correction): The widened source union still omitted Objective-C `.m` files
+  and textual `.inc` fragments. A macOS implementation or an included fragment
+  could therefore contain a first-party dependency that the gate did not see.
+  Scan both suffixes case-insensitively and exercise them in the suffix fixture.
+- ARCH-002A resolution: Added a fixed-scope, comment-aware dependency analyzer
+  for literal `#include`/`#import` directives and a canonical exact-edge debt
+  baseline. Resolution is deterministic and fail-closed for unsafe paths,
+  ambiguous or wrong-case first-party matches, invalid input, symlinks, and
+  non-regular sources. Generated parser/SIP inputs, unresolved quoted operands,
+  macro operands, and cyclic components remain explicit records. The required
+  all-platform qmake auxiliary test is registered in the unit-test project and
+  CI manifest. The current baseline contains 2,332 exact cross-module edges,
+  11 generated-parser records, 109 unresolved quoted operands, one reviewed
+  macro operand, and one cyclic component containing all 11 modules.
+- ARCH-002A verification: The 14-case fixture/live suite passes, including
+  exact new and stale edge drift, `#import`, qualified and case-folded lookup,
+  common case-insensitive C/C++/Objective-C and fragment suffixes, generated
+  inputs, source-root build products, invalid encoding, unsafe paths, symlinks,
+  CRLF, Unicode, and deterministic diagnostics. The qmake auxiliary `check`,
+  direct live-baseline comparison, CI registry self-test, existing header-path
+  auxiliary test, Python byte compilation, and `git diff --check` pass on
+  Linux. Native Windows and macOS executions remain CI prerequisites; no native
+  result is claimed. ARCH-002 itself remains open work because this gate records
+  the existing all-module cycle but does not yet define or enforce a target DAG.
 
 ### ARCH-003: Context and global registries hide ownership and lifetimes
 

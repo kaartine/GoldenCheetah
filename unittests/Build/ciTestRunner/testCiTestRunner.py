@@ -147,6 +147,7 @@ def main() -> None:
 
     unit_test_project = REPOSITORY / "unittests" / "unittests.pro"
     require_literal("Build/ciTestRunner", unit_test_project)
+    require_literal("Build/sourceModuleDependencies", unit_test_project)
     if "CONFIG += ordered" in unit_test_project.read_text(encoding="utf-8"):
         raise AssertionError("unit-test subprojects must build in parallel")
     require_literal(
@@ -159,6 +160,10 @@ def main() -> None:
     )
     require_literal(
         "all qt Core/linkedActivitySaveCleanup",
+        REPOSITORY / "unittests" / "ci-required-tests.txt",
+    )
+    require_literal(
+        "all aux Build/sourceModuleDependencies",
         REPOSITORY / "unittests" / "ci-required-tests.txt",
     )
     linux_workflow = REPOSITORY / ".github" / "workflows" / "ridecache-removal-native.yml"
