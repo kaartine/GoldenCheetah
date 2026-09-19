@@ -9554,6 +9554,45 @@ commit before the next finding begins.
   `isstale` in the worker before refresh construction. Return those fields as a
   detached proposal. A clean proposal and a complete refresh result must cross
   the same generation gate; a rejected generation publishes neither.
+- ARCH-003F3c2b (detached stale-proposal prerequisite recorded before
+  correction): Independent design review rejected a direct queued-result
+  cutover because stale evaluation still mutates `color`, resolved weight,
+  source CRC, and `isstale` through a raw worker target. First extract a pure,
+  callback-observed evaluator that returns all four values as one proposal;
+  keep the current synchronous adapter responsible for applying it so this
+  prerequisite preserves behavior without claiming owner-thread publication.
+  Prove branch equivalence and that unnecessary CRC/cache observations are not
+  evaluated. The later atomic F3c cutover must carry this proposal in its
+  bounded generation envelope and apply it only after the owner gate accepts.
+- ARCH-003F3c2b1 (exception-semantics evidence gap found by independent review
+  before correction): The extraction intentionally delays color, weight, and
+  CRC writes until every filesystem/cache observation returns, strengthening
+  the old partial-write behavior if an observation throws. The initial audit
+  says only that behavior is preserved, and tests cover normal returns but do
+  not prove exception propagation, skipped later callbacks, or apply-after-
+  evaluation ordering. Test each throwing observation boundary and state the
+  guarantee as normal-return parity plus stronger no-partial-write safety.
+- ARCH-003F3c2b/F3c2b1 resolution: Stale evaluation now returns an owned
+  proposal containing the color gate, optional resolved weight, optional CRC
+  update, and final stale state. The evaluator observes source modification,
+  CRC, and cache state lazily without a `RideItem` reference. The shared
+  synchronous wrapper evaluates the complete proposal before its first target
+  write, then applies color, weight, CRC, and stale state in legacy order.
+  Normal returns preserve final-state and observation-laziness semantics;
+  unwinding from any observation now has the stronger guarantee that none of
+  those four target fields is partially changed. The worker still invokes this
+  adapter through its raw target, so F3c2 remains open until the proposal moves
+  through the bounded owner-thread generation envelope.
+- ARCH-003F3c2b verification: The environment suite passes 22/22 normally and
+  under ASan/UBSan (LeakSanitizer disabled only for the environment's ptrace
+  restriction). Tests cover generation and initially-stale early gates,
+  schema/weight/fingerprint decisions, unchanged and changed CRC paths, cache
+  and metadata staleness, interval absence, exact callback counts, both normal
+  wrapper apply modes, and exceptions from all three observation boundaries
+  with unchanged target fields. `RideItem.cpp` compiles with warnings as
+  errors, the production source contract proves adapter wiring and excludes
+  direct pre-proposal writes, `git diff --check` is clean, and independent
+  final review returned GO with no remaining finding in this bounded scope.
 - ARCH-003F3c2a (failed-build clean-state defect recorded before correction):
   `RideItem::refresh()` returns `void`, so the worker marks an accepted item
   clean and marks the cache changed even when source open, fingerprinting,

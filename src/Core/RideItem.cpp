@@ -726,53 +726,35 @@ RideItem::checkStale(
     const RideRefreshEnvironment &environment,
     const RideRefreshItemStaleInputs &inputs)
 {
-    const RideRefreshItemGateDecision gate =
-        rideRefreshItemGateDecision(
-            inputs, environment.generation(), DBSchemaVersion);
-    if (!gate.applyColor) {
-        isstale = true;
-        return true;
-    }
-
-    color = inputs.color;
-    if (gate.writeResolvedWeight) {
-        weight = *inputs.resolvedWeight;
-    }
-    bool stale = gate.stale;
-    if (gate.continueWithSourceChecks) {
-        QFile file(inputs.sourcePath);
-        const qint64 sourceModifiedSeconds =
-            QFileInfo(file).lastModified().toSecsSinceEpoch();
-        std::optional<unsigned int> computedCrc;
-        if (inputs.storedTimestamp < static_cast<unsigned long>(
-                qMax<qint64>(0, sourceModifiedSeconds))) {
-            unsigned int currentCrc = 0;
-            const bool crcRead = RideFile::computeFileCRC(
-                inputs.sourcePath, currentCrc);
-            if (crcRead) computedCrc = currentCrc;
-        }
-        const RideRefreshItemSourceDecision sourceDecision =
-            rideRefreshItemSourceDecision(
-                inputs, sourceModifiedSeconds, computedCrc);
-        if (sourceDecision.crcUpdate) crc = *sourceDecision.crcUpdate;
-        stale = sourceDecision.stale;
-    }
-
-    if (!stale) {
-        RideFileCacheStaleInputs cacheInputs;
-        cacheInputs.storagePathsComplete =
-            inputs.cacheStoragePathsComplete;
-        cacheInputs.sourcePath = inputs.sourcePath;
-        cacheInputs.cachePath = inputs.cachePath;
-        cacheInputs.weight = inputs.cacheWeight;
-        cacheInputs.analysisFingerprint =
-            inputs.cacheAnalysisFingerprint;
-        stale = RideFileCache::checkStale(cacheInputs);
-    }
-    if (inputs.storedMetadataCrc != inputs.currentMetadataCrc)
-        stale = true;
-    isstale = stale;
-    return stale;
+    return evaluateAndApplyRideRefreshStaleness(
+        [&]() {
+            return evaluateRideRefreshStaleness(
+                inputs, environment.generation(), DBSchemaVersion,
+                [&inputs]() {
+                    return QFileInfo(inputs.sourcePath)
+                        .lastModified().toSecsSinceEpoch();
+                },
+                [&inputs]() -> std::optional<unsigned int> {
+                    unsigned int currentCrc = 0;
+                    if (!RideFile::computeFileCRC(
+                            inputs.sourcePath, currentCrc)) {
+                        return std::nullopt;
+                    }
+                    return currentCrc;
+                },
+                [&inputs]() {
+                    RideFileCacheStaleInputs cacheInputs;
+                    cacheInputs.storagePathsComplete =
+                        inputs.cacheStoragePathsComplete;
+                    cacheInputs.sourcePath = inputs.sourcePath;
+                    cacheInputs.cachePath = inputs.cachePath;
+                    cacheInputs.weight = inputs.cacheWeight;
+                    cacheInputs.analysisFingerprint =
+                        inputs.cacheAnalysisFingerprint;
+                    return RideFileCache::checkStale(cacheInputs);
+                });
+        },
+        color, weight, crc, isstale);
 }
 
 bool

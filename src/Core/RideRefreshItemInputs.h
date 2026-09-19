@@ -115,6 +115,14 @@ struct RideRefreshItemSourceDecision {
     std::optional<unsigned int> crcUpdate;
 };
 
+struct RideRefreshStaleProposal {
+    bool applyColor = false;
+    QColor color;
+    std::optional<double> resolvedWeight;
+    std::optional<unsigned int> crcUpdate;
+    bool stale = true;
+};
+
 inline bool rideRefreshCaptureThreadAllowed(
     const QThread *current, const QThread *owner)
 {
@@ -196,6 +204,60 @@ inline RideRefreshItemSourceDecision rideRefreshItemSourceDecision(
     }
     if (inputs.samples && !inputs.hasIntervals) decision.stale = true;
     return decision;
+}
+
+template<typename SourceModified, typename SourceCrc, typename CacheStale>
+RideRefreshStaleProposal evaluateRideRefreshStaleness(
+    const RideRefreshItemStaleInputs &inputs,
+    quint64 environmentGeneration,
+    int requiredDbVersion,
+    SourceModified &&sourceModified,
+    SourceCrc &&sourceCrc,
+    CacheStale &&cacheStale)
+{
+    RideRefreshStaleProposal proposal;
+    const RideRefreshItemGateDecision gate =
+        rideRefreshItemGateDecision(
+            inputs, environmentGeneration, requiredDbVersion);
+    proposal.applyColor = gate.applyColor;
+    if (!proposal.applyColor) return proposal;
+
+    proposal.color = inputs.color;
+    if (gate.writeResolvedWeight)
+        proposal.resolvedWeight = inputs.resolvedWeight;
+    if (!gate.continueWithSourceChecks) return proposal;
+
+    const qint64 modifiedSeconds = sourceModified();
+    std::optional<unsigned int> computedCrc;
+    if (inputs.storedTimestamp < static_cast<unsigned long>(
+            qMax<qint64>(0, modifiedSeconds))) {
+        computedCrc = sourceCrc();
+    }
+    const RideRefreshItemSourceDecision sourceDecision =
+        rideRefreshItemSourceDecision(
+            inputs, modifiedSeconds, computedCrc);
+    proposal.crcUpdate = sourceDecision.crcUpdate;
+    proposal.stale = sourceDecision.stale;
+    if (!proposal.stale) proposal.stale = cacheStale();
+    if (inputs.storedMetadataCrc != inputs.currentMetadataCrc)
+        proposal.stale = true;
+    return proposal;
+}
+
+template<typename Evaluate>
+bool evaluateAndApplyRideRefreshStaleness(
+    Evaluate &&evaluate,
+    QColor &color,
+    double &weight,
+    unsigned long &crc,
+    bool &stale)
+{
+    const RideRefreshStaleProposal proposal = evaluate();
+    if (proposal.applyColor) color = proposal.color;
+    if (proposal.resolvedWeight) weight = *proposal.resolvedWeight;
+    if (proposal.crcUpdate) crc = *proposal.crcUpdate;
+    stale = proposal.stale;
+    return stale;
 }
 
 #endif // GC_RIDEREFRESHITEMINPUTS_H

@@ -21,6 +21,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 
 namespace {
@@ -73,6 +74,7 @@ private slots:
     void rideItemWeightMilligramsRejectsUnsafeConversions();
     void cacheInputsAndStoragePathsAreGenerationBound();
     void itemStaleGateIsGenerationBoundAndPreservesWriteOrder();
+    void staleProposalDefersWritesAndSkipsUnneededObservations();
     void backgroundRefreshRejectsMutableOwnerState();
     void mutableItemAccessPreservesWorkerOwnedStaging();
     void measuresSnapshotIsRetainedByTheGeneration();
@@ -807,6 +809,295 @@ itemStaleGateIsGenerationBoundAndPreservesWriteOrder()
     QVERIFY(!sourceDecision.crcUpdate);
 }
 
+void TestRideRefreshEnvironment::
+staleProposalDefersWritesAndSkipsUnneededObservations()
+{
+    RideRefreshItemStaleInputs inputs;
+    inputs.generation = 41;
+    inputs.initiallyStale = false;
+    inputs.color = QColor(Qt::darkGreen);
+    inputs.storedUserMetricSchemaVersion = 7;
+    inputs.requiredUserMetricSchemaVersion = 7;
+    inputs.storedDbVersion = 12;
+    inputs.storedWeightMilligrams = 72500UL;
+    inputs.resolvedWeight = 72.5009;
+    inputs.resolvedWeightMilligrams = 72500UL;
+    inputs.storedRefreshFingerprint = 99UL;
+    inputs.refreshFingerprint = 99UL;
+    inputs.storedTimestamp = 100;
+    inputs.storedCrc = 55;
+    inputs.samples = true;
+    inputs.hasIntervals = true;
+    inputs.storedMetadataCrc = 123;
+    inputs.currentMetadataCrc = 123;
+
+    int modifiedCalls = 0;
+    int crcCalls = 0;
+    int cacheCalls = 0;
+    qint64 modifiedSeconds = 100;
+    std::optional<unsigned int> observedCrc = 55U;
+    bool cacheIsStale = false;
+    const auto evaluate = [&](quint64 generation = 41) {
+        return evaluateRideRefreshStaleness(
+            inputs, generation, 12,
+            [&]() {
+                ++modifiedCalls;
+                return modifiedSeconds;
+            },
+            [&]() {
+                ++crcCalls;
+                return observedCrc;
+            },
+            [&]() {
+                ++cacheCalls;
+                return cacheIsStale;
+            });
+    };
+
+    RideRefreshStaleProposal proposal = evaluate(42);
+    QVERIFY(proposal.stale);
+    QVERIFY(!proposal.applyColor);
+    QVERIFY(!proposal.resolvedWeight);
+    QCOMPARE(modifiedCalls, 0);
+    QCOMPARE(crcCalls, 0);
+    QCOMPARE(cacheCalls, 0);
+
+    inputs.initiallyStale = true;
+    proposal = evaluate();
+    QVERIFY(proposal.stale);
+    QVERIFY(!proposal.applyColor);
+    QVERIFY(!proposal.resolvedWeight);
+    QCOMPARE(modifiedCalls, 0);
+    QCOMPARE(crcCalls, 0);
+    QCOMPARE(cacheCalls, 0);
+    inputs.initiallyStale = false;
+
+    inputs.requiredUserMetricSchemaVersion.reset();
+    proposal = evaluate();
+    QVERIFY(proposal.stale);
+    QVERIFY(proposal.applyColor);
+    QCOMPARE(proposal.color, inputs.color);
+    QVERIFY(!proposal.resolvedWeight);
+    QCOMPARE(modifiedCalls, 0);
+    QCOMPARE(crcCalls, 0);
+    QCOMPARE(cacheCalls, 0);
+    inputs.requiredUserMetricSchemaVersion = 7;
+
+    inputs.storedWeightMilligrams = 72000UL;
+    proposal = evaluate();
+    QVERIFY(proposal.stale);
+    QVERIFY(proposal.applyColor);
+    QCOMPARE(proposal.resolvedWeight, inputs.resolvedWeight);
+    QCOMPARE(modifiedCalls, 0);
+    QCOMPARE(crcCalls, 0);
+    QCOMPARE(cacheCalls, 0);
+    inputs.storedWeightMilligrams = 72500UL;
+
+    proposal = evaluate();
+    QVERIFY(!proposal.stale);
+    QVERIFY(proposal.applyColor);
+    QCOMPARE(proposal.resolvedWeight, inputs.resolvedWeight);
+    QVERIFY(!proposal.crcUpdate);
+    QCOMPARE(modifiedCalls, 1);
+    QCOMPARE(crcCalls, 0);
+    QCOMPARE(cacheCalls, 1);
+
+    modifiedSeconds = 101;
+    observedCrc = 55U;
+    proposal = evaluate();
+    QVERIFY(!proposal.stale);
+    QVERIFY(!proposal.crcUpdate);
+    QCOMPARE(modifiedCalls, 2);
+    QCOMPARE(crcCalls, 1);
+    QCOMPARE(cacheCalls, 2);
+
+    observedCrc = 56U;
+    proposal = evaluate();
+    QVERIFY(proposal.stale);
+    QCOMPARE(proposal.crcUpdate, std::optional<unsigned int>(56U));
+    QCOMPARE(modifiedCalls, 3);
+    QCOMPARE(crcCalls, 2);
+    QCOMPARE(cacheCalls, 2);
+
+    observedCrc.reset();
+    proposal = evaluate();
+    QVERIFY(proposal.stale);
+    QVERIFY(!proposal.crcUpdate);
+    QCOMPARE(modifiedCalls, 4);
+    QCOMPARE(crcCalls, 3);
+    QCOMPARE(cacheCalls, 2);
+
+    modifiedSeconds = 100;
+    observedCrc = 55U;
+    cacheIsStale = true;
+    proposal = evaluate();
+    QVERIFY(proposal.stale);
+    QCOMPARE(cacheCalls, 3);
+
+    cacheIsStale = false;
+    inputs.currentMetadataCrc = 124;
+    proposal = evaluate();
+    QVERIFY(proposal.stale);
+    QCOMPARE(cacheCalls, 4);
+
+    inputs.currentMetadataCrc = inputs.storedMetadataCrc;
+    inputs.hasIntervals = false;
+    proposal = evaluate();
+    QVERIFY(proposal.stale);
+    QCOMPARE(cacheCalls, 4);
+
+    inputs.hasIntervals = true;
+    modifiedCalls = 0;
+    crcCalls = 0;
+    cacheCalls = 0;
+    QColor appliedColor(Qt::red);
+    double appliedWeight = 80.0;
+    unsigned long appliedCrc = 77;
+    bool appliedStale = false;
+    const auto evaluateAndApply = [&](const auto &evaluation) {
+        return evaluateAndApplyRideRefreshStaleness(
+            evaluation, appliedColor, appliedWeight,
+            appliedCrc, appliedStale);
+    };
+    const auto verifyUnchanged = [&]() {
+        QCOMPARE(appliedColor, QColor(Qt::red));
+        QCOMPARE(appliedWeight, 80.0);
+        QCOMPARE(appliedCrc, 77UL);
+        QVERIFY(!appliedStale);
+    };
+
+    bool returnedStale = evaluateAndApply([&]() {
+        return evaluateRideRefreshStaleness(
+            inputs, 42, 12,
+            [&]() {
+                ++modifiedCalls;
+                return qint64(100);
+            },
+            [&]() {
+                ++crcCalls;
+                return std::optional<unsigned int>(55U);
+            },
+            [&]() {
+                ++cacheCalls;
+                return false;
+            });
+    });
+    QVERIFY(returnedStale);
+    QCOMPARE(appliedColor, QColor(Qt::red));
+    QCOMPARE(appliedWeight, 80.0);
+    QCOMPARE(appliedCrc, 77UL);
+    QVERIFY(appliedStale);
+    QCOMPARE(modifiedCalls, 0);
+    QCOMPARE(crcCalls, 0);
+    QCOMPARE(cacheCalls, 0);
+
+    appliedStale = false;
+    modifiedSeconds = 101;
+    observedCrc = 56U;
+    returnedStale = evaluateAndApply([&]() {
+        return evaluateRideRefreshStaleness(
+            inputs, 41, 12,
+            [&]() {
+                ++modifiedCalls;
+                return modifiedSeconds;
+            },
+            [&]() {
+                ++crcCalls;
+                return observedCrc;
+            },
+            [&]() {
+                ++cacheCalls;
+                return false;
+            });
+    });
+    QVERIFY(returnedStale);
+    QCOMPARE(appliedColor, inputs.color);
+    QCOMPARE(appliedWeight, *inputs.resolvedWeight);
+    QCOMPARE(appliedCrc, 56UL);
+    QVERIFY(appliedStale);
+    QCOMPARE(modifiedCalls, 1);
+    QCOMPARE(crcCalls, 1);
+    QCOMPARE(cacheCalls, 0);
+
+    modifiedCalls = 0;
+    crcCalls = 0;
+    cacheCalls = 0;
+    appliedColor = QColor(Qt::red);
+    appliedWeight = 80.0;
+    appliedCrc = 77;
+    appliedStale = false;
+    QVERIFY_THROWS_EXCEPTION(std::runtime_error,
+        evaluateAndApply([&]() {
+            return evaluateRideRefreshStaleness(
+                inputs, 41, 12,
+                [&]() -> qint64 {
+                    ++modifiedCalls;
+                    throw std::runtime_error("modified");
+                },
+                [&]() {
+                    ++crcCalls;
+                    return std::optional<unsigned int>(55U);
+                },
+                [&]() {
+                    ++cacheCalls;
+                    return false;
+                });
+        }));
+    QCOMPARE(modifiedCalls, 1);
+    QCOMPARE(crcCalls, 0);
+    QCOMPARE(cacheCalls, 0);
+    verifyUnchanged();
+
+    modifiedCalls = 0;
+    modifiedSeconds = 101;
+    QVERIFY_THROWS_EXCEPTION(std::runtime_error,
+        evaluateAndApply([&]() {
+            return evaluateRideRefreshStaleness(
+                inputs, 41, 12,
+                [&]() {
+                    ++modifiedCalls;
+                    return modifiedSeconds;
+                },
+                [&]() -> std::optional<unsigned int> {
+                    ++crcCalls;
+                    throw std::runtime_error("crc");
+                },
+                [&]() {
+                    ++cacheCalls;
+                    return false;
+                });
+        }));
+    QCOMPARE(modifiedCalls, 1);
+    QCOMPARE(crcCalls, 1);
+    QCOMPARE(cacheCalls, 0);
+    verifyUnchanged();
+
+    modifiedCalls = 0;
+    crcCalls = 0;
+    modifiedSeconds = 100;
+    QVERIFY_THROWS_EXCEPTION(std::runtime_error,
+        evaluateAndApply([&]() {
+            return evaluateRideRefreshStaleness(
+                inputs, 41, 12,
+                [&]() {
+                    ++modifiedCalls;
+                    return modifiedSeconds;
+                },
+                [&]() {
+                    ++crcCalls;
+                    return std::optional<unsigned int>(55U);
+                },
+                [&]() -> bool {
+                    ++cacheCalls;
+                    throw std::runtime_error("cache");
+                });
+        }));
+    QCOMPARE(modifiedCalls, 1);
+    QCOMPARE(crcCalls, 0);
+    QCOMPARE(cacheCalls, 1);
+    verifyUnchanged();
+}
+
 void TestRideRefreshEnvironment::sessionPublishesWholeGenerationsAtomically()
 {
     AthleteSession session(
@@ -1376,12 +1667,22 @@ productionWorkersRetainTheirPublishedGeneration()
 
     const QByteArray boundBody = itemSource.mid(
         boundOverload, legacyImplementation - boundOverload);
-    QVERIFY(boundBody.contains("rideRefreshItemGateDecision("));
-    QVERIFY(boundBody.contains("inputs.resolvedWeight"));
-    QVERIFY(boundBody.contains("QFile file(inputs.sourcePath)"));
-    QVERIFY(boundBody.contains("rideRefreshItemSourceDecision("));
+    QVERIFY(boundBody.contains("evaluateRideRefreshStaleness("));
+    QVERIFY(boundBody.contains("QFileInfo(inputs.sourcePath)"));
     QVERIFY(boundBody.contains("RideFileCache::checkStale(cacheInputs)"));
-    QVERIFY(boundBody.contains("inputs.currentMetadataCrc"));
+    const qsizetype evaluateAndApply = boundBody.indexOf(
+        "evaluateAndApplyRideRefreshStaleness(");
+    const qsizetype proposalEvaluation = boundBody.indexOf(
+        "evaluateRideRefreshStaleness(", evaluateAndApply);
+    const qsizetype applyTargets = boundBody.indexOf(
+        "color, weight, crc, isstale", proposalEvaluation);
+    QVERIFY(evaluateAndApply >= 0);
+    QVERIFY(proposalEvaluation > evaluateAndApply);
+    QVERIFY(applyTargets > proposalEvaluation);
+    QVERIFY(!boundBody.contains("color = proposal"));
+    QVERIFY(!boundBody.contains("weight = *proposal"));
+    QVERIFY(!boundBody.contains("crc = *proposal"));
+    QVERIFY(!boundBody.contains("isstale = proposal"));
     QVERIFY(!boundBody.contains("context->"));
     QVERIFY(!boundBody.contains("appsettings"));
     QVERIFY(!boundBody.contains("getText("));
