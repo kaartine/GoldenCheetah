@@ -72,6 +72,9 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
         captureAthleteSetting(settings, athlete, key);
     }
 
+    const auto metricRegistry =
+        std::make_shared<const RideMetricRegistrySnapshot>(
+            RideMetricFactory::instance().snapshot());
     RideMetadata *metadata = GlobalContext::context()->rideMetadata;
     const QList<FieldDefinition> definitions = metadata->getFields();
     QVector<RideRefreshEnvironment::CalendarField> calendarFields;
@@ -84,7 +87,9 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
         if (SpecialFields::getInstance().isMetric(fieldName)) {
             const RideMetric *metric =
                 SpecialFields::getInstance().rideMetric(fieldName);
-            if (metric) metricSymbol = metric->symbol();
+            if (!metric || !metricRegistry->haveMetric(metric->symbol()))
+                return {};
+            metricSymbol = metric->symbol();
         }
         calendarFields.append({
             definition.name,
@@ -150,8 +155,7 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
         std::move(colorRules),
         std::move(calendarFields),
         std::move(sports),
-        std::make_shared<const RideMetricRegistrySnapshot>(
-            RideMetricFactory::instance().snapshot()),
+        metricRegistry,
         zones,
         measures,
         routes,

@@ -128,6 +128,7 @@ void RideItem::reverted() {}
 void RideItem::saved() {}
 void RideItem::notifyRideDataChanged() {}
 void RideItem::notifyRideMetadataChanged() {}
+bool RideItem::prepareForRefreshRelevantMutation() { return true; }
 
 QString time_to_string(double, bool)
 {
@@ -211,6 +212,8 @@ void GlobalContext::readConfig(qint32) {}
 void GlobalContext::userMetricsConfigChanged() {}
 
 void Context::notifyConfigChanged(qint32) {}
+bool Context::beginConfigTransition() { return true; }
+bool Context::finishConfigTransition() { return true; }
 void Context::notifyCompareIntervals(bool) {}
 void Context::notifyCompareIntervalsChanged() {}
 void Context::notifyCompareDateRanges(bool) {}

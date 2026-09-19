@@ -9059,6 +9059,43 @@ commit before the next finding begins.
   outcome makes six failure outcomes, while the earlier F3c2a2 verification
   still claims its classification test covers five. Update that historical
   evidence statement to match the expanded exhaustive outcome matrix.
+- ARCH-003F2c3d (retained metric registry and Calendar Text recorded before
+  correction): The bound builder computes its metric vector from a live
+  `RideMetricFactory` snapshot and later asks live `GlobalContext` metadata to
+  interpret that vector for Calendar Text. Switching either consumer alone
+  could mix captured metric indices with a newer registry. Resolve one
+  retained registry before metric allocation, fail closed when it is absent,
+  and use the same registry plus the environment's captured Calendar fields
+  and unit mode for formatting and relevance. Preserve both live paths only
+  for the environment-free compatibility overload. Metric implementations'
+  remaining staging-Context reads stay open under F2c3.
+- ARCH-003F2c3d1 (projection test-double contract recorded before correction):
+  The new retained-registry projection metric does not implement the abstract
+  `RideMetric::compute()` contract, so the focused registry target cannot
+  compile. Supply a no-op computation appropriate to a format/relevance-only
+  definition and rebuild the registered target before accepting F2c3d.
+- ARCH-003F2c3d2 (registry-target linkage drift recorded before correction):
+  The existing user-metric registry target predates the production mutation
+  admission and config-transition APIs, so its doubles do not define
+  `RideItem::prepareForRefreshRelevantMutation()` or Context's transition
+  methods. Add behavior-neutral definitions appropriate to this registry-only
+  harness and link/run the complete registered target.
+- ARCH-003F2c3d3 (shared relevance runtime race found by independent review
+  and recorded before correction): The first retained Calendar projection
+  calls `isRelevantForRide()` on the registry's shared metric definition.
+  User metrics mutate their `DataFilterRuntime` during relevance evaluation,
+  so concurrent refresh workers can race through the same runtime. Evaluate
+  relevance on an owned metric clone per call and prove the definition itself
+  is never invoked.
+- ARCH-003F2c3d4 (outcome-count evidence drift found by independent review and
+  recorded before correction): The metric-registry failure expands the
+  exhaustive outcome matrix to seven failures while F3c2a2 still records six.
+  Update the evidence statement with the new classified failure.
+- ARCH-003F2c3d5 (move-only concurrency harness recorded before correction):
+  The new parallel relevance regression stores `std::thread` in `QVector`,
+  whose detach/copy path requires a copy constructor and fails to compile.
+  Use a standard move-aware container and rerun both normal and sanitizer
+  registry targets.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9656,7 +9693,7 @@ commit before the next finding begins.
 - ARCH-003F3c2a2 resolution: The production method now names every terminal
   result with `RideItemRefreshOutcome`, and all returns are derived through the
   single `rideItemRefreshSucceeded()` seam. Its focused test covers both
-  successful outcomes and all six failure outcomes normally and under
+  successful outcomes and all seven failure outcomes normally and under
   ASan/UBSan. This pins the contract without adding a worker-thread fixture
   around the still-open F3c publication design.
 - ARCH-003F3c2a3 (removal-target linkage regression found during verification
@@ -10255,8 +10292,9 @@ commit before the next finding begins.
   live fallback. The environment-free compatibility path retains the original
   live sum, including nonzero CP-setting, signed discovery, and default-value
   semantics; a valid captured zero remains distinguishable from no value.
-- ARCH-003F2c3c1 resolution: the earlier F3c2a2 verification now records all
-  six failure outcomes covered by its exhaustive success-classification test.
+- ARCH-003F2c3c1 resolution: the earlier F3c2a2 verification was expanded to
+  six failure outcomes by F2c3c; F2c3d4 subsequently keeps that evidence
+  current at seven outcomes.
 - ARCH-003F2c3c verification: the environment suite passes 22/22 and the
   computed-state outcome suite 10/10, each normally and under ASan/UBSan. The
   production-mutator suite passes 3/3 in both configurations, `RideItem.cpp`
@@ -10271,6 +10309,50 @@ commit before the next finding begins.
   preparation, metric registry/context, interval construction and update, and
   Calendar Text remain live builder dependencies under ARCH-003F2c3. Detached
   owner-thread publication remains under ARCH-003F3.
+- ARCH-003F2c3d resolution: environment capture now retains one immutable
+  metric-registry generation before mapping metadata fields and rejects any
+  captured Calendar metric absent from it. The bound builder fails closed when
+  that registry is unavailable or a captured symbol/index is inconsistent,
+  then uses the same generation for vector sizing, dependency-ordered metric
+  computation, schema version, Calendar value conversion/formatting, and
+  relevance. Relevance is evaluated on an owned per-call metric clone so a
+  mutable user-metric runtime is never shared between refresh workers. The
+  environment-free compatibility overload alone retains the live factory and
+  metadata projection.
+- ARCH-003F2c3d1 resolution: the projection metric supplies the required
+  no-op compute implementation and the complete registry target compiles and
+  runs.
+- ARCH-003F2c3d2 resolution: the focused registry harness supplies neutral
+  definitions for the production mutation-admission and config-transition
+  seams without broadening its behavioral scope.
+- ARCH-003F2c3d3 resolution: retained relevance clones the snapshot definition
+  for every invocation. The regression proves concurrent evaluations call
+  only independent clones and never the retained definition; the existing
+  teardown case continues to prove that a clone safely retains its
+  context-free compiled user-metric program after definition teardown.
+- ARCH-003F2c3d4 resolution: the exhaustive outcome contract and the earlier
+  F3c2a2 evidence now cover all seven failure outcomes.
+- ARCH-003F2c3d5 resolution: the parallel harness uses
+  `std::vector<std::thread>`, preserving move-only thread ownership through
+  construction and join.
+- ARCH-003F2c3d verification: the environment suite passes 22/22, the
+  user-metric registry suite 9/9, the computed-state suite 10/10, and the
+  production-mutator suite 3/3, each normally and under ASan/UBSan with leak
+  detection disabled for the sanitizer harnesses. Production `RideItem.cpp`,
+  `RideMetric.cpp`, and `RideRefreshEnvironmentCapture.cpp` compile with
+  warnings as errors; source dependencies pass 14/14 and `git diff --check` is
+  clean. Independent review first returned NO-GO for the shared user-metric
+  relevance runtime, then returned GO with no blocker or major finding after
+  the per-call clone correction and focused concurrency regression.
+- ARCH-003F2c3d residual: metric implementations, including user metrics, still
+  receive a staging `RideItem` whose Context and setting/zone consumers are
+  live. Parser context, weight, zone indices, `RideFileCache`, interval
+  discovery/update, and derived-series CP/wheel-size reads remain under
+  ARCH-003F2c3. Detached owner-thread publication remains under ARCH-003F3.
+  The focused parallel projection uses an instrumented metric double rather
+  than concurrent real UserMetric relevance evaluations; existing clone,
+  concurrent evaluation, and definition-teardown tests provide the remaining
+  supporting evidence, so independent review did not treat this as a blocker.
 - ARCH-003F2c3a residual: generation-bound `checkStale` still writes color,
   weight, CRC, and stale state in the worker, as tracked by ARCH-003F3c2. The
   builder's remaining live environment consumers are tracked by ARCH-003F2c3,

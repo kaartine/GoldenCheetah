@@ -12,9 +12,11 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #define private public
 #include "DataFilter.h"
@@ -138,6 +140,65 @@ private:
     std::shared_ptr<BlockingState> state_;
 };
 
+const QString projectionSymbol =
+    QStringLiteral("metric002_registry_projection");
+
+struct ProjectionState
+{
+    std::atomic<int> definitionRelevanceCalls{0};
+    std::atomic<int> clonedRelevanceCalls{0};
+};
+
+const auto projectionState = std::make_shared<ProjectionState>();
+
+class ProjectionMetric final : public RideMetric
+{
+public:
+    explicit ProjectionMetric(
+        std::shared_ptr<ProjectionState> state = projectionState)
+        : state_(std::move(state))
+    {
+        setSymbol(projectionSymbol);
+        setConversion(2.0);
+        setConversionSum(1.0);
+    }
+
+    ProjectionMetric(const ProjectionMetric &other)
+        : RideMetric(other), state_(other.state_), cloneDepth_(
+              other.cloneDepth_ + 1)
+    {
+    }
+
+    RideMetric *clone() const override
+    {
+        return new ProjectionMetric(*this);
+    }
+
+    void compute(
+        RideItem *, Specification,
+        const QHash<QString, RideMetric *> &) override
+    {
+    }
+
+    bool isRelevantForRide(const RideItem *item) const override
+    {
+        if (cloneDepth_ >= 2)
+            state_->clonedRelevanceCalls.fetch_add(1);
+        else
+            state_->definitionRelevanceCalls.fetch_add(1);
+        return item != nullptr;
+    }
+
+    QString toString(double value) const override
+    {
+        return QStringLiteral("projected:%1").arg(value);
+    }
+
+private:
+    std::shared_ptr<ProjectionState> state_;
+    int cloneDepth_ = 0;
+};
+
 } // namespace
 
 class TestUserMetricRegistrySafety : public QObject
@@ -150,6 +211,7 @@ private slots:
     void firstAthleteContextIsNotRetained();
     void concurrentEvaluationAndReloadAreSafe();
     void repeatedReloadPreservesOrderingSchemaAndDependencies();
+    void retainedRegistryFormatsAndFiltersCalendarMetrics();
     void activeEvaluationDoesNotBlockPublication();
     void clonesReuseContextFreeCompiledProgramAfterDefinitionTeardown();
     void removedUserMetricDefinitionsAreReclaimed();
@@ -172,6 +234,8 @@ void TestUserMetricRegistrySafety::initTestCase()
     blockingState_ = std::make_shared<BlockingState>();
     BlockingMetric blocking(blockingState_);
     QVERIFY(RideMetricFactory::instance().addMetric(blocking));
+    ProjectionMetric projection;
+    QVERIFY(RideMetricFactory::instance().addMetric(projection));
     builtinCount_ = RideMetricFactory::instance().metricCount();
 }
 
@@ -291,6 +355,51 @@ repeatedReloadPreservesOrderingSchemaAndDependencies()
             {dependencyRootSymbol}, registry);
         QCOMPARE(result.value(dependencyRootSymbol)->value(), 5.0);
     }
+}
+
+void TestUserMetricRegistrySafety::
+retainedRegistryFormatsAndFiltersCalendarMetrics()
+{
+    const RideMetricRegistrySnapshot retained =
+        RideMetricFactory::instance().snapshot();
+    RideItem item;
+    projectionState->definitionRelevanceCalls.store(0);
+    projectionState->clonedRelevanceCalls.store(0);
+
+    QCOMPARE(
+        retained.formatMetricValue(projectionSymbol, 4.0, false).value(),
+        QStringLiteral("projected:9"));
+    QCOMPARE(
+        retained.formatMetricValue(
+            projectionSymbol,
+            std::numeric_limits<double>::infinity(),
+            true).value(),
+        QStringLiteral("projected:0"));
+    QVERIFY(!retained.formatMetricValue(
+        QStringLiteral("missing"), 4.0, true));
+    QVERIFY(retained.metricIsRelevant(projectionSymbol, &item));
+    QVERIFY(!retained.metricIsRelevant(projectionSymbol, nullptr));
+    QVERIFY(!retained.metricIsRelevant(QStringLiteral("missing"), &item));
+    QCOMPARE(projectionState->definitionRelevanceCalls.load(), 0);
+    QCOMPARE(projectionState->clonedRelevanceCalls.load(), 2);
+
+    constexpr int evaluatorCount = 8;
+    std::vector<std::thread> evaluators;
+    std::atomic<int> relevanceFailures{0};
+    evaluators.reserve(evaluatorCount);
+    for (int i = 0; i < evaluatorCount; ++i) {
+        evaluators.emplace_back([
+            &retained, &item, &relevanceFailures]() {
+            if (!retained.metricIsRelevant(projectionSymbol, &item))
+                relevanceFailures.fetch_add(1);
+        });
+    }
+    for (std::thread &evaluator : evaluators) evaluator.join();
+    QCOMPARE(relevanceFailures.load(), 0);
+    QCOMPARE(projectionState->definitionRelevanceCalls.load(), 0);
+    QCOMPARE(
+        projectionState->clonedRelevanceCalls.load(),
+        2 + evaluatorCount);
 }
 
 void TestUserMetricRegistrySafety::activeEvaluationDoesNotBlockPublication()

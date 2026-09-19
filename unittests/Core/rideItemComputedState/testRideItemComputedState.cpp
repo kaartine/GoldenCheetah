@@ -499,6 +499,8 @@ refreshOutcomeClassifiesOnlyPublishedStateAsSuccess()
     QVERIFY(!rideItemRefreshSucceeded(
         RideItemRefreshOutcome::EnvironmentFingerprintUnavailable));
     QVERIFY(!rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::EnvironmentMetricRegistryUnavailable));
+    QVERIFY(!rideItemRefreshSucceeded(
         RideItemRefreshOutcome::CachePreparationInvalid));
     QVERIFY(!rideItemRefreshSucceeded(
         RideItemRefreshOutcome::IdentityRejected));

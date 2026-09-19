@@ -258,6 +258,26 @@ RideMetricRegistrySnapshot::rideMetric(const QString &symbol) const
     return state_ ? state_->metrics.value(symbol).data() : nullptr;
 }
 
+std::optional<QString>
+RideMetricRegistrySnapshot::formatMetricValue(
+    const QString &symbol,
+    double rawValue,
+    bool useMetricUnits) const
+{
+    const RideMetric *metric = rideMetric(symbol);
+    if (!metric) return std::nullopt;
+    if (!std::isfinite(rawValue)) rawValue = 0.0;
+    return metric->toString(metric->value(rawValue, useMetricUnits));
+}
+
+bool
+RideMetricRegistrySnapshot::metricIsRelevant(
+    const QString &symbol, const RideItem *item) const
+{
+    std::unique_ptr<RideMetric> metric(newMetric(symbol));
+    return metric && metric->isRelevantForRide(item);
+}
+
 bool RideMetricRegistrySnapshot::haveMetric(const QString &symbol) const
 {
     return state_ && state_->metrics.contains(symbol);

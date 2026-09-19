@@ -1039,6 +1039,31 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
                     EnvironmentFingerprintUnavailable);
         }
     }
+    RideMetricRegistrySnapshot legacyMetricRegistry;
+    const RideMetricRegistrySnapshot *metricRegistry =
+        environment ? environment->metricRegistry() : nullptr;
+    if (environment && !metricRegistry) {
+        return rideItemRefreshSucceeded(
+            RideItemRefreshOutcome::
+                EnvironmentMetricRegistryUnavailable);
+    }
+    if (!environment) {
+        legacyMetricRegistry = RideMetricFactory::instance().snapshot();
+        metricRegistry = &legacyMetricRegistry;
+    } else {
+        for (const RideRefreshEnvironment::CalendarField &field
+             : environment->metadataFields()) {
+            if (field.metricSymbol.isEmpty()) continue;
+            const RideMetric *metric =
+                metricRegistry->rideMetric(field.metricSymbol);
+            if (!metric || metric->index() < 0
+                || metric->index() >= metricRegistry->metricCount()) {
+                return rideItemRefreshSucceeded(
+                    RideItemRefreshOutcome::
+                        EnvironmentMetricRegistryUnavailable);
+            }
+        }
+    }
     const QString boundColorText = environment
         ? sourceRide->getTag(environment->colorField(), "")
         : QString();
@@ -1076,14 +1101,12 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
             RideItemRefreshOutcome::CachePreparationInvalid);
     }
 
-    const RideMetricRegistrySnapshot metricRegistry =
-        RideMetricFactory::instance().snapshot();
-    staging.metrics_.fill(0, metricRegistry.metricCount());
-    staging.count_.fill(0, metricRegistry.metricCount());
+    staging.metrics_.fill(0, metricRegistry->metricCount());
+    staging.count_.fill(0, metricRegistry->metricCount());
     const QHash<QString,RideMetricPtr> computed =
         RideMetric::computeMetrics(
-            &staging, Specification(), metricRegistry.allMetrics(),
-            metricRegistry);
+            &staging, Specification(), metricRegistry->allMetrics(),
+            *metricRegistry);
     for (auto metric = computed.constBegin();
          metric != computed.constEnd(); ++metric) {
         staging.metrics_[metric.value()->index()] =
@@ -1098,7 +1121,7 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
                 metric.value()->index(), stdvariance);
         }
     }
-    for (int index = 0; index < metricRegistry.metricCount(); ++index) {
+    for (int index = 0; index < metricRegistry->metricCount(); ++index) {
         if (std::isinf(staging.metrics_[index])
             || std::isnan(staging.metrics_[index])) {
             staging.metrics_[index] = 0.0;
@@ -1131,12 +1154,38 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
                 context->athlete->cyclist, GC_DISCOVERY, 57).toInt();
     }
     staging.dbversion = DBSchemaVersion;
-    staging.udbversion = metricRegistry.userMetricSchemaVersion();
+    staging.udbversion = metricRegistry->userMetricSchemaVersion();
     staging.timestamp = QDateTime::currentDateTime().toSecsSinceEpoch();
     staging.metacrc = staging.metaCRC();
-    staging.metadata_.insert(
-        "Calendar Text",
-        GlobalContext::context()->rideMetadata->calendarText(&staging));
+    if (environment) {
+        staging.metadata_.insert(
+            "Calendar Text",
+            environment->calendarText(
+                [&staging](const QString &name) {
+                    return staging.getText(name, "");
+                },
+                [&staging, metricRegistry](
+                    const QString &symbol, bool useMetricUnits) {
+                    const RideMetric *metric =
+                        metricRegistry->rideMetric(symbol);
+                    if (!metric || metric->index() < 0
+                        || metric->index() >= staging.metrics_.size()) {
+                        return QStringLiteral("-");
+                    }
+                    return metricRegistry->formatMetricValue(
+                        symbol,
+                        staging.metrics_.at(metric->index()),
+                        useMetricUnits).value_or(QStringLiteral("-"));
+                },
+                [&staging, metricRegistry](const QString &symbol) {
+                    return metricRegistry->metricIsRelevant(
+                        symbol, &staging);
+                }));
+    } else {
+        staging.metadata_.insert(
+            "Calendar Text",
+            GlobalContext::context()->rideMetadata->calendarText(&staging));
+    }
 
     RideItemRefreshResult result;
     result.state = RideItemComputedState::takeFrom(staging);

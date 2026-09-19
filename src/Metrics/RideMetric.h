@@ -31,6 +31,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 
 #include "RideFile.h"
 #include "UserMetricSettings.h"
@@ -373,6 +374,12 @@ public:
     QString metricName(int index) const;
     RideMetric::MetricType metricType(int index) const;
     const RideMetric *rideMetric(const QString &symbol) const;
+    std::optional<QString> formatMetricValue(
+        const QString &symbol,
+        double rawValue,
+        bool useMetricUnits) const;
+    bool metricIsRelevant(
+        const QString &symbol, const RideItem *item) const;
     bool haveMetric(const QString &symbol) const;
     RideMetric *newMetric(const QString &symbol) const;
     const QVector<QString> &dependencies(const QString &symbol) const;

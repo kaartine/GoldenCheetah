@@ -691,8 +691,15 @@ cacheInputsAndStoragePathsAreGenerationBound()
     const QByteArray capture = captureFile.readAll();
     const qsizetype ownerGuard = capture.indexOf(
         "Q_ASSERT(QThread::currentThread() == context->thread())");
+    const qsizetype metricRegistryCapture = capture.indexOf(
+        "const auto metricRegistry =", ownerGuard);
+    const qsizetype metadataDefinitions = capture.indexOf(
+        "metadata->getFields()", metricRegistryCapture);
+    const qsizetype metricSymbolValidation = capture.indexOf(
+        "!metricRegistry->haveMetric(metric->symbol())",
+        metadataDefinitions);
     const qsizetype homeGuard = capture.indexOf(
-        "Q_ASSERT(context->athlete->home)", ownerGuard);
+        "Q_ASSERT(context->athlete->home)", metricSymbolValidation);
     const qsizetype createCall = capture.indexOf(
         "return RideRefreshEnvironment::create(", homeGuard);
     const qsizetype cacheRoot = capture.indexOf(
@@ -703,12 +710,18 @@ cacheInputsAndStoragePathsAreGenerationBound()
         "context->athlete->home->planned().absolutePath()", activitiesRoot);
     const qsizetype callClose = capture.indexOf("\n        });", plannedRoot);
     QVERIFY(ownerGuard >= 0);
+    QVERIFY(metricRegistryCapture > ownerGuard);
+    QVERIFY(metadataDefinitions > metricRegistryCapture);
+    QVERIFY(metricSymbolValidation > metadataDefinitions);
     QVERIFY(homeGuard > ownerGuard);
     QVERIFY(createCall > homeGuard);
     QVERIFY(cacheRoot > createCall);
     QVERIFY(activitiesRoot > cacheRoot);
     QVERIFY(plannedRoot > activitiesRoot);
     QVERIFY(callClose > plannedRoot);
+    const QByteArray createBody = capture.mid(
+        createCall, callClose - createCall);
+    QVERIFY(createBody.contains("metricRegistry,"));
 }
 
 void TestRideRefreshEnvironment::
@@ -1733,9 +1746,18 @@ productionWorkersRetainTheirPublishedGeneration()
         "environment->rideItemFingerprint(", boundBuildFingerprint);
     const qsizetype boundFingerprintFailure = itemSource.indexOf(
         "EnvironmentFingerprintUnavailable", boundFingerprintCall);
+    const qsizetype retainedMetricRegistry = itemSource.indexOf(
+        "environment ? environment->metricRegistry() : nullptr",
+        boundFingerprintFailure);
+    const qsizetype missingMetricRegistry = itemSource.indexOf(
+        "EnvironmentMetricRegistryUnavailable", retainedMetricRegistry);
+    const qsizetype legacyMetricRegistry = itemSource.indexOf(
+        "RideMetricFactory::instance().snapshot()", missingMetricRegistry);
+    const qsizetype calendarMetricValidation = itemSource.indexOf(
+        "environment->metadataFields()", legacyMetricRegistry);
     const qsizetype boundColorText = itemSource.indexOf(
         "const QString boundColorText = environment",
-        boundFingerprintFailure);
+        calendarMetricValidation);
     const qsizetype boundColorField = itemSource.indexOf(
         "sourceRide->getTag(environment->colorField(), \"\")",
         boundColorText);
@@ -1745,6 +1767,11 @@ productionWorkersRetainTheirPublishedGeneration()
         "staging.present =", boundColorEvaluation);
     const qsizetype cacheBuilder = itemSource.indexOf(
         "RideFileCache updater(", nextBuildField);
+    const qsizetype metricVector = itemSource.indexOf(
+        "staging.metrics_.fill(0, metricRegistry->metricCount())",
+        cacheBuilder);
+    const qsizetype metricCompute = itemSource.indexOf(
+        "*metricRegistry);", metricVector);
     const qsizetype boundFingerprintPublish = itemSource.indexOf(
         "if (boundBuildFingerprint)", cacheBuilder);
     const qsizetype boundFingerprintValue = itemSource.indexOf(
@@ -1755,6 +1782,21 @@ productionWorkersRetainTheirPublishedGeneration()
         boundFingerprintValue);
     const qsizetype nextTerminalField = itemSource.indexOf(
         "staging.dbversion =", legacyFingerprint);
+    const qsizetype retainedSchema = itemSource.indexOf(
+        "metricRegistry->userMetricSchemaVersion()", nextTerminalField);
+    const qsizetype boundCalendar = itemSource.indexOf(
+        "if (environment) {", retainedSchema);
+    const qsizetype environmentCalendar = itemSource.indexOf(
+        "environment->calendarText(", boundCalendar);
+    const qsizetype retainedMetricFormat = itemSource.indexOf(
+        "metricRegistry->formatMetricValue(", environmentCalendar);
+    const qsizetype retainedMetricRelevance = itemSource.indexOf(
+        "metricRegistry->metricIsRelevant(", retainedMetricFormat);
+    const qsizetype legacyCalendar = itemSource.indexOf(
+        "GlobalContext::context()->rideMetadata->calendarText(&staging)",
+        retainedMetricRelevance);
+    const qsizetype refreshResult = itemSource.indexOf(
+        "RideItemRefreshResult result", legacyCalendar);
     QVERIFY(legacyRefresh >= 0);
     QVERIFY(legacyRefreshDelegate > legacyRefresh);
     QVERIFY(boundRefresh > legacyRefreshDelegate);
@@ -1764,16 +1806,29 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(boundBuildFingerprint > buildSport);
     QVERIFY(boundFingerprintCall > boundBuildFingerprint);
     QVERIFY(boundFingerprintFailure > boundFingerprintCall);
+    QVERIFY(retainedMetricRegistry > boundFingerprintFailure);
+    QVERIFY(missingMetricRegistry > retainedMetricRegistry);
+    QVERIFY(legacyMetricRegistry > missingMetricRegistry);
+    QVERIFY(calendarMetricValidation > legacyMetricRegistry);
     QVERIFY(boundColorText > refreshImpl);
     QVERIFY(boundColorField > boundColorText);
     QVERIFY(boundColorEvaluation > boundColorField);
     QVERIFY(nextBuildField > boundColorEvaluation);
     QVERIFY(cacheBuilder > boundFingerprintFailure);
+    QVERIFY(metricVector > cacheBuilder);
+    QVERIFY(metricCompute > metricVector);
     QVERIFY(boundFingerprintCall < cacheBuilder);
     QVERIFY(boundFingerprintPublish > cacheBuilder);
     QVERIFY(boundFingerprintValue > boundFingerprintPublish);
     QVERIFY(legacyFingerprint > boundFingerprintValue);
     QVERIFY(nextTerminalField > legacyFingerprint);
+    QVERIFY(retainedSchema > nextTerminalField);
+    QVERIFY(boundCalendar > retainedSchema);
+    QVERIFY(environmentCalendar > boundCalendar);
+    QVERIFY(retainedMetricFormat > environmentCalendar);
+    QVERIFY(retainedMetricRelevance > retainedMetricFormat);
+    QVERIFY(legacyCalendar > retainedMetricRelevance);
+    QVERIFY(refreshResult > legacyCalendar);
 
     const QByteArray boundFingerprintBody = itemSource.mid(
         boundBuildFingerprint,
@@ -1781,6 +1836,13 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(!boundFingerprintBody.contains("context->"));
     QVERIFY(!boundFingerprintBody.contains("appsettings"));
     QVERIFY(!boundFingerprintBody.contains("getHrvFingerprint"));
+
+    const QByteArray boundCalendarBody = itemSource.mid(
+        boundCalendar, legacyCalendar - boundCalendar);
+    QVERIFY(!boundCalendarBody.contains("RideMetricFactory::instance()"));
+    QVERIFY(!boundCalendarBody.contains("GlobalContext::context()"));
+    QVERIFY(!boundCalendarBody.contains("SpecialFields::getInstance()"));
+    QVERIFY(!boundCalendarBody.contains("RideMetadata::calendarText"));
 
     const QByteArray captureBody = itemSource.mid(
         captureInputs, boundOverload - captureInputs);
