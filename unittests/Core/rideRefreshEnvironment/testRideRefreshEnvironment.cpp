@@ -530,8 +530,29 @@ productionWorkersRetainTheirPublishedGeneration()
         "return checkStaleImpl(&environment);", boundOverload);
     const qsizetype implementation = itemSource.indexOf(
         "RideItem::checkStaleImpl(", boundDelegation);
-    const qsizetype immutableBranch = itemSource.indexOf(
+    const qsizetype colorBranch = itemSource.indexOf(
         "if (environment) {", implementation);
+    const qsizetype immutableColor = itemSource.indexOf(
+        "environment->colorFor(", colorBranch);
+    const qsizetype colorLegacyBranch = itemSource.indexOf(
+        "} else {", immutableColor);
+    const QByteArray immutableColorBody = itemSource.mid(
+        colorBranch, colorLegacyBranch - colorBranch);
+    const qsizetype schemaBranch = itemSource.indexOf(
+        "if (environment) {", colorLegacyBranch + 1);
+    const qsizetype immutableSchema = itemSource.indexOf(
+        "environment->metricRegistry()->userMetricSchemaVersion()",
+        schemaBranch);
+    const qsizetype schemaLegacyBranch = itemSource.indexOf(
+        "} else {", immutableSchema);
+    const QByteArray immutableSchemaBody = itemSource.mid(
+        schemaBranch, schemaLegacyBranch - schemaBranch);
+    const qsizetype schemaFailClosed = itemSource.indexOf(
+        "if (!userMetricSchemaVersion", schemaLegacyBranch);
+    const qsizetype fingerprintValue = itemSource.indexOf(
+        "std::optional<unsigned long> refreshFingerprint;", schemaFailClosed);
+    const qsizetype immutableBranch = itemSource.indexOf(
+        "if (environment) {", fingerprintValue);
     const qsizetype immutableFingerprint = itemSource.indexOf(
         "environment->rideItemFingerprint(", immutableBranch);
     const qsizetype legacyBranch = itemSource.indexOf(
@@ -546,7 +567,19 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(boundOverload >= 0);
     QVERIFY(boundDelegation > boundOverload);
     QVERIFY(implementation > boundDelegation);
-    QVERIFY(immutableBranch > implementation);
+    QVERIFY(colorBranch > implementation);
+    QVERIFY(immutableColor > colorBranch);
+    QVERIFY(colorLegacyBranch > immutableColor);
+    QVERIFY(!immutableColorBody.contains("GlobalContext"));
+    QVERIFY(!immutableColorBody.contains("colorEngine"));
+    QVERIFY(!immutableColorBody.contains("rideMetadata"));
+    QVERIFY(schemaBranch > colorLegacyBranch);
+    QVERIFY(immutableSchema > schemaBranch);
+    QVERIFY(schemaLegacyBranch > immutableSchema);
+    QVERIFY(!immutableSchemaBody.contains("RideMetricFactory::instance"));
+    QVERIFY(schemaFailClosed > schemaLegacyBranch);
+    QVERIFY(fingerprintValue > schemaFailClosed);
+    QVERIFY(immutableBranch > fingerprintValue);
     QVERIFY(immutableFingerprint > immutableBranch);
     QVERIFY(legacyBranch > immutableFingerprint);
     QVERIFY(legacyFingerprint > legacyBranch);

@@ -8919,6 +8919,12 @@ commit before the next finding begins.
   state, and mutable item metadata. Capture or stage those inputs and remove
   each worker-reachable live read before declaring the stale-check cutover
   complete; do not hide them behind the legacy overload.
+- ARCH-003F2c2c1 (color/schema worker cutover recorded before correction): Use
+  the bound environment's captured color field/rules and metric-registry schema
+  version in worker stale checks. A missing bound registry must fail closed as
+  stale without consulting either process singleton; retain legacy singleton
+  behavior only in the no-environment overload. Weight, file/cache/path, and
+  item-metadata staging remain separate c2c work.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9271,6 +9277,22 @@ commit before the next finding begins.
   metric-schema, Body-weight, RideFileCache analysis/path, and mutable
   item-metadata inputs. F3 must prevent generation replacement from exposing
   worker mutations by publishing detached results only after acceptance.
+- ARCH-003F2c2c1 resolution: generation-bound stale checks now derive color
+  from the captured field and ordered rules and compare `udbversion` with the
+  retained metric-registry schema. A missing bound registry marks the item
+  stale without a singleton fallback, while schema version zero remains a
+  valid captured value. The no-environment overload alone retains legacy
+  GlobalContext/ColorEngine/RideMetadata and RideMetricFactory behavior.
+- ARCH-003F2c2c1 verification: the focused suite passes 14/14 normally and
+  under ASan/UBSan. Its source contract isolates the color, schema, and
+  fingerprint branches, rejects their respective process/live fallback tokens,
+  and pins missing-schema evaluation before later stale checks. Qt 6.8.3
+  production builds of `RideItem.cpp` and `RideCache.cpp` pass with warnings as
+  errors; source dependencies pass 14/14 and `git diff --check` passes.
+  Independent review: GO with no blocker, major, or minor finding.
+- ARCH-003F2c2c1 residual: c2c still needs immutable Body-weight and
+  RideFileCache analysis/path inputs plus an owner-safe item metadata snapshot.
+  F3 still owns detached publication after generation acceptance.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

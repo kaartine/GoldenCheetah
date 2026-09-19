@@ -535,12 +535,30 @@ RideItem::checkStaleImpl(const RideRefreshEnvironment *environment)
     if (isstale) return true;
 
     // just change it .. its as quick to change as it is to check !
-    color = GlobalContext::context()->colorEngine->colorFor(getText(GlobalContext::context()->rideMetadata->getColorField(), ""));
+    if (environment) {
+        color = environment->colorFor(
+            getText(environment->colorField(), ""));
+    } else {
+        color = GlobalContext::context()->colorEngine->colorFor(
+            getText(
+                GlobalContext::context()->rideMetadata->getColorField(),
+                ""));
+    }
 
     // upgraded metrics
-    const quint16 userMetricSchemaVersion =
-        RideMetricFactory::instance().userMetricSchemaVersion();
-    if (udbversion != userMetricSchemaVersion || dbversion != DBSchemaVersion) {
+    std::optional<quint16> userMetricSchemaVersion;
+    if (environment) {
+        if (environment->metricRegistry()) {
+            userMetricSchemaVersion =
+                environment->metricRegistry()->userMetricSchemaVersion();
+        }
+    } else {
+        userMetricSchemaVersion =
+            RideMetricFactory::instance().userMetricSchemaVersion();
+    }
+    if (!userMetricSchemaVersion
+        || udbversion != *userMetricSchemaVersion
+        || dbversion != DBSchemaVersion) {
 
         isstale = true;
 
