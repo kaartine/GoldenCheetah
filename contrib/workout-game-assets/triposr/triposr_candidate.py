@@ -18,11 +18,13 @@ from typing import Any, Iterable, NamedTuple
 from urllib.parse import urlparse
 
 
-VERSION = 1
+VERSION = 2
+SUPPORTED_DESCRIPTOR_VERSIONS = {1, VERSION}
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 REPOSITORY = SCRIPT_DIRECTORY.parents[2]
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CANDIDATE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
+ASSET_ID_PATTERN = re.compile(r"^[A-Z]{2}-[0-9]{2}(?:-[a-z0-9-]+)?$")
 REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 GENERATOR_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._+()-]{0,127}$")
 AXES = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"}
@@ -32,6 +34,17 @@ RIGHTS_BASES = {
     "permission",
     "public-domain",
     "unverified-review-only",
+}
+ASSET_ROLES = {
+    "rider-bike",
+    "trail-tile",
+    "feature",
+    "terrain",
+    "vegetation",
+    "prop",
+    "effect",
+    "texture",
+    "reference",
 }
 MIME_MAGIC = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
@@ -999,7 +1012,8 @@ def build_descriptor(
         },
         "installation": {
             "automatic": False,
-            "target": "RB-01",
+            "targetAssetId": args.target_asset_id,
+            "targetRole": args.target_role,
             "decision": "prohibited-pending-human-review",
         },
     }
@@ -1078,8 +1092,11 @@ def validate_descriptor(document: Any) -> None:
     if has_collision_hint:
         expected_top.add("collisionProxyProvenance")
     document = _exact_object(document, expected_top, "candidate descriptor")
+    descriptor_version = document.get("schemaVersion")
     if (
-        document.get("schemaVersion") != VERSION
+        not isinstance(descriptor_version, int)
+        or isinstance(descriptor_version, bool)
+        or descriptor_version not in SUPPORTED_DESCRIPTOR_VERSIONS
         or document.get("kind") != "workout-game-triposr-candidate"
     ):
         raise CandidateError("candidate descriptor version or kind is unsupported")
@@ -1227,7 +1244,7 @@ def validate_descriptor(document: Any) -> None:
         document.get("validation"), {"validator", "budgets", "checks"},
         "candidate validation record",
     )
-    if validation["validator"] != f"triposr_candidate.py/{VERSION}":
+    if validation["validator"] != f"triposr_candidate.py/{descriptor_version}":
         raise CandidateError("candidate validator version is unsupported")
     budgets = _exact_object(validation["budgets"], {
         "maxGlbBytes", "maxTrianglesLod0", "maxTrianglesLod1",
@@ -1264,12 +1281,27 @@ def validate_descriptor(document: Any) -> None:
     if validation["checks"] != CHECKS:
         raise CandidateError("candidate validation checks are incomplete or reordered")
     installation = document.get("installation", {})
-    if installation != {
-        "automatic": False,
-        "target": "RB-01",
-        "decision": "prohibited-pending-human-review",
-    }:
-        raise CandidateError("candidate must not install or replace RB-01 automatically")
+    if descriptor_version == 1:
+        expected_installation = {
+            "automatic": False,
+            "target": "RB-01",
+            "decision": "prohibited-pending-human-review",
+        }
+    else:
+        expected_installation = {
+            "automatic": False,
+            "targetAssetId": installation.get("targetAssetId"),
+            "targetRole": installation.get("targetRole"),
+            "decision": "prohibited-pending-human-review",
+        }
+        if (
+            not isinstance(installation.get("targetAssetId"), str)
+            or not ASSET_ID_PATTERN.fullmatch(installation["targetAssetId"])
+            or installation.get("targetRole") not in ASSET_ROLES
+        ):
+            raise CandidateError("candidate installation target is invalid")
+    if installation != expected_installation:
+        raise CandidateError("candidate must not install or replace an asset automatically")
 
 
 def budgets_from_args(args: argparse.Namespace) -> dict[str, int]:
@@ -1626,6 +1658,8 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command", required=True)
     create = commands.add_parser("import", help="validate and quarantine a candidate")
     create.add_argument("--candidate-id", required=True)
+    create.add_argument("--target-asset-id", required=True)
+    create.add_argument("--target-role", required=True, choices=sorted(ASSET_ROLES))
     create.add_argument("--reference", required=True, type=Path)
     create.add_argument("--reference-sha256", required=True)
     create.add_argument("--reference-rights", required=True, choices=sorted(RIGHTS_BASES))

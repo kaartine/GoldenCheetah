@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://goldencheetah.org/schemas/workout-game/triposr-candidate-v1.json",
+  "$id": "https://goldencheetah.org/schemas/workout-game/triposr-candidate-v2.json",
   "title": "Workout Game TripoSR review candidate",
   "type": "object",
   "additionalProperties": false,
@@ -18,7 +18,7 @@
     "installation"
   ],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "kind": { "const": "workout-game-triposr-candidate" },
     "candidateId": {
       "type": "string",
@@ -135,7 +135,7 @@
       "additionalProperties": false,
       "required": ["validator", "budgets", "checks"],
       "properties": {
-        "validator": { "const": "triposr_candidate.py/1" },
+        "validator": { "const": "triposr_candidate.py/2" },
         "budgets": {
           "type": "object",
           "additionalProperties": false,
@@ -184,10 +184,26 @@
     "installation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["automatic", "target", "decision"],
+      "required": ["automatic", "targetAssetId", "targetRole", "decision"],
       "properties": {
         "automatic": { "const": false },
-        "target": { "const": "RB-01" },
+        "targetAssetId": {
+          "type": "string",
+          "pattern": "^[A-Z]{2}-[0-9]{2}(?:-[a-z0-9-]+)?$"
+        },
+        "targetRole": {
+          "enum": [
+            "rider-bike",
+            "trail-tile",
+            "feature",
+            "terrain",
+            "vegetation",
+            "prop",
+            "effect",
+            "texture",
+            "reference"
+          ]
+        },
         "decision": { "const": "prohibited-pending-human-review" }
       }
     },

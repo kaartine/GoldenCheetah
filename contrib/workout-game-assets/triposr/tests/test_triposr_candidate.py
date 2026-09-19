@@ -144,6 +144,8 @@ class TripoSRCandidateTest(unittest.TestCase):
     def args(self, destination: str = "candidate") -> argparse.Namespace:
         return argparse.Namespace(
             candidate_id="bike-side-001",
+            target_asset_id="RB-01",
+            target_role="rider-bike",
             reference=self.reference,
             reference_sha256=sha256(self.reference),
             reference_rights="unverified-review-only",
@@ -194,7 +196,8 @@ class TripoSRCandidateTest(unittest.TestCase):
         )
         self.assertEqual(descriptor["installation"], {
             "automatic": False,
-            "target": "RB-01",
+            "targetAssetId": "RB-01",
+            "targetRole": "rider-bike",
             "decision": "prohibited-pending-human-review",
         })
         self.assertNotIn(str(self.reference), first_bytes.decode())
@@ -606,6 +609,8 @@ class TripoSRCandidateTest(unittest.TestCase):
         parsed = candidate.parser().parse_args([
             "import",
             "--candidate-id", "bike-side-001",
+            "--target-asset-id", "RB-01",
+            "--target-role", "rider-bike",
             "--reference", str(self.reference),
             "--reference-sha256", sha256(self.reference),
             "--reference-rights", "owned",
@@ -663,11 +668,49 @@ class TripoSRCandidateTest(unittest.TestCase):
         )
         installation = schema["properties"]["installation"]["properties"]
         self.assertEqual(installation["automatic"]["const"], False)
-        self.assertEqual(installation["target"]["const"], "RB-01")
+        self.assertEqual(
+            installation["targetAssetId"]["pattern"],
+            "^[A-Z]{2}-[0-9]{2}(?:-[a-z0-9-]+)?$",
+        )
+        self.assertIn("prop", installation["targetRole"]["enum"])
         self.assertEqual(
             installation["decision"]["const"],
             "prohibited-pending-human-review",
         )
+
+    def test_generic_target_is_recorded_and_old_v1_descriptor_remains_verifiable(self) -> None:
+        args = self.args()
+        args.target_asset_id = "EN-10-mossy-log"
+        args.target_role = "prop"
+        candidate.import_candidate(args)
+        descriptor_path = args.candidate_dir / "candidate.json"
+        descriptor = json.loads(descriptor_path.read_text())
+        self.assertEqual(descriptor["schemaVersion"], 2)
+        self.assertEqual(descriptor["installation"]["targetAssetId"], "EN-10-mossy-log")
+        self.assertEqual(descriptor["installation"]["targetRole"], "prop")
+
+        descriptor["schemaVersion"] = 1
+        descriptor["validation"]["validator"] = "triposr_candidate.py/1"
+        descriptor["installation"] = {
+            "automatic": False,
+            "target": "RB-01",
+            "decision": "prohibited-pending-human-review",
+        }
+        candidate.validate_descriptor(descriptor)
+
+    def test_invalid_generic_target_is_rejected(self) -> None:
+        args = self.args()
+        args.target_asset_id = "../../escape"
+        with self.assertRaisesRegex(candidate.CandidateError, "installation target"):
+            candidate.import_candidate(args)
+
+    def test_wrong_typed_descriptor_version_is_rejected_cleanly(self) -> None:
+        args = self.args()
+        candidate.import_candidate(args)
+        descriptor = json.loads((args.candidate_dir / "candidate.json").read_text())
+        descriptor["schemaVersion"] = []
+        with self.assertRaisesRegex(candidate.CandidateError, "version or kind"):
+            candidate.validate_descriptor(descriptor)
 
     @unittest.skipUnless(jsonschema is not None, "jsonschema is not installed")
     def test_schema_matches_safe_runtime_contract(self) -> None:

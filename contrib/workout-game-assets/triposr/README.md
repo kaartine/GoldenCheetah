@@ -57,6 +57,8 @@ Create a quarantined candidate outside the repository:
 ```bash
 python3 contrib/workout-game-assets/triposr/triposr_candidate.py import \
   --candidate-id bike-side-001 \
+  --target-asset-id RB-01 \
+  --target-role rider-bike \
   --reference /private/reference.png \
   --reference-sha256 REF_SHA256 \
   --reference-rights unverified-review-only \
@@ -85,7 +87,7 @@ python3 contrib/workout-game-assets/triposr/triposr_candidate.py import \
 This emits only `candidate-lod0.glb`, `candidate-lod1.glb`, optional
 `candidate-collision.glb` and `candidate.json` in the external candidate
 directory. The LOD budgets remain
-configurable, with RB-01 candidate defaults of 18,000 triangles for LOD0 and
+configurable, with defaults of 18,000 triangles for LOD0 and
 9,000 for LOD1. LOD1 is mandatory and must have strictly fewer triangles than
 LOD0. The importer does not create the LOD; use an external Blender decimation
 and cleanup step, then supply and hash both results. `candidate.json` follows
@@ -144,9 +146,14 @@ The descriptor always contains:
 ```text
 status: review-required
 installation.automatic: false
-installation.target: RB-01
+installation.targetAssetId: EN-10-mossy-log
+installation.targetRole: prop
 installation.decision: prohibited-pending-human-review
 ```
+
+`import` requires `--target-asset-id` and `--target-role`. These identify the
+intended canonical asset without installing or replacing it. Descriptor v2 is
+generic; the verifier continues to accept existing v1 `RB-01` review bundles.
 
 There is deliberately no `--install` option and no import of
 `install_rider_bike_asset.py`.
