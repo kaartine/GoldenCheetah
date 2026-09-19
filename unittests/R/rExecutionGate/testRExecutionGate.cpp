@@ -270,6 +270,16 @@ TestRExecutionGate::productionEntrypointsUseGate()
     QVERIFY(toolSource.contains(
         "tryAcquireExecution(NULL, NULL, NULL, NULL)"));
     QVERIFY(toolSource.contains("appearanceRefreshPending.exchange("));
+
+    QFile toolHeader(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTool.h"));
+    QVERIFY2(
+        toolHeader.open(QIODevice::ReadOnly),
+        qPrintable(toolHeader.errorString()));
+    const QByteArray toolHeaderSource = toolHeader.readAll();
+    QVERIFY(toolHeaderSource.contains("QPointer<RCanvas> canvas;"));
+    QVERIFY(toolHeaderSource.contains("QPointer<RChart> chart;"));
+    QVERIFY(!toolHeaderSource.contains("RCanvas *canvas;"));
+    QVERIFY(!toolHeaderSource.contains("RChart *chart;"));
 }
 
 QTEST_APPLESS_MAIN(TestRExecutionGate)

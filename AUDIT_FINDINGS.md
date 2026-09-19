@@ -7965,6 +7965,30 @@ commit before the next finding begins.
   native or graphics callbacks before that return; the explicit activity-loop
   event pump is also unchanged. Both remain ARCH-003B2, so ARCH-003B and
   close-during-evaluation safety as a whole are not yet complete.
+- ARCH-003B2a (FIXED; implementation item recorded before correction): during the
+  R-call window that ARCH-003B1 deliberately leaves open, the R graphics
+  device and other native callbacks read `RTool::canvas` and `RTool::chart` as
+  raw QObject pointers. Deleting the chart tree in the GUI event pump leaves
+  those globals dangling before the entrypoint regains control. Convert the
+  active graphics targets to guarded pointers, retain the existing null/no-op
+  callback behavior, and compile the production RTool/RChart/device set before
+  addressing Context/Athlete and RideItem separately.
+- ARCH-003B2a resolution: the active `RTool::canvas` and `RTool::chart`
+  bindings are now `QPointer`s. Chart-tree destruction during the GUI event
+  pump therefore clears the shared targets before later graphics/native
+  callbacks inspect them, preserving the existing guarded no-op and fallback
+  size behavior instead of leaving dangling QWidget pointers.
+- ARCH-003B2a verification: The focused gate/lifetime suite passes 10/10 on Qt
+  6.4.2 normally and 10/10 under ASan/UBSan with leak detection disabled; its
+  QObject deletion test and production contract pin guarded invalidation and
+  reject the former raw declarations. `RTool.cpp`, `RChart.cpp`, and
+  `RGraphicsDevice.cpp` compile with staged R 4.3.3/Rcpp/RInside headers under
+  `GC_WANT_R` and `STRICT_R_HEADERS`. The source dependency baseline suite
+  passes 14/14, `git diff --check` is clean, and independent review returned
+  GO. A real graphics callback deleting the live chart remains a full-UI
+  release check. Raw `rtool`, Context, Perspective, Athlete/RideItem chains,
+  device `Close`/`GCdisplay` ownership, the explicit activity event pump, and
+  any cross-thread access are outside this item and remain ARCH-003B2/003C.
 - ARCH-003C (queued lifetime work recorded before correction): `rtool` is a raw
   process global, self-publishes before construction finishes, leaks failed and
   successful instances, and has an unreachable/unconditional finalizer. Define

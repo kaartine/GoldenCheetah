@@ -21,6 +21,7 @@
 #include "RExecutionGate.h"
 
 #include <atomic>
+#include <QPointer>
 
 #ifndef _GC_RTool_h
 
@@ -45,9 +46,9 @@ class RTool {
 
         // the canvas to plot on, it may be null
         // if no canvas is active
-        RCanvas *canvas;
+        QPointer<RCanvas> canvas;
         Perspective *perspective;
-        RChart *chart;
+        QPointer<RChart> chart;
 
         Context *context;
         QString version;
