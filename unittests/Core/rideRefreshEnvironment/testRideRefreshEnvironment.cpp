@@ -4,6 +4,7 @@
 #include "AthleteSession.h"
 #include "RideRefreshEnvironment.h"
 #include "RideRefreshCacheInputs.h"
+#include "RideRefreshItemInputs.h"
 #include "RideRefreshMeasures.h"
 #include "RideRefreshRoutes.h"
 #include "RideRefreshZones.h"
@@ -67,6 +68,7 @@ private slots:
     void rideItemWeightPreservesLegacyFallbacks();
     void rideItemWeightMilligramsRejectsUnsafeConversions();
     void cacheInputsAndStoragePathsAreGenerationBound();
+    void itemStaleGateIsGenerationBoundAndPreservesWriteOrder();
     void measuresSnapshotIsRetainedByTheGeneration();
     void routesSnapshotIsRetainedByTheGeneration();
     void zonesSnapshotIsRetainedByTheGeneration();
@@ -651,6 +653,122 @@ cacheInputsAndStoragePathsAreGenerationBound()
     QVERIFY(callClose > plannedRoot);
 }
 
+void TestRideRefreshEnvironment::
+itemStaleGateIsGenerationBoundAndPreservesWriteOrder()
+{
+    QVERIFY(rideRefreshWorksetCaptureAllowed(true, false));
+    QVERIFY(rideRefreshWorksetCaptureAllowed(false, true));
+    QVERIFY(!rideRefreshWorksetCaptureAllowed(false, false));
+    QThread otherThread;
+    QVERIFY(rideRefreshCaptureThreadAllowed(
+        QThread::currentThread(), QThread::currentThread()));
+    QVERIFY(!rideRefreshCaptureThreadAllowed(
+        QThread::currentThread(), &otherThread));
+    QVERIFY(!rideRefreshCaptureThreadAllowed(nullptr, &otherThread));
+
+    QMap<QString, QString> metadata;
+    metadata.insert(QStringLiteral("Mood"), QStringLiteral("Fresh"));
+    metadata.insert(QStringLiteral("Calendar Text"), QStringLiteral("old"));
+    const QDateTime dateTime(
+        QDate(2026, 9, 19), QTime(13, 14, 15));
+    QCOMPARE(rideRefreshItemText(
+                 metadata, dateTime, QStringLiteral("Start Date"), {}),
+             QString::number(
+                 QDate(1900, 1, 1).daysTo(dateTime.date())));
+    QCOMPARE(rideRefreshItemText(
+                 metadata, dateTime, QStringLiteral("Start Time"), {}),
+             QString::number(
+                 QTime(0, 0, 0).secsTo(dateTime.time())));
+    QCOMPARE(rideRefreshItemText(
+                 metadata, dateTime, QStringLiteral("Mood"), {}),
+             QStringLiteral("Fresh"));
+    const unsigned long metadataCrc = rideRefreshMetadataCrc(metadata);
+    metadata[QStringLiteral("Calendar Text")] = QStringLiteral("new");
+    QCOMPARE(rideRefreshMetadataCrc(metadata), metadataCrc);
+    metadata[QStringLiteral("Mood")] = QStringLiteral("Tired");
+    QVERIFY(rideRefreshMetadataCrc(metadata) != metadataCrc);
+
+    RideRefreshItemStaleInputs inputs;
+    inputs.generation = 41;
+    inputs.initiallyStale = false;
+    inputs.storedUserMetricSchemaVersion = 7;
+    inputs.requiredUserMetricSchemaVersion = 7;
+    inputs.storedDbVersion = 12;
+    inputs.storedWeightMilligrams = 72500UL;
+    inputs.resolvedWeight = 72.5009;
+    inputs.resolvedWeightMilligrams = 72500UL;
+    inputs.storedRefreshFingerprint = 99UL;
+    inputs.refreshFingerprint = 99UL;
+
+    auto decision = rideRefreshItemGateDecision(inputs, 42, 12);
+    QVERIFY(decision.stale);
+    QVERIFY(!decision.applyColor);
+    QVERIFY(!decision.writeResolvedWeight);
+    QVERIFY(!decision.continueWithSourceChecks);
+
+    inputs.initiallyStale = true;
+    decision = rideRefreshItemGateDecision(inputs, 41, 12);
+    QVERIFY(decision.stale);
+    QVERIFY(!decision.applyColor);
+    inputs.initiallyStale = false;
+
+    inputs.requiredUserMetricSchemaVersion.reset();
+    decision = rideRefreshItemGateDecision(inputs, 41, 12);
+    QVERIFY(decision.stale);
+    QVERIFY(decision.applyColor);
+    QVERIFY(!decision.writeResolvedWeight);
+    inputs.requiredUserMetricSchemaVersion = 7;
+
+    inputs.storedWeightMilligrams.reset();
+    decision = rideRefreshItemGateDecision(inputs, 41, 12);
+    QVERIFY(decision.stale);
+    QVERIFY(decision.applyColor);
+    QVERIFY(decision.writeResolvedWeight);
+    QVERIFY(!decision.continueWithSourceChecks);
+    inputs.storedWeightMilligrams = 72500UL;
+
+    inputs.refreshFingerprint = 100UL;
+    decision = rideRefreshItemGateDecision(inputs, 41, 12);
+    QVERIFY(decision.stale);
+    QVERIFY(decision.writeResolvedWeight);
+    QVERIFY(!decision.continueWithSourceChecks);
+    inputs.refreshFingerprint = 99UL;
+
+    decision = rideRefreshItemGateDecision(inputs, 41, 12);
+    QVERIFY(!decision.stale);
+    QVERIFY(decision.applyColor);
+    QVERIFY(decision.writeResolvedWeight);
+    QVERIFY(decision.continueWithSourceChecks);
+
+    inputs.storedTimestamp = 100;
+    inputs.storedCrc = 55;
+    inputs.samples = true;
+    inputs.hasIntervals = true;
+    auto sourceDecision = rideRefreshItemSourceDecision(
+        inputs, 101, 55U);
+    QVERIFY(!sourceDecision.stale);
+    QVERIFY(!sourceDecision.crcUpdate);
+    sourceDecision = rideRefreshItemSourceDecision(
+        inputs, 101, std::nullopt);
+    QVERIFY(sourceDecision.stale);
+    QVERIFY(!sourceDecision.crcUpdate);
+    sourceDecision = rideRefreshItemSourceDecision(
+        inputs, 101, 56U);
+    QVERIFY(sourceDecision.stale);
+    QCOMPARE(sourceDecision.crcUpdate, std::optional<unsigned int>(56U));
+    inputs.storedCrc = 0;
+    sourceDecision = rideRefreshItemSourceDecision(
+        inputs, 101, 55U);
+    QVERIFY(sourceDecision.stale);
+    QCOMPARE(sourceDecision.crcUpdate, std::optional<unsigned int>(55U));
+    inputs.storedCrc = 55;
+    inputs.hasIntervals = false;
+    sourceDecision = rideRefreshItemSourceDecision(
+        inputs, 100, std::nullopt);
+    QVERIFY(sourceDecision.stale);
+    QVERIFY(!sourceDecision.crcUpdate);
+}
+
 void TestRideRefreshEnvironment::sessionPublishesWholeGenerationsAtomically()
 {
     AthleteSession session(
@@ -721,10 +839,13 @@ productionWorkersRetainTheirPublishedGeneration()
     const qsizetype validation = source.indexOf(
         "!environment || environment->generation() != generation",
         capture);
+    const qsizetype worksetCapture = source.indexOf(
+        "work.inputs = item->captureRefreshInputs(*environment)",
+        validation);
     const qsizetype publish = source.indexOf(
-        "publishRefreshEnvironment(\n            environment)", capture);
+        "publishRefreshEnvironment(environment)", worksetCapture);
     const qsizetype worker = source.indexOf(
-        "this, generation, environment", publish);
+        "this, generation, environment, workset", publish);
     const qsizetype run = source.indexOf(
         "void RideCacheRefreshThread::run()", worker);
     const qsizetype guard = source.indexOf(
@@ -732,18 +853,21 @@ productionWorkersRetainTheirPublishedGeneration()
     const qsizetype loop = source.indexOf(
         "while (!isInterruptionRequested())", run);
     const qsizetype nextRefresh = source.indexOf(
-        "target->nextRefresh(generation)", run);
+        "target->nextRefresh(\n            generation, workset->count())", run);
     const qsizetype staleCheck = source.indexOf(
-        "item->checkStale(*environment)", nextRefresh);
+        "item->checkStale(*environment, work->inputs)", nextRefresh);
     const qsizetype constructor = source.indexOf(
         "RideCacheRefreshThread::RideCacheRefreshThread(");
     const qsizetype retained = source.indexOf(
         "environment(std::move(environment))", constructor);
+    const qsizetype retainedWorkset = source.indexOf(
+        "workset(std::move(workset))", retained);
     const qsizetype constructorBody = source.indexOf("\n{", constructor);
     QVERIFY(start >= 0);
     QVERIFY(capture > start);
     QVERIFY(validation > capture);
-    QVERIFY(publish > validation);
+    QVERIFY(worksetCapture > validation);
+    QVERIFY(publish > worksetCapture);
     QVERIFY(worker > publish);
     QVERIFY(run > worker);
     QVERIFY(guard > run);
@@ -752,123 +876,92 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(staleCheck > nextRefresh);
     QVERIFY(constructor >= 0);
     QVERIFY(retained > constructor);
-    QVERIFY(constructorBody > retained);
+    QVERIFY(retainedWorkset > retained);
+    QVERIFY(constructorBody > retainedWorkset);
 
     QFile headerFile(root.filePath(QStringLiteral("src/Core/RideCache.h")));
     QVERIFY(headerFile.open(QIODevice::ReadOnly));
     const QByteArray header = headerFile.readAll();
     QVERIFY(header.contains(
         "const std::shared_ptr<const RideRefreshEnvironment> environment;"));
+    QVERIFY(header.contains(
+        "const std::shared_ptr<const QVector<RideRefreshWorkItem>> workset;"));
 
     QFile itemSourceFile(root.filePath(QStringLiteral("src/Core/RideItem.cpp")));
     QVERIFY(itemSourceFile.open(QIODevice::ReadOnly));
     const QByteArray itemSource = itemSourceFile.readAll();
+    const qsizetype captureInputs = itemSource.indexOf(
+        "RideItem::captureRefreshInputs(");
     const qsizetype boundOverload = itemSource.indexOf(
-        "RideItem::checkStale(const RideRefreshEnvironment &environment)");
-    const qsizetype boundDelegation = itemSource.indexOf(
-        "return checkStaleImpl(&environment);", boundOverload);
-    const qsizetype implementation = itemSource.indexOf(
-        "RideItem::checkStaleImpl(", boundDelegation);
-    const qsizetype colorBranch = itemSource.indexOf(
-        "if (environment) {", implementation);
-    const qsizetype immutableColor = itemSource.indexOf(
-        "environment->colorFor(", colorBranch);
-    const qsizetype colorLegacyBranch = itemSource.indexOf(
-        "} else {", immutableColor);
-    const QByteArray immutableColorBody = itemSource.mid(
-        colorBranch, colorLegacyBranch - colorBranch);
-    const qsizetype schemaBranch = itemSource.indexOf(
-        "if (environment) {", colorLegacyBranch + 1);
-    const qsizetype immutableSchema = itemSource.indexOf(
-        "environment->metricRegistry()->userMetricSchemaVersion()",
-        schemaBranch);
-    const qsizetype schemaLegacyBranch = itemSource.indexOf(
-        "} else {", immutableSchema);
-    const QByteArray immutableSchemaBody = itemSource.mid(
-        schemaBranch, schemaLegacyBranch - schemaBranch);
-    const qsizetype schemaFailClosed = itemSource.indexOf(
-        "if (!userMetricSchemaVersion", schemaLegacyBranch);
-    const qsizetype weightBranch = itemSource.indexOf(
-        "if (environment) {", schemaFailClosed);
-    const qsizetype priorConversion = itemSource.indexOf(
-        "RideRefreshEnvironment::rideItemWeightMilligrams(weight)",
-        weightBranch);
-    const qsizetype immutableWeight = itemSource.indexOf(
-        "environment->rideItemWeight(", priorConversion);
-    const qsizetype weightLegacyBranch = itemSource.indexOf(
-        "} else {", immutableWeight);
-    const QByteArray immutableWeightBody = itemSource.mid(
-        weightBranch, weightLegacyBranch - weightBranch);
-    const qsizetype weightFailClosed = itemSource.indexOf(
-        "if (!priorWeight || !currentWeight)", weightLegacyBranch);
-    const qsizetype currentConversion = itemSource.indexOf(
-        "RideRefreshEnvironment::rideItemWeightMilligrams(\n"
-        "                        *currentWeight)", priorConversion);
-    const qsizetype weightComparison = itemSource.indexOf(
-        "if (!currentMilligrams || *priorWeight != *currentMilligrams)",
-        currentConversion);
-    const qsizetype fingerprintValue = itemSource.indexOf(
-        "std::optional<unsigned long> refreshFingerprint;", weightComparison);
-    const qsizetype immutableBranch = itemSource.indexOf(
-        "if (environment) {", fingerprintValue);
-    const qsizetype immutableFingerprint = itemSource.indexOf(
-        "environment->rideItemFingerprint(", immutableBranch);
-    const qsizetype legacyBranch = itemSource.indexOf(
-        "} else {", immutableFingerprint);
-    const qsizetype legacyFingerprint = itemSource.indexOf(
-        "context->athlete->zones(sport)->getFingerprint", legacyBranch);
-    const qsizetype failClosed = itemSource.indexOf(
-        "if (!refreshFingerprint || fingerprint != *refreshFingerprint)",
-        legacyFingerprint);
-    const qsizetype cacheCheck = itemSource.indexOf(
-        "RideFileCache::checkStale(context, this)", failClosed);
-    QVERIFY(boundOverload >= 0);
-    QVERIFY(boundDelegation > boundOverload);
-    QVERIFY(implementation > boundDelegation);
-    QVERIFY(colorBranch > implementation);
-    QVERIFY(immutableColor > colorBranch);
-    QVERIFY(colorLegacyBranch > immutableColor);
-    QVERIFY(!immutableColorBody.contains("GlobalContext"));
-    QVERIFY(!immutableColorBody.contains("colorEngine"));
-    QVERIFY(!immutableColorBody.contains("rideMetadata"));
-    QVERIFY(schemaBranch > colorLegacyBranch);
-    QVERIFY(immutableSchema > schemaBranch);
-    QVERIFY(schemaLegacyBranch > immutableSchema);
-    QVERIFY(!immutableSchemaBody.contains("RideMetricFactory::instance"));
-    QVERIFY(schemaFailClosed > schemaLegacyBranch);
-    QVERIFY(weightBranch > schemaFailClosed);
-    QVERIFY(priorConversion > weightBranch);
-    QVERIFY(immutableWeight > priorConversion);
-    QVERIFY(weightLegacyBranch > immutableWeight);
-    QVERIFY(!immutableWeightBody.contains("getWeight()"));
-    QVERIFY(!immutableWeightBody.contains("context->athlete"));
-    QVERIFY(!immutableWeightBody.contains("appsettings"));
-    QVERIFY(!immutableWeightBody.contains("->measures"));
-    QVERIFY(weightFailClosed > weightLegacyBranch);
-    QVERIFY(currentConversion > weightFailClosed);
-    QVERIFY(weightComparison > currentConversion);
-    QVERIFY(fingerprintValue > weightComparison);
-    QVERIFY(immutableBranch > fingerprintValue);
-    QVERIFY(immutableFingerprint > immutableBranch);
-    QVERIFY(legacyBranch > immutableFingerprint);
-    QVERIFY(legacyFingerprint > legacyBranch);
-    QVERIFY(failClosed > legacyFingerprint);
-    QVERIFY(cacheCheck > failClosed);
-    const QByteArray immutableBody = itemSource.mid(
-        immutableBranch, legacyBranch - immutableBranch);
-    QVERIFY(!immutableBody.contains("context->athlete"));
-    QVERIFY(!immutableBody.contains("appsettings"));
-    QVERIFY(!immutableBody.contains("getHrvFingerprint"));
-    QVERIFY(!immutableBody.contains("->zones("));
-    QVERIFY(!immutableBody.contains("->hrZones("));
-    QVERIFY(!immutableBody.contains("->paceZones("));
-    QVERIFY(!immutableBody.contains("->routes"));
+        "RideItem::checkStale(\n"
+        "    const RideRefreshEnvironment &environment,",
+        captureInputs);
+    const qsizetype legacyImplementation = itemSource.indexOf(
+        "RideItem::checkStaleImpl(", boundOverload);
+    QVERIFY(captureInputs >= 0);
+    QVERIFY(boundOverload > captureInputs);
+    QVERIFY(legacyImplementation > boundOverload);
+
+    const QByteArray boundBody = itemSource.mid(
+        boundOverload, legacyImplementation - boundOverload);
+    QVERIFY(boundBody.contains("rideRefreshItemGateDecision("));
+    QVERIFY(boundBody.contains("inputs.resolvedWeight"));
+    QVERIFY(boundBody.contains("QFile file(inputs.sourcePath)"));
+    QVERIFY(boundBody.contains("rideRefreshItemSourceDecision("));
+    QVERIFY(boundBody.contains("RideFileCache::checkStale(cacheInputs)"));
+    QVERIFY(boundBody.contains("inputs.currentMetadataCrc"));
+    QVERIFY(!boundBody.contains("context->"));
+    QVERIFY(!boundBody.contains("appsettings"));
+    QVERIFY(!boundBody.contains("getText("));
+    QVERIFY(!boundBody.contains("getWeight("));
+    QVERIFY(!boundBody.contains("dateTime"));
+    QVERIFY(!boundBody.contains("metadata_"));
+    QVERIFY(!boundBody.contains("intervals_"));
+    QVERIFY(!boundBody.contains("->zones("));
+    QVERIFY(!boundBody.contains("if (!isstale)"));
+    QVERIFY(!boundBody.contains("return isstale"));
+
+    const QByteArray captureBody = itemSource.mid(
+        captureInputs, boundOverload - captureInputs);
+    QVERIFY(captureBody.contains("rideRefreshItemText("));
+    const qsizetype ownerGuard = captureBody.indexOf(
+        "rideRefreshCaptureThreadAllowed(");
+    const qsizetype firstItemRead = captureBody.indexOf(
+        "inputs.initiallyStale = isstale");
+    QVERIFY(ownerGuard >= 0);
+    QVERIFY(firstItemRead > ownerGuard);
+    QVERIFY(captureBody.contains("QStringLiteral(\"Weight\")"));
+    QVERIFY(captureBody.contains("metaCRC()"));
+    QVERIFY(captureBody.contains("cacheStoragePathsComplete = storage.isComplete()"));
+    QVERIFY(captureBody.contains("cachePathForActivity("));
+    QVERIFY(captureBody.contains(
+        "environment.rideFileCacheAnalysisFingerprint("));
+
+    QFile cacheSourceFile(root.filePath(
+        QStringLiteral("src/FileIO/RideFileCache.cpp")));
+    QVERIFY(cacheSourceFile.open(QIODevice::ReadOnly));
+    const QByteArray cacheSource = cacheSourceFile.readAll();
+    const qsizetype valueCacheCheck = cacheSource.indexOf(
+        "RideFileCache::checkStale(const RideFileCacheStaleInputs &inputs)");
+    const qsizetype nextCacheFunction = cacheSource.indexOf(
+        "\nstatic bool meanMaxBlockForSeries", valueCacheCheck);
+    QVERIFY(valueCacheCheck >= 0);
+    QVERIFY(nextCacheFunction > valueCacheCheck);
+    const QByteArray valueCacheBody = cacheSource.mid(
+        valueCacheCheck, nextCacheFunction - valueCacheCheck);
+    QVERIFY(valueCacheBody.contains("!inputs.storagePathsComplete"));
+    QVERIFY(valueCacheBody.contains("inputs.analysisFingerprint.size() != 32"));
+    QVERIFY(valueCacheBody.contains("cacheIsCurrentForSource("));
+    QVERIFY(!valueCacheBody.contains("context"));
+    QVERIFY(!valueCacheBody.contains("athlete"));
+    QVERIFY(!valueCacheBody.contains("appsettings"));
+    QVERIFY(!valueCacheBody.contains("RideItem"));
 
     QFile itemHeaderFile(root.filePath(QStringLiteral("src/Core/RideItem.h")));
     QVERIFY(itemHeaderFile.open(QIODevice::ReadOnly));
     const QByteArray itemHeader = itemHeaderFile.readAll();
     QVERIFY(itemHeader.contains(
-        "bool checkStale(const RideRefreshEnvironment &environment);"));
+        "const RideRefreshItemStaleInputs &inputs"));
     QVERIFY(itemHeader.contains(
         "bool checkStaleImpl(const RideRefreshEnvironment *environment);"));
 }

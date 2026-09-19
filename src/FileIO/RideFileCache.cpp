@@ -444,12 +444,32 @@ RideFileCache::checkStale(Context *context, RideItem*item)
             rideFileName);
 
     const double weight = item->getWeight();
+    RideFileCacheStaleInputs inputs;
+    inputs.storagePathsComplete = true;
+    inputs.sourcePath = rideFileName;
+    inputs.cachePath = cacheFileName;
+    inputs.weight = weight;
+    inputs.analysisFingerprint = analysisFingerprintForItem(
+        context, item, weight);
+    return checkStale(inputs);
+}
+
+bool
+RideFileCache::checkStale(const RideFileCacheStaleInputs &inputs)
+{
+    if (!inputs.storagePathsComplete
+        || inputs.sourcePath.isEmpty()
+        || inputs.cachePath.isEmpty()
+        || !std::isfinite(inputs.weight)
+        || inputs.weight <= 0.0
+        || inputs.analysisFingerprint.size() != 32) {
+        return true;
+    }
     return !cacheIsCurrentForSource(
-        rideFileName,
-        cacheFileName,
-        weight,
-        analysisFingerprintForItem(
-            context, item, weight));
+        inputs.sourcePath,
+        inputs.cachePath,
+        inputs.weight,
+        inputs.analysisFingerprint);
 }
 
 static bool meanMaxBlockForSeries(

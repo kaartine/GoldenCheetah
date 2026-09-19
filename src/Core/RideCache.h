@@ -25,6 +25,7 @@
 #include "RideItem.h"
 #include "RideCachePersistence.h"
 #include "RideCacheStartup.h"
+#include "RideRefreshItemInputs.h"
 #include "PDModel.h"
 
 #include <atomic>
@@ -132,7 +133,7 @@ class RideCache : public QObject
         // how is update going?
         QMutex updateMutex;
         int updates; // for watching progress
-        int nextRefresh(quint64 generation);
+        int nextRefresh(quint64 generation, int workCount);
         void threadCompleted(RideCacheRefreshThread*, quint64 generation);
 
         // the ride list
@@ -632,7 +633,8 @@ class RideCacheRefreshThread : public QThread
         RideCacheRefreshThread(
             RideCache *cache,
             quint64 generation,
-            std::shared_ptr<const RideRefreshEnvironment> environment);
+            std::shared_ptr<const RideRefreshEnvironment> environment,
+            std::shared_ptr<const QVector<RideRefreshWorkItem>> workset);
 
     protected:
 
@@ -643,6 +645,7 @@ class RideCacheRefreshThread : public QThread
         QPointer<RideCache> cache;
         quint64 generation;
         const std::shared_ptr<const RideRefreshEnvironment> environment;
+        const std::shared_ptr<const QVector<RideRefreshWorkItem>> workset;
 };
 
 #endif // _GC_RideCache_h

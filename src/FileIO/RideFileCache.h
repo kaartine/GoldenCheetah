@@ -101,6 +101,14 @@ typedef double data_t;
 // the arrays have been computed they can be retrieved quickly.
 //
 // This is the main user entry to the ridefile cached data.
+struct RideFileCacheStaleInputs {
+    bool storagePathsComplete = false;
+    QString sourcePath;
+    QString cachePath;
+    double weight = 0.0;
+    QByteArray analysisFingerprint;
+};
+
 class RideFileCache
 {
     public:
@@ -135,6 +143,7 @@ class RideFileCache
 
         // are we stale ?
         static bool checkStale(Context *context, RideItem*item);
+        static bool checkStale(const RideFileCacheStaleInputs &inputs);
 
         // Just get mean max values for power & wpk for a ride
         static QVector<float> meanMaxPowerFor(Context *context, QVector<float>&wpk, QDate from, QDate to, QVector<QDate> *dates, QString sport="Bike");

@@ -40,6 +40,7 @@
 #include <QtAlgorithms>
 #include <QMap>
 #include <QMapIterator>
+#include <QThread>
 #include <QByteArray>
 #include <QDir>
 #include <QFileInfo>
@@ -163,23 +164,10 @@ RideItem::setFrom(QHash<QString, RideMetricPtr> computed)
 }
 
 // calculate metadata crc
-unsigned long 
-RideItem::metaCRC()
+unsigned long
+RideItem::metaCRC() const
 {
-    QMapIterator<QString,QString> i(metadata_);
-    QByteArray ba;
-    i.toFront();
-    while(i.hasNext()) {
-        i.next();
-
-        // ignore calendar texts as they change 
-        // with configuration, not user updates
-        if (i.key() == "Calendar Text") continue;
-
-        ba.append(i.key().toUtf8());
-        ba.append(i.value().toUtf8());
-    }
-    return qChecksum(ba);
+    return rideRefreshMetadataCrc(metadata_);
 }
 
 RideFile *RideItem::ride(bool open)
@@ -516,6 +504,65 @@ RideItem::setStartTime(QDateTime newDateTime)
 }
 
 // check if we need to be refreshed
+RideRefreshItemStaleInputs
+RideItem::captureRefreshInputs(
+    const RideRefreshEnvironment &environment) const
+{
+    RideRefreshItemStaleInputs inputs;
+    inputs.generation = environment.generation();
+    if (!rideRefreshCaptureThreadAllowed(
+            QThread::currentThread(), thread())) return inputs;
+    inputs.initiallyStale = isstale;
+    inputs.color = environment.colorFor(
+        rideRefreshItemText(
+            metadata_, dateTime, environment.colorField(), {}));
+    inputs.storedUserMetricSchemaVersion = udbversion;
+    if (environment.metricRegistry()) {
+        inputs.requiredUserMetricSchemaVersion =
+            environment.metricRegistry()->userMetricSchemaVersion();
+    }
+    inputs.storedDbVersion = dbversion;
+    inputs.storedWeightMilligrams =
+        RideRefreshEnvironment::rideItemWeightMilligrams(weight);
+    inputs.resolvedWeight = environment.rideItemWeight(
+        dateTime.date(),
+        rideRefreshItemText(
+            metadata_, dateTime, QStringLiteral("Weight"),
+            QStringLiteral("0.0")));
+    if (inputs.resolvedWeight) {
+        inputs.resolvedWeightMilligrams =
+            RideRefreshEnvironment::rideItemWeightMilligrams(
+                *inputs.resolvedWeight);
+    }
+    inputs.storedRefreshFingerprint = fingerprint;
+    inputs.refreshFingerprint = environment.rideItemFingerprint(
+        dateTime.date(), sport, isSwim);
+    inputs.sourcePath = RideFileCacheIntegrity::activitySourcePath(
+        path, fileName);
+    inputs.storedTimestamp = timestamp;
+    inputs.storedCrc = crc;
+    inputs.samples = samples;
+    inputs.hasIntervals = !intervals_.isEmpty();
+    inputs.storedMetadataCrc = metacrc;
+    inputs.currentMetadataCrc = metaCRC();
+
+    const auto &storage = environment.storagePaths();
+    inputs.cacheStoragePathsComplete = storage.isComplete();
+    if (inputs.cacheStoragePathsComplete) {
+        inputs.cachePath = RideFileCacheIntegrity::cachePathForActivity(
+            storage.cache, storage.activities, storage.planned,
+            inputs.sourcePath);
+    }
+    if (inputs.resolvedWeight) {
+        inputs.cacheWeight = *inputs.resolvedWeight;
+        inputs.cacheAnalysisFingerprint =
+            environment.rideFileCacheAnalysisFingerprint(
+                dateTime.date(), sport, isSwim,
+                *inputs.resolvedWeight);
+    }
+    return inputs;
+}
+
 bool
 RideItem::checkStale()
 {
@@ -525,7 +572,61 @@ RideItem::checkStale()
 bool
 RideItem::checkStale(const RideRefreshEnvironment &environment)
 {
-    return checkStaleImpl(&environment);
+    return checkStale(environment, captureRefreshInputs(environment));
+}
+
+bool
+RideItem::checkStale(
+    const RideRefreshEnvironment &environment,
+    const RideRefreshItemStaleInputs &inputs)
+{
+    const RideRefreshItemGateDecision gate =
+        rideRefreshItemGateDecision(
+            inputs, environment.generation(), DBSchemaVersion);
+    if (!gate.applyColor) {
+        isstale = true;
+        return true;
+    }
+
+    color = inputs.color;
+    if (gate.writeResolvedWeight) {
+        weight = *inputs.resolvedWeight;
+    }
+    bool stale = gate.stale;
+    if (gate.continueWithSourceChecks) {
+        QFile file(inputs.sourcePath);
+        const qint64 sourceModifiedSeconds =
+            QFileInfo(file).lastModified().toSecsSinceEpoch();
+        std::optional<unsigned int> computedCrc;
+        if (inputs.storedTimestamp < static_cast<unsigned long>(
+                qMax<qint64>(0, sourceModifiedSeconds))) {
+            unsigned int currentCrc = 0;
+            const bool crcRead = RideFile::computeFileCRC(
+                inputs.sourcePath, currentCrc);
+            if (crcRead) computedCrc = currentCrc;
+        }
+        const RideRefreshItemSourceDecision sourceDecision =
+            rideRefreshItemSourceDecision(
+                inputs, sourceModifiedSeconds, computedCrc);
+        if (sourceDecision.crcUpdate) crc = *sourceDecision.crcUpdate;
+        stale = sourceDecision.stale;
+    }
+
+    if (!stale) {
+        RideFileCacheStaleInputs cacheInputs;
+        cacheInputs.storagePathsComplete =
+            inputs.cacheStoragePathsComplete;
+        cacheInputs.sourcePath = inputs.sourcePath;
+        cacheInputs.cachePath = inputs.cachePath;
+        cacheInputs.weight = inputs.cacheWeight;
+        cacheInputs.analysisFingerprint =
+            inputs.cacheAnalysisFingerprint;
+        stale = RideFileCache::checkStale(cacheInputs);
+    }
+    if (inputs.storedMetadataCrc != inputs.currentMetadataCrc)
+        stale = true;
+    isstale = stale;
+    return stale;
 }
 
 bool

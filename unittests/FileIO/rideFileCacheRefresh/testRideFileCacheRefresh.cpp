@@ -30,6 +30,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -484,6 +485,7 @@ class TestRideFileCacheRefresh : public QObject
 
 private slots:
     void cleanup();
+    void immutableStaleInputsFailClosedAndAcceptCurrentCache();
     void refreshRestoresFixedZoneStorage();
     void repeatedRefreshClearsZoneValues();
     void temporaryActivityComputesWithoutPersistentCache();
@@ -530,6 +532,59 @@ private slots:
 void TestRideFileCacheRefresh::cleanup()
 {
     RideFileCache::setContextPersistenceFallbackHookForTest({});
+}
+
+void TestRideFileCacheRefresh::
+immutableStaleInputsFailClosedAndAcceptCurrentCache()
+{
+    RideFileCacheStaleInputs inputs;
+    QVERIFY(RideFileCache::checkStale(inputs));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(QStringLiteral("activity.fit"));
+    const QString cachePath =
+        directory.filePath(QStringLiteral("cache/activity.cpx"));
+    const QByteArray sourceBytes = QByteArrayLiteral("source-generation");
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(sourceBytes), qint64(sourceBytes.size()));
+    source.close();
+
+    constexpr double Weight = 72.5;
+    const QByteArray analysis = analysisFingerprint(
+        QByteArrayLiteral("immutable-analysis"));
+    writeCacheFixture(
+        cachePath, 100.0f, 30.0f,
+        sourceBytes, Weight, analysis);
+    makeSourceOlderThanCache(sourcePath, cachePath);
+
+    inputs.storagePathsComplete = true;
+    inputs.sourcePath = sourcePath;
+    inputs.cachePath = cachePath;
+    inputs.weight = Weight;
+    inputs.analysisFingerprint = analysis;
+    QVERIFY(!RideFileCache::checkStale(inputs));
+
+    RideFileCacheStaleInputs invalid = inputs;
+    invalid.storagePathsComplete = false;
+    QVERIFY(RideFileCache::checkStale(invalid));
+    invalid = inputs;
+    invalid.sourcePath.clear();
+    QVERIFY(RideFileCache::checkStale(invalid));
+    invalid = inputs;
+    invalid.cachePath.clear();
+    QVERIFY(RideFileCache::checkStale(invalid));
+    invalid = inputs;
+    invalid.weight = 0.0;
+    QVERIFY(RideFileCache::checkStale(invalid));
+    invalid = inputs;
+    invalid.weight = std::numeric_limits<double>::infinity();
+    QVERIFY(RideFileCache::checkStale(invalid));
+    invalid = inputs;
+    invalid.analysisFingerprint.chop(1);
+    QVERIFY(RideFileCache::checkStale(invalid));
 }
 
 void TestRideFileCacheRefresh::refreshRestoresFixedZoneStorage()

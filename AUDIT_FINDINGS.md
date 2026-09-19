@@ -8970,6 +8970,41 @@ commit before the next finding begins.
   production capture promises legacy absolute roots. Treat completeness as an
   anchored-path admission check so later worker cutover cannot silently depend
   on the process working directory.
+- ARCH-003F2c2c4 (per-item stale-input cutover recorded before correction):
+  Capturing only RideFileCache arguments would leave the bound worker reading
+  mutable RideItem metadata, dates, sport flags, schema/weight/fingerprint
+  state, paths, CRC state, intervals, and metadata CRC. Capture one immutable
+  per-generation workset on the owner thread, make it the worker's indexed
+  input authority, and route the bound stale/cache decision exclusively
+  through those values. Invalid roots, paths, weights, fingerprints, or
+  generation/workset associations must fail stale without live Context,
+  Athlete, settings, zone, metadata, or RideItem read fallback. Preserve the
+  legacy stale-check ordering and worker-side filesystem authentication; F3
+  continues to own removal of worker-side RideItem mutation and refresh.
+- ARCH-003F2c2c4a (empty-generation fatal recorded before correction): The
+  first workset implementation requires the generation to remain active after
+  the existing empty-cache path has already finished it, so an empty athlete
+  reaches `qFatal`. Preserve empty completion while still binding every
+  nonempty workset to an accepted generation, and add a behavioral regression.
+- ARCH-003F2c2c4b (live stale accumulator recorded before correction): The
+  bound decision still reads the mutable `RideItem::isstale` member before the
+  cache check and on return. Accumulate the entire decision in a local value
+  sourced from the DTO and publish only the final stale flag.
+- ARCH-003F2c2c4c (workset association skip recorded before correction): A
+  mismatch against mutable `reverse_` consumes an index and silently skips a
+  captured item. Make the immutable workset authoritative; removed targets may
+  be ignored only after the liveness check, while live captured targets must
+  not depend on a second mutable ordering.
+- ARCH-003F2c2c4d (behavior verification gap recorded before correction):
+  Source contracts alone do not prove empty-generation behavior, generation
+  mismatch, wrong-thread capture, legacy stale ordering, special color fields,
+  CRC/interval/metaCRC decisions, or planned/completed cache mapping. Add
+  executable value/state-machine seams for these cases and keep source checks
+  only for the no-live-fallback structural invariant.
+- ARCH-003F2c2c4e (module edge recorded before correction): Including the Core
+  DTO header from `RideFileCache.h` adds a new FileIO-to-Core dependency and
+  breaks the checked module inventory. Keep the FileIO value input owned by
+  FileIO and copy the cache fields at the existing Core-to-FileIO call site.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9384,6 +9419,41 @@ commit before the next finding begins.
   back to live Context, Athlete, home, or settings. Mutable per-item cache
   inputs still need an owner-thread snapshot, and F3 still owns detached
   publication after generation acceptance.
+- ARCH-003F2c2c4/F2c2c4a-e resolution: each nonempty generation now captures
+  one immutable, owner-thread-only workset before publication, and workers use
+  its size, target association, and value inputs as their indexing authority.
+  The bound stale path consumes captured color text, schema, exact and checked
+  weight values, generation fingerprint, anchored source/cache paths,
+  timestamp/CRC state, interval presence, and metadata CRC without a live
+  Context, Athlete, settings, zones, metadata, or RideItem read fallback.
+  Empty generations retain their prior completion path. The FileIO-owned
+  value check rejects incomplete paths, invalid source/cache paths, nonpositive
+  or nonfinite weights, and non-SHA-256 fingerprints before filesystem access,
+  while the legacy overload delegates to the same cache-current core.
+- ARCH-003F2c2c4 verification: the focused environment/state-machine suite
+  passes 18/18 normally and under rebuilt ASan/UBSan. It executes empty versus
+  active workset admission, generation mismatch, owner/null thread admission,
+  initial stale and schema gates, exact-weight write/truncation order,
+  fingerprint gating, Start Date/Time metadata semantics, Calendar Text CRC
+  exclusion, source CRC read failure/match/mismatch/update, and missing
+  intervals. The cache suite's new immutable-input test and existing
+  planned/completed mapping test pass 4/4 normally and under ASan/UBSan. Qt
+  6.8.3 production builds of `RideItem.cpp`, `RideCache.cpp`, and
+  `RideFileCache.cpp` pass with warnings as errors; source dependencies pass
+  14/14 and `git diff --check` passes. Independent review first returned NO-GO
+  for the five correctness/evidence gaps recorded as F2c2c4a-e; final re-review
+  is GO with no blocker or major finding.
+- ARCH-003F2c2c4 test residual: the full pre-existing RideFileCache refresh
+  suite passes 47/48, with `savedRideRebindsAndPersistsAtomically` failing both
+  in the full run and alone. That test does not call either changed stale-check
+  overload or the generation workset path; the new and adjacent path-mapping
+  tests pass independently, so this is recorded as an unrelated baseline test
+  prerequisite rather than hidden by the focused result.
+- ARCH-003F2c2c4 architectural residual: stale inputs are immutable, but the
+  accepted worker still writes color, weight, CRC, stale state and then calls
+  `RideItem::refresh()` before generation acceptance. F3 must compute a
+  detached result and publish it on the owner thread only after revalidating
+  generation and target liveness.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

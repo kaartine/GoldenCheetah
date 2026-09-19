@@ -20,6 +20,7 @@
 #ifndef _GC_RideItem_h
 #define _GC_RideItem_h 1
 #include "GoldenCheetah.h"
+#include "RideRefreshItemInputs.h"
 
 #include "RideMetric.h"
 #include "Measures.h"
@@ -82,8 +83,10 @@ class RideItem : public QObject
         // userdata cache
         QMap<QString, QVector<double> > userCache;
 
-        unsigned long metaCRC();
+        unsigned long metaCRC() const;
         void rebindSourceProvenance();
+        RideRefreshItemStaleInputs captureRefreshInputs(
+            const RideRefreshEnvironment &environment) const;
 
     public slots:
         void modified();
@@ -219,6 +222,9 @@ class RideItem : public QObject
         bool isDirty() { return isdirty; }
         bool checkStale(); // check if we need to refresh
         bool checkStale(const RideRefreshEnvironment &environment);
+        bool checkStale(
+            const RideRefreshEnvironment &environment,
+            const RideRefreshItemStaleInputs &inputs);
         bool isStale() { return isstale; }
 
         // Activity linking methods

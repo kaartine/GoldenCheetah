@@ -716,7 +716,7 @@ HEADERS += Cloud/CalendarDownload.h Cloud/CloudService.h \
 
 HEADERS += Cloud/LocalFileStoreProcess.h
 # core data
-HEADERS += Core/Athlete.h Core/AthleteRefreshLifecycle.h Core/AthleteSession.h Core/ConfigFlags.h Core/Context.h Core/DataFilter.h Core/DataFilterResources.h Core/DataFilterSafety.h Core/DataFilterZones.h Core/FreeSearch.h Core/GcCalendarModel.h Core/GcUpgrade.h Core/RideRefreshCacheInputs.h Core/RideRefreshEnvironment.h Core/RideRefreshMeasures.h Core/RideRefreshRoutes.h Core/RideRefreshZones.h \
+HEADERS += Core/Athlete.h Core/AthleteRefreshLifecycle.h Core/AthleteSession.h Core/ConfigFlags.h Core/Context.h Core/DataFilter.h Core/DataFilterResources.h Core/DataFilterSafety.h Core/DataFilterZones.h Core/FreeSearch.h Core/GcCalendarModel.h Core/GcUpgrade.h Core/RideRefreshCacheInputs.h Core/RideRefreshEnvironment.h Core/RideRefreshItemInputs.h Core/RideRefreshMeasures.h Core/RideRefreshRoutes.h Core/RideRefreshZones.h \
            Core/IdleTimer.h Core/IntervalItem.h Core/LinkedActivityRemovalJournal.h Core/LinkedActivitySaveJournal.h Core/NamedSearch.h Core/PlannedActivityFileStager.h Core/RideCache.h Core/RideCacheBackgroundSaver.h Core/RideCacheBulkMerge.h Core/RideCacheCallbackGuard.h Core/RideCacheMutationScope.h Core/RideCachePersistence.h Core/RideCacheSaveCapture.h Core/RideCacheSaveSnapshot.h Core/RideCacheSnapshot.h Core/RideCacheStartup.h Core/RideCacheModel.h Core/RideDB.h \
            Core/RideCacheAggregate.h \
            Core/RideItem.h Core/Route.h Core/RouteParser.h Core/Season.h Core/SeasonDialogs.h Core/Seasons.h Core/Secrets.h Core/SessionServices.h Core/Settings.h Core/CredentialSettings.h Core/CredentialStoreQtKeychain.h Core/TrainingSession.h \

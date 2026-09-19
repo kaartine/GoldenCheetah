@@ -661,7 +661,7 @@ RideCache::writeAsCSV(QString filename)
 }
 
 int
-RideCache::nextRefresh(quint64 generation)
+RideCache::nextRefresh(quint64 generation, int workCount)
 {
     int returning = -1;
     int completed = 0;
@@ -670,11 +670,11 @@ RideCache::nextRefresh(quint64 generation)
         QMutexLocker locker(&updateMutex);
         if (updates >= 0
             && refreshGeneration_.accepts(generation)
-            && updates < reverse_.count()) {
+            && updates < workCount) {
             returning = updates++;
             completed = updates;
-            const int step = qMax(1, reverse_.count() / 10);
-            reportProgress = completed == reverse_.count()
+            const int step = qMax(1, workCount / 10);
+            reportProgress = completed == workCount
                 || completed % step == 0;
         }
     }
@@ -699,10 +699,12 @@ RideCache::nextRefresh(quint64 generation)
 RideCacheRefreshThread::RideCacheRefreshThread(
     RideCache *cache,
     quint64 generation,
-    std::shared_ptr<const RideRefreshEnvironment> environment)
+    std::shared_ptr<const RideRefreshEnvironment> environment,
+    std::shared_ptr<const QVector<RideRefreshWorkItem>> workset)
     : cache(cache)
     , generation(generation)
     , environment(std::move(environment))
+    , workset(std::move(workset))
 {
     QPointer<RideCacheRefreshThread> weakSelf(this);
     connect(
@@ -988,9 +990,32 @@ RideCache::startLatestRefresh()
 
     const auto environment =
         captureRideRefreshEnvironment(context, generation);
-    if (!environment || environment->generation() != generation
-        || !context->athleteSession().publishRefreshEnvironment(
-            environment)) {
+    if (!environment || environment->generation() != generation) {
+        qFatal("RideCache could not capture its refresh environment");
+    }
+
+    auto mutableWorkset =
+        std::make_shared<QVector<RideRefreshWorkItem>>();
+    {
+        QMutexLocker locker(&updateMutex);
+        if (!rideRefreshWorksetCaptureAllowed(
+                empty, refreshGeneration_.accepts(generation))) {
+            qFatal("RideCache refresh generation changed during capture");
+        }
+        mutableWorkset->reserve(reverse_.size());
+        for (RideItem *item : reverse_) {
+            RideRefreshWorkItem work;
+            work.target = item;
+            if (item) {
+                work.inputs = item->captureRefreshInputs(*environment);
+            }
+            mutableWorkset->append(std::move(work));
+        }
+    }
+    const std::shared_ptr<const QVector<RideRefreshWorkItem>> workset =
+        mutableWorkset;
+
+    if (!context->athleteSession().publishRefreshEnvironment(environment)) {
         qFatal("RideCache could not publish its refresh environment");
     }
 
@@ -1015,7 +1040,7 @@ RideCache::startLatestRefresh()
     for (int index = 0; index < workerCount; ++index) {
         workers.append(
             new RideCacheRefreshThread(
-                this, generation, environment));
+                this, generation, environment, workset));
     }
     {
         QMutexLocker locker(&updateMutex);
@@ -2322,25 +2347,33 @@ RideCache::openPlannedActivityForDeleteProcessor
 // refresh metrics
 void RideCacheRefreshThread::run()
 {
-    if (!environment || environment->generation() != generation) return;
+    if (!environment || environment->generation() != generation
+        || !workset) return;
 
     while (!isInterruptionRequested()) {
         RideCache *target = cache.data();
         if (!target) return;
 
-        const int index = target->nextRefresh(generation);
+        const int index = target->nextRefresh(
+            generation, workset->count());
         if (index < 0 || isInterruptionRequested()) return;
 
-        RideItem *item = nullptr;
+        const RideRefreshWorkItem *work = nullptr;
         {
             QMutexLocker locker(&target->updateMutex);
             if (target->refreshGeneration_.accepts(generation)
-                && index < target->reverse_.count()) {
-                item = target->reverse_.at(index);
+                && index < workset->count()) {
+                const RideRefreshWorkItem &candidate = workset->at(index);
+                if (candidate.target
+                    && target->ownsLiveRide(candidate.target)) {
+                    work = &candidate;
+                }
             }
         }
 
-        if (item && item->checkStale(*environment)) {
+        RideItem *const item = work ? work->target : nullptr;
+        if (item
+            && item->checkStale(*environment, work->inputs)) {
             item->refresh();
             QMutexLocker locker(&target->updateMutex);
             const auto disposition =
