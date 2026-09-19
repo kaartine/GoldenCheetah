@@ -8,6 +8,7 @@
  */
 
 #include "LocalApiSecurityPolicy.h"
+#include "PortableFileName.h"
 
 #include <QFile>
 #include <QFileDevice>
@@ -160,6 +161,21 @@ bool constantTimeEquals(const QByteArray &left,
     return difference == 0;
 }
 
+bool containsEncodedOctet(const QString &component)
+{
+    for (qsizetype index = 0; index + 2 < component.size(); ++index) {
+        if (component.at(index) != QLatin1Char('%')) continue;
+        const QChar first = component.at(index + 1).toLower();
+        const QChar second = component.at(index + 2).toLower();
+        const bool firstIsHex = first.isDigit()
+            || (first >= QLatin1Char('a') && first <= QLatin1Char('f'));
+        const bool secondIsHex = second.isDigit()
+            || (second >= QLatin1Char('a') && second <= QLatin1Char('f'));
+        if (firstIsHex && secondIsHex) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 namespace LocalApiSecurityPolicy {
@@ -260,6 +276,34 @@ bool isWellFormedBearerToken(const QByteArray &token)
         }
     }
 
+    return true;
+}
+
+bool isSafePathComponent(const QString &component)
+{
+    return PortableFileName::isValid(component)
+        && !containsEncodedOctet(component);
+}
+
+bool splitAndValidateDecodedPath(
+    const QString &decodedPath,
+    QStringList &components)
+{
+    components.clear();
+    QStringList parsed = decodedPath.split(
+        QLatin1Char('/'), Qt::KeepEmptyParts);
+    while (!parsed.isEmpty() && parsed.constFirst().isEmpty()) {
+        parsed.removeFirst();
+    }
+    while (!parsed.isEmpty() && parsed.constLast().isEmpty()) {
+        parsed.removeLast();
+    }
+
+    for (const QString &component : parsed) {
+        if (!isSafePathComponent(component)) return false;
+    }
+
+    components = parsed;
     return true;
 }
 

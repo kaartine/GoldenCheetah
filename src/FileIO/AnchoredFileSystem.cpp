@@ -8,6 +8,7 @@
  */
 
 #include "AnchoredFileSystem.h"
+#include "Core/PortableFileName.h"
 
 #include <QByteArrayView>
 #include <QCryptographicHash>
@@ -101,47 +102,6 @@ QString nativeError(const QString &operation, int errorNumber)
     return QStringLiteral("%1: %2")
         .arg(operation,
              QString::fromLocal8Bit(std::strerror(errorNumber)));
-}
-
-bool validPortableComponent(const QString &component)
-{
-    if (component.isEmpty()
-        || component == QStringLiteral(".")
-        || component == QStringLiteral("..")
-        || QDir::isAbsolutePath(component)
-        || QFileInfo(component).fileName() != component
-        || component.endsWith(QLatin1Char(' '))
-        || component.endsWith(QLatin1Char('.'))
-        || component.toUtf8().size() > 240) {
-        return false;
-    }
-
-    static const QString forbidden =
-        QStringLiteral("<>:\"/\\|?*");
-    for (const QChar character : component) {
-        const ushort value = character.unicode();
-        if (value <= 0x1f || value == 0x7f
-            || forbidden.contains(character)) {
-            return false;
-        }
-    }
-
-    const int dot = component.indexOf(QLatin1Char('.'));
-    const QString stem = (dot < 0 ? component : component.left(dot))
-        .toUpper();
-    static const QStringList reserved = {
-        QStringLiteral("CON"), QStringLiteral("PRN"),
-        QStringLiteral("AUX"), QStringLiteral("NUL"),
-        QStringLiteral("COM1"), QStringLiteral("COM2"),
-        QStringLiteral("COM3"), QStringLiteral("COM4"),
-        QStringLiteral("COM5"), QStringLiteral("COM6"),
-        QStringLiteral("COM7"), QStringLiteral("COM8"),
-        QStringLiteral("COM9"), QStringLiteral("LPT1"),
-        QStringLiteral("LPT2"), QStringLiteral("LPT3"),
-        QStringLiteral("LPT4"), QStringLiteral("LPT5"),
-        QStringLiteral("LPT6"), QStringLiteral("LPT7"),
-        QStringLiteral("LPT8"), QStringLiteral("LPT9")};
-    return !reserved.contains(stem);
 }
 
 #ifdef Q_OS_UNIX
@@ -2125,7 +2085,7 @@ bool enumerateUnixDirectoryPass(
         }
         const QString name = QFile::decodeName(encodedName);
         if (QFile::encodeName(name) != encodedName
-            || !validPortableComponent(name)) {
+            || !PortableFileName::isValid(name)) {
             error = QStringLiteral(
                 "The anchored directory contains an unsafe name");
             entries.clear();
@@ -2212,7 +2172,7 @@ bool enumerateWindowsDirectoryPass(
                 int(nameBytes / sizeof(wchar_t)));
             if (name != QStringLiteral(".")
                 && name != QStringLiteral("..")) {
-                if (!validPortableComponent(name)
+                if (!PortableFileName::isValid(name)
                     || (nativeEntry->FileAttributes
                         & (FILE_ATTRIBUTE_REPARSE_POINT
                            | FILE_ATTRIBUTE_DEVICE))) {
@@ -2872,7 +2832,7 @@ bool DirectoryAnchor::openChildIfExists(
         error = QStringLiteral("The anchored directory is unavailable");
         return false;
     }
-    if (!validPortableComponent(component)) {
+    if (!PortableFileName::isValid(component)) {
         error = QStringLiteral("The anchored directory name is unsafe");
         return false;
     }
@@ -3029,7 +2989,7 @@ EntryRef DirectoryAnchor::entry(
         error = QStringLiteral("The anchored directory is unavailable");
         return {};
     }
-    if (!validPortableComponent(component)) {
+    if (!PortableFileName::isValid(component)) {
         error = QStringLiteral("The anchored file name is unsafe");
         return {};
     }
@@ -5164,7 +5124,7 @@ MutationResult Detail::PrivateDirectoryOperations::create(
             "The anchored parent directory is unavailable");
         return result;
     }
-    if (!validPortableComponent(component)) {
+    if (!PortableFileName::isValid(component)) {
         result.error = QStringLiteral(
             "The anchored child directory name is unsafe");
         return result;
@@ -5896,7 +5856,7 @@ MutationResult Detail::PrivateDirectoryOperations::createFixed(
             "The anchored parent directory is unavailable");
         return result;
     }
-    if (!validPortableComponent(component)) {
+    if (!PortableFileName::isValid(component)) {
         result.error = QStringLiteral(
             "The anchored child directory name is unsafe");
         return result;
@@ -7115,7 +7075,7 @@ QString removalQuarantineName(
     const QString &originalComponent)
 {
     if (!identity.isValid()
-        || !validPortableComponent(originalComponent)) {
+        || !PortableFileName::isValid(originalComponent)) {
         return {};
     }
     QByteArray ownership = identity.serializedKey();

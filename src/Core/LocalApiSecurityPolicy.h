@@ -14,6 +14,7 @@
 #include <QMultiMap>
 #include <QSettings>
 #include <QString>
+#include <QStringList>
 #include <QtGlobal>
 
 namespace LocalApiSecurityPolicy {
@@ -37,6 +38,10 @@ bool ensureSettingsFile(const QString &path,
                         const QByteArray &defaultContents,
                         QString *error = nullptr);
 bool isWellFormedBearerToken(const QByteArray &token);
+bool isSafePathComponent(const QString &component);
+bool splitAndValidateDecodedPath(
+    const QString &decodedPath,
+    QStringList &components);
 Configuration prepareServerConfiguration(QSettings &settings,
                                          QString *error = nullptr);
 Decision evaluateRequest(

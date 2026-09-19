@@ -1,4 +1,5 @@
 #include "Core/LocalApiSecurityPolicy.h"
+#include "httprequest.h"
 
 #include <QFile>
 #include <QFileDevice>
@@ -65,6 +66,14 @@ private slots:
     void rejectsMissingOrInvalidAuthorization();
     void rejectsDuplicateSecurityHeaders();
     void invalidExpectedTokenFailsClosed();
+    void rejectsUnsafePathComponents_data();
+    void rejectsUnsafePathComponents();
+    void acceptsPortablePathComponents_data();
+    void acceptsPortablePathComponents();
+    void rejectsUnsafeDecodedPaths_data();
+    void rejectsUnsafeDecodedPaths();
+    void splitsPortableDecodedPaths();
+    void httpParserDecodesPathSeparatorsAndNul();
 };
 
 void TestLocalApiSecurity::generatedTokensAreStrongAndUnique()
@@ -500,6 +509,105 @@ void TestLocalApiSecurity::invalidExpectedTokenFailsClosed()
         LocalApiSecurityPolicy::evaluateRequest(
             headers, QByteArrayLiteral("short"), quint16(12021)),
         LocalApiSecurityPolicy::Decision::RejectAuthorization);
+}
+
+void TestLocalApiSecurity::rejectsUnsafePathComponents_data()
+{
+    QTest::addColumn<QString>("component");
+
+    QTest::newRow("empty") << QString();
+    QTest::newRow("dot") << QStringLiteral(".");
+    QTest::newRow("dot-dot") << QStringLiteral("..");
+    QTest::newRow("slash") << QStringLiteral("ride/next");
+    QTest::newRow("backslash") << QStringLiteral("ride\\next");
+    QTest::newRow("absolute") << QStringLiteral("/etc/passwd");
+    QTest::newRow("drive-or-stream") << QStringLiteral("C:ride.fit");
+    QTest::newRow("trailing-dot") << QStringLiteral("ride.fit.");
+    QTest::newRow("trailing-space") << QStringLiteral("ride.fit ");
+    QTest::newRow("nul") << QString(QChar(u'r')) + QChar(0) + QStringLiteral("ide");
+    QTest::newRow("control") << QString(QChar(0x1f));
+    QTest::newRow("reserved-con") << QStringLiteral("CON");
+    QTest::newRow("reserved-nul-suffix") << QStringLiteral("nul.json");
+    QTest::newRow("reserved-lpt") << QStringLiteral("LPT9.fit");
+    QTest::newRow("overlong") << QString(241, QLatin1Char('a'));
+    QTest::newRow("encoded-slash") << QStringLiteral("ride%2fsecret");
+    QTest::newRow("encoded-backslash") << QStringLiteral("ride%5Csecret");
+    QTest::newRow("encoded-dot") << QStringLiteral("%2e%2e");
+    QTest::newRow("encoded-nul") << QStringLiteral("ride%00name");
+}
+
+void TestLocalApiSecurity::rejectsUnsafePathComponents()
+{
+    QFETCH(QString, component);
+    QVERIFY(!LocalApiSecurityPolicy::isSafePathComponent(component));
+}
+
+void TestLocalApiSecurity::acceptsPortablePathComponents_data()
+{
+    QTest::addColumn<QString>("component");
+
+    QTest::newRow("athlete") << QStringLiteral("athlete-one");
+    QTest::newRow("activity") << QStringLiteral("2026_09_19_12_00_00.fit");
+    QTest::newRow("unicode") << QStringLiteral("Järvinen");
+    QTest::newRow("literal-percent") << QStringLiteral("100% effort");
+}
+
+void TestLocalApiSecurity::acceptsPortablePathComponents()
+{
+    QFETCH(QString, component);
+    QVERIFY(LocalApiSecurityPolicy::isSafePathComponent(component));
+}
+
+void TestLocalApiSecurity::rejectsUnsafeDecodedPaths_data()
+{
+    QTest::addColumn<QString>("path");
+
+    QTest::newRow("internal-empty") << QStringLiteral("/athlete//activity/file.fit");
+    QTest::newRow("dot-athlete") << QStringLiteral("/../activity/file.fit");
+    QTest::newRow("windows-traversal") << QStringLiteral("/athlete/activity/..\\secret.fit");
+    QTest::newRow("decoded-slash") << QStringLiteral("/athlete/activity/../secret.fit");
+    QTest::newRow("double-encoded-slash") << QStringLiteral("/athlete/activity/%2fsecret.fit");
+    QTest::newRow("embedded-nul")
+        << (QStringLiteral("/athlete/activity/ride")
+            + QChar(0) + QStringLiteral(".fit"));
+}
+
+void TestLocalApiSecurity::rejectsUnsafeDecodedPaths()
+{
+    QFETCH(QString, path);
+    QStringList components;
+    QVERIFY(!LocalApiSecurityPolicy::splitAndValidateDecodedPath(
+        path, components));
+    QVERIFY(components.isEmpty());
+}
+
+void TestLocalApiSecurity::splitsPortableDecodedPaths()
+{
+    QStringList components;
+    QVERIFY(LocalApiSecurityPolicy::splitAndValidateDecodedPath(
+        QStringLiteral("/athlete/activity/2026_09_19.fit/"),
+        components));
+    QCOMPARE(components, QStringList({
+        QStringLiteral("athlete"),
+        QStringLiteral("activity"),
+        QStringLiteral("2026_09_19.fit")}));
+
+    QVERIFY(LocalApiSecurityPolicy::splitAndValidateDecodedPath(
+        QStringLiteral("/"), components));
+    QVERIFY(components.isEmpty());
+}
+
+void TestLocalApiSecurity::httpParserDecodesPathSeparatorsAndNul()
+{
+    QCOMPARE(HttpRequest::urlDecode(
+                 QByteArrayLiteral("/athlete/activity/..%5csecret.fit")),
+             QByteArray("/athlete/activity/..\\secret.fit"));
+    QCOMPARE(HttpRequest::urlDecode(
+                 QByteArrayLiteral("/athlete/activity/a%2fb.fit")),
+             QByteArray("/athlete/activity/a/b.fit"));
+    QCOMPARE(HttpRequest::urlDecode(
+                 QByteArrayLiteral("/athlete/activity/a%00b.fit")),
+             QByteArray("/athlete/activity/a\0b.fit", 25));
 }
 
 QTEST_MAIN(TestLocalApiSecurity)

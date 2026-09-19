@@ -64,14 +64,18 @@ APIWebService::service(HttpRequest &request, HttpResponse &response)
         return;
     }
 
-    // remove trailing '/' from request, just to be consistent
-    QString fullPath = request.getPath();
-    while (fullPath.endsWith("/")) fullPath.chop(1);
-
-    // get the paths, strip empty stuff
-    QStringList paths = QString(request.getPath()).split("/");
-    while (paths.count() && paths[paths.count()-1] == "") paths.removeLast();
-    while (paths.count() && paths[0] == "") paths.removeFirst();
+    // The HTTP library returns a percent-decoded path. Validate every route
+    // component before it can be concatenated into a filesystem path.
+    QStringList paths;
+    if (!LocalApiSecurityPolicy::splitAndValidateDecodedPath(
+            QString::fromUtf8(request.getPath()), paths)) {
+        response.setStatus(400);
+        response.setHeader(
+            QByteArrayLiteral("Content-Type"),
+            QByteArrayLiteral("text/plain; charset=UTF-8"));
+        response.write(QByteArrayLiteral("Invalid path."), true);
+        return;
+    }
 
     // we don't have a fave icon
     if (paths.count() && paths[0] == "favicon.ico") return;

@@ -5,8 +5,14 @@ TARGET = tst_localApiSecurity
 
 SOURCES += testLocalApiSecurity.cpp
 SOURCES += ../../../src/Core/LocalApiSecurityPolicy.cpp
+SOURCES += ../../../contrib/httpserver/httprequest.cpp
+SOURCES += ../../../contrib/httpserver/httpcookie.cpp
 
 HEADERS += ../../../src/Core/LocalApiSecurityPolicy.h
+HEADERS += ../../../contrib/httpserver/httprequest.h
+HEADERS += ../../../contrib/httpserver/httpcookie.h
+
+INCLUDEPATH += ../../../contrib/httpserver
 
 include(../../unittests.pri)
 

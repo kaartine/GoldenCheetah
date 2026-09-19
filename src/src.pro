@@ -716,7 +716,7 @@ HEADERS += Core/Athlete.h Core/AthleteSession.h Core/ConfigFlags.h Core/Context.
            Core/IdleTimer.h Core/IntervalItem.h Core/LinkedActivityRemovalJournal.h Core/LinkedActivitySaveJournal.h Core/NamedSearch.h Core/PlannedActivityFileStager.h Core/RideCache.h Core/RideCacheBackgroundSaver.h Core/RideCacheBulkMerge.h Core/RideCacheCallbackGuard.h Core/RideCacheMutationScope.h Core/RideCachePersistence.h Core/RideCacheSaveCapture.h Core/RideCacheSaveSnapshot.h Core/RideCacheSnapshot.h Core/RideCacheStartup.h Core/RideCacheModel.h Core/RideDB.h \
            Core/RideCacheAggregate.h \
            Core/RideItem.h Core/Route.h Core/RouteParser.h Core/Season.h Core/SeasonDialogs.h Core/Seasons.h Core/Secrets.h Core/SessionServices.h Core/Settings.h Core/CredentialSettings.h Core/CredentialStoreQtKeychain.h Core/TrainingSession.h \
-           Core/Specification.h Core/TimeUtils.h Core/Units.h Core/UserData.h Core/Utils.h \
+           Core/PortableFileName.h Core/Specification.h Core/TimeUtils.h Core/Units.h Core/UserData.h Core/Utils.h \
            Core/Measures.h Core/Quadtree.h Core/SplineLookup.h
 
 # device and file IO or edit

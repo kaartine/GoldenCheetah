@@ -7798,7 +7798,7 @@ commit before the next finding begins.
 
 ### ARCH-004: Local API path components bypass the anchored filesystem boundary
 
-- Status: OPEN
+- Status: IN_PROGRESS
 - Severity: MEDIUM
 - Code: `src/Core/APIWebService.cpp` and
   `contrib/httpserver/httprequest.cpp`
@@ -7810,6 +7810,25 @@ commit before the next finding begins.
   request parser and API routing on every supported platform.
 - Fix direction: Validate one decoded path component at a time and resolve it
   through the common anchored filesystem boundary before opening data.
+- Completed work item (ARCH-004A): Centralized the portable component rules
+  used by `AnchoredFileSystem`. Local API dispatch now rejects unsafe decoded
+  components, embedded separators and control characters, and residual encoded
+  octets that could be decoded a second time. The tests exercise the real HTTP
+  percent decoder as well as the shared policy.
+- ARCH-004A verification: The 33 focused route-policy/parser cases pass with
+  Qt 6.4.2, under ASan/UBSan (leak detection disabled because LSan cannot
+  attach in the sandbox), and with the pinned Qt 6.8.3 UI-test image. The three
+  changed production objects compile with Qt 6.8.3. The complete local API
+  suite has two settings-persistence failures and the complete anchored
+  filesystem suite has twelve atomic-publication/ACL failures; clean
+  base-revision controls reproduce the exact same failures, so they are not
+  regressions from ARCH-004A. Platform-wide routing and stable-file access
+  remain explicitly assigned to ARCH-004B.
+- Required follow-up item (ARCH-004B): Introduce a read-only anchored API
+  adapter that retains directory and regular-file generations across
+  third-party ride, cache, zone, and measures readers. Cover symlink, hardlink,
+  replacement, and platform-specific stable-access behavior before replacing
+  the current path-based readers.
 
 ### ARCH-005: The build does not enforce component boundaries
 
