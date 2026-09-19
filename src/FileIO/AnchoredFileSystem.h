@@ -93,6 +93,7 @@ struct DirectoryEntry
     QString name;
     DirectoryEntryKind kind = DirectoryEntryKind::RegularFile;
     NativeIdentity identity;
+    bool hidden = false;
 };
 
 class DirectoryAnchor

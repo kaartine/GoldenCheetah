@@ -43,6 +43,21 @@ bool createHardLink(const QString &existing, const QString &link)
 #endif
 }
 
+bool markHidden(const QString &path)
+{
+#ifdef Q_OS_WIN
+    const DWORD attributes = ::GetFileAttributesW(
+        reinterpret_cast<LPCWSTR>(path.utf16()));
+    return attributes != INVALID_FILE_ATTRIBUTES
+        && ::SetFileAttributesW(
+            reinterpret_cast<LPCWSTR>(path.utf16()),
+            attributes | FILE_ATTRIBUTE_HIDDEN) != FALSE;
+#else
+    Q_UNUSED(path)
+    return true;
+#endif
+}
+
 } // namespace
 
 class TestLocalApiFileStore : public QObject
@@ -74,6 +89,9 @@ private slots:
     void endpointContracts();
     void unavailableMeanMaxPreservesCsvContract();
     void rideDatabaseDecodePreservesTextStreamBehavior();
+    void preparesSortedBoundedDirectoryListings();
+    void listingRejectsReplacedRetainedDirectory();
+    void listedChildRejectsReplacementBeforeOpen();
 };
 
 void TestLocalApiFileStore::opensRetainedRegularFile()
@@ -629,6 +647,149 @@ void TestLocalApiFileStore::rideDatabaseDecodePreservesTextStreamBehavior()
     QCOMPARE(LocalApiEndpointInput::decodeRideDatabase(contents), expected);
     QVERIFY(!expected.startsWith(QChar::ByteOrderMark));
     QVERIFY(expected.contains(QString::fromUtf8("Mäki – 東京")));
+}
+
+void TestLocalApiFileStore::preparesSortedBoundedDirectoryListings()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities/subdir")));
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral(".hidden-athlete/cache")));
+    QVERIFY(writeFile(
+        QDir(root.path()).filePath(QStringLiteral("alice/activities/b.fit")),
+        QByteArrayLiteral("b")));
+    QVERIFY(writeFile(
+        QDir(root.path()).filePath(QStringLiteral("alice/activities/a.fit")),
+        QByteArrayLiteral("a")));
+    QVERIFY(writeFile(
+        QDir(root.path()).filePath(
+            QStringLiteral("alice/activities/.hidden.fit")),
+        QByteArrayLiteral("hidden")));
+    QVERIFY(markHidden(QDir(root.path()).filePath(
+        QStringLiteral(".hidden-athlete"))));
+    QVERIFY(markHidden(QDir(root.path()).filePath(
+        QStringLiteral("alice/activities/.hidden.fit"))));
+
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor rootDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory({}, rootDirectory, error), qPrintable(error));
+    const LocalApiEndpointInput::PreparedListing athletes =
+        LocalApiEndpointInput::prepareListing(
+            store, rootDirectory, {},
+            LocalApiEndpointInput::ListingKind::Directories,
+            LocalApiEndpointInput::AthleteDirectoryMaximumEntries,
+            error);
+    QVERIFY2(athletes.status == LocalApiEndpointInput::Status::Ready,
+             qPrintable(error));
+    QCOMPARE(athletes.names, QStringList{QStringLiteral("alice")});
+
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QVERIFY2(store.openDirectory(
+                 rootDirectory, {QStringLiteral("alice")},
+                 athleteDirectory, error),
+             qPrintable(error));
+    const LocalApiEndpointInput::PreparedListing activities =
+        LocalApiEndpointInput::prepareListing(
+            store, athleteDirectory, {QStringLiteral("activities")},
+            LocalApiEndpointInput::ListingKind::RegularFiles,
+            LocalApiEndpointInput::ActivityDirectoryMaximumEntries,
+            error);
+    QVERIFY2(activities.status == LocalApiEndpointInput::Status::Ready,
+             qPrintable(error));
+    QCOMPARE(
+        activities.names,
+        QStringList({QStringLiteral("a.fit"), QStringLiteral("b.fit")}));
+
+    const LocalApiEndpointInput::PreparedListing overBudget =
+        LocalApiEndpointInput::prepareListing(
+            store, athleteDirectory, {QStringLiteral("activities")},
+            LocalApiEndpointInput::ListingKind::RegularFiles, 2, error);
+    QVERIFY(overBudget.status
+            == LocalApiEndpointInput::Status::Unavailable);
+    QVERIFY(overBudget.names.isEmpty());
+    const LocalApiEndpointInput::Contract rejectedContract =
+        LocalApiEndpointInput::listingContract(overBudget);
+    QCOMPARE(rejectedContract.statusCode, 500);
+    QCOMPARE(
+        rejectedContract.bodyPrefix,
+        QByteArrayLiteral("unable to enumerate activities safely.\n"));
+    QVERIFY(!rejectedContract.processInput);
+
+    const LocalApiEndpointInput::PreparedListing absent =
+        LocalApiEndpointInput::prepareListing(
+            store, athleteDirectory, {QStringLiteral("missing")},
+            LocalApiEndpointInput::ListingKind::RegularFiles, 2, error);
+    QVERIFY(absent.status == LocalApiEndpointInput::Status::Unavailable);
+    QVERIFY(absent.absent);
+    const LocalApiEndpointInput::Contract absentContract =
+        LocalApiEndpointInput::listingContract(absent);
+    QCOMPARE(absentContract.statusCode, 200);
+    QVERIFY(absentContract.bodyPrefix.isEmpty());
+    QVERIFY(!absentContract.processInput);
+}
+
+void TestLocalApiFileStore::listingRejectsReplacedRetainedDirectory()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities")));
+    const QString athletePath = QDir(root.path()).filePath(
+        QStringLiteral("alice"));
+    const QString retainedPath = QDir(root.path()).filePath(
+        QStringLiteral("retained-alice"));
+
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+    QVERIFY(QDir().rename(athletePath, retainedPath));
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities")));
+
+    const LocalApiEndpointInput::PreparedListing listing =
+        LocalApiEndpointInput::prepareListing(
+            store, athleteDirectory, {QStringLiteral("activities")},
+            LocalApiEndpointInput::ListingKind::RegularFiles,
+            LocalApiEndpointInput::ActivityDirectoryMaximumEntries,
+            error);
+    QVERIFY(listing.status
+            == LocalApiEndpointInput::Status::Unavailable);
+    QVERIFY(listing.names.isEmpty());
+}
+
+void TestLocalApiFileStore::listedChildRejectsReplacementBeforeOpen()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/cache")));
+    const QString athletePath = QDir(root.path()).filePath(
+        QStringLiteral("alice"));
+    const QString retainedPath = QDir(root.path()).filePath(
+        QStringLiteral("retained-alice"));
+
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor rootDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory({}, rootDirectory, error), qPrintable(error));
+    const LocalApiEndpointInput::PreparedListing listing =
+        LocalApiEndpointInput::prepareListing(
+            store, rootDirectory, {},
+            LocalApiEndpointInput::ListingKind::Directories,
+            LocalApiEndpointInput::AthleteDirectoryMaximumEntries,
+            error);
+    QVERIFY2(listing.status == LocalApiEndpointInput::Status::Ready,
+             qPrintable(error));
+    QCOMPARE(listing.entries.size(), 1);
+
+    QVERIFY(QDir().rename(athletePath, retainedPath));
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/cache")));
+    AnchoredFileSystem::DirectoryAnchor reopened;
+    QVERIFY(!LocalApiEndpointInput::openListedDirectory(
+        store, rootDirectory, listing.entries.first(), reopened, error));
+    QVERIFY(!reopened.isValid());
+    QVERIFY(!error.isEmpty());
 }
 
 QTEST_MAIN(TestLocalApiFileStore)

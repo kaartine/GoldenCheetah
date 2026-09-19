@@ -12,6 +12,7 @@
 #include <QBuffer>
 #include <QFileInfo>
 #include <QTextStream>
+#include <algorithm>
 
 namespace LocalApiEndpointInput {
 
@@ -131,6 +132,110 @@ PreparedInput prepareMeanMax(
     cache.bytes_.clear();
     source.status_ = Status::Ready;
     return source;
+}
+
+PreparedListing prepareListing(
+    const LocalApiFileStore &store,
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const QStringList &directoryComponents,
+    ListingKind kind,
+    qsizetype maximumEntries,
+    QString &error)
+{
+    Q_UNUSED(store)
+    error.clear();
+    PreparedListing result;
+    if (maximumEntries < 0) {
+        error = QStringLiteral(
+            "The Local API directory entry budget is invalid");
+        result.status = Status::Unavailable;
+        return result;
+    }
+
+    AnchoredFileSystem::DirectoryAnchor directory = baseDirectory;
+    QList<AnchoredFileSystem::DirectoryEntry> entries;
+    if (!directory.isValid() || !directory.pathMatches(error)) {
+        result.status = Status::Unavailable;
+        return result;
+    }
+    for (const QString &component : directoryComponents) {
+        AnchoredFileSystem::DirectoryAnchor child;
+        bool exists = false;
+        if (!directory.openChildIfExists(
+                component, child, exists, error)) {
+            result.status = Status::Unavailable;
+            return result;
+        }
+        if (!exists) {
+            result.status = Status::Unavailable;
+            result.absent = true;
+            return result;
+        }
+        directory = std::move(child);
+    }
+    if (!directory.enumerateEntries(entries, maximumEntries, error)) {
+        result.status = Status::Unavailable;
+        return result;
+    }
+
+    const AnchoredFileSystem::DirectoryEntryKind expectedKind =
+        kind == ListingKind::RegularFiles
+        ? AnchoredFileSystem::DirectoryEntryKind::RegularFile
+        : AnchoredFileSystem::DirectoryEntryKind::Directory;
+    for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+        if (entry.kind == expectedKind && !entry.hidden) {
+            result.entries.append(entry);
+        }
+    }
+    std::sort(
+        result.entries.begin(), result.entries.end(),
+        [](const AnchoredFileSystem::DirectoryEntry &left,
+           const AnchoredFileSystem::DirectoryEntry &right) {
+            return left.name < right.name;
+        });
+    for (const AnchoredFileSystem::DirectoryEntry &entry : result.entries) {
+        result.names.append(entry.name);
+    }
+    result.status = Status::Ready;
+    return result;
+}
+
+bool openListedDirectory(
+    const LocalApiFileStore &store,
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const AnchoredFileSystem::DirectoryEntry &listedEntry,
+    AnchoredFileSystem::DirectoryAnchor &directory,
+    QString &error)
+{
+    directory = {};
+    error.clear();
+    AnchoredFileSystem::DirectoryAnchor candidate;
+    if (listedEntry.kind
+            != AnchoredFileSystem::DirectoryEntryKind::Directory
+        || !store.openDirectory(
+            baseDirectory, {listedEntry.name}, candidate, error)
+        || candidate.identity() != listedEntry.identity) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The listed Local API directory generation changed");
+        }
+        return false;
+    }
+    directory = std::move(candidate);
+    return true;
+}
+
+Contract listingContract(const PreparedListing &listing)
+{
+    Contract result;
+    if (listing.status == Status::Ready) {
+        result.processInput = true;
+    } else if (!listing.absent) {
+        result.statusCode = 500;
+        result.bodyPrefix = QByteArrayLiteral(
+            "unable to enumerate activities safely.\n");
+    }
+    return result;
 }
 
 Contract contract(

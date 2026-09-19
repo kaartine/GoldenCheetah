@@ -7906,6 +7906,71 @@ commit before the next finding begins.
   Native macOS and Windows runs remain required for cross-platform verification.
 - ARCH-004B3 (queued): Replace path-based athlete/activity enumeration and
   snapshot the multi-file bests and measures inputs before producing output.
+- ARCH-004B3a (completed): Replace root athlete and per-athlete activity `QDir`
+  enumeration with bounded enumeration of retained directory generations.
+  Preserve ordering and endpoint response contracts with focused tests.
+- ARCH-004B3a1 (review finding recorded before correction): The first listing
+  seam discarded each enumerated directory entry's native identity, so
+  `listAthletes` could reopen a same-name replacement rather than the generation
+  it enumerated. Preserve identity evidence and compare it after opening every
+  listed athlete directory, as required by the anchored enumeration contract.
+- ARCH-004B3a2 (review finding recorded before correction): The first
+  integration scanned the activities directory for every RideDB request, even
+  when the response used only `rideDB.json`. Prepare the bounded listing only
+  in the legacy directory fast-path so metric/interval requests do not acquire
+  an unrelated 200,000-entry cost or failure mode.
+- ARCH-004B3a3 (review finding recorded before correction): A 200,000-entry
+  per-request activity budget is finite but still permits excessive two-pass
+  enumeration, native metadata work, and retained name/identity memory. Reduce
+  the cap to a defensible multi-decade activity count and keep athlete-root
+  enumeration under a separate substantially smaller cap.
+- ARCH-004B3a4 (review finding recorded before correction): Anchored listing
+  initially exposed hidden entries that legacy `QDir::Dirs`/`QDir::Files`
+  omitted. Carry native hidden metadata in directory observations on Unix and
+  Windows and filter it in the Local API listing seam; cover dot-file parity.
+- ARCH-004B3a5 (review finding recorded before correction): Treating every
+  activity-listing failure as the legacy empty HTTP 200 response hides budget,
+  unsafe-entry, permission, and concurrent-mutation failures. Distinguish an
+  absent directory from a rejected listing; only absence maps to the legacy
+  empty response, while other failures return 500 before publishing a body.
+- ARCH-004B3a6 (review finding recorded before correction): The first hidden
+  parity test used dot-prefixed names unconditionally, but Windows `QDir`
+  hidden behavior follows native attributes. Set `FILE_ATTRIBUTE_HIDDEN` on
+  Windows fixtures so the test exercises each platform's actual contract.
+- ARCH-004B3a7 (review finding recorded before correction): Listing contract
+  tests asserted only status and processing flags, not the exact response body.
+  Pin the rejected-listing error text and the absent-listing empty body before
+  treating the endpoint contract as verified.
+- ARCH-004B3a resolution: Athlete and activity discovery now enumerate retained
+  directory generations through a shared listing seam. The seam keeps native
+  identity evidence, rechecks each athlete child after open, filters native
+  hidden/system entries to preserve `QDir` behavior, sorts names consistently,
+  and caps roots at 1,024 entries and activities at 32,768. Activity discovery
+  runs only in the legacy fast-list branch. A missing activities directory
+  preserves the empty HTTP 200 response; budget, unsafe-entry, permission, and
+  mutation failures return the exact tested 500 response before body output.
+  This resolves ARCH-004B3a1 through ARCH-004B3a7.
+- ARCH-004B3a verification: The focused file-store/endpoint-input suite passes
+  33/33 with Qt 6.8.3 and under Qt 6.4.2 ASan/UBSan (leak detection disabled).
+  It covers stable sorting, entry budgets, retained base and child replacement,
+  hidden-entry parity, and exact absent/rejected response contracts. The full
+  anchored filesystem suite remains at its established 82 passed, 12 known
+  environment-dependent failures, and 13 platform skips. The changed Local API,
+  endpoint-input, anchored-filesystem, and generated RideDB objects compile
+  with Qt 6.8.3; only the established bison warnings remain. Independent review
+  found no remaining blocker after the exact-body assertions were added. Native
+  Windows/macOS execution remains required for platform-specific verification.
+- ARCH-004B3b (queued): Build a bounded, all-or-nothing private snapshot of
+  the activity/cache pairs consumed by aggregate mean-max (`bests`) before
+  invoking the legacy multi-file reader.
+- ARCH-004B3c (queued): Inventory the configured measures groups and snapshot
+  every athlete measure input needed by one response before constructing the
+  legacy `Measures` reader. Keep the global measures-schema dependency explicit.
+- ARCH-004B3d (correctness finding recorded before correction): The RideDB
+  parser assigns `RideItem::path` from `<athlete-root>/activities`, omitting the
+  selected athlete component. Confirm the parser's path contract with a focused
+  test before changing it; do not fold an unverified behavior change into the
+  directory-enumeration remediation.
 - ARCH-004C (prerequisite recorded): `listAthletes` initializes per-athlete
   settings through the global `appsettings` path API after filesystem
   validation. Inventory those settings files and add a generation-aware

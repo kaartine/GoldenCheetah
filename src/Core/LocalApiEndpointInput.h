@@ -30,6 +30,8 @@ inline constexpr qint64 ActivityMaximumSize = 64LL * 1024 * 1024;
 inline constexpr qint64 CacheMaximumSize = 64LL * 1024 * 1024;
 inline constexpr qint64 ZoneMaximumSize = 4LL * 1024 * 1024;
 inline constexpr qint64 MeanMaxAggregateMaximumSize = 128LL * 1024 * 1024;
+inline constexpr qsizetype AthleteDirectoryMaximumEntries = 1024;
+inline constexpr qsizetype ActivityDirectoryMaximumEntries = 32768;
 static_assert(
     ActivityMaximumSize + CacheMaximumSize
         <= MeanMaxAggregateMaximumSize,
@@ -93,6 +95,19 @@ private:
         const QString &, QString &);
 };
 
+enum class ListingKind {
+    RegularFiles,
+    Directories
+};
+
+struct PreparedListing
+{
+    Status status = Status::InternalError;
+    bool absent = false;
+    QList<AnchoredFileSystem::DirectoryEntry> entries;
+    QStringList names;
+};
+
 PreparedInput prepareBytes(
     const LocalApiFileStore &store,
     const AnchoredFileSystem::DirectoryAnchor &athleteDirectory,
@@ -114,6 +129,23 @@ PreparedInput prepareMeanMax(
     const AnchoredFileSystem::DirectoryAnchor &athleteDirectory,
     const QString &activityFileName,
     QString &error);
+
+PreparedListing prepareListing(
+    const LocalApiFileStore &store,
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const QStringList &directoryComponents,
+    ListingKind kind,
+    qsizetype maximumEntries,
+    QString &error);
+
+bool openListedDirectory(
+    const LocalApiFileStore &store,
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const AnchoredFileSystem::DirectoryEntry &listedEntry,
+    AnchoredFileSystem::DirectoryAnchor &directory,
+    QString &error);
+
+Contract listingContract(const PreparedListing &listing);
 
 Contract contract(
     Endpoint endpoint,

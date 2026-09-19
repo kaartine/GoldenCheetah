@@ -1014,7 +1014,7 @@ bool RideCache::saveToFile(
 #include "RideMetadata.h"
 
 void
-APIWebService::listRides(QString athlete, const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, HttpRequest &request, HttpResponse &response)
+APIWebService::listRides(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, HttpRequest &request, HttpResponse &response)
 {
     listRideSettings settings;
 
@@ -1067,14 +1067,15 @@ APIWebService::listRides(QString athlete, const AnchoredFileSystem::DirectoryAnc
     QStringList wantedNames;
     if (metrics != "") wantedNames = metrics.split(",");
 
-    // write headings
-    response.bwrite("date, time, filename");
+    QByteArray headings("date, time, filename");
 
     // don't want metrics, so do it fast by traversing the ride directory
     if (wantedNames.count() == 1 && wantedNames[0].toUpper() == "NONE") nometrics = true;
 
     // if intervals, add interval name
-    if (settings.intervals == true) response.bwrite(", interval name, interval type");
+    if (settings.intervals == true) {
+        headings.append(", interval name, interval type");
+    }
 
     // get metadata definitions into settings
     QString metadata = request.getParameter("metadata");
@@ -1138,10 +1139,10 @@ APIWebService::listRides(QString athlete, const AnchoredFileSystem::DirectoryAnc
             if (wantedNames.count() && !wantedNames.contains(underscored)) continue;
 
             if (m->name().startsWith("BikeScore"))
-                response.bwrite(", BikeScore");
+                headings.append(", BikeScore");
             else {
-                response.bwrite(", ");
-                response.bwrite(underscored.toLocal8Bit());
+                headings.append(", ");
+                headings.append(underscored.toLocal8Bit());
             }
 
             // index of wanted metrics
@@ -1151,11 +1152,12 @@ APIWebService::listRides(QString athlete, const AnchoredFileSystem::DirectoryAnc
         // do we want metadata too ?
         foreach(QString meta, settings.metawanted) {
             meta.replace(" ", "_");
-            response.bwrite(", \"");
-            response.bwrite(meta.toLocal8Bit());
-            response.bwrite("\"");
+            headings.append(", \"");
+            headings.append(meta.toLocal8Bit());
+            headings.append("\"");
         }
-        response.bwrite("\n");
+        headings.append("\n");
+        response.bwrite(headings);
 
         // parse the rideDB and write a line for each entry
         if (inputContract.processInput) {
@@ -1200,6 +1202,23 @@ APIWebService::listRides(QString athlete, const AnchoredFileSystem::DirectoryAnc
 
     } else {
 
+        // Preserve the legacy empty-list response when the activity directory
+        // is absent, but never fall back to path-based enumeration.
+        const LocalApiEndpointInput::PreparedListing activities =
+            LocalApiEndpointInput::prepareListing(
+                fileStore, athleteDirectory,
+                {QStringLiteral("activities")},
+                LocalApiEndpointInput::ListingKind::RegularFiles,
+                LocalApiEndpointInput::ActivityDirectoryMaximumEntries,
+                rideDatabaseError);
+        const LocalApiEndpointInput::Contract listingContract =
+            LocalApiEndpointInput::listingContract(activities);
+        if (listingContract.statusCode != 200) {
+            response.setStatus(listingContract.statusCode);
+            response.write(listingContract.bodyPrefix);
+            return;
+        }
+
         // honour the since parameter
         QString sincep(request.getParameter("since"));
         QDate since(1900,01,01);
@@ -1211,16 +1230,15 @@ APIWebService::listRides(QString athlete, const AnchoredFileSystem::DirectoryAnc
         if (beforep != "") before = QDate::fromString(beforep,"yyyy/MM/dd");
 
         // fast list of rides by traversing the directory
+        response.bwrite(headings);
         response.bwrite("\n"); // headings have no metric columns
 
         // This will read the user preferences and change the file list order as necessary:
-        QFlags<QDir::Filter> spec = QDir::Files;
-        QStringList names;
-        names << "*"; // anything
-
         // loop through files, make sure in time range wanted
-        QDir activities(home.absolutePath() + "/" + athlete + "/activities");
-        foreach(QString name, activities.entryList(names, spec, QDir::Name)) {
+        const QStringList activityNames =
+            activities.status == LocalApiEndpointInput::Status::Ready
+            ? activities.names : QStringList();
+        foreach(QString name, activityNames) {
 
             // parse it into date and time
             QDateTime dateTime;

@@ -52,7 +52,7 @@ class APIWebService : public HttpRequestHandler
 
         // Discrete API endpoints
         void listAthletes(HttpRequest &request, HttpResponse &response);
-        void listRides(QString athlete, const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, HttpRequest &request, HttpResponse &response);
+        void listRides(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, HttpRequest &request, HttpResponse &response);
         void listActivity(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);
         void listMMP(QString athlete, const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);
         void listZones(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);

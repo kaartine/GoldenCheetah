@@ -1908,6 +1908,7 @@ struct DirectoryEntryObservation
     QString name;
     DirectoryEntryKind kind = DirectoryEntryKind::RegularFile;
     NativeIdentity identity;
+    bool hidden = false;
 #ifdef Q_OS_UNIX
     UnixStamp stamp;
 #elif defined(Q_OS_WIN)
@@ -1938,6 +1939,7 @@ bool directoryEntryObservationsMatch(
         if (leftEntry.name != rightEntry.name
             || leftEntry.kind != rightEntry.kind
             || leftEntry.identity != rightEntry.identity
+            || leftEntry.hidden != rightEntry.hidden
             || !(leftEntry.stamp == rightEntry.stamp)) {
             return false;
         }
@@ -2023,6 +2025,7 @@ bool captureUnixDirectoryEntryObservation(
         directory, encodedName.constData(),
         AT_SYMLINK_NOFOLLOW, status);
     observation.name = name;
+    observation.hidden = name.startsWith(QLatin1Char('.'));
     observation.stamp = stamp;
     observation.identity = unixIdentity(stamp, identityType);
     return true;
@@ -2227,6 +2230,8 @@ bool enumerateWindowsDirectoryPass(
                 observation.kind = isDirectory
                     ? DirectoryEntryKind::Directory
                     : DirectoryEntryKind::RegularFile;
+                observation.hidden = nativeEntry->FileAttributes
+                    & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
                 observation.stamp = stamp;
                 observation.identity = windowsIdentity(
                     stamp, isDirectory ? 'd' : 'f');
@@ -2976,7 +2981,8 @@ bool DirectoryAnchor::enumerateEntries(
         entries.append({
             observation.name,
             observation.kind,
-            observation.identity});
+            observation.identity,
+            observation.hidden});
     }
     return true;
 }

@@ -132,7 +132,7 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
 
         // LIST ACTIVITIES FOR ATHLETE
         // http://localhost:12021/athlete
-        listRides(paths[0], athleteDirectory, request, response);
+        listRides(athleteDirectory, request, response);
         return;
 
     } else if (paths.count() == 2) {
@@ -210,20 +210,43 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
 void
 APIWebService::listAthletes(HttpRequest &, HttpResponse &response)
 {
+    AnchoredFileSystem::DirectoryAnchor rootDirectory;
+    QString error;
+    if (!fileStore.openDirectory({}, rootDirectory, error)) {
+        response.setStatus(500);
+        response.write("unable to enumerate athletes safely.\n");
+        return;
+    }
+    const LocalApiEndpointInput::PreparedListing athletes =
+        LocalApiEndpointInput::prepareListing(
+            fileStore, rootDirectory, {},
+            LocalApiEndpointInput::ListingKind::Directories,
+            LocalApiEndpointInput::AthleteDirectoryMaximumEntries,
+            error);
+    if (athletes.status != LocalApiEndpointInput::Status::Ready) {
+        response.setStatus(500);
+        response.write("unable to enumerate athletes safely.\n");
+        return;
+    }
+
     response.setHeader("Content-Type", "text; charset=ISO-8859-1");
-
-    // This will read the user preferences and change the file list order as necessary:
-    QFlags<QDir::Filter> spec = QDir::Dirs;
-    QStringList names;
-    names << "*"; // anything
-
     response.write("name,dob,weight,height,sex\n");
-    foreach(QString name, home.entryList(names, spec, QDir::Name)) {
+    for (const AnchoredFileSystem::DirectoryEntry &athlete :
+         athletes.entries) {
+        const QString &name = athlete.name;
 
         // sure fire sign the athlete has been upgraded to post 3.2 and not some
         // random directory full of other things & check something basic is set
-        QString ridedb = home.absolutePath() + "/" + name + "/cache/rideDB.json";
-        if (QFile(ridedb).exists()) {
+        AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+        LocalApiFileGeneration rideDatabase;
+        if (LocalApiEndpointInput::openListedDirectory(
+                fileStore, rootDirectory, athlete,
+                athleteDirectory, error)
+            && fileStore.captureRegularFile(
+                athleteDirectory, {QStringLiteral("cache")},
+                QStringLiteral("rideDB.json"), rideDatabase, error,
+                LocalApiEndpointInput::maximumSize(
+                    LocalApiEndpointInput::FileKind::RideDatabase))) {
             // we need to initialize athlete settings for cvalue to work
             appsettings->initializeQSettingsAthlete(home.absolutePath(), name);
             if (appsettings->cvalue(name, GC_SEX, "") == "") continue;
