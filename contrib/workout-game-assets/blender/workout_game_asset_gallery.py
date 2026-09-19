@@ -21,6 +21,7 @@ sys.path.insert(0, str(SCRIPT_DIRECTORY.parent))
 
 from gallery_catalog import (  # noqa: E402
     GalleryAsset,
+    gallery_asset_index,
     load_candidate_gallery_assets,
     load_gallery_assets,
     validate_gallery_asset_file,
@@ -409,16 +410,9 @@ def _clear_scene() -> None:
 
 
 def _asset_index(identifier: str) -> int:
-    normalized = identifier.casefold()
-    for index, imported in enumerate(IMPORTED_ASSETS):
-        candidates = {
-            imported.catalog.asset_id.casefold(),
-            imported.catalog.display_name.casefold(),
-            imported.catalog.path.stem.casefold(),
-        }
-        if normalized in candidates:
-            return index
-    return 0
+    return gallery_asset_index(
+        [imported.catalog for imported in IMPORTED_ASSETS], identifier
+    )
 
 
 def _visible_index(scene: bpy.types.Scene) -> int:

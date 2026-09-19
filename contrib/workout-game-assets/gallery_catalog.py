@@ -26,6 +26,30 @@ class GalleryAsset:
     expected_sha256: str = ""
     expected_bytes: int = 0
     candidate_directory: Path | None = None
+    selection_aliases: tuple[str, ...] = ()
+
+
+def gallery_asset_index(assets: list[GalleryAsset], identifier: str) -> int:
+    """Resolve one user-facing gallery selector without silent fallback."""
+    if not assets:
+        raise ValueError("gallery has no assets")
+    if not identifier:
+        return 0
+    normalized = identifier.casefold()
+    matches = []
+    for index, asset in enumerate(assets):
+        candidates = {
+            asset.asset_id.casefold(),
+            asset.display_name.casefold(),
+            asset.path.stem.casefold(),
+            *(alias.casefold() for alias in asset.selection_aliases),
+        }
+        if normalized in candidates:
+            matches.append(index)
+    if len(matches) != 1:
+        reason = "ambiguous" if matches else "unknown"
+        raise ValueError(f"{reason} gallery asset selector: {identifier}")
+    return matches[0]
 
 
 def _repository_path(repository: Path, value: str) -> Path:
@@ -158,6 +182,7 @@ def load_candidate_gallery_assets(
             expected_sha256=file_entry["sha256"],
             expected_bytes=int(file_entry["bytes"]),
             candidate_directory=candidate,
+            selection_aliases=(candidate_id,) if lod_level == "LOD0" else (),
         ))
     return assets
 

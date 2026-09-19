@@ -17,6 +17,7 @@ TOOLS = REPOSITORY / "contrib/workout-game-assets"
 sys.path.insert(0, str(TOOLS))
 
 from gallery_catalog import (  # noqa: E402
+    gallery_asset_index,
     load_candidate_gallery_assets,
     load_gallery_assets,
     validate_gallery_asset_file,
@@ -101,8 +102,20 @@ class WorkoutGameGalleryTest(unittest.TestCase):
         self.assertTrue(all(asset.review_only for asset in assets))
         self.assertTrue(all("REVIEW ONLY" in asset.display_name for asset in assets))
         self.assertTrue(all(asset.path.parent == directory for asset in assets))
+        self.assertEqual(assets[0].selection_aliases, ("gallery-review-001",))
+        self.assertEqual(assets[1].selection_aliases, ())
+        self.assertEqual(gallery_asset_index(assets, "gallery-review-001"), 0)
+        self.assertEqual(
+            gallery_asset_index(assets, "triposr-review-gallery-review-001-lod1"),
+            1,
+        )
         for asset in assets:
             validate_gallery_asset_file(asset)
+
+    def test_gallery_selector_rejects_unknown_identifier(self) -> None:
+        assets = load_gallery_assets(REPOSITORY)
+        with self.assertRaisesRegex(ValueError, "unknown gallery asset selector"):
+            gallery_asset_index(assets, "does-not-exist")
 
     def test_external_candidate_verifier_rejection_blocks_loading(self) -> None:
         directory, _descriptor = self._candidate_directory()
