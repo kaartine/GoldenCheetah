@@ -12,5 +12,6 @@ if [[ ! -s "$config/userpref.blend" ]]; then
 fi
 
 exec blender \
+    --no-window-focus \
     --python "$repository/contrib/workout-game-assets/blender/workout_game_asset_gallery.py" \
     -- --root "$repository" "$@"

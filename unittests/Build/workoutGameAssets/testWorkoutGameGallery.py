@@ -202,6 +202,37 @@ class WorkoutGameGalleryTest(unittest.TestCase):
         self.assertIn(manifest_mount, arguments)
         self.assertIn("--edit", arguments)
 
+    def test_docker_evidence_mount_is_explicit_and_outside_repository(self) -> None:
+        evidence = self.external_root / "evidence"
+        evidence.mkdir()
+        arguments = self._capture_docker_launcher(
+            "--ui-smoke-test", "--evidence-directory", str(evidence)
+        )
+
+        self.assertIn(f"{evidence}:/evidence:rw", arguments)
+        self.assertIn("--evidence-directory", arguments)
+        self.assertIn("/evidence", arguments)
+
+        result = subprocess.run(
+            [
+                str(TOOLS / "open_gallery.sh"),
+                "--evidence-directory",
+                str(TOOLS),
+            ],
+            check=False,
+            env={
+                **os.environ,
+                "DISPLAY": ":99",
+                "PATH": f"{self.external_root / 'bin'}:/usr/bin:/bin",
+                "WG_DOCKER_CAPTURE": str(self.external_root / "unused"),
+                "XAUTHORITY": str(self.external_root / "missing-authority"),
+            },
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 2, result)
+        self.assertIn("must remain outside the repository", result.stderr)
+
     def test_docker_edit_rejects_symlinked_manifest_directory(self) -> None:
         repository = self.external_root / "repository"
         tools = repository / "contrib/workout-game-assets"

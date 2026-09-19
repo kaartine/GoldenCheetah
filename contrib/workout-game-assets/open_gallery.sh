@@ -20,12 +20,13 @@ if [[ -z "${DISPLAY:-}" ]]; then
 fi
 
 if command -v blender >/dev/null 2>&1; then
-    exec blender --python "$gallery_script" -- \
+    exec blender --no-window-focus --python "$gallery_script" -- \
         --root "$repository" "$@"
 fi
 
 forwarded_args=()
 candidate_directory=""
+evidence_directory=""
 edit_mode=false
 while (($#)); do
     case "$1" in
@@ -36,6 +37,18 @@ while (($#)); do
             fi
             candidate_directory="$2"
             shift 2
+            ;;
+        --evidence-directory)
+            if (($# < 2)); then
+                printf '%s requires a directory argument.\n' "$1" >&2
+                exit 2
+            fi
+            evidence_directory="$2"
+            shift 2
+            ;;
+        --evidence-directory=*)
+            evidence_directory="${1#*=}"
+            shift
             ;;
         --candidate-directory=*)
             candidate_directory="${1#*=}"
@@ -106,6 +119,22 @@ if [[ -n "$candidate_directory" ]]; then
     esac
     docker_args+=(--volume "$candidate_directory:/candidate:ro")
     forwarded_args+=(--candidate-directory /candidate)
+fi
+
+if [[ -n "$evidence_directory" ]]; then
+    evidence_directory="$(realpath -e -- "$evidence_directory")"
+    if [[ ! -d "$evidence_directory" ]]; then
+        printf 'Evidence path is not a directory: %s\n' "$evidence_directory" >&2
+        exit 2
+    fi
+    case "$evidence_directory/" in
+        "$repository/"|"$repository/"*)
+            printf 'Evidence directory must remain outside the repository.\n' >&2
+            exit 2
+            ;;
+    esac
+    docker_args+=(--volume "$evidence_directory:/evidence:rw")
+    forwarded_args+=(--evidence-directory /evidence)
 fi
 
 xauthority="${XAUTHORITY:-$HOME/.Xauthority}"

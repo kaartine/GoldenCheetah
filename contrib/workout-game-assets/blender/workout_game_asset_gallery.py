@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import json
 import math
 from pathlib import Path
 import sys
@@ -40,6 +41,8 @@ ASSET_DOCUMENTS: dict[str, AssetDocument] = {}
 REPOSITORY: Path | None = None
 EDIT_ENABLED = False
 SYNCING_CONTROLS = False
+GPU_EVIDENCE_PATH: Path | None = None
+UI_SCREENSHOT_PATH: Path | None = None
 
 
 def _arguments() -> argparse.Namespace:
@@ -62,6 +65,21 @@ def _arguments() -> argparse.Namespace:
     )
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--ui-smoke-test", action="store_true")
+    parser.add_argument(
+        "--gpu-evidence",
+        default="",
+        help="Write the active Blender GPU backend, vendor and renderer as JSON",
+    )
+    parser.add_argument(
+        "--ui-screenshot",
+        default="",
+        help="Capture the gallery window during --ui-smoke-test",
+    )
+    parser.add_argument(
+        "--evidence-directory",
+        default="",
+        help="Write gpu.json and gallery.png review evidence into this directory",
+    )
     parser.add_argument(
         "--editor-smoke-test",
         action="store_true",
@@ -95,6 +113,43 @@ def _linear_color_to_hex(value) -> str:
         for channel in value[:3]
     ]
     return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+
+def _gpu_details() -> dict[str, str]:
+    import gpu
+
+    platform = gpu.platform
+    backend_get = getattr(platform, "backend_type_get", None)
+    return {
+        "backend": str(backend_get()) if backend_get is not None else "unknown",
+        "vendor": str(platform.vendor_get()),
+        "renderer": str(platform.renderer_get()),
+        "version": str(platform.version_get()),
+    }
+
+
+def _record_gpu_evidence(path: Path) -> dict[str, str]:
+    details = _gpu_details()
+    path = path.expanduser().absolute()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(details, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return details
+
+
+def _validate_ui_screenshot(path: Path) -> None:
+    image = bpy.data.images.load(str(path), check_existing=False)
+    try:
+        pixels = image.pixels
+        pixel_count = max(1, image.size[0] * image.size[1])
+        step = max(1, pixel_count // 4096) * 4
+        samples = [float(pixels[index]) for index in range(0, len(pixels), step)]
+        if not samples or max(samples) < 0.05 or max(samples) - min(samples) < 0.02:
+            raise RuntimeError("gallery UI screenshot is blank")
+    finally:
+        bpy.data.images.remove(image)
 
 
 def _active_document(scene: bpy.types.Scene) -> AssetDocument | None:
@@ -573,6 +628,7 @@ class WG_GALLERY_PT_models(bpy.types.Panel):
             row.label(text=warning, icon="ERROR")
         layout.label(text=scene.get("workout_game_gallery_details", ""))
         layout.label(text=scene.get("workout_game_gallery_provenance", ""))
+        layout.label(text=scene.get("workout_game_gallery_gpu", ""))
 
         if EDIT_ENABLED and _active_document(scene) is not None:
             editor = layout.column(align=True)
@@ -737,6 +793,17 @@ def _run_ui_smoke_test():
     with bpy.context.temp_override(window=window, screen=window.screen):
         bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=3)
 
+    if GPU_EVIDENCE_PATH is not None:
+        details = _record_gpu_evidence(GPU_EVIDENCE_PATH)
+        print(f"Workout Game gallery GPU evidence: {details}", flush=True)
+    if UI_SCREENSHOT_PATH is not None:
+        UI_SCREENSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with bpy.context.temp_override(window=window, screen=window.screen):
+            result = bpy.ops.screen.screenshot(filepath=str(UI_SCREENSHOT_PATH))
+        if "FINISHED" not in result or not UI_SCREENSHOT_PATH.is_file():
+            raise RuntimeError("gallery UI screenshot failed")
+        _validate_ui_screenshot(UI_SCREENSHOT_PATH)
+
     print("Workout Game gallery UI smoke test passed", flush=True)
     bpy.ops.wm.quit_blender()
     return None
@@ -817,11 +884,30 @@ def _run_catalog_smoke_test() -> None:
 
 
 def main() -> None:
-    global EDIT_ENABLED, REPOSITORY
+    global EDIT_ENABLED, GPU_EVIDENCE_PATH, REPOSITORY, UI_SCREENSHOT_PATH
     arguments = _arguments()
     repository = Path(arguments.root).expanduser().resolve()
     REPOSITORY = repository
     EDIT_ENABLED = arguments.edit
+    if arguments.evidence_directory and (
+        arguments.gpu_evidence or arguments.ui_screenshot
+    ):
+        raise RuntimeError(
+            "--evidence-directory cannot be combined with individual evidence paths"
+        )
+    evidence_directory = (
+        Path(arguments.evidence_directory) if arguments.evidence_directory else None
+    )
+    GPU_EVIDENCE_PATH = (
+        evidence_directory / "gpu.json"
+        if evidence_directory is not None
+        else Path(arguments.gpu_evidence) if arguments.gpu_evidence else None
+    )
+    UI_SCREENSHOT_PATH = (
+        evidence_directory / "gallery.png"
+        if evidence_directory is not None
+        else Path(arguments.ui_screenshot) if arguments.ui_screenshot else None
+    )
     catalog = load_gallery_assets(repository)
     if arguments.candidate_directory:
         catalog.extend(load_candidate_gallery_assets(
@@ -840,6 +926,13 @@ def main() -> None:
     IMPORTED_ASSETS.extend(_import_asset(asset) for asset in catalog)
     initial_index = _asset_index(arguments.asset)
     _configure_ui(initial_index)
+    gpu_details = _gpu_details()
+    bpy.context.scene["workout_game_gallery_gpu"] = (
+        f"{gpu_details['backend']} | {gpu_details['vendor']} | "
+        f"{gpu_details['renderer']}"
+    )
+    if GPU_EVIDENCE_PATH is not None and not arguments.ui_smoke_test:
+        _record_gpu_evidence(GPU_EVIDENCE_PATH)
 
     print(
         "Workout Game gallery loaded:",
