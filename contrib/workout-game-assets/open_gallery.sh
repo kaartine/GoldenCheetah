@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repository="$(cd -- "$script_dir/../.." && pwd)"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+repository="$(cd -- "$script_dir/../.." && pwd -P)"
 gallery_script="$script_dir/blender/workout_game_asset_gallery.py"
 image="goldencheetah-workout-game-blender:ubuntu24.04"
 
@@ -26,6 +26,7 @@ fi
 
 forwarded_args=()
 candidate_directory=""
+edit_mode=false
 while (($#)); do
     case "$1" in
         --candidate-directory)
@@ -38,6 +39,11 @@ while (($#)); do
             ;;
         --candidate-directory=*)
             candidate_directory="${1#*=}"
+            shift
+            ;;
+        --edit)
+            edit_mode=true
+            forwarded_args+=(--edit)
             shift
             ;;
         *)
@@ -68,6 +74,23 @@ docker_args=(
     --volume "$repository:/work:ro"
     --workdir /work
 )
+
+if [[ "$edit_mode" == true ]]; then
+    manifest_directory="$repository/contrib/workout-game-assets/manifests"
+    if [[ ! -d "$manifest_directory" ]]; then
+        printf 'Manifest directory is unavailable: %s\n' "$manifest_directory" >&2
+        exit 2
+    fi
+    canonical_manifest_directory="$(realpath -e -- "$manifest_directory")"
+    if [[ "$canonical_manifest_directory" != "$manifest_directory" ]]; then
+        printf 'Manifest directory must not contain symlinks: %s\n' \
+            "$manifest_directory" >&2
+        exit 2
+    fi
+    docker_args+=(
+        --volume "$manifest_directory:/work/contrib/workout-game-assets/manifests:rw"
+    )
+fi
 
 if [[ -n "$candidate_directory" ]]; then
     candidate_directory="$(realpath -e -- "$candidate_directory")"

@@ -7,8 +7,10 @@ import argparse
 import datetime as dt
 import json
 import math
+import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import struct
 import sys
 from typing import Any
@@ -54,11 +56,107 @@ def load_json_bytes(data: bytes, description: str) -> Any:
 
 
 def load_json_file(path: Path, maximum_bytes: int = 1024 * 1024) -> Any:
-    if path.is_symlink() or not path.is_file():
-        raise AssetValidationError(f"JSON file is unavailable: {path}")
-    if path.stat().st_size > maximum_bytes:
-        raise AssetValidationError(f"JSON file is too large: {path}")
-    return load_json_bytes(path.read_bytes(), str(path))
+    return load_json_bytes(read_regular_file(path, maximum_bytes), str(path))
+
+
+def _reject_symlink_components(path: Path) -> Path:
+    absolute = Path(path).absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        try:
+            if current.is_symlink():
+                raise AssetValidationError(f"path contains a symlink: {path}")
+        except OSError as error:
+            raise AssetValidationError(f"path is unavailable: {path}") from error
+    return absolute
+
+
+def open_directory_anchored(path: Path) -> int:
+    """Open a directory through descriptor-anchored, no-symlink traversal."""
+    absolute = _reject_symlink_components(path)
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    if os.name == "nt" or os.open not in os.supports_dir_fd:
+        try:
+            descriptor = os.open(absolute, directory_flags)
+        except OSError as error:
+            raise AssetValidationError(f"directory is unavailable: {path}") from error
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise AssetValidationError(f"path is not a directory: {path}")
+        return descriptor
+
+    descriptor = os.open(absolute.anchor, directory_flags)
+    try:
+        for part in absolute.parts[1:]:
+            next_descriptor = os.open(part, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise AssetValidationError(f"path is not a directory: {path}")
+        return descriptor
+    except (AssetValidationError, OSError) as error:
+        os.close(descriptor)
+        if isinstance(error, AssetValidationError):
+            raise
+        raise AssetValidationError(
+            f"directory traversal rejected a symlink or unavailable path: {path}"
+        ) from error
+
+
+def read_regular_file(path: Path, maximum_bytes: int) -> bytes:
+    """Read one bounded regular file without following any path symlink."""
+    absolute = _reject_symlink_components(path)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent_descriptor = None
+    try:
+        if os.name != "nt" and os.open in os.supports_dir_fd:
+            parent_descriptor = open_directory_anchored(absolute.parent)
+            descriptor = os.open(absolute.name, flags, dir_fd=parent_descriptor)
+        else:
+            descriptor = os.open(absolute, flags)
+    except (AssetValidationError, OSError) as error:
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+        if isinstance(error, AssetValidationError):
+            raise
+        raise AssetValidationError(
+            f"file traversal rejected a symlink or unavailable path: {path}"
+        ) from error
+    try:
+        initial = os.fstat(descriptor)
+        if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
+            raise AssetValidationError(f"file is not regular: {path}")
+        if initial.st_size > maximum_bytes:
+            raise AssetValidationError(f"file is too large: {path}")
+        data = bytearray()
+        while len(data) <= initial.st_size:
+            block = os.read(
+                descriptor,
+                min(1024 * 1024, initial.st_size + 1 - len(data)),
+            )
+            if not block:
+                break
+            data.extend(block)
+        final = os.fstat(descriptor)
+        if (
+            len(data) != initial.st_size
+            or final.st_dev != initial.st_dev
+            or final.st_ino != initial.st_ino
+            or final.st_size != initial.st_size
+            or final.st_mtime_ns != initial.st_mtime_ns
+        ):
+            raise AssetValidationError(f"file changed while reading: {path}")
+        return bytes(data)
+    finally:
+        os.close(descriptor)
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
 
 
 def _matches_type(value: Any, expected: str) -> bool:
@@ -143,6 +241,8 @@ def validate_against_schema(
     if isinstance(value, list):
         if len(value) < schema.get("minItems", 0):
             raise AssetValidationError(f"{location} has too few items")
+        if len(value) > schema.get("maxItems", len(value)):
+            raise AssetValidationError(f"{location} has too many items")
         if schema.get("uniqueItems"):
             encoded = [
                 json.dumps(item, sort_keys=True, separators=(",", ":"))
@@ -166,6 +266,8 @@ def validate_against_schema(
     if isinstance(value, str):
         if len(value) < schema.get("minLength", 0):
             raise AssetValidationError(f"{location} is too short")
+        if len(value) > schema.get("maxLength", len(value)):
+            raise AssetValidationError(f"{location} is too long")
         pattern = schema.get("pattern")
         if pattern is not None and re.search(pattern, value) is None:
             raise AssetValidationError(f"{location} does not match its pattern")
@@ -177,9 +279,15 @@ def validate_against_schema(
             raise AssetValidationError(f"{location} is not finite")
         if "minimum" in schema and value < schema["minimum"]:
             raise AssetValidationError(f"{location} is below its minimum")
+        if "maximum" in schema and value > schema["maximum"]:
+            raise AssetValidationError(f"{location} is above its maximum")
         if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
             raise AssetValidationError(
                 f"{location} is not above its exclusive minimum"
+            )
+        if "exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]:
+            raise AssetValidationError(
+                f"{location} is not below its exclusive maximum"
             )
 
 
@@ -231,43 +339,49 @@ def _vector_close(actual: list[Any], expected: list[Any]) -> bool:
     )
 
 
-def read_glb(path: Path) -> tuple[dict[str, Any], int]:
-    data = path.read_bytes()
+def parse_glb_bytes(data: bytes, description: str) -> dict[str, Any]:
     if len(data) < GLB_HEADER.size:
-        raise AssetValidationError(f"truncated GLB: {path}")
+        raise AssetValidationError(f"truncated GLB: {description}")
     magic, version, declared_length = GLB_HEADER.unpack_from(data)
     if magic != GLB_MAGIC or version != 2 or declared_length != len(data):
-        raise AssetValidationError(f"invalid GLB header: {path}")
+        raise AssetValidationError(f"invalid GLB header: {description}")
 
     offset = GLB_HEADER.size
     chunks: list[tuple[int, bytes]] = []
     while offset < len(data):
         if offset + GLB_CHUNK_HEADER.size > len(data):
-            raise AssetValidationError(f"truncated GLB chunk header: {path}")
+            raise AssetValidationError(f"truncated GLB chunk header: {description}")
         length, chunk_type = GLB_CHUNK_HEADER.unpack_from(data, offset)
         offset += GLB_CHUNK_HEADER.size
         end = offset + length
         if length % 4 or end > len(data):
-            raise AssetValidationError(f"invalid GLB chunk length: {path}")
+            raise AssetValidationError(f"invalid GLB chunk length: {description}")
         chunks.append((chunk_type, data[offset:end]))
         offset = end
     if not chunks or chunks[0][0] != GLB_JSON_CHUNK:
-        raise AssetValidationError(f"GLB JSON chunk must be first: {path}")
+        raise AssetValidationError(f"GLB JSON chunk must be first: {description}")
     if len(chunks) > 2 or any(
         chunk_type not in {GLB_JSON_CHUNK, GLB_BINARY_CHUNK}
         for chunk_type, _ in chunks
     ):
-        raise AssetValidationError(f"unexpected GLB chunks: {path}")
+        raise AssetValidationError(f"unexpected GLB chunks: {description}")
     if sum(chunk_type == GLB_JSON_CHUNK for chunk_type, _ in chunks) != 1:
-        raise AssetValidationError(f"GLB must contain one JSON chunk: {path}")
+        raise AssetValidationError(f"GLB must contain one JSON chunk: {description}")
     if sum(chunk_type == GLB_BINARY_CHUNK for chunk_type, _ in chunks) > 1:
-        raise AssetValidationError(f"GLB has multiple binary chunks: {path}")
+        raise AssetValidationError(f"GLB has multiple binary chunks: {description}")
 
     json_data = chunks[0][1].rstrip(b" \t\r\n\x00")
-    document = load_json_bytes(json_data, f"GLB JSON in {path}")
+    document = load_json_bytes(json_data, f"GLB JSON in {description}")
     if not isinstance(document, dict):
-        raise AssetValidationError(f"GLB JSON root is not an object: {path}")
-    return document, len(data)
+        raise AssetValidationError(f"GLB JSON root is not an object: {description}")
+    return document
+
+
+def read_glb(
+    path: Path, maximum_bytes: int = 64 * 1024 * 1024
+) -> tuple[dict[str, Any], int]:
+    data = read_regular_file(path, maximum_bytes)
+    return parse_glb_bytes(data, str(path)), len(data)
 
 
 def _node_world_translation(
@@ -425,6 +539,50 @@ def _validate_glb_document(
         raise AssetValidationError("GLB material count does not match manifest")
     if len(materials) > budgets.get("maxMaterials", len(materials)):
         raise AssetValidationError("GLB exceeds material budget")
+    material_names = [material.get("name") for material in materials]
+    if any(not isinstance(name, str) or not name for name in material_names):
+        raise AssetValidationError("every GLB material must have a name")
+    if len(material_names) != len(set(material_names)):
+        raise AssetValidationError("GLB material names are not unique")
+    override_names = [
+        override["materialName"]
+        for override in manifest.get("materialOverrides", [])
+    ]
+    if len(override_names) != len(set(override_names)):
+        raise AssetValidationError("duplicate material override")
+    unknown_materials = sorted(set(override_names) - set(material_names))
+    if unknown_materials:
+        raise AssetValidationError(
+            f"material override names unknown GLB material: {unknown_materials[0]}"
+        )
+
+    physics = manifest.get("physics")
+    if physics is not None:
+        interaction = physics["interaction"]
+        has_surface = "surface" in physics
+        proxy = physics["collisionProxy"]
+        if interaction == "visual-only" and has_surface:
+            raise AssetValidationError(
+                "visual-only physics must not define surface properties"
+            )
+        if interaction == "visual-only" and proxy["kind"] != "none":
+            raise AssetValidationError(
+                "visual-only physics must not define a collision proxy"
+            )
+        if interaction != "visual-only" and not has_surface:
+            raise AssetValidationError(
+                "interactive physics requires surface properties"
+            )
+        if proxy["kind"] == "none" and "node" in proxy:
+            raise AssetValidationError("disabled collision proxy names a node")
+        if proxy["kind"] == "node":
+            node_name = proxy.get("node")
+            if not node_name:
+                raise AssetValidationError("collision proxy node is missing")
+            if node_name not in names:
+                raise AssetValidationError(
+                    f"collision proxy names unknown GLB node: {node_name}"
+                )
     expected_bounds = technical.get("boundsMeters", {})
     if not _vector_close(bounds_min, expected_bounds.get("minimum", [])):
         raise AssetValidationError("GLB minimum bounds do not match manifest")
@@ -537,7 +695,13 @@ def validate_manifest(
     if manifest["technical"]["format"] == "glb" and len(glb_paths) != 1:
         raise AssetValidationError("GLB asset must list exactly one GLB file")
     for glb_path in glb_paths:
-        document, size = read_glb(glb_path)
+        maximum_glb_bytes = min(
+            64 * 1024 * 1024,
+            int(manifest["technical"].get("budgets", {}).get(
+                "maxGlbBytes", 64 * 1024 * 1024
+            )),
+        )
+        document, size = read_glb(glb_path, maximum_glb_bytes)
         validate_glb_document(document, size, manifest)
 
     qml_text = "\n".join(path.read_text(encoding="utf-8") for path in runtime_qml)

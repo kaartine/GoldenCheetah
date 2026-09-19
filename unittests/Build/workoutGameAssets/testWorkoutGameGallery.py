@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import hashlib
+import os
 import py_compile
 import shutil
 import subprocess
@@ -148,6 +149,99 @@ class WorkoutGameGalleryTest(unittest.TestCase):
             TOOLS / "blender/run_gallery_container.sh",
         ):
             subprocess.run(["bash", "-n", str(path)], check=True)
+
+    def _capture_docker_launcher(self, *arguments: str) -> list[str]:
+        binary = self.external_root / "bin"
+        binary.mkdir(exist_ok=True)
+        capture = self.external_root / "docker-arguments"
+        docker = binary / "docker"
+        docker.write_text(
+            "#!/bin/sh\n"
+            "if [ \"${1:-}\" = image ]; then exit 0; fi\n"
+            "printf '%s\\n' \"$@\" > \"$WG_DOCKER_CAPTURE\"\n",
+            encoding="utf-8",
+        )
+        docker.chmod(0o755)
+        environment = dict(os.environ)
+        environment.update({
+            "DISPLAY": ":99",
+            "PATH": f"{binary}:/usr/bin:/bin",
+            "WG_DOCKER_CAPTURE": str(capture),
+            "XAUTHORITY": str(self.external_root / "missing-authority"),
+        })
+        subprocess.run(
+            [str(TOOLS / "open_gallery.sh"), *arguments],
+            check=True,
+            env=environment,
+        )
+        return capture.read_text(encoding="utf-8").splitlines()
+
+    def test_docker_launcher_is_read_only_by_default(self) -> None:
+        arguments = self._capture_docker_launcher("--asset", "FT-01-tabletop-greybox")
+        repository_mount = f"{REPOSITORY}:/work:ro"
+        manifest_mount = (
+            f"{TOOLS / 'manifests'}:"
+            "/work/contrib/workout-game-assets/manifests:rw"
+        )
+
+        self.assertIn(repository_mount, arguments)
+        self.assertNotIn(manifest_mount, arguments)
+        self.assertNotIn("--edit", arguments)
+
+    def test_docker_edit_mounts_only_manifest_directory_read_write(self) -> None:
+        arguments = self._capture_docker_launcher(
+            "--edit", "--asset", "FT-01-tabletop-greybox"
+        )
+        repository_mount = f"{REPOSITORY}:/work:ro"
+        manifest_mount = (
+            f"{TOOLS / 'manifests'}:"
+            "/work/contrib/workout-game-assets/manifests:rw"
+        )
+
+        self.assertIn(repository_mount, arguments)
+        self.assertIn(manifest_mount, arguments)
+        self.assertIn("--edit", arguments)
+
+    def test_docker_edit_rejects_symlinked_manifest_directory(self) -> None:
+        repository = self.external_root / "repository"
+        tools = repository / "contrib/workout-game-assets"
+        tools.mkdir(parents=True)
+        launcher = tools / "open_gallery.sh"
+        shutil.copyfile(TOOLS / "open_gallery.sh", launcher)
+        launcher.chmod(0o755)
+        external_manifests = self.external_root / "external-manifests"
+        external_manifests.mkdir()
+        (tools / "manifests").symlink_to(
+            external_manifests, target_is_directory=True
+        )
+
+        binary = self.external_root / "symlink-bin"
+        binary.mkdir()
+        docker = binary / "docker"
+        docker.write_text(
+            "#!/bin/sh\n"
+            "if [ \"${1:-}\" = image ]; then exit 0; fi\n"
+            "exit 99\n",
+            encoding="utf-8",
+        )
+        docker.chmod(0o755)
+        environment = dict(os.environ)
+        environment.update({
+            "DISPLAY": ":99",
+            "PATH": f"{binary}:/usr/bin:/bin",
+            "XAUTHORITY": str(self.external_root / "missing-authority"),
+        })
+
+        result = subprocess.run(
+            [str(launcher), "--edit"],
+            check=False,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 2, result)
+        self.assertIn("must not contain symlinks", result.stderr)
 
 
 if __name__ == "__main__":

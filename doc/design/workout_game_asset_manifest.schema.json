@@ -227,6 +227,94 @@
         }
       }
     },
+    "materialOverrides": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "materialName",
+          "baseColorSrgb",
+          "roughness",
+          "metallic"
+        ],
+        "properties": {
+          "materialName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[ -~]+$"
+          },
+          "baseColorSrgb": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$"
+          },
+          "roughness": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "metallic": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          }
+        }
+      }
+    },
+    "physics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority", "interaction", "collisionProxy"],
+      "properties": {
+        "authority": { "const": "external" },
+        "interaction": {
+          "enum": [
+            "visual-only",
+            "surface",
+            "obstacle",
+            "rideable-feature"
+          ]
+        },
+        "surface": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["friction", "rollingResistance", "restitution"],
+          "properties": {
+            "friction": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 2.0
+            },
+            "rollingResistance": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 0.1
+            },
+            "restitution": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 0.25
+            }
+          }
+        },
+        "collisionProxy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "enum": ["none", "node"] },
+            "node": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[ -~]+$"
+            }
+          }
+        }
+      }
+    },
     "review": {
       "type": "object",
       "additionalProperties": false,

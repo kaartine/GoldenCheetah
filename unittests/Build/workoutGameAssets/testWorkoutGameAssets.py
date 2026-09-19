@@ -265,6 +265,79 @@ class TestWorkoutGameAssets(unittest.TestCase):
         with self.assertRaisesRegex(assets.AssetValidationError, "too few items"):
             assets.validate_against_schema(manifest, schema)
 
+    def test_schema_enforces_maximum_and_collection_limits(self) -> None:
+        with self.assertRaisesRegex(assets.AssetValidationError, "above its maximum"):
+            assets.validate_against_schema(1.01, {"type": "number", "maximum": 1.0})
+        with self.assertRaisesRegex(assets.AssetValidationError, "too many items"):
+            assets.validate_against_schema(
+                [1, 2],
+                {"type": "array", "maxItems": 1, "items": {"type": "integer"}},
+            )
+        with self.assertRaisesRegex(assets.AssetValidationError, "too long"):
+            assets.validate_against_schema(
+                "ab", {"type": "string", "maxLength": 1}
+            )
+
+    def test_manifest_material_override_must_name_a_glb_material(self) -> None:
+        fixture = AssetFixture()
+        try:
+            fixture.manifest["materialOverrides"] = [{
+                "materialName": "MAT_Missing",
+                "baseColorSrgb": "#102030",
+                "roughness": 0.8,
+                "metallic": 0.0,
+            }]
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "unknown GLB material"
+            ):
+                assets.validate_repository(fixture.root)
+        finally:
+            fixture.close()
+
+    def test_manifest_physics_requires_external_consistent_contract(self) -> None:
+        fixture = AssetFixture()
+        try:
+            fixture.manifest["physics"] = {
+                "authority": "external",
+                "interaction": "rideable-feature",
+                "collisionProxy": {"kind": "none"},
+            }
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "requires surface properties"
+            ):
+                assets.validate_repository(fixture.root)
+
+            fixture.manifest["physics"] = {
+                "authority": "external",
+                "interaction": "rideable-feature",
+                "surface": {
+                    "friction": 1.0,
+                    "rollingResistance": 0.02,
+                    "restitution": 0.0,
+                },
+                "collisionProxy": {"kind": "node", "node": "MISSING_NODE"},
+            }
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "unknown GLB node"
+            ):
+                assets.validate_repository(fixture.root)
+
+            fixture.manifest["physics"] = {
+                "authority": "external",
+                "interaction": "visual-only",
+                "collisionProxy": {"kind": "node", "node": "ROOT_Tabletop"},
+            }
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "visual-only.*collision"
+            ):
+                assets.validate_repository(fixture.root)
+        finally:
+            fixture.close()
+
     def test_repository_file_hashes_are_not_duplicated_in_manifests(self) -> None:
         manifest = assets.load_json_file(MANIFEST_PATH)
         for entry in manifest["files"]:
