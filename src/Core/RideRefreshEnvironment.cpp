@@ -54,7 +54,8 @@ RideRefreshEnvironment::create(
     QMap<QString, QColor> colorRules,
     QVector<CalendarField> calendarFields,
     QStringList sports,
-    std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry)
+    std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry,
+    std::shared_ptr<const RideRefreshZones> zones)
 {
     return std::shared_ptr<const RideRefreshEnvironment>(
         new RideRefreshEnvironment(
@@ -65,7 +66,8 @@ RideRefreshEnvironment::create(
             std::move(colorRules),
             std::move(calendarFields),
             std::move(sports),
-            std::move(metricRegistry)));
+            std::move(metricRegistry),
+            std::move(zones)));
 }
 
 RideRefreshEnvironment::RideRefreshEnvironment(
@@ -76,7 +78,8 @@ RideRefreshEnvironment::RideRefreshEnvironment(
     QMap<QString, QColor> colorRules,
     QVector<CalendarField> calendarFields,
     QStringList sports,
-    std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry)
+    std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry,
+    std::shared_ptr<const RideRefreshZones> zones)
     : generation_(generation)
     , settings_(std::move(settings))
     , useMetricUnits_(useMetricUnits)
@@ -85,6 +88,7 @@ RideRefreshEnvironment::RideRefreshEnvironment(
     , calendarFields_(std::move(calendarFields))
     , sports_(std::move(sports))
     , metricRegistry_(std::move(metricRegistry))
+    , zones_(std::move(zones))
 {
 }
 

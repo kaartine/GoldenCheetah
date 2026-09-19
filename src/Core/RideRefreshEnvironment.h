@@ -22,6 +22,7 @@
 
 class Context;
 class RideMetricRegistrySnapshot;
+class RideRefreshZones;
 
 class RideRefreshEnvironment final
 {
@@ -53,7 +54,8 @@ public:
         QMap<QString, QColor> colorRules,
         QVector<CalendarField> calendarFields,
         QStringList sports,
-        std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry = {});
+        std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry = {},
+        std::shared_ptr<const RideRefreshZones> zones = {});
 
     quint64 generation() const { return generation_; }
     bool useMetricUnits() const { return useMetricUnits_; }
@@ -81,6 +83,7 @@ public:
     {
         return metricRegistry_.get();
     }
+    const RideRefreshZones *zones() const { return zones_.get(); }
 
 private:
     RideRefreshEnvironment(
@@ -91,7 +94,8 @@ private:
         QMap<QString, QColor> colorRules,
         QVector<CalendarField> calendarFields,
         QStringList sports,
-        std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry);
+        std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry,
+        std::shared_ptr<const RideRefreshZones> zones);
 
     static QString formatCalendarField(
         const CalendarField &field, const QString &value);
@@ -104,6 +108,7 @@ private:
     const QVector<CalendarField> calendarFields_;
     const QStringList sports_;
     const std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry_;
+    const std::shared_ptr<const RideRefreshZones> zones_;
 };
 
 std::shared_ptr<const RideRefreshEnvironment>

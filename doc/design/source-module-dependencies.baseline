@@ -5371,6 +5371,36 @@
       "target_module": "Metrics"
     },
     {
+      "source": "src/Core/RideRefreshZonesAthleteCapture.cpp",
+      "source_module": "Core",
+      "target": "src/Metrics/PaceZones.h",
+      "target_module": "Metrics"
+    },
+    {
+      "source": "src/Core/RideRefreshZonesAthleteCapture.cpp",
+      "source_module": "Core",
+      "target": "src/Metrics/Zones.h",
+      "target_module": "Metrics"
+    },
+    {
+      "source": "src/Core/RideRefreshZonesCapture.cpp",
+      "source_module": "Core",
+      "target": "src/Metrics/HrZones.h",
+      "target_module": "Metrics"
+    },
+    {
+      "source": "src/Core/RideRefreshZonesCapture.cpp",
+      "source_module": "Core",
+      "target": "src/Metrics/PaceZones.h",
+      "target_module": "Metrics"
+    },
+    {
+      "source": "src/Core/RideRefreshZonesCapture.cpp",
+      "source_module": "Core",
+      "target": "src/Metrics/Zones.h",
+      "target_module": "Metrics"
+    },
+    {
       "source": "src/Core/Route.cpp",
       "source_module": "Core",
       "target": "src/FileIO/RideFile.h",

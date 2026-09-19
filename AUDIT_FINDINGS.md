@@ -8726,6 +8726,56 @@ commit before the next finding begins.
   call-graph inventory. Preserve range selection, fingerprints, CP/W'/Pmax,
   pace formatting, measure lookup, and route-match semantics in focused
   equivalence tests before switching production readers.
+- ARCH-003F2b1 (zone snapshot work item recorded before correction): Capture
+  complete power, heart-rate, run-pace, and swim-pace range histories as
+  value-only data. Preserve half-open date/range and zone boundaries, scalar
+  parameters, names/descriptions, lows/highs, HR TRIMP values, per-date
+  fingerprints, pace conversion/units, sport selection, and the settings
+  names needed by F2c. Prove equivalence against
+  the live zone classes over boundary, gap, null-date, NaN, and infinity cases.
+- ARCH-003F2b1a (zone presence parity defect recorded before correction): An
+  exact sport key mapped to a null live zone pointer means no zones, while an
+  absent key falls back to Bike. Preserve that distinction in the value map
+  and make capture null-safe; otherwise an exact null entry either crashes
+  capture or incorrectly acquires Bike values.
+- ARCH-003F2b1b (zone assembly test-coverage item recorded before correction):
+  The focused value/live-equivalence suite does not link the Athlete-owned
+  assembly seam. Add a lightweight contract seam that exercises wrong-thread
+  rejection, already-captured settings-to-zone assembly, exact-null map
+  entries, and `RideRefreshEnvironment::zones()` wiring without importing the
+  complete application object graph. Production warnings-as-errors compilation
+  and review cover this seam for the bounded foundation commit, but do not
+  replace runtime coverage before the F2c cutover.
+- ARCH-003F2b2 (measures breadth gap recorded before correction): The initial
+  F2b wording names Body/HRV, but refresh-time user metrics can query every
+  configured Measures group and field, date range, and series through both
+  `measures()` and `measure()`. Snapshot all group metadata and observations,
+  preserving Body's carry-forward rule, other groups' exact-date rule, unit
+  factors, missing values, and fingerprints; do not limit capture to Body/HRV.
+- ARCH-003F2b2a (measures fail-closed defect recorded before correction): The
+  DataFilter bulk `measures()` path can pass an unknown group index into live
+  `groups.at(group)`. Make the value API reject unknown groups/fields without
+  indexing and pin that behavior before F2c redirects user metrics.
+- ARCH-003F2b2b (measures mutation gap recorded before correction): Calendar's
+  measure editor mutates the live list and writes it without the refresh
+  lifecycle barrier or requesting a new generation. Add pre-mutation
+  quiescence and deterministic invalidation before claiming the measures
+  snapshot cutover complete.
+- ARCH-003F2b2c (existing Body invalidation debt recorded before correction):
+  Current stale detection compares Body weight separately but does not include
+  other Body fields in its combined fingerprint. Preserve that legacy scope in
+  the value-foundation commit; any broader invalidation change needs a
+  separately tested behavior decision before correction.
+- ARCH-003F2b3 (route snapshot work item recorded before correction): Separate
+  immutable route geometry/matching input from `IntervalItem` publication.
+  Capture route identity, names, points, search parameters, and fingerprint;
+  return value-only matches. Creating/publishing interval QObjects remains an
+  F3 owner-thread result-handoff responsibility.
+- ARCH-003F2b4 (RideFileCache input work item recorded before correction):
+  Express analysis fingerprints and distribution-zone inputs solely through
+  the immutable zone/settings values, including absent-domain semantics, so
+  F2c can remove Context/Athlete/appsettings reads without changing cache
+  invalidation or on-disk compatibility.
 - ARCH-003F2c (worker cutover work item recorded before correction): Bind one
   shared immutable environment to each refresh generation and route every
   `checkStale`, `refresh`, interval discovery, RideFileCache, built-in metric,
@@ -8837,6 +8887,27 @@ commit before the next finding begins.
   object graph. ARCH-004C must remove the HTTP endpoint's mutation of the
   shared athlete-settings registry before multi-key capture itself can be
   claimed transactionally consistent. TSan remains a release prerequisite.
+- ARCH-003F2b1/F2b1a resolution: `RideRefreshZones` now owns immutable power,
+  heart-rate, run-pace, and swim-pace histories inside the same published
+  refresh environment. Owner-thread capture copies the live range values and
+  consumes only the settings hashes already captured for that generation.
+  Exact null sport entries remain distinct from absent keys, so only an absent
+  sport falls back to Bike. Date and zone boundaries, raw and resolved AeT,
+  CP-for-FTP semantics, scalar values, labels/descriptions, HR TRIMP, legacy
+  fingerprints, and generation-specific pace formatting/units retain their
+  live-class behavior.
+- ARCH-003F2b1 verification: direct live-class/value equivalence and pure
+  boundary tests pass 13/13 normally and under ASan/UBSan. All five changed
+  production translation units compile with warnings as errors, the source
+  dependency suite passes 14/14, and `git diff --check` is clean. Independent
+  final review: GO with no blocker or major correctness finding. The focused
+  suite deliberately does not link the full Athlete assembly seam; its LOW
+  runtime-coverage follow-up is tracked as ARCH-003F2b1b.
+- ARCH-003F2b1 residual: this commit supplies value data but does not redirect
+  worker consumers. ARCH-003F2c must bind one immutable environment to every
+  worker path and preserve absence/fallback behavior when removing live zone
+  and `appsettings` reads. ARCH-003F2b1b and a TSan-instrumented Qt run remain
+  verification prerequisites before the complete F2 safety claim.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

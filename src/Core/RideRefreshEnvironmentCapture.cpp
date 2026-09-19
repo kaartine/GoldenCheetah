@@ -8,6 +8,7 @@
  */
 
 #include "RideRefreshEnvironment.h"
+#include "RideRefreshZones.h"
 
 #include "Athlete.h"
 #include "Context.h"
@@ -126,14 +127,23 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
         }
     }
 
+    const bool useMetricUnits = GlobalContext::context()->useMetricUnits;
+    const auto zones = captureRideRefreshZones(
+        context->athlete,
+        settings.global,
+        settings.athlete,
+        useMetricUnits);
+    Q_ASSERT(zones);
+
     return RideRefreshEnvironment::create(
         generation,
         std::move(settings),
-        GlobalContext::context()->useMetricUnits,
+        useMetricUnits,
         metadata->getColorField(),
         std::move(colorRules),
         std::move(calendarFields),
         std::move(sports),
         std::make_shared<const RideMetricRegistrySnapshot>(
-            RideMetricFactory::instance().snapshot()));
+            RideMetricFactory::instance().snapshot()),
+        zones);
 }
