@@ -8844,6 +8844,18 @@ commit before the next finding begins.
   `RideRefreshEnvironment`, and cover null/wrong-thread rejection plus complete
   ordered assembly. Keep `IntervalItem` construction outside the value model;
   worker cutover and owner-thread publication remain F2c/F3 responsibilities.
+- ARCH-003F2b3b1 (route capture contract-coverage gap recorded before
+  correction): The first assembly test proved owner-thread admission, route
+  order, ids, one name/point, and fingerprint, but would not catch an omitted
+  or swapped latitude, longitude, bound, multi-point ordering, or second-route
+  field in the private live-to-value adapter. Exercise asymmetric complete
+  values and pin every production mapping before accepting F2b3b.
+- ARCH-003F2b3b2 (route collection-transfer contract gap recorded before
+  correction): The expanded private-adapter source contract pins each segment
+  field mapping but not the null guard, ordered outer traversal, segment append,
+  or exact fingerprint delegation. Because the focused suite cannot link the
+  live `Routes` graph, pin those transfer operations so an adapter that maps
+  fields but discards or reorders its output cannot pass F2b3b verification.
 - ARCH-003F2b4 (RideFileCache input work item recorded before correction):
   Express analysis fingerprints and distribution-zone inputs solely through
   the immutable zone/settings values, including absent-domain semantics, so
@@ -9084,12 +9096,37 @@ commit before the next finding begins.
   diff --check` checks pass. Independent final re-review: GO with the initial
   matrix-registration and edge-case coverage blockers resolved and no remaining
   major finding.
-- ARCH-003F2b3a residual: F2b3b must still capture the complete live Routes
-  collection on its owner thread and retain it in the generation environment.
-  F2c must provide immutable ride samples and cut worker matching over; F3 must
-  construct and publish `IntervalItem` objects only after generation acceptance.
-  Changing the F2b3a1 partial-match quirk remains a separate behavior migration,
-  and a TSan-instrumented integration run remains a release prerequisite.
+- ARCH-003F2b3a residual: F2b3b now captures the complete live Routes collection
+  and retains it in the generation environment. F2c must still provide immutable
+  ride samples and cut worker matching over; F3 must construct and publish
+  `IntervalItem` objects only after generation acceptance. Changing the F2b3a1
+  partial-match quirk remains a separate behavior migration, and a TSan-
+  instrumented integration run remains a release prerequisite.
+- ARCH-003F2b3b/F2b3b1/F2b3b2 resolution: the private live-Routes adapter now rejects
+  null and wrong-thread access before reading the collection, copies every
+  segment id, name, asymmetric bound, and ordered point, and captures the exact
+  route fingerprint into an owned immutable `RideRefreshRoutes`. The refresh
+  environment retains that snapshot for its full generation lifetime. Focused
+  assembly coverage proves complete two-segment value parity, point and segment
+  order, fingerprint retention, and independence from later source mutation;
+  its production contract pins the null/owner guard, ordered outer traversal,
+  every private live-to-value field mapping, ordered append, and exact
+  fingerprint delegation. `IntervalItem` construction remains outside capture
+  and matching.
+- ARCH-003F2b3b verification: the registered route suite passes 13/13 normally
+  and under ASan/UBSan; the environment suite passes 11/11 in both modes. All
+  five changed production translation units compile with warnings as errors.
+  Source dependencies pass 14/14, and CI-runner, header-path, linker-policy,
+  and `git diff --check` checks pass. Independent review initially returned
+  NO-GO for incomplete field-level coverage and then for an unpinned outer
+  collection transfer; F2b3b1/F2b3b2 record those findings and the expanded
+  tests close them. Final independent re-review: GO with no remaining blocker,
+  major, or minor finding.
+- ARCH-003F2b3b residual: F2c must still bind this immutable route snapshot and
+  immutable ride samples to worker matching. F3 must construct and publish
+  `IntervalItem` objects on the owner thread only after generation acceptance.
+  The full real-Athlete capture path and TSan-instrumented generation handoff
+  remain integration/release checks for those stages.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

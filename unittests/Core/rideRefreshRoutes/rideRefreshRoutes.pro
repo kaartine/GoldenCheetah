@@ -11,7 +11,11 @@ CONFIG -= debug
 include(../../section-gc.prf)
 
 SOURCES = testRideRefreshRoutes.cpp \
-          ../../../src/Core/RideRefreshRoutes.cpp
+          ../../../src/Core/RideRefreshRoutes.cpp \
+          ../../../src/Core/RideRefreshRoutesAssembly.cpp
+
+GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
+DEFINES += GC_TEST_SOURCE_ROOT="$${GC_TEST_SOURCE_ROOT}"
 
 HEADERS = ../../../src/Core/RideRefreshRoutes.h
 

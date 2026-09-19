@@ -16,6 +16,9 @@
 
 #include <memory>
 
+class QObject;
+class Routes;
+
 class RideRefreshRoutes final
 {
 public:
@@ -102,5 +105,16 @@ private:
     const quint16 fingerprint_;
     const SearchParameters parameters_;
 };
+
+// Lightweight owner-thread assembly seam used by live capture and tests.
+std::shared_ptr<const RideRefreshRoutes>
+captureRideRefreshRoutesForOwner(
+    const QObject *owner,
+    QVector<RideRefreshRoutes::Segment> segments,
+    quint16 fingerprint);
+
+// Must be called on Routes' QObject owner thread. Returns null otherwise.
+std::shared_ptr<const RideRefreshRoutes>
+captureRideRefreshRoutes(const Routes *source);
 
 #endif // GC_RIDEREFRESHROUTES_H

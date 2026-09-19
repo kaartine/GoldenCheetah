@@ -4,6 +4,7 @@
 #include "AthleteSession.h"
 #include "RideRefreshEnvironment.h"
 #include "RideRefreshMeasures.h"
+#include "RideRefreshRoutes.h"
 #include "RideRefreshZones.h"
 #include "SessionServices.h"
 
@@ -53,6 +54,7 @@ private slots:
     void colorRulesPreserveEngineOrderingAndFallback();
     void calendarFormattingPreservesFieldAndUnitSemantics();
     void measuresSnapshotIsRetainedByTheGeneration();
+    void routesSnapshotIsRetainedByTheGeneration();
     void zonesSnapshotIsRetainedByTheGeneration();
     void sessionPublishesWholeGenerationsAtomically();
     void publicationIsOwnerThreadOnlyAndClosedByLifecycle();
@@ -193,11 +195,22 @@ void TestRideRefreshEnvironment::measuresSnapshotIsRetainedByTheGeneration()
     QVERIFY(snapshot->measures()->groups().isEmpty());
 }
 
+void TestRideRefreshEnvironment::routesSnapshotIsRetainedByTheGeneration()
+{
+    auto routes = RideRefreshRoutes::create({}, 0x5678);
+    auto snapshot = RideRefreshEnvironment::create(
+        4, {}, true, {}, {}, {}, {}, {}, {}, {}, routes);
+    routes.reset();
+
+    QVERIFY(snapshot->routes());
+    QCOMPARE(snapshot->routes()->fingerprint(), quint16(0x5678));
+}
+
 void TestRideRefreshEnvironment::zonesSnapshotIsRetainedByTheGeneration()
 {
     auto zones = RideRefreshZones::create({}, {}, {}, {});
     auto snapshot = RideRefreshEnvironment::create(
-        4, {}, true, {}, {}, {}, {}, {}, zones);
+        5, {}, true, {}, {}, {}, {}, {}, zones);
     zones.reset();
 
     QVERIFY(snapshot->zones());

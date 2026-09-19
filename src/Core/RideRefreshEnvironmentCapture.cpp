@@ -9,6 +9,7 @@
 
 #include "RideRefreshEnvironment.h"
 #include "RideRefreshMeasures.h"
+#include "RideRefreshRoutes.h"
 #include "RideRefreshZones.h"
 
 #include "Athlete.h"
@@ -137,6 +138,8 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
     Q_ASSERT(zones);
     const auto measures = captureRideRefreshMeasures(context->athlete);
     Q_ASSERT(measures);
+    const auto routes = captureRideRefreshRoutes(context->athlete->routes);
+    Q_ASSERT(routes);
 
     return RideRefreshEnvironment::create(
         generation,
@@ -149,5 +152,6 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
         std::make_shared<const RideMetricRegistrySnapshot>(
             RideMetricFactory::instance().snapshot()),
         zones,
-        measures);
+        measures,
+        routes);
 }

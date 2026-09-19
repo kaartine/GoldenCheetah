@@ -26,14 +26,23 @@
 #include <QDate>
 #include <QFile>
 
+#include <memory>
+
 #include "Context.h"
 
 class  RideFile;
 class  Routes;
+class  RideRefreshRoutes;
 struct RoutePoint;
+
+std::shared_ptr<const RideRefreshRoutes>
+captureRideRefreshRoutes(const Routes *source);
 
 class RouteSegment // represents a segment we match against
 {
+    friend std::shared_ptr<const RideRefreshRoutes>
+    captureRideRefreshRoutes(const Routes *source);
+
     public:
 
         RouteSegment();
@@ -88,6 +97,8 @@ class Routes : public QObject { // top-level object with API and map of segments
     Q_OBJECT;
 
     friend class ::RideItem; // access the route/ride map
+    friend std::shared_ptr<const RideRefreshRoutes>
+    captureRideRefreshRoutes(const Routes *source);
 
     public:
 

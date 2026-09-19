@@ -56,7 +56,8 @@ RideRefreshEnvironment::create(
     QStringList sports,
     std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry,
     std::shared_ptr<const RideRefreshZones> zones,
-    std::shared_ptr<const RideRefreshMeasures> measures)
+    std::shared_ptr<const RideRefreshMeasures> measures,
+    std::shared_ptr<const RideRefreshRoutes> routes)
 {
     return std::shared_ptr<const RideRefreshEnvironment>(
         new RideRefreshEnvironment(
@@ -69,7 +70,8 @@ RideRefreshEnvironment::create(
             std::move(sports),
             std::move(metricRegistry),
             std::move(zones),
-            std::move(measures)));
+            std::move(measures),
+            std::move(routes)));
 }
 
 RideRefreshEnvironment::RideRefreshEnvironment(
@@ -82,7 +84,8 @@ RideRefreshEnvironment::RideRefreshEnvironment(
     QStringList sports,
     std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry,
     std::shared_ptr<const RideRefreshZones> zones,
-    std::shared_ptr<const RideRefreshMeasures> measures)
+    std::shared_ptr<const RideRefreshMeasures> measures,
+    std::shared_ptr<const RideRefreshRoutes> routes)
     : generation_(generation)
     , settings_(std::move(settings))
     , useMetricUnits_(useMetricUnits)
@@ -93,6 +96,7 @@ RideRefreshEnvironment::RideRefreshEnvironment(
     , metricRegistry_(std::move(metricRegistry))
     , zones_(std::move(zones))
     , measures_(std::move(measures))
+    , routes_(std::move(routes))
 {
 }
 

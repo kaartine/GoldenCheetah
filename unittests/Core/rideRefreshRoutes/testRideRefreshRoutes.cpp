@@ -2,7 +2,14 @@
 
 #include "RideRefreshRoutes.h"
 
+#include <QDir>
+#include <QFile>
+#include <QThread>
+
 namespace {
+
+#define GC_STRINGIFY_IMPL(value) #value
+#define GC_STRINGIFY(value) GC_STRINGIFY_IMPL(value)
 
 RideRefreshRoutes::Segment segment(
     const QUuid &id,
@@ -64,6 +71,8 @@ private slots:
     void farPointSkipAndLookAheadMatchLegacyScanning();
     void divergenceRestartsFromTheFirstRoutePoint();
     void parametersControlRestartAndOccurrenceNumbering();
+    void ownerThreadAssemblyPreservesCompleteOrderedValues();
+    void productionCaptureChecksOwnerBeforeReadingRoutes();
 };
 
 void TestRideRefreshRoutes::snapshotOwnsGeometryAndFingerprint()
@@ -268,6 +277,124 @@ void TestRideRefreshRoutes::parametersControlRestartAndOccurrenceNumbering()
     QCOMPARE(matches[1].startSeconds, 30.0);
 }
 
-QTEST_APPLESS_MAIN(TestRideRefreshRoutes)
+void TestRideRefreshRoutes::ownerThreadAssemblyPreservesCompleteOrderedValues()
+{
+    QObject owner;
+    const QUuid first = QUuid::createUuid();
+    const QUuid second = QUuid::createUuid();
+    RideRefreshRoutes::Segment firstSegment;
+    firstSegment.id = first;
+    firstSegment.name = QStringLiteral("first");
+    firstSegment.points = {{24.25, 60.75}, {24.5, 61.0}};
+    firstSegment.minimumLatitude = 59.5;
+    firstSegment.maximumLatitude = 61.25;
+    firstSegment.minimumLongitude = 23.5;
+    firstSegment.maximumLongitude = 25.75;
+    RideRefreshRoutes::Segment secondSegment;
+    secondSegment.id = second;
+    secondSegment.name = QStringLiteral("second");
+    secondSegment.points = {{-3.25, 52.125}, {-2.75, 52.625}};
+    secondSegment.minimumLatitude = 51.5;
+    secondSegment.maximumLatitude = 53.25;
+    secondSegment.minimumLongitude = -4.5;
+    secondSegment.maximumLongitude = -1.75;
+    QVector<RideRefreshRoutes::Segment> segments = {
+        firstSegment, secondSegment};
+    const auto captured = captureRideRefreshRoutesForOwner(
+        &owner, segments, 0x4321);
+    segments[0].points[0] = {-99.0, -88.0};
+    segments[1].name = QStringLiteral("mutated");
+    QVERIFY(captured);
+    QCOMPARE(captured->fingerprint(), quint16(0x4321));
+    QCOMPARE(captured->segments().size(), 2);
+    QCOMPARE(captured->segments()[0].id, first);
+    QCOMPARE(captured->segments()[0].name, QStringLiteral("first"));
+    QCOMPARE(captured->segments()[0].points.size(), 2);
+    QCOMPARE(captured->segments()[0].points[0].longitude, 24.25);
+    QCOMPARE(captured->segments()[0].points[0].latitude, 60.75);
+    QCOMPARE(captured->segments()[0].points[1].longitude, 24.5);
+    QCOMPARE(captured->segments()[0].points[1].latitude, 61.0);
+    QCOMPARE(captured->segments()[0].minimumLatitude, 59.5);
+    QCOMPARE(captured->segments()[0].maximumLatitude, 61.25);
+    QCOMPARE(captured->segments()[0].minimumLongitude, 23.5);
+    QCOMPARE(captured->segments()[0].maximumLongitude, 25.75);
+    QCOMPARE(captured->segments()[1].id, second);
+    QCOMPARE(captured->segments()[1].name, QStringLiteral("second"));
+    QCOMPARE(captured->segments()[1].points.size(), 2);
+    QCOMPARE(captured->segments()[1].points[0].longitude, -3.25);
+    QCOMPARE(captured->segments()[1].points[0].latitude, 52.125);
+    QCOMPARE(captured->segments()[1].points[1].longitude, -2.75);
+    QCOMPARE(captured->segments()[1].points[1].latitude, 52.625);
+    QCOMPARE(captured->segments()[1].minimumLatitude, 51.5);
+    QCOMPARE(captured->segments()[1].maximumLatitude, 53.25);
+    QCOMPARE(captured->segments()[1].minimumLongitude, -4.5);
+    QCOMPARE(captured->segments()[1].maximumLongitude, -1.75);
+    QVERIFY(!captureRideRefreshRoutesForOwner(nullptr, segments, 1));
+
+    QThread foreignThread;
+    QObject foreignOwner;
+    foreignOwner.moveToThread(&foreignThread);
+    foreignThread.start();
+    QVERIFY(!captureRideRefreshRoutesForOwner(
+        &foreignOwner, segments, 1));
+    QThread *testThread = QThread::currentThread();
+    QMetaObject::invokeMethod(
+        &foreignOwner,
+        [&foreignOwner, testThread]() {
+            foreignOwner.moveToThread(testThread);
+        },
+        Qt::BlockingQueuedConnection);
+    foreignThread.quit();
+    QVERIFY(foreignThread.wait());
+}
+
+void TestRideRefreshRoutes::productionCaptureChecksOwnerBeforeReadingRoutes()
+{
+    QFile file(QDir(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)))
+                   .filePath(QStringLiteral(
+                       "src/Core/RideRefreshRoutesCapture.cpp")));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray source = file.readAll();
+    const qsizetype function = source.indexOf("captureRideRefreshRoutes(");
+    const qsizetype nullAndOwnerGuard = source.indexOf(
+        "if (!source || QThread::currentThread() != source->thread())",
+        function);
+    const qsizetype ownerCheck = source.indexOf(
+        "QThread::currentThread() != source->thread()", function);
+    const qsizetype orderedTraversal = source.indexOf(
+        "for (const RouteSegment &live : source->routes)", function);
+    const qsizetype firstRouteRead = source.indexOf(
+        "source->routes", function);
+    const qsizetype orderedAppend = source.indexOf(
+        "segments.append(std::move(segment));", function);
+    const qsizetype fingerprintRead = source.indexOf(
+        "source->getFingerprint()", function);
+    const qsizetype exactDelegation = source.indexOf(
+        "source, std::move(segments), source->getFingerprint()", function);
+
+    QVERIFY(function >= 0);
+    QVERIFY(nullAndOwnerGuard > function);
+    QVERIFY(ownerCheck > function);
+    QVERIFY(firstRouteRead > ownerCheck);
+    QVERIFY(orderedTraversal > ownerCheck);
+    QVERIFY(orderedAppend > orderedTraversal);
+    QVERIFY(fingerprintRead > orderedAppend);
+    QVERIFY(exactDelegation > orderedAppend);
+    for (const QByteArray &mapping : {
+             QByteArray("segment.id = live._id;"),
+             QByteArray("segment.name = live.name;"),
+             QByteArray("segment.minimumLatitude = live.minLat;"),
+             QByteArray("segment.maximumLatitude = live.maxLat;"),
+             QByteArray("segment.minimumLongitude = live.minLon;"),
+             QByteArray("segment.maximumLongitude = live.maxLon;"),
+             QByteArray("segment.points.reserve(live.points.size());"),
+             QByteArray("for (const RoutePoint &point : live.points)"),
+             QByteArray("segment.points.append({point.lon, point.lat});")}) {
+        const qsizetype mappingPosition = source.indexOf(mapping, function);
+        QVERIFY2(mappingPosition > ownerCheck, mapping.constData());
+    }
+}
+
+QTEST_GUILESS_MAIN(TestRideRefreshRoutes)
 
 #include "testRideRefreshRoutes.moc"

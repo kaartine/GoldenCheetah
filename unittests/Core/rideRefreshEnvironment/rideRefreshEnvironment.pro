@@ -13,6 +13,7 @@ SOURCES = testRideRefreshEnvironment.cpp \
           ../../../src/Core/AthleteSession.cpp \
           ../../../src/Core/RideRefreshEnvironment.cpp \
           ../../../src/Core/RideRefreshMeasures.cpp \
+          ../../../src/Core/RideRefreshRoutes.cpp \
           ../../../src/Core/RideRefreshZones.cpp \
           ../../../src/Core/Units.cpp
 
@@ -20,6 +21,7 @@ HEADERS = ../../../src/Core/AthleteRefreshLifecycle.h \
           ../../../src/Core/AthleteSession.h \
           ../../../src/Core/RideRefreshEnvironment.h \
           ../../../src/Core/RideRefreshMeasures.h \
+          ../../../src/Core/RideRefreshRoutes.h \
           ../../../src/Core/RideRefreshZones.h \
           ../../../src/Core/SessionServices.h
 
