@@ -32,12 +32,15 @@ inline constexpr qint64 ZoneMaximumSize = 4LL * 1024 * 1024;
 inline constexpr qint64 MeanMaxAggregateMaximumSize = 128LL * 1024 * 1024;
 inline constexpr qsizetype AthleteDirectoryMaximumEntries = 1024;
 inline constexpr qsizetype ActivityDirectoryMaximumEntries = 32768;
+inline constexpr qsizetype MeanMaxCollectionMaximumPairs = 2048;
+inline constexpr qint64 MeanMaxCollectionMaximumSize = 256LL * 1024 * 1024;
 static_assert(
     ActivityMaximumSize + CacheMaximumSize
         <= MeanMaxAggregateMaximumSize,
     "The individual mean-max input budget must remain bounded");
 
 qint64 maximumSize(FileKind kind);
+bool fitsMeanMaxCollectionByteBudget(qint64 currentSize, qint64 addedSize);
 
 enum class Status {
     Ready,
@@ -49,7 +52,8 @@ enum class Endpoint {
     RideDatabase,
     Activity,
     Zone,
-    MeanMax
+    MeanMax,
+    MeanMaxCollection
 };
 
 struct Contract
@@ -93,6 +97,10 @@ private:
         const LocalApiFileStore &,
         const AnchoredFileSystem::DirectoryAnchor &,
         const QString &, QString &);
+    friend PreparedInput prepareMeanMaxCollection(
+        const LocalApiFileStore &,
+        const AnchoredFileSystem::DirectoryAnchor &,
+        const QList<AnchoredFileSystem::DirectoryEntry> &, QString &);
 };
 
 enum class ListingKind {
@@ -128,6 +136,12 @@ PreparedInput prepareMeanMax(
     const LocalApiFileStore &store,
     const AnchoredFileSystem::DirectoryAnchor &athleteDirectory,
     const QString &activityFileName,
+    QString &error);
+
+PreparedInput prepareMeanMaxCollection(
+    const LocalApiFileStore &store,
+    const AnchoredFileSystem::DirectoryAnchor &athleteDirectory,
+    const QList<AnchoredFileSystem::DirectoryEntry> &activityEntries,
     QString &error);
 
 PreparedListing prepareListing(

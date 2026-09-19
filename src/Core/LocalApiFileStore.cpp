@@ -207,6 +207,34 @@ bool LocalApiFileStore::captureRegularFile(
     return true;
 }
 
+bool LocalApiFileStore::captureListedRegularFile(
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const QStringList &directoryComponents,
+    const AnchoredFileSystem::DirectoryEntry &listedEntry,
+    LocalApiFileGeneration &generation,
+    QString &error,
+    qint64 maximumSize) const
+{
+    generation = {};
+    error.clear();
+    LocalApiFileGeneration candidate;
+    if (listedEntry.kind
+            != AnchoredFileSystem::DirectoryEntryKind::RegularFile
+        || !listedEntry.identity.isValid()
+        || !captureRegularFile(
+            baseDirectory, directoryComponents, listedEntry.name,
+            candidate, error, maximumSize)
+        || candidate.file_.identity() != listedEntry.identity) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The listed Local API file generation changed");
+        }
+        return false;
+    }
+    generation = std::move(candidate);
+    return true;
+}
+
 bool LocalApiFileSnapshotDirectory::writeFile(
     const QString &component,
     const QByteArray &contents,

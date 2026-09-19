@@ -11,6 +11,8 @@
 
 #include <QBuffer>
 #include <QFileInfo>
+#include <QHash>
+#include <QSet>
 #include <QTextStream>
 #include <algorithm>
 
@@ -29,6 +31,15 @@ qint64 maximumSize(FileKind kind)
         return ZoneMaximumSize;
     }
     return -1;
+}
+
+bool fitsMeanMaxCollectionByteBudget(
+    qint64 currentSize, qint64 addedSize)
+{
+    return currentSize >= 0
+        && addedSize >= 0
+        && currentSize <= MeanMaxCollectionMaximumSize
+        && addedSize <= MeanMaxCollectionMaximumSize - currentSize;
 }
 
 const QByteArray &PreparedInput::bytes() const
@@ -238,6 +249,127 @@ Contract listingContract(const PreparedListing &listing)
     return result;
 }
 
+PreparedInput prepareMeanMaxCollection(
+    const LocalApiFileStore &store,
+    const AnchoredFileSystem::DirectoryAnchor &athleteDirectory,
+    const QList<AnchoredFileSystem::DirectoryEntry> &activityEntries,
+    QString &error)
+{
+    error.clear();
+    PreparedInput result;
+    struct Pair {
+        AnchoredFileSystem::DirectoryEntry activity;
+        AnchoredFileSystem::DirectoryEntry cache;
+    };
+    QList<Pair> pairs;
+    if (!activityEntries.isEmpty()) {
+        const PreparedListing caches = prepareListing(
+            store, athleteDirectory, {QStringLiteral("cache")},
+            ListingKind::RegularFiles, ActivityDirectoryMaximumEntries,
+            error);
+        if (caches.status != Status::Ready) {
+            if (caches.absent) {
+                result.status_ = Status::Unavailable;
+            }
+            return result;
+        }
+        QHash<QString, AnchoredFileSystem::DirectoryEntry> cachesByName;
+        for (const AnchoredFileSystem::DirectoryEntry &cache : caches.entries) {
+            cachesByName.insert(cache.name, cache);
+        }
+        for (const AnchoredFileSystem::DirectoryEntry &activity
+             : activityEntries) {
+            const QString basename = QFileInfo(activity.name).baseName();
+            const QString cacheName = basename + QStringLiteral(".cpx");
+            if (basename.isEmpty()
+                || !cachesByName.contains(cacheName)) {
+                continue;
+            }
+            pairs.append({activity, cachesByName.value(cacheName)});
+            if (pairs.size() > MeanMaxCollectionMaximumPairs) {
+                error = QStringLiteral(
+                    "The mean-max collection exceeds its pair budget");
+                result.status_ = Status::InternalError;
+                return result;
+            }
+        }
+    }
+    result.firstSnapshot_ =
+        std::make_unique<LocalApiFileSnapshotDirectory>();
+    result.secondSnapshot_ =
+        std::make_unique<LocalApiFileSnapshotDirectory>();
+    if (!result.firstSnapshot_->isValid()
+        || !result.secondSnapshot_->isValid()) {
+        error = QStringLiteral(
+            "Cannot create private mean-max collection directories");
+        result = {};
+        result.status_ = Status::InternalError;
+        return result;
+    }
+
+    qint64 totalSize = 0;
+    QSet<QString> snappedCacheNames;
+    for (const Pair &pair : pairs) {
+        LocalApiFileGeneration activityGeneration;
+        QByteArray activityBytes;
+        if (!store.captureListedRegularFile(
+                athleteDirectory, {QStringLiteral("activities")},
+                pair.activity, activityGeneration, error,
+                maximumSize(FileKind::Activity))
+            || !activityGeneration.readAll(activityBytes, error)
+            || !fitsMeanMaxCollectionByteBudget(
+                totalSize, activityBytes.size())) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "The mean-max collection exceeds its byte budget");
+            }
+            result = {};
+            result.status_ = Status::InternalError;
+            return result;
+        }
+        totalSize += activityBytes.size();
+        QString activityPath;
+        if (!result.firstSnapshot_->writeFile(
+                pair.activity.name, activityBytes, activityPath, error)) {
+            result = {};
+            result.status_ = Status::InternalError;
+            return result;
+        }
+        if (!snappedCacheNames.contains(pair.cache.name)) {
+            LocalApiFileGeneration cacheGeneration;
+            QByteArray cacheBytes;
+            if (!store.captureListedRegularFile(
+                    athleteDirectory, {QStringLiteral("cache")},
+                    pair.cache, cacheGeneration, error,
+                    maximumSize(FileKind::Cache))
+                || !cacheGeneration.readAll(cacheBytes, error)
+                || !fitsMeanMaxCollectionByteBudget(
+                    totalSize, cacheBytes.size())) {
+                if (error.isEmpty()) {
+                    error = QStringLiteral(
+                        "The mean-max collection exceeds its byte budget");
+                }
+                result = {};
+                result.status_ = Status::InternalError;
+                return result;
+            }
+            totalSize += cacheBytes.size();
+            QString cachePath;
+            if (!result.secondSnapshot_->writeFile(
+                    pair.cache.name, cacheBytes, cachePath, error)) {
+                result = {};
+                result.status_ = Status::InternalError;
+                return result;
+            }
+            snappedCacheNames.insert(pair.cache.name);
+        }
+    }
+    result.firstPath_ = result.firstSnapshot_->path();
+    result.secondPath_ = result.secondSnapshot_->path();
+    result.status_ = Status::Ready;
+    return result;
+}
+
 Contract contract(
     Endpoint endpoint,
     Status status,
@@ -246,7 +378,8 @@ Contract contract(
     Contract result;
     if (status == Status::Ready) {
         result.processInput = true;
-        if (endpoint == Endpoint::MeanMax) {
+        if (endpoint == Endpoint::MeanMax
+            || endpoint == Endpoint::MeanMaxCollection) {
             result.bodyPrefix = QByteArrayLiteral("secs, ")
                 + series + QByteArrayLiteral("\n");
         }
@@ -261,6 +394,9 @@ Contract contract(
         } else if (endpoint == Endpoint::MeanMax) {
             result.bodyPrefix = QByteArrayLiteral(
                 "unable to create private mean-max snapshots\n");
+        } else if (endpoint == Endpoint::MeanMaxCollection) {
+            result.bodyPrefix = QByteArrayLiteral(
+                "unable to prepare mean-max collection safely\n");
         }
         return result;
     }
@@ -280,6 +416,7 @@ Contract contract(
         result.statusCode = 500;
         break;
     case Endpoint::MeanMax:
+    case Endpoint::MeanMaxCollection:
         result.bodyPrefix = QByteArrayLiteral("secs, ")
             + series + QByteArrayLiteral("\n");
         break;

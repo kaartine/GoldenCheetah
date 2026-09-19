@@ -92,6 +92,13 @@ private slots:
     void preparesSortedBoundedDirectoryListings();
     void listingRejectsReplacedRetainedDirectory();
     void listedChildRejectsReplacementBeforeOpen();
+    void listedRegularFileRejectsReplacementBeforeOpen();
+    void meanMaxCollectionHandlesEmptySelection();
+    void preparesMeanMaxCollectionAtomically();
+    void meanMaxCollectionPreservesDuplicateBasenames();
+    void meanMaxCollectionRollsBackAfterLaterReplacement();
+    void meanMaxCollectionRejectsPairBudget();
+    void meanMaxCollectionByteBudgetBoundaries();
 };
 
 void TestLocalApiFileStore::opensRetainedRegularFile()
@@ -790,6 +797,270 @@ void TestLocalApiFileStore::listedChildRejectsReplacementBeforeOpen()
         store, rootDirectory, listing.entries.first(), reopened, error));
     QVERIFY(!reopened.isValid());
     QVERIFY(!error.isEmpty());
+}
+
+void TestLocalApiFileStore::preparesMeanMaxCollectionAtomically()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities")));
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/cache")));
+    QVERIFY(writeFile(
+        QDir(root.path()).filePath(QStringLiteral("alice/activities/one.fit")),
+        QByteArrayLiteral("activity-one")));
+    QVERIFY(writeFile(
+        QDir(root.path()).filePath(QStringLiteral("alice/cache/one.cpx")),
+        QByteArrayLiteral("cache-one")));
+
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+    const LocalApiEndpointInput::PreparedListing activities =
+        LocalApiEndpointInput::prepareListing(
+            store, athleteDirectory, {QStringLiteral("activities")},
+            LocalApiEndpointInput::ListingKind::RegularFiles,
+            LocalApiEndpointInput::ActivityDirectoryMaximumEntries,
+            error);
+    QVERIFY2(activities.status == LocalApiEndpointInput::Status::Ready,
+             qPrintable(error));
+    QString activityDirectory;
+    QString cacheDirectory;
+    {
+        LocalApiEndpointInput::PreparedInput input =
+            LocalApiEndpointInput::prepareMeanMaxCollection(
+                store, athleteDirectory, activities.entries, error);
+        QVERIFY2(input.status() == LocalApiEndpointInput::Status::Ready,
+                 qPrintable(error));
+        activityDirectory = input.firstPath();
+        cacheDirectory = input.secondPath();
+        QVERIFY(activityDirectory != cacheDirectory);
+        QFile activity(QDir(activityDirectory).filePath(
+            QStringLiteral("one.fit")));
+        QFile cache(QDir(cacheDirectory).filePath(
+            QStringLiteral("one.cpx")));
+        QVERIFY(activity.open(QIODevice::ReadOnly));
+        QVERIFY(cache.open(QIODevice::ReadOnly));
+        QCOMPARE(activity.readAll(), QByteArrayLiteral("activity-one"));
+        QCOMPARE(cache.readAll(), QByteArrayLiteral("cache-one"));
+    }
+    QVERIFY(!QFileInfo::exists(activityDirectory));
+    QVERIFY(!QFileInfo::exists(cacheDirectory));
+}
+
+void TestLocalApiFileStore::listedRegularFileRejectsReplacementBeforeOpen()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/cache")));
+    const QString cachePath = QDir(root.path()).filePath(
+        QStringLiteral("alice/cache/one.cpx"));
+    const QString oldCachePath = QDir(root.path()).filePath(
+        QStringLiteral("alice/cache/old-one.cpx"));
+    QVERIFY(writeFile(cachePath, QByteArrayLiteral("old-cache")));
+
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+    const LocalApiEndpointInput::PreparedListing caches =
+        LocalApiEndpointInput::prepareListing(
+            store, athleteDirectory, {QStringLiteral("cache")},
+            LocalApiEndpointInput::ListingKind::RegularFiles,
+            LocalApiEndpointInput::ActivityDirectoryMaximumEntries,
+            error);
+    QVERIFY2(caches.status == LocalApiEndpointInput::Status::Ready,
+             qPrintable(error));
+    QCOMPARE(caches.entries.size(), 1);
+    QVERIFY(QFile::rename(cachePath, oldCachePath));
+    QVERIFY(writeFile(cachePath, QByteArrayLiteral("new-cache")));
+
+    LocalApiFileGeneration generation;
+    QVERIFY(!store.captureListedRegularFile(
+        athleteDirectory, {QStringLiteral("cache")},
+        caches.entries.first(), generation, error,
+        LocalApiEndpointInput::CacheMaximumSize));
+    QVERIFY(!generation.isValid());
+    QVERIFY(!error.isEmpty());
+}
+
+void TestLocalApiFileStore::meanMaxCollectionHandlesEmptySelection()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice")));
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+    LocalApiEndpointInput::PreparedInput input =
+        LocalApiEndpointInput::prepareMeanMaxCollection(
+            store, athleteDirectory, {}, error);
+    QVERIFY2(input.status() == LocalApiEndpointInput::Status::Ready,
+             qPrintable(error));
+    QVERIFY(QFileInfo(input.firstPath()).isDir());
+    QVERIFY(QFileInfo(input.secondPath()).isDir());
+    const LocalApiEndpointInput::Contract result =
+        LocalApiEndpointInput::contract(
+            LocalApiEndpointInput::Endpoint::MeanMaxCollection,
+            input.status(), QByteArrayLiteral("watts"));
+    QCOMPARE(result.statusCode, 200);
+    QCOMPARE(result.bodyPrefix, QByteArrayLiteral("secs, watts\n"));
+    QVERIFY(result.processInput);
+}
+
+void TestLocalApiFileStore::meanMaxCollectionPreservesDuplicateBasenames()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities")));
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/cache")));
+    const QString activitiesPath = QDir(root.path()).filePath(
+        QStringLiteral("alice/activities"));
+    QVERIFY(writeFile(QDir(activitiesPath).filePath(QStringLiteral("one.fit")),
+                      QByteArrayLiteral("first")));
+    QVERIFY(writeFile(QDir(activitiesPath).filePath(QStringLiteral("one.json")),
+                      QByteArrayLiteral("second")));
+    QVERIFY(writeFile(
+        QDir(root.path()).filePath(QStringLiteral("alice/cache/one.cpx")),
+        QByteArrayLiteral("cache")));
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+    const LocalApiEndpointInput::PreparedListing activities =
+        LocalApiEndpointInput::prepareListing(
+            store, athleteDirectory, {QStringLiteral("activities")},
+            LocalApiEndpointInput::ListingKind::RegularFiles,
+            LocalApiEndpointInput::ActivityDirectoryMaximumEntries,
+            error);
+    QVERIFY2(activities.status == LocalApiEndpointInput::Status::Ready,
+             qPrintable(error));
+    LocalApiEndpointInput::PreparedInput input =
+        LocalApiEndpointInput::prepareMeanMaxCollection(
+            store, athleteDirectory, activities.entries, error);
+    QVERIFY2(input.status() == LocalApiEndpointInput::Status::Ready,
+             qPrintable(error));
+    QVERIFY(QFileInfo(QDir(input.firstPath()).filePath(
+        QStringLiteral("one.fit"))).isFile());
+    QVERIFY(QFileInfo(QDir(input.firstPath()).filePath(
+        QStringLiteral("one.json"))).isFile());
+    QCOMPARE(QDir(input.secondPath()).entryList(QDir::Files).size(), 1);
+}
+
+void TestLocalApiFileStore::meanMaxCollectionRollsBackAfterLaterReplacement()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities")));
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/cache")));
+    const QDir activitiesDir(QDir(root.path()).filePath(
+        QStringLiteral("alice/activities")));
+    const QDir cacheDir(QDir(root.path()).filePath(QStringLiteral("alice/cache")));
+    QVERIFY(writeFile(activitiesDir.filePath(QStringLiteral("one.fit")),
+                      QByteArrayLiteral("one")));
+    QVERIFY(writeFile(activitiesDir.filePath(QStringLiteral("two.fit")),
+                      QByteArrayLiteral("two")));
+    QVERIFY(writeFile(cacheDir.filePath(QStringLiteral("one.cpx")),
+                      QByteArrayLiteral("one-cache")));
+    QVERIFY(writeFile(cacheDir.filePath(QStringLiteral("two.cpx")),
+                      QByteArrayLiteral("two-cache")));
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+    const LocalApiEndpointInput::PreparedListing activities =
+        LocalApiEndpointInput::prepareListing(
+            store, athleteDirectory, {QStringLiteral("activities")},
+            LocalApiEndpointInput::ListingKind::RegularFiles,
+            LocalApiEndpointInput::ActivityDirectoryMaximumEntries,
+            error);
+    QCOMPARE(activities.entries.size(), 2);
+    QVERIFY(QFile::rename(
+        activitiesDir.filePath(QStringLiteral("two.fit")),
+        activitiesDir.filePath(QStringLiteral("old-two.fit"))));
+    QVERIFY(writeFile(activitiesDir.filePath(QStringLiteral("two.fit")),
+                      QByteArrayLiteral("replacement")));
+    LocalApiEndpointInput::PreparedInput rejected =
+        LocalApiEndpointInput::prepareMeanMaxCollection(
+            store, athleteDirectory, activities.entries, error);
+    QVERIFY(rejected.status()
+            == LocalApiEndpointInput::Status::InternalError);
+    QVERIFY(rejected.firstPath().isEmpty());
+    QVERIFY(rejected.secondPath().isEmpty());
+    QVERIFY(!error.isEmpty());
+}
+
+void TestLocalApiFileStore::meanMaxCollectionRejectsPairBudget()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/activities")));
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/cache")));
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+    QList<AnchoredFileSystem::DirectoryEntry> activities;
+    for (qsizetype index = 0;
+         index <= LocalApiEndpointInput::MeanMaxCollectionMaximumPairs;
+         ++index) {
+        const QString basename = QStringLiteral("ride-%1").arg(index);
+        const QString cacheName = basename + QStringLiteral(".cpx");
+        QVERIFY(writeFile(
+            QDir(root.path()).filePath(
+                QStringLiteral("alice/cache/") + cacheName), {}));
+        activities.append({basename + QStringLiteral(".fit"),
+                           AnchoredFileSystem::DirectoryEntryKind::RegularFile,
+                           {}, false});
+    }
+    LocalApiEndpointInput::PreparedInput input =
+        LocalApiEndpointInput::prepareMeanMaxCollection(
+            store, athleteDirectory, activities, error);
+    QVERIFY(input.status()
+            == LocalApiEndpointInput::Status::InternalError);
+    const LocalApiEndpointInput::Contract result =
+        LocalApiEndpointInput::contract(
+            LocalApiEndpointInput::Endpoint::MeanMaxCollection,
+            input.status(), QByteArrayLiteral("watts"));
+    QCOMPARE(result.statusCode, 500);
+    QCOMPARE(
+        result.bodyPrefix,
+        QByteArrayLiteral("unable to prepare mean-max collection safely\n"));
+    QVERIFY(!result.processInput);
+
+    QVERIFY(QFile::remove(QDir(root.path()).filePath(
+        QStringLiteral("alice/cache/ride-0.cpx"))));
+    input = LocalApiEndpointInput::prepareMeanMaxCollection(
+        store, athleteDirectory, activities, error);
+    QVERIFY(input.status()
+            == LocalApiEndpointInput::Status::InternalError);
+    QVERIFY(error != QStringLiteral(
+        "The mean-max collection exceeds its pair budget"));
+}
+
+void TestLocalApiFileStore::meanMaxCollectionByteBudgetBoundaries()
+{
+    QVERIFY(LocalApiEndpointInput::fitsMeanMaxCollectionByteBudget(
+        0, LocalApiEndpointInput::MeanMaxCollectionMaximumSize));
+    QVERIFY(LocalApiEndpointInput::fitsMeanMaxCollectionByteBudget(
+        LocalApiEndpointInput::MeanMaxCollectionMaximumSize, 0));
+    QVERIFY(!LocalApiEndpointInput::fitsMeanMaxCollectionByteBudget(
+        1, LocalApiEndpointInput::MeanMaxCollectionMaximumSize));
+    QVERIFY(!LocalApiEndpointInput::fitsMeanMaxCollectionByteBudget(-1, 0));
+    QVERIFY(!LocalApiEndpointInput::fitsMeanMaxCollectionByteBudget(0, -1));
 }
 
 QTEST_MAIN(TestLocalApiFileStore)

@@ -68,6 +68,14 @@ public:
         QString &error,
         qint64 maximumSize) const;
 
+    bool captureListedRegularFile(
+        const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+        const QStringList &directoryComponents,
+        const AnchoredFileSystem::DirectoryEntry &listedEntry,
+        LocalApiFileGeneration &generation,
+        QString &error,
+        qint64 maximumSize) const;
+
     bool openDirectory(
         const QStringList &components,
         AnchoredFileSystem::DirectoryAnchor &directory,
@@ -90,6 +98,7 @@ class LocalApiFileSnapshotDirectory
 {
 public:
     bool isValid() const { return directory_.isValid(); }
+    QString path() const { return directory_.path(); }
     bool writeFile(
         const QString &component,
         const QByteArray &contents,

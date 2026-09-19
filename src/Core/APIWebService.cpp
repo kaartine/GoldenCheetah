@@ -185,7 +185,7 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
             //    ?series=watts     (default)
             //    ?series=<xx>  xx=1 of (cad, speed, vam, IsoPower, xPower, nm)
             paths.removeFirst();
-            listMMP(athlete, athleteDirectory, paths, request, response);
+            listMMP(athleteDirectory, paths, request, response);
             return;
         }
 
@@ -493,7 +493,7 @@ APIWebService::listActivity(const AnchoredFileSystem::DirectoryAnchor &athleteDi
 }
 
 void
-APIWebService::listMMP(QString athlete, const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response)
+APIWebService::listMMP(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response)
 {
     // list activities and associated metrics
     response.setHeader("Content-Type", "text; charset=ISO-8859-1");
@@ -523,12 +523,6 @@ APIWebService::listMMP(QString athlete, const AnchoredFileSystem::DirectoryAncho
     QString filename=paths[0];
 
     if (paths[0] == "bests") {
-
-        // header
-        response.bwrite("secs, ");
-        response.bwrite(seriesp.toLocal8Bit());
-        response.bwrite("\n");
-
         // honour the since parameter
         QString sincep(request.getParameter("since"));
         QDate since(1900,01,01);
@@ -539,20 +533,55 @@ APIWebService::listMMP(QString athlete, const AnchoredFileSystem::DirectoryAncho
         QDate before(3000,01,01);
         if (beforep != "") before = QDate::fromString(beforep,"yyyy/MM/dd");
 
+        QString error;
+        const LocalApiEndpointInput::PreparedListing activities =
+            LocalApiEndpointInput::prepareListing(
+                fileStore, athleteDirectory,
+                {QStringLiteral("activities")},
+                LocalApiEndpointInput::ListingKind::RegularFiles,
+                LocalApiEndpointInput::ActivityDirectoryMaximumEntries,
+                error);
+        QList<AnchoredFileSystem::DirectoryEntry> selectedActivities;
+        if (activities.status == LocalApiEndpointInput::Status::Ready) {
+            for (const AnchoredFileSystem::DirectoryEntry &activity
+                 : activities.entries) {
+                QDateTime dateTime;
+                if (RideFile::parseRideFileName(activity.name, &dateTime)
+                    && !(dateTime.date() < since)
+                    && !(dateTime.date() > before)) {
+                    selectedActivities.append(activity);
+                }
+            }
+        } else if (!activities.absent) {
+            response.setStatus(500);
+            response.write("unable to enumerate activities safely.\n");
+            return;
+        }
+        LocalApiEndpointInput::PreparedInput input =
+            LocalApiEndpointInput::prepareMeanMaxCollection(
+                fileStore, athleteDirectory, selectedActivities, error);
+        const LocalApiEndpointInput::Contract inputContract =
+            LocalApiEndpointInput::contract(
+                LocalApiEndpointInput::Endpoint::MeanMaxCollection,
+                input.status(), seriesp.toLocal8Bit());
+        response.setStatus(inputContract.statusCode);
+        response.bwrite(inputContract.bodyPrefix);
+        if (!inputContract.processInput) {
+            response.flush();
+            return;
+        }
+
         int secs=0;
-        const QDir athleteRoot(
-            QDir(home.absolutePath())
-                .filePath(athlete));
         foreach(float value, RideFileCache::meanMaxFor(
-                    athleteRoot.filePath("activities"),
-                    athleteRoot.filePath("cache"),
+                    input.firstPath(),
+                    input.secondPath(),
                     series,
                     since,
                     before)) {
             if (secs >0) response.bwrite(QString("%1, %2\n").arg(secs).arg(value).toLocal8Bit());
             secs++;
         }
-
+        response.flush();
 
     } else {
         QString error;

@@ -7960,9 +7960,56 @@ commit before the next finding begins.
   with Qt 6.8.3; only the established bison warnings remain. Independent review
   found no remaining blocker after the exact-body assertions were added. Native
   Windows/macOS execution remains required for platform-specific verification.
-- ARCH-004B3b (queued): Build a bounded, all-or-nothing private snapshot of
+- ARCH-004B3b (completed): Build a bounded, all-or-nothing private snapshot of
   the activity/cache pairs consumed by aggregate mean-max (`bests`) before
   invoking the legacy multi-file reader.
+- ARCH-004B3b1 (defect recorded before correction): The first collection
+  helper enumerates `cache` even when the date-filtered activity selection is
+  empty. Preserve the legacy empty HTTP 200 CSV response without introducing
+  an unrelated missing, unsafe, or over-budget cache-directory failure.
+- ARCH-004B3b2 (security review finding recorded before correction): The first
+  collection helper retains names but not the native identities observed by
+  the activity and cache listings. Carry each listed identity into the pinned
+  open and reject replacements before publishing either snapshot directory.
+- ARCH-004B3b3 (compatibility review finding recorded before correction): The
+  first pair cap counts every selected activity name before cache matching and
+  basename handling. Apply the cap to cache-matched activity candidates that
+  the legacy aggregate reader can actually attempt.
+- ARCH-004B3b4 (compatibility review finding recorded before correction): The
+  first snapshot design de-duplicates basenames before the legacy reader can
+  validate source/cache integrity. Snapshot every selected source having a
+  matching cache and each cache once so a stale first extension does not hide
+  a later valid source with the same basename.
+- ARCH-004B3b5 (test item recorded before correction): The first rejection
+  fixture fails during cache enumeration, before any pair has been written.
+  Add coverage for empty selection, retained activity and cache identities,
+  actual pair and byte boundaries, duplicate basenames, and rollback after a
+  later source fails following an earlier successful snapshot write.
+- ARCH-004B3b6 (compatibility defect recorded before correction): The first
+  API integration re-runs the legacy reader with hard-coded 1900--3000 dates
+  after prefiltering with non-equivalent comparison operators. Preserve the
+  caller's original bounds and the legacy `<`/`>` exclusion predicate,
+  including malformed or out-of-default-range parameters.
+- ARCH-004B3b resolution: Aggregate mean-max now selects activities from the
+  anchored listing, retains both activity and cache native identities through
+  pinned reads, and publishes two private snapshot directories only after the
+  complete collection succeeds. Empty selections do not inspect `cache` and
+  preserve the header-only HTTP 200 response. Cache-matched activity attempts
+  are capped at 2,048 and verified snapshot bytes at 256 MiB; all selected
+  same-basename sources remain available to the legacy integrity reader while
+  each cache is copied once. A late generation change or any budget, read, or
+  write failure discards both snapshots before response output. The original
+  date bounds and legacy exclusion comparisons are retained. This resolves
+  ARCH-004B3b1 through ARCH-004B3b6.
+- ARCH-004B3b verification: The focused file-store/endpoint-input suite passes
+  40/40 with Qt 6.8.3 and under Qt 6.4.2 ASan/UBSan (leak detection disabled).
+  It covers empty selection, exact response contracts, retained listed-file
+  identities, duplicate basenames, cache-matched pair limits, byte-boundary
+  arithmetic, snapshot cleanup, and rollback after a later source replacement.
+  The changed Local API, endpoint-input, file-store, anchored-filesystem, and
+  generated RideDB objects compile with Qt 6.8.3; only the established bison
+  warnings remain. Independent re-review found no remaining commit blocker.
+  Native Windows/macOS execution remains required for platform verification.
 - ARCH-004B3c (queued): Inventory the configured measures groups and snapshot
   every athlete measure input needed by one response before constructing the
   legacy `Measures` reader. Keep the global measures-schema dependency explicit.

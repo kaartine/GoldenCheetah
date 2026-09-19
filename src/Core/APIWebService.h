@@ -54,7 +54,7 @@ class APIWebService : public HttpRequestHandler
         void listAthletes(HttpRequest &request, HttpResponse &response);
         void listRides(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, HttpRequest &request, HttpResponse &response);
         void listActivity(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);
-        void listMMP(QString athlete, const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);
+        void listMMP(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);
         void listZones(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);
         void listMeasures(QString athlete, QStringList paths, HttpRequest &request, HttpResponse &response);
 
