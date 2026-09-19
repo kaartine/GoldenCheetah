@@ -310,6 +310,13 @@ TestRExecutionGate::productionEntrypointsUseGate()
         "executionContext->athlete != executionAthlete.data()"));
     QVERIFY(toolSource.contains("RideItem *item = guardedItem.data();"));
     QVERIFY(!toolSource.contains("foreach(RideItem *item, activities)"));
+    QVERIFY(toolSource.contains("RProtectionScope protectionScope;"));
+    QVERIFY(toolSource.contains("protectionScope.protectValue(df);"));
+    QVERIFY(toolSource.contains(
+        "list = protectionScope.protectValue(Rf_allocVector(VECSXP, f.count()));"));
+    QVERIFY(toolSource.contains(
+        "rownames = protectionScope.protectValue(Rf_allocVector(STRSXP, f.count()));"));
+    QVERIFY(!toolSource.contains("UNPROTECT(3); // list and names and rownames"));
 
     QFile toolHeader(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTool.h"));
     QVERIFY2(

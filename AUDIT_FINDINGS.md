@@ -8016,7 +8016,7 @@ commit before the next finding begins.
   Raw `rtool`/cross-thread deletion remain ARCH-003C; a cache replacement that
   leaves old items alive is a stale-snapshot semantic risk rather than this
   UAF and still needs generation identity in the broader snapshot design.
-- ARCH-003B2c (queued R memory-safety work recorded before correction): the
+- ARCH-003B2c (FIXED; R memory-safety work recorded before correction): the
   same `RTool::activity()` user-list branch accumulates `SEXP` data frames in a
   plain `QList` after `dfForActivity()` has unprotected them, so later R
   allocations may collect those frames before the result list roots them. The
@@ -8024,6 +8024,32 @@ commit before the next finding begins.
   row-name protections, thereby popping one caller/outer protection. Define a
   balanced RAII/protection strategy, add allocation-pressure real-R coverage,
   and verify every early-return/exception path before correcting this item.
+- ARCH-003B2c resolution: a non-copyable `RProtectionScope` now owns the
+  branch's contiguous protection-stack segment. Every frame returned by
+  `dfForActivity()` is protected before Qt storage or another R allocation;
+  the final list and row names enter the same scope. Scope destruction balances
+  all successful protections after return-value evaluation on normal,
+  cancellation/invalid-target, and ordinary C++ exception paths. The helper's
+  `protectValue` name intentionally avoids R's lowercase `protect` macro.
+- ARCH-003B2c verification: The source contract first failed on the missing
+  ownership/counting seam, then the focused suite passed 11/11 on Qt 6.4.2
+  normally and 11/11 under ASan/UBSan with leak detection disabled.
+  `RTool.cpp` compiles with staged R 4.3.3/Rcpp/RInside headers under
+  `GC_WANT_R` and `STRICT_R_HEADERS`. A real embedded-R 4.3.3 pressure test
+  using the production header protected 256 frames across a forced `R_gc()`
+  after every allocation, verified the rooted result, unwound a deliberately
+  thrown C++ exception, and passed another GC afterward. The test also exposed
+  and prevented the lowercase macro-name recursion before completion. The
+  source dependency baseline passes 14/14, `git diff --check` is clean, and
+  independent re-review returned GO. The real-R pressure test remains a
+  one-off release check; `dfForActivity()` internal exceptions are its own
+  callee contract and the adjacent unrooted callers remain ARCH-003B2d.
+- ARCH-003B2d (queued adjacent R protection work recorded before correction):
+  the compare/split branches also receive unprotected frames from
+  `dfForActivity()` and perform a new R allocation for `namedlist` before
+  rooting each frame. Inventory every `dfForActivity()` caller and give the
+  returned frames a common ownership/protection contract; do not assume the
+  bounded ARCH-003B2c user-list correction resolves these adjacent paths.
 - ARCH-003C (queued lifetime work recorded before correction): `rtool` is a raw
   process global, self-publishes before construction finishes, leaks failed and
   successful instances, and has an unreachable/unconditional finalizer. Define

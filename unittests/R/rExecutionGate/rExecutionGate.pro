@@ -14,6 +14,7 @@ SOURCES = testRExecutionGate.cpp \
           $$PWD/../../../src/R/RExecutionGate.cpp
 
 HEADERS = $$PWD/../../../src/R/RExecutionGate.h \
+          $$PWD/../../../src/R/RProtectionScope.h \
           $$PWD/../../../src/Charts/RWidgetExecutionGuard.h
 
 INCLUDEPATH += $$PWD/../../../src

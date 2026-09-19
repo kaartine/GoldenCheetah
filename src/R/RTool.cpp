@@ -18,6 +18,7 @@
 
 #include "RTool.h"
 #include "RGraphicsDevice.h"
+#include "RProtectionScope.h"
 #include "GcUpgrade.h"
 
 #include "RideCache.h"
@@ -2418,6 +2419,7 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
             // than pre-allocating, since we decide to split and may
             // get multiple responses
             QList<SEXP> f;
+            RProtectionScope protectionScope;
 
             // create a data.frame for each and add to list
             for (const QPointer<RideItem> &guardedItem : guardedActivities) {
@@ -2435,19 +2437,22 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
                 // we open, if it wasn't open we also close
                 // to make sure we don't exhause memory
                 bool close = (item->isOpen() == false);
-                foreach(SEXP df, rtool->dfForActivity(item->ride(), split, join)) f<<df;
+                foreach(SEXP df, rtool->dfForActivity(item->ride(), split, join)) {
+                    protectionScope.protectValue(df);
+                    f << df;
+                }
                 if (close) item->close();
 
             }
 
             // now create an R list
             SEXP list;
-            PROTECT(list=Rf_allocVector(VECSXP, f.count()));
+            list = protectionScope.protectValue(Rf_allocVector(VECSXP, f.count()));
             for(int index=0; index < f.count(); index++) SET_VECTOR_ELT(list, index, f[index]);
 
             // we have to give a name to each row
             SEXP rownames;
-            PROTECT(rownames = Rf_allocVector(STRSXP, f.count()));
+            rownames = protectionScope.protectValue(Rf_allocVector(STRSXP, f.count()));
             for(int i=0; i<f.count(); i++) {
                 QString rownumber=QString("%1").arg(i+1);
                 SET_STRING_ELT(rownames, i, Rf_mkChar(rownumber.toLatin1().constData()));
@@ -2458,8 +2463,6 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
             //XXX Rf_setAttrib(list, R_ClassSymbol, Rf_mkString("data.frame"));
             Rf_setAttrib(list, R_RowNamesSymbol, rownames);
             Rf_namesgets(list, rownames);
-
-            UNPROTECT(3); // list and names and rownames
 
             return list;
 
