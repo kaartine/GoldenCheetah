@@ -5,6 +5,7 @@ all aux Build/sourceModuleDependencies
 all aux Build/workoutGameAssets
 all aux Build/publicReleaseCredentials
 all aux Build/linkerSectionFlags
+all qt R/rExecutionGate
 all qt Core/athleteMigrationSafety
 all qt Core/sessionBoundaries
 all qt Core/credentialSettings

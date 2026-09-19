@@ -117,6 +117,7 @@ exists(unittests.pri) {
 			   Planning/planBundleReaderLifetime \
 			   Python/pythonDataSeriesOwnership \
 			   Python/pythonChartLifecycle \
+			   R/rExecutionGate \
 			   Train/antBurstBounds \
 			   Train/antLifecycle \
 			   Train/antThreadSafety \

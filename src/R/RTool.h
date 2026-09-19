@@ -18,6 +18,9 @@
 
 #include "RChart.h"
 #include "Context.h"
+#include "RExecutionGate.h"
+
+#include <atomic>
 
 #ifndef _GC_RTool_h
 
@@ -31,6 +34,11 @@ class RTool {
     public:
         RTool();
         void  configChanged();
+        RExecutionGate::Lease tryAcquireExecution(
+            Context *executionContext,
+            RCanvas *executionCanvas,
+            Perspective *executionPerspective,
+            RChart *executionChart);
 
         REmbed *R;
         RGraphicsDevice *dev;
@@ -122,6 +130,10 @@ class RTool {
         SEXP dfForDateRangeMeanmax(bool all, DateRange range, SEXP filter); // returns the meanmax for a season
         SEXP dfForDateRangePeaks(bool all, DateRange range, SEXP filter, QList<RideFile::SeriesType> series, QList<int> durations);
         SEXP dfForRideFileCache(RideFileCache *p);      // returns meanmax for a cache
+
+    private:
+        RExecutionGate executionGate;
+        std::atomic_bool appearanceRefreshPending{false};
 
 };
 

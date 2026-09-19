@@ -179,11 +179,19 @@ void RConsole::keyPressEvent(QKeyEvent *e)
             // lets run it
             //qDebug()<<"RUN:" << line;
 
-            // set the context for the call - used by all the
-            // R functions to access the athlete data/model etc
-            rtool->context = context;
-            rtool->canvas = parent->canvas;
-            rtool->chart = parent;
+            RExecutionGate::Lease executionLease =
+                rtool->tryAcquireExecution(
+                    context,
+                    parent->canvas,
+                    NULL,
+                    parent);
+            if (!executionLease) {
+                putData(
+                    QColor(Qt::red),
+                    "R execution is already active or was requested "
+                    "from a non-owner thread.\n");
+                break;
+            }
 
             try {
 
@@ -219,10 +227,6 @@ void RConsole::keyPressEvent(QKeyEvent *e)
 
             }
 
-            // clear context
-            rtool->context = NULL;
-            rtool->canvas = NULL;
-            rtool->chart = NULL;
         }
 
         // prompt ">" for new command and ">>" for a continuation line
@@ -538,17 +542,19 @@ RChart::runScript()
 
     if (script->toPlainText() != "") {
 
+        RExecutionGate::Lease executionLease =
+            rtool->tryAcquireExecution(
+                context,
+                canvas,
+                myPerspective,
+                this);
+        if (!executionLease) return;
+
         // hourglass .. for long running ones this helps user know its busy
         QApplication::setOverrideCursor(Qt::WaitCursor);
 
         // turn off updates for a sec
         setUpdatesEnabled(false);
-
-        // run it !!
-        rtool->context = context;
-        rtool->canvas = canvas;
-        rtool->perspective = myPerspective;
-        rtool->chart = this;
 
         // set default page size
         rtool->width = rtool->height = 0; // sets the canvas to the window size
@@ -609,10 +615,5 @@ RChart::runScript()
         // scale to fit and center on output
         canvas->fitInView(canvas->sceneRect(), Qt::KeepAspectRatio);
 
-        // clear context
-        rtool->context = NULL;
-        rtool->canvas = NULL;
-        rtool->perspective = NULL;
-        rtool->chart = NULL;
     }
 }

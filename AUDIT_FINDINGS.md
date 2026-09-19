@@ -7864,7 +7864,7 @@ commit before the next finding begins.
 
 ### ARCH-003: Context and global registries hide ownership and lifetimes
 
-- Status: OPEN
+- Status: IN_PROGRESS
 - Severity: MEDIUM
 - Code: `src/Core/Context.h`, `src/Core/Context.cpp`,
   `src/Core/Settings.h`, and interpreter globals
@@ -7876,6 +7876,93 @@ commit before the next finding begins.
   ownership.
 - Fix direction: Extend the existing `AthleteSession` and `TrainingSession`
   seams incrementally and keep compatibility adapters until callers migrate.
+- ARCH-003A (FIXED; recorded before correction): Embedded R calls
+  `QApplication::processEvents()` while `RChart` and `RConsole` publish the
+  active `Context`, canvas, perspective, and chart through mutable process-wide
+  `rtool` pointers. Directly connected GUI signals can re-enter the single R
+  interpreter, overwrite those bindings, and clear them underneath the outer
+  evaluation. Add one GUI-thread-bound, non-reentrant RAII execution lease used
+  by both entry points; reject a nested/busy or wrong-thread acquisition before
+  touching R and clear bindings on every exit path. This is statically
+  demonstrated from the production wiring; no runtime reproduction is claimed.
+- ARCH-003A1 (configuration re-entry found during implementation and recorded
+  before correction): `RConsole::configChanged` and the graphics-device setup
+  can call `RTool::configChanged`, which directly evaluates R appearance code
+  outside the chart/console entry points. A config event pumped during an active
+  evaluation could therefore bypass the new lease. Admit this evaluation
+  through the same gate; while R is active, coalesce the request and apply it
+  exactly once after the outer lease releases, without nested interpreter use.
+- ARCH-003A2 (deferred-appearance regression found in review and recorded before
+  correction): `RGraphicsDevice::createGD()` requests `RTool::configChanged`
+  from inside an active R evaluation so a simple busy rejection drops the new
+  device's `par()`/`par.gc` appearance update, with no guaranteed later config
+  event. Coalesce busy appearance requests and execute one owner-thread refresh
+  only after the outer lease has cleared its bindings and released the gate.
+  Preserve this release ordering in the dependency-light gate tests and verify
+  the appearance semantics against a real embedded R graphics device.
+- ARCH-003A3 (queued behavior item recorded during review): A nested console
+  attempt reports that R is busy but skips the normal prompt, while a nested
+  chart refresh is silently dropped. Decide and test prompt plus chart-rerun
+  coalescing after ARCH-003B establishes a guarded chart lifetime; do not queue
+  raw `RChart *` callbacks through the current event-pumping lifetime gap.
+- ARCH-003A resolution: Added an owner-thread-bound, non-reentrant
+  `RExecutionGate` and RAII lease. `RConsole`, `RChart`, and appearance
+  configuration now acquire it before evaluating R. Rejected calls cannot
+  overwrite the active process-wide bindings, lease destruction clears those
+  bindings before release, and a lease moved to a non-owner thread terminates
+  before cleanup can write them. Busy appearance refreshes coalesce through an
+  atomic pending flag and run once after the outer lease releases; chart reruns
+  are intentionally not queued through the still-raw QObject lifetime.
+- ARCH-003A verification: The production-wiring test first failed because both
+  R entry points bypassed the gate. The final focused suite passes 9/9 on Qt
+  6.4.2 normally and 9/9 under ASan/UBSan with leak detection disabled. It
+  covers nested event-pump admission, wrong-thread rejection, exception and
+  early-return cleanup, move ownership, cleanup/release/deferred-work ordering,
+  reacquisition, and production entry-point wiring. With staged Ubuntu R 4.3.3,
+  Rcpp, and RInside headers, the production `RExecutionGate.cpp`, `RTool.cpp`,
+  and `RChart.cpp` compile with `GC_WANT_R` and `STRICT_R_HEADERS`. A real
+  embedded-R/RInside integration opens an R graphics device, defers an
+  appearance refresh through the gate, applies `par(bg='#123456')`, persists
+  `par.gc`, and reads the expected value back. The CI registry, source-module
+  baseline, and diff checks pass. LSan cannot run under the ptrace sandbox and
+  TSan aborts on the environment's unexpected memory mapping, so neither result
+  is claimed. A full GoldenCheetah `GC.display()` UI runtime and native platform
+  runs remain CI/release residuals. ARCH-003 remains in progress because
+  ARCH-003B--G are not resolved by this bounded reentrancy seam.
+- ARCH-003B (queued lifetime work recorded before correction): R event pumping
+  can also dispatch deletion of the active chart while `rtool` retains raw
+  QObject pointers. Reentrancy exclusion does not make those pointers lifetime
+  safe. Before changing this path, design a constrained event/cancellation pump
+  or guarded QObject bindings and add close-during-evaluation coverage.
+- ARCH-003C (queued lifetime work recorded before correction): `rtool` is a raw
+  process global, self-publishes before construction finishes, leaks failed and
+  successful instances, and has an unreachable/unconditional finalizer. Define
+  initialization-state-aware ownership and tested shutdown ordering before
+  enabling R finalization.
+- ARCH-003D (queued lifetime work recorded before correction): `PythonEmbed` is
+  another raw process global whose failed and successful instances are never
+  deleted, while its empty destructor cannot balance the saved interpreter
+  thread state. Define explicit shutdown ownership before finalization changes.
+- ARCH-003E (queued concrete defect recorded before correction):
+  `Py_SetProgramName` receives storage from a temporary `std::wstring`, although
+  CPython requires that storage to remain valid for the interpreter lifetime.
+  Give the program-name buffer explicit `PythonEmbed` lifetime and cover the
+  initialization contract before correcting it.
+- ARCH-003F (queued high-risk seam recorded before correction): RideCache
+  refresh workers directly dereference replaceable `GlobalContext`
+  `RideMetadata`/`ColorEngine` QObject state and read multi-key `appsettings`
+  values while GUI-thread config changes delete and replace those objects before
+  cooperatively interrupting workers. Introduce an AthleteSession-owned,
+  immutable per-refresh-generation environment snapshot; workers must receive
+  value data rather than QWidget/QObject/settings pointers. First inventory all
+  refresh keys and calendar/colour semantics and add deterministic
+  config-change/teardown barrier tests. Coordinate this work with ARCH-004C so
+  the HTTP worker no longer mutates the shared settings registry.
+- ARCH-003G (queued registry work recorded before correction): The global raw
+  `Context *` list and broad public mutable Context state provide only a
+  lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the
+  GUI thread and migrate bounded consumers into owned session services rather
+  than attempting a broad Context rewrite.
 
 ### ARCH-004: Local API path components bypass the anchored filesystem boundary
 

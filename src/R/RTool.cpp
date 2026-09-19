@@ -397,6 +397,35 @@ RTool::R_ProcessEvents()
     QApplication::processEvents();
 }
 
+RExecutionGate::Lease
+RTool::tryAcquireExecution(
+    Context *executionContext,
+    RCanvas *executionCanvas,
+    Perspective *executionPerspective,
+    RChart *executionChart)
+{
+    RExecutionGate::Lease lease = executionGate.tryAcquire(
+        [this]() {
+            context = NULL;
+            canvas = NULL;
+            perspective = NULL;
+            chart = NULL;
+        },
+        [this]() {
+            if (appearanceRefreshPending.exchange(
+                    false, std::memory_order_acq_rel)) {
+                configChanged();
+            }
+        });
+    if (!lease) return lease;
+
+    context = executionContext;
+    canvas = executionCanvas;
+    perspective = executionPerspective;
+    chart = executionChart;
+    return lease;
+}
+
 void
 RTool::cancel()
 {
@@ -415,6 +444,14 @@ RTool::configChanged()
 {
     // wait until loaded
     if (starting || failed) return;
+
+    RExecutionGate::Lease executionLease =
+        tryAcquireExecution(NULL, NULL, NULL, NULL);
+    if (!executionLease) {
+        appearanceRefreshPending.store(true, std::memory_order_release);
+        return;
+    }
+    appearanceRefreshPending.store(false, std::memory_order_release);
 
     // update global R appearances
     QString parCommand=QString("par(par.default)\n"
