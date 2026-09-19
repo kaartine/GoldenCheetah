@@ -8115,6 +8115,54 @@ commit before the next finding begins.
   settings through the global `appsettings` path API after filesystem
   validation. Inventory those settings files and add a generation-aware
   settings adapter before claiming that endpoint is fully anchored.
+- ARCH-004C1 (security and side-effect finding recorded before correction): All
+  four response values route to `config/athlete-preferences.ini`, but the GET
+  request initializes all four athlete QSettings files through process-global
+  state. That can run legacy migration, synchronize every cached athlete,
+  harden private settings, and access credential backends in an HTTP worker.
+  Read only a bounded, anchored generation of the preferences file through a
+  request-local adapter; the endpoint must not initialize or migrate settings.
+- ARCH-004C2 (response-integrity finding recorded before correction): The CSV
+  header is emitted before all athlete inputs are validated. Prepare every row
+  first; an unsafe, changed, oversized, or malformed preferences generation
+  must return 500 without a partial header or prior athlete rows. A genuinely
+  missing preferences file or empty `sex` value may retain the legacy skip.
+- ARCH-004C3 (availability finding recorded before correction): A per-file cap
+  multiplied by the 1,024-athlete listing budget still permits excessive
+  aggregate snapshot and INI-parser work. Define both per-profile and
+  request-wide byte/work budgets and test their exact boundaries.
+- ARCH-004C4 (classification finding recorded before correction): The current
+  conditional silently skips every athlete-directory or `rideDB.json` capture
+  failure. Distinguish a genuinely absent database, which may preserve the
+  legacy skip, from alias, replacement, oversize, and other unsafe failures,
+  which must fail the all-or-nothing response.
+- ARCH-004C5 (compatibility decision required before correction): Direct split-
+  file snapshots intentionally cannot reproduce the legacy Windows Registry,
+  macOS plist, portable `cwd/gc`, or unsynchronized in-process QSettings
+  sources. Choose whether the API requires already-migrated split files, or
+  separately design trusted adapters for those non-athlete-root backends.
+  Calling `sync()` or migration from the GET request is not an acceptable way
+  to conceal the difference.
+- ARCH-004C6 (CSV correctness and consumer-safety finding recorded before
+  correction): Portable athlete names may contain commas and formula-leading
+  characters, while the endpoint writes the name as an unescaped CSV field.
+  Define an RFC 4180 field policy and an explicit spreadsheet-consumer policy;
+  cover comma-prefixed and formula-prefixed names without silently changing
+  the normal-name wire representation.
+- ARCH-004C proposed implementation: Add a request-local athlete-profile reader
+  with exact-file QSettings INI parsing, fallbacks disabled, bare keys `dob`,
+  `weight`, `height`, and `sex`, and a required `NoError` parser status. Feed it
+  only verified private snapshots from the retained athlete anchor, collect
+  bounded immutable rows before output, and remove `appsettings` access from
+  `listAthletes`. Tests must cover typed values, missing versus unsafe inputs,
+  malformed and aliased files, replacement races, aggregate limits, a later-
+  athlete failure with no partial body, the selected compatibility policy, and
+  CSV field behavior on Qt 6.4/6.8 plus native Windows and macOS.
+- ARCH-004C inventory verification: Two independent read-only reviews traced
+  key routing, target and legacy precedence, migration side effects, worker-
+  thread use, response ordering, and the proposed adapter. Both require the
+  ARCH-004C5 compatibility policy before implementation; no source-code change
+  is approved until that decision is explicit.
 
 ### ARCH-005: The build does not enforce component boundaries
 
