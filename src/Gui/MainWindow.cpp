@@ -111,6 +111,7 @@
 #ifdef GC_HAS_CLOUD_DB
 #include "CloudDBCommon.h"
 #include "CloudDBChart.h"
+#include "CloudDBChartImportPolicy.h"
 #include "CloudDBUserMetric.h"
 #include "CloudDBCurator.h"
 #include "CloudDBStatus.h"
@@ -1029,6 +1030,15 @@ MainWindow::addChartFromCloudDB()
             // parse charts into property pairs
             foreach (QString chartDef, chartDefs) {
                 QList<QMap<QString,QString> > properties = GcChartWindow::chartPropertiesFromString(chartDef);
+                if (CloudDBChartImportPolicy::evaluate(properties)
+                    != CloudDBChartImportPolicy::Decision::Allow) {
+                    QMessageBox::warning(
+                        this,
+                        tr("Chart import blocked"),
+                        tr("This CloudDB chart contains executable or invalid content and was not imported. "
+                           "Community Python and R charts remain disabled until they can run inside an isolated security boundary."));
+                    continue;
+                }
                 for (int i = 0; i< properties.size(); i++) {
                     currentAthleteTab->context->mainWindow->athleteTab()->view(currentAthleteTab->currentView())->importChart(properties.at(i), false);
                 }

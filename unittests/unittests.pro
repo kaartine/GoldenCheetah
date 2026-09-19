@@ -18,6 +18,7 @@ exists(unittests.pri) {
 			   Core/dataFilterZones \
 			   Core/localApiSecurity \
 			   Cloud/credentialTransportSafety \
+			   Cloud/cloudDbChartImportPolicy \
 			   Cloud/oauthCallbackPolicy \
 			   Cloud/oauthTokenReplyController \
 			   Cloud/stravaAccountRemoval \

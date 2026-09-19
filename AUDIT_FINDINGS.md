@@ -7738,7 +7738,7 @@ commit before the next finding begins.
 
 ### ARCH-001: CloudDB charts cross the content-to-code trust boundary
 
-- Status: IN_PROGRESS
+- Status: FIXED
 - Severity: HIGH
 - Code: `src/Cloud/CloudDBChart.cpp`, `src/Gui/MainWindow.cpp`,
   `src/Gui/Perspective.cpp`, `src/Charts/PythonChart.cpp`, and
@@ -7753,6 +7753,20 @@ commit before the next finding begins.
 - Fix direction: Quarantine executable CloudDB chart definitions. A preview or
   consent dialog alone must never authorize them; re-enablement requires a
   separately reviewed sandbox or authenticated curation design.
+- Resolution: The CloudDB import path now passes every parsed definition
+  through a fail-closed policy before `Perspective::importChart`. Empty or
+  malformed property sets, all four Python/R chart types, case variants of the
+  executable `script` property, and mixed safe/executable imports are rejected
+  atomically. Rejected charts remain inert and the UI explains that community
+  scripts require a separately reviewed isolation boundary. The chart type
+  identifiers were moved into a lightweight header so the policy uses the
+  production enum without linking the GUI registry.
+- Verification: The RED build first failed because the import policy did not
+  exist. The focused suite passes 16 cases normally and under ASan/UBSan. Leak
+  detection is unavailable in the current sandbox because LSan cannot attach;
+  no leak result is claimed. The CI registry self-test passes. `MainWindow`,
+  the import policy, and `GcWindowRegistry` compile with CloudDB enabled in the
+  pinned Qt 6.8.3 UI-test container.
 
 ### ARCH-002: All primary source modules form one include cycle
 

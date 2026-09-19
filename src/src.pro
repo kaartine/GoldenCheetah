@@ -516,11 +516,11 @@ notsupported += $${QT_VERSION}
 
 equals(CloudDB, active) {
 
-            HEADERS += Cloud/CloudDBChart.h Cloud/CloudDBCommon.h \
+            HEADERS += Cloud/CloudDBChart.h Cloud/CloudDBChartImportPolicy.h Cloud/CloudDBCommon.h \
                        Cloud/CloudDBCurator.h Cloud/CloudDBStatus.h \
                        Cloud/CloudDBVersion.h Cloud/CloudDBTelemetry.h \
                        Cloud/CloudDBUserMetric.h
-            SOURCES += Cloud/CloudDBChart.cpp Cloud/CloudDBCommon.cpp \
+            SOURCES += Cloud/CloudDBChart.cpp Cloud/CloudDBChartImportPolicy.cpp Cloud/CloudDBCommon.cpp \
                        Cloud/CloudDBCurator.cpp Cloud/CloudDBStatus.cpp \
                        Cloud/CloudDBVersion.cpp Cloud/CloudDBTelemetry.cpp \
                        Cloud/CloudDBUserMetric.cpp
@@ -740,7 +740,7 @@ HEADERS += FileIO/AnchoredFileSystem.h FileIO/ArchiveFile.h FileIO/AtomicFileWri
 HEADERS += Gui/AboutDialog.h Gui/AddIntervalDialog.h Gui/AnalysisSidebar.h Gui/CacheWriteWarning.h Gui/ChooseCyclistDialog.h Gui/ColorButton.h \
            Gui/Colors.h Gui/CompareDateRange.h Gui/CompareInterval.h Gui/ComparePane.h Gui/ConfigDialog.h Gui/MiniCalendar.h \
            Gui/DragBar.h Gui/EstimateCPDialog.h Gui/GcCrashDialog.h Gui/GcSideBarItem.h Gui/GcToolBar.h Gui/GcWindowLayout.h \
-           Gui/GcWindowRegistry.h Gui/GenerateHeatMapDialog.h Gui/GuiSmokeShutdown.h Gui/GuiStartupPolicy.h Gui/HelpWhatsThis.h Gui/HelpWindow.h \
+           Gui/GcWindowRegistry.h Gui/GcWindowTypes.h Gui/GenerateHeatMapDialog.h Gui/GuiSmokeShutdown.h Gui/GuiStartupPolicy.h Gui/HelpWhatsThis.h Gui/HelpWindow.h \
            Gui/IntervalTreeView.h Gui/LTMSidebar.h Gui/MainWindow.h Gui/OpenGLVersionProbe.h Gui/NewAthleteWizard.h Gui/Pages.h Gui/RideNavigator.h Gui/RideNavigatorProxy.h \
            Gui/RideNavigatorSearchFilter.h \
            Gui/SaveDialogs.h Gui/SearchBox.h Gui/SearchFilterBox.h Gui/SolveCPDialog.h Gui/AthleteTab.h Gui/AbstractView.h Gui/ToolsRhoEstimator.h \

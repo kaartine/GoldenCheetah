@@ -12,6 +12,7 @@ all qt Core/dataFilterSafety
 all qt Core/dataFilterZones
 all qt Core/localApiSecurity
 all qt Cloud/credentialTransportSafety
+all qt Cloud/cloudDbChartImportPolicy
 all qt Cloud/oauthCallbackPolicy
 all qt Cloud/oauthTokenReplyController
 all qt Cloud/stravaAccountRemoval
