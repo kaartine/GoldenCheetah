@@ -2686,6 +2686,45 @@ RideFile::arePresent()
 void
 RideFile::recalculateDerivedSeries(bool force)
 {
+    if (!force && dstale == false) return;
+
+    RideFileDerivedSeriesInputs inputs;
+    bool allowCpMetadataOverride = false;
+    Athlete *athlete = context ? context->athlete : nullptr;
+    if (athlete && athlete->zones(sport())) {
+        inputs.powerZonesAvailable = true;
+        const int zoneRange = athlete->zones(sport())->whichRange(
+            startTime().date());
+        inputs.configuredCp = zoneRange >= 0
+            ? athlete->zones(sport())->getCP(zoneRange)
+            : 0;
+        allowCpMetadataOverride = true;
+    }
+    if (athlete && appsettings) {
+        inputs.configuredWheelSizeMillimeters = appsettings->cvalue(
+            athlete->cyclist,
+            GC_WHEELSIZE,
+            2100).toInt();
+    }
+    recalculateDerivedSeriesImpl(
+        force, inputs, allowCpMetadataOverride);
+}
+
+void
+RideFile::recalculateDerivedSeries(
+    bool force,
+    const RideFileDerivedSeriesInputs &inputs)
+{
+    recalculateDerivedSeriesImpl(
+        force, inputs, inputs.powerZonesAvailable);
+}
+
+void
+RideFile::recalculateDerivedSeriesImpl(
+    bool force,
+    const RideFileDerivedSeriesInputs &inputs,
+    bool allowCpMetadataOverride)
+{
     // derived data is calculated from the data that is present
     // we should set to 0 where we cannot derive since we may
     // be called after data is deleted or added
@@ -2732,35 +2771,21 @@ RideFile::recalculateDerivedSeries(bool force)
     static const double bn = -61.849f;
     static const double cn = -1.73549567522521f;
 
-    int CP = 0;
+    int CP = inputs.configuredCp;
     //int WPRIME = 0;
     double aTISS = 0.0f;
     double anTISS = 0.0f;
 
-    // set WPrime and CP
-    Athlete *athlete =
-        context ? context->athlete : nullptr;
-    if (athlete && athlete->zones(sport())) {
-        int zoneRange = athlete->zones(sport())->whichRange(
-            startTime().date());
-        CP = zoneRange >= 0
-            ? athlete->zones(sport())->getCP(zoneRange)
-            : 0;
-        //WPRIME = zoneRange >= 0 ? context->athlete->zones(sport())->getWprime(zoneRange) : 0;
-
-        // did we override CP in metadata / metrics ?
-        int oCP = getTag("CP","0").toInt();
-        if (oCP) CP=oCP;
+    // did we override CP in metadata / metrics ?
+    if (allowCpMetadataOverride) {
+        const int overrideCp = getTag("CP", "0").toInt();
+        if (overrideCp) CP = overrideCp;
     }
 
     // wheelsize - use meta, then config then drop to 2100
     double wheelsize = getTag(tr("Wheelsize"), "0.0").toDouble();
-    if (wheelsize == 0 && athlete && appsettings) {
-        wheelsize = appsettings->cvalue(
-            athlete->cyclist,
-            GC_WHEELSIZE,
-            2100).toInt();
-    }
+    if (wheelsize == 0)
+        wheelsize = inputs.configuredWheelSizeMillimeters;
     if (wheelsize == 0)
         wheelsize = 2100;
     wheelsize /= 1000.00f; // need it in meters

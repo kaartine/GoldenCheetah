@@ -733,7 +733,7 @@ HEADERS += FileIO/AnchoredFileSystem.h FileIO/ArchiveFile.h FileIO/AtomicFileWri
            FileIO/PowerTapDevice.h FileIO/PowerTapUtil.h FileIO/PwxRideFile.h FileIO/QuarqParser.h FileIO/QuarqRideFile.h \
            FileIO/RawRideFile.h FileIO/RideAutoImportConfig.h FileIO/RideFileCache.h FileIO/RideFileCacheIntegrity.h \
            FileIO/RideFileCacheWriteError.h \
-           FileIO/RideFileCommand.h FileIO/RideFileCRC.h FileIO/RideFile.h FileIO/RideFileTableModel.h  FileIO/Serial.h \
+           FileIO/RideFileCommand.h FileIO/RideFileCRC.h FileIO/RideFileDerivedSeriesInputs.h FileIO/RideFile.h FileIO/RideFileTableModel.h  FileIO/Serial.h \
            FileIO/SlfParser.h FileIO/SlfRideFile.h FileIO/SmfParser.h FileIO/SmfRideFile.h FileIO/SmlParser.h \
            FileIO/SmlRideFile.h FileIO/SrdRideFile.h FileIO/SrmRideFile.h FileIO/SyncRideFile.h FileIO/TcxParser.h \
            FileIO/TcxRideFile.h FileIO/TxtRideFile.h FileIO/WkoRideFile.h FileIO/XDataDialog.h FileIO/XDataTableModel.h \

@@ -9096,6 +9096,28 @@ commit before the next finding begins.
   whose detach/copy path requires a copy constructor and fails to compile.
   Use a standard move-aware container and rerun both normal and sanitizer
   registry targets.
+- ARCH-003F2c3e (remaining value-execution transaction recorded before
+  correction): Moving only weight and zone-range indices to the retained
+  environment would mix those values with live zone tables and settings still
+  consumed by derived-series, CPX, metrics, and interval discovery. Do not
+  perform that partial production cutover. First extract behavior-preserving
+  value-input seams, then switch weight, concrete power/heart-rate/pace ranges,
+  cache analysis, metric execution, and interval construction as one coherent
+  generation transaction.
+- ARCH-003F2c3e1 (derived-series prerequisite recorded before correction):
+  `RideFile::recalculateDerivedSeries()` resolves CP and wheel size internally
+  from live Athlete zones and `appsettings`, including when the parser invokes
+  it in a refresh worker. Add a FileIO-owned scalar input and an explicit
+  overload whose calculation body cannot consult Context, Athlete, or global
+  settings. Keep the current overload as a compatibility adapter with its
+  metadata-override and fallback ordering unchanged; this commit establishes
+  the seam but must not yet claim the bound worker is generation-pure.
+- ARCH-003F2c3e1a (CP-domain ambiguity found by independent review and recorded
+  before correction): A scalar `configuredCp = 0` cannot distinguish absent
+  power zones from a present zone history with no matching dated range. Legacy
+  code permits the ride's CP metadata override only in the latter case. Carry
+  domain presence explicitly in the value input and cover both zero-CP states
+  before accepting the compatibility adapter.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -10353,6 +10375,33 @@ commit before the next finding begins.
   than concurrent real UserMetric relevance evaluations; existing clone,
   concurrent evaluation, and definition-teardown tests provide the remaining
   supporting evidence, so independent review did not treat this as a blocker.
+- ARCH-003F2c3e1 resolution: derived-series calculation now accepts a
+  FileIO-owned scalar input containing power-zone availability, configured CP,
+  and configured wheel size. The explicit calculation path reads only that
+  value plus RideFile-owned points and metadata. The compatibility overload
+  retains the live lookups before delegating, including its early clean-state
+  return, CP-tag acceptance only when a power-zone domain exists, and the
+  Wheelsize-tag, athlete-setting, then 2100 mm fallback order.
+- ARCH-003F2c3e1a resolution: power-zone domain availability is represented
+  independently from the resolved CP. Focused cases prove that an absent
+  domain ignores a CP tag, while a present domain with no dated range permits
+  the same tag exactly as the legacy path does.
+- ARCH-003F2c3e1 verification: the expanded RideFile ownership/value suite
+  passes 21/21 normally and under ASan/UBSan with leak detection disabled. It
+  compares the affected derived point fields and presence flags for legacy/default,
+  configured CP, CP/Wheelsize metadata override, zero wheel fallback, and
+  clean-state short-circuit behavior; a source contract excludes Context,
+  Athlete, and `appsettings` from the calculation implementation.
+  `RideFile.cpp` compiles with warnings as errors, source dependencies pass
+  14/14, the linker-section policy check passes, and `git diff --check` is
+  clean. Independent review first returned NO-GO for the corrected CP-domain
+  ambiguity and then GO with no remaining blocker, major, or minor finding.
+- ARCH-003F2c3e residual: this is a prerequisite seam only. The parser and all
+  existing production callers still use the compatibility overload; the bound
+  refresh must not supply retained derived-series inputs until weight,
+  concrete zone ranges, CPX, metric execution, and interval discovery can move
+  as one generation-consistent transaction. Parser temp/metadata/notes/athlete
+  tag/RR inputs remain a separate snapshot prerequisite under ARCH-003F2c3.
 - ARCH-003F2c3a residual: generation-bound `checkStale` still writes color,
   weight, CRC, and stale state in the worker, as tracked by ARCH-003F3c2. The
   builder's remaining live environment consumers are tracked by ARCH-003F2c3,

@@ -14,6 +14,79 @@
 
 #include "RideFile.h"
 
+namespace {
+
+#define GC_STRINGIFY_IMPL(value) #value
+#define GC_STRINGIFY(value) GC_STRINGIFY_IMPL(value)
+
+void populateDerivedSeriesRide(RideFile &ride)
+{
+    ride.setTag(QStringLiteral("Sport"), QStringLiteral("Bike"));
+    ride.setRecIntSecs(1.0);
+    ride.setDataPresent(RideFile::watts, true);
+    ride.setDataPresent(RideFile::cad, true);
+    ride.setDataPresent(RideFile::kph, true);
+    ride.setDataPresent(RideFile::km, true);
+    ride.setDataPresent(RideFile::alt, true);
+
+    RideFilePoint first;
+    first.secs = 0.0;
+    first.watts = 220.0;
+    first.cad = 90.0;
+    first.kph = 36.0;
+    first.km = 0.0;
+    first.alt = 100.0;
+    ride.appendPoint(first);
+
+    RideFilePoint second = first;
+    second.secs = 1.0;
+    second.watts = 300.0;
+    second.cad = 95.0;
+    second.kph = 38.0;
+    second.km = 0.01;
+    second.alt = 101.0;
+    ride.appendPoint(second);
+}
+
+void compareDerivedSeries(const RideFile &actual, const RideFile &expected)
+{
+    QCOMPARE(actual.dataPoints().size(), expected.dataPoints().size());
+    for (int index = 0; index < actual.dataPoints().size(); ++index) {
+        const RideFilePoint *left = actual.dataPoints().at(index);
+        const RideFilePoint *right = expected.dataPoints().at(index);
+        QCOMPARE(left->hrd, right->hrd);
+        QCOMPARE(left->cadd, right->cadd);
+        QCOMPARE(left->kphd, right->kphd);
+        QCOMPARE(left->nmd, right->nmd);
+        QCOMPARE(left->wattsd, right->wattsd);
+        QCOMPARE(left->xp, right->xp);
+        QCOMPARE(left->np, right->np);
+        QCOMPARE(left->apower, right->apower);
+        QCOMPARE(left->atiss, right->atiss);
+        QCOMPARE(left->antiss, right->antiss);
+        QCOMPARE(left->gear, right->gear);
+        QCOMPARE(left->hhb, right->hhb);
+        QCOMPARE(left->o2hb, right->o2hb);
+        QCOMPARE(left->tcore, right->tcore);
+        QCOMPARE(left->clength, right->clength);
+        QCOMPARE(left->slope, right->slope);
+    }
+    const RideFileDataPresent *left = actual.areDataPresent();
+    const RideFileDataPresent *right = expected.areDataPresent();
+    QCOMPARE(left->np, right->np);
+    QCOMPARE(left->xp, right->xp);
+    QCOMPARE(left->apower, right->apower);
+    QCOMPARE(left->atiss, right->atiss);
+    QCOMPARE(left->antiss, right->antiss);
+    QCOMPARE(left->gear, right->gear);
+    QCOMPARE(left->hhb, right->hhb);
+    QCOMPARE(left->o2hb, right->o2hb);
+    QCOMPARE(left->tcore, right->tcore);
+    QCOMPARE(left->slope, right->slope);
+}
+
+} // namespace
+
 class TestableRideFile : public RideFile
 {
 public:
@@ -37,7 +110,161 @@ private slots:
     void duplicateTimestampUpdateKeepsOwnedPointAndSummaries();
     void fileCrcReleasesItsReadStream();
     void fileCrcDistinguishesEmptyFileFromReadFailure();
+    void explicitDerivedInputsPreserveLegacyDefaults();
+    void explicitDerivedInputsUseConfiguredCp();
+    void derivedMetadataOverridesExplicitInputs();
+    void absentPowerZonesIgnoreCpMetadata();
+    void availablePowerZonesWithoutRangeUseCpMetadata();
+    void zeroWheelInputUsesLegacyDefault();
+    void cleanDerivedSeriesSkipsExplicitRecalculation();
+    void explicitDerivedCalculationHasNoLiveFallback();
 };
+
+void TestRideFileOwnership::explicitDerivedInputsPreserveLegacyDefaults()
+{
+    RideFile legacy;
+    RideFile explicitInputs;
+    populateDerivedSeriesRide(legacy);
+    populateDerivedSeriesRide(explicitInputs);
+
+    legacy.recalculateDerivedSeries(true);
+    explicitInputs.recalculateDerivedSeries(
+        true, RideFileDerivedSeriesInputs {});
+
+    compareDerivedSeries(explicitInputs, legacy);
+}
+
+void TestRideFileOwnership::explicitDerivedInputsUseConfiguredCp()
+{
+    RideFile lowerCp;
+    RideFile higherCp;
+    populateDerivedSeriesRide(lowerCp);
+    populateDerivedSeriesRide(higherCp);
+
+    RideFileDerivedSeriesInputs lowerInputs;
+    lowerInputs.powerZonesAvailable = true;
+    lowerInputs.configuredCp = 200;
+    RideFileDerivedSeriesInputs higherInputs = lowerInputs;
+    higherInputs.configuredCp = 300;
+    lowerCp.recalculateDerivedSeries(true, lowerInputs);
+    higherCp.recalculateDerivedSeries(true, higherInputs);
+
+    QVERIFY(lowerCp.dataPoints().constLast()->atiss > 0.0);
+    QVERIFY(higherCp.dataPoints().constLast()->atiss > 0.0);
+    QVERIFY(lowerCp.dataPoints().constLast()->atiss
+            != higherCp.dataPoints().constLast()->atiss);
+    QVERIFY(lowerCp.dataPoints().constLast()->antiss
+            != higherCp.dataPoints().constLast()->antiss);
+}
+
+void TestRideFileOwnership::derivedMetadataOverridesExplicitInputs()
+{
+    RideFile metadataOverride;
+    RideFile explicitEquivalent;
+    populateDerivedSeriesRide(metadataOverride);
+    populateDerivedSeriesRide(explicitEquivalent);
+    metadataOverride.setTag(QStringLiteral("CP"), QStringLiteral("300"));
+    metadataOverride.setTag(
+        QStringLiteral("Wheelsize"), QStringLiteral("2500"));
+
+    RideFileDerivedSeriesInputs lowerInputs;
+    lowerInputs.powerZonesAvailable = true;
+    lowerInputs.configuredCp = 200;
+    lowerInputs.configuredWheelSizeMillimeters = 2000;
+    RideFileDerivedSeriesInputs equivalentInputs;
+    equivalentInputs.configuredCp = 300;
+    equivalentInputs.configuredWheelSizeMillimeters = 2500;
+    metadataOverride.recalculateDerivedSeries(true, lowerInputs);
+    explicitEquivalent.recalculateDerivedSeries(true, equivalentInputs);
+
+    compareDerivedSeries(metadataOverride, explicitEquivalent);
+}
+
+void TestRideFileOwnership::absentPowerZonesIgnoreCpMetadata()
+{
+    RideFile taggedWithoutZones;
+    RideFile noCp;
+    populateDerivedSeriesRide(taggedWithoutZones);
+    populateDerivedSeriesRide(noCp);
+    taggedWithoutZones.setTag(QStringLiteral("CP"), QStringLiteral("300"));
+
+    taggedWithoutZones.recalculateDerivedSeries(
+        true, RideFileDerivedSeriesInputs {});
+    noCp.recalculateDerivedSeries(
+        true, RideFileDerivedSeriesInputs {});
+
+    compareDerivedSeries(taggedWithoutZones, noCp);
+}
+
+void TestRideFileOwnership::availablePowerZonesWithoutRangeUseCpMetadata()
+{
+    RideFile taggedWithoutRange;
+    RideFile explicitEquivalent;
+    populateDerivedSeriesRide(taggedWithoutRange);
+    populateDerivedSeriesRide(explicitEquivalent);
+    taggedWithoutRange.setTag(QStringLiteral("CP"), QStringLiteral("300"));
+
+    RideFileDerivedSeriesInputs noRange;
+    noRange.powerZonesAvailable = true;
+    RideFileDerivedSeriesInputs equivalent = noRange;
+    equivalent.configuredCp = 300;
+    taggedWithoutRange.recalculateDerivedSeries(true, noRange);
+    explicitEquivalent.recalculateDerivedSeries(true, equivalent);
+
+    compareDerivedSeries(taggedWithoutRange, explicitEquivalent);
+}
+
+void TestRideFileOwnership::zeroWheelInputUsesLegacyDefault()
+{
+    RideFile zeroInput;
+    RideFile legacyDefault;
+    populateDerivedSeriesRide(zeroInput);
+    populateDerivedSeriesRide(legacyDefault);
+
+    RideFileDerivedSeriesInputs zero;
+    zero.configuredWheelSizeMillimeters = 0;
+    zeroInput.recalculateDerivedSeries(true, zero);
+    legacyDefault.recalculateDerivedSeries(
+        true, RideFileDerivedSeriesInputs {});
+
+    compareDerivedSeries(zeroInput, legacyDefault);
+}
+
+void TestRideFileOwnership::cleanDerivedSeriesSkipsExplicitRecalculation()
+{
+    RideFile ride;
+    populateDerivedSeriesRide(ride);
+    RideFileDerivedSeriesInputs initial;
+    initial.configuredWheelSizeMillimeters = 2100;
+    ride.recalculateDerivedSeries(true, initial);
+    const double initialGear = ride.dataPoints().constLast()->gear;
+
+    RideFileDerivedSeriesInputs replacement = initial;
+    replacement.configuredWheelSizeMillimeters = 1000;
+    ride.recalculateDerivedSeries(false, replacement);
+
+    QCOMPARE(ride.dataPoints().constLast()->gear, initialGear);
+}
+
+void TestRideFileOwnership::explicitDerivedCalculationHasNoLiveFallback()
+{
+    const QDir root(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)));
+    QFile source(root.filePath(QStringLiteral("src/FileIO/RideFile.cpp")));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QByteArray contents = source.readAll();
+    const qsizetype implementation = contents.indexOf(
+        "RideFile::recalculateDerivedSeriesImpl(");
+    const qsizetype nextMethod = contents.indexOf(
+        "\nRideFile::", implementation + 1);
+    QVERIFY(implementation >= 0);
+    QVERIFY(nextMethod > implementation);
+    const QByteArray body = contents.mid(
+        implementation, nextMethod - implementation);
+    QVERIFY(!body.contains("context"));
+    QVERIFY(!body.contains("Athlete"));
+    QVERIFY(!body.contains("athlete"));
+    QVERIFY(!body.contains("appsettings"));
+}
 
 void TestRideFileOwnership::allConstructorsReleaseSummaryPoints()
 {

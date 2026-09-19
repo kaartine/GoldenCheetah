@@ -20,6 +20,7 @@
 #define _RideFile_h
 #include "GoldenCheetah.h"
 #include "RideFileCRC.h"
+#include "RideFileDerivedSeriesInputs.h"
 
 #include <QDate>
 #include <QDir>
@@ -361,6 +362,9 @@ class RideFile : public QObject // QObject to emit signals
         // TO ENSURE IT IS ONLY REFRESHED IF NEEDED
         //
         void recalculateDerivedSeries(bool force=false);
+        void recalculateDerivedSeries(
+            bool force,
+            const RideFileDerivedSeriesInputs &inputs);
 
         // Working with DATAPRESENT flags
         inline const RideFileDataPresent *areDataPresent() const { return &dataPresent; }
@@ -545,6 +549,11 @@ class RideFile : public QObject // QObject to emit signals
         void updateTotal(const RideFilePoint* point, double factor);
         void updateAvg(SeriesType series, double value);
         void updateAvg(RideFilePoint* point);
+
+        void recalculateDerivedSeriesImpl(
+            bool force,
+            const RideFileDerivedSeriesInputs &inputs,
+            bool allowCpMetadataOverride);
 
         bool dstale; // is derived data up to date?
 

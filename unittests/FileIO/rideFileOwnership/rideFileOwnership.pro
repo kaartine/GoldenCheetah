@@ -9,6 +9,8 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
+GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
+DEFINES += GC_TEST_SOURCE_ROOT="$${GC_TEST_SOURCE_ROOT}"
 
 SOURCES = testRideFileOwnership.cpp \
           RideFileOwnershipTestStubs.cpp \
@@ -19,6 +21,7 @@ SOURCES = testRideFileOwnership.cpp \
           ../../../src/FileIO/RideFileCommand.cpp
 
 HEADERS = ../../../src/FileIO/RideFile.h \
+          ../../../src/FileIO/RideFileDerivedSeriesInputs.h \
           ../../../src/FileIO/RideFileCommand.h
 
 INCLUDEPATH += ../../../src \
