@@ -1380,7 +1380,9 @@ TrainSidebar::updateWorkoutDistanceProgress()
                     progress.targetWatts,
                     progress.terrain,
                     progress.sectionProgress,
-                    progress.sectionDurationMs);
+                    progress.sectionDurationMs,
+                    workoutGameCourseRuntime.relativeGearRatio(
+                        virtualDrivetrain.gear()));
     }
 }
 
@@ -1407,7 +1409,9 @@ TrainSidebar::seekWorkoutDistance(double distanceKilometers)
                     progress.targetWatts,
                     progress.terrain,
                     progress.sectionProgress,
-                    progress.sectionDurationMs);
+                    progress.sectionDurationMs,
+                    workoutGameCourseRuntime.relativeGearRatio(
+                        virtualDrivetrain.gear()));
     }
 }
 
@@ -3381,6 +3385,9 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
                         activeTrainerCapabilities().targetPower;
                 input.prescribedWatts =
                         workoutGameCourseRuntime.generatedProgressTargetWatts(1.0);
+                input.relativeGearRatio =
+                        workoutGameCourseRuntime.relativeGearRatio(
+                            virtualDrivetrain.gear());
                 input.gradePercent = slope;
                 input.terrain =
                         workoutGameCourseRuntime.generatedProgressTerrain();

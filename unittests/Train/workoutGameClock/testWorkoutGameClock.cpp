@@ -112,6 +112,32 @@ private slots:
         QVERIFY(clock.positionAt(2200) > before);
     }
 
+    void zeroRateAnchorIsAuthoritativeAcrossWallClockTime()
+    {
+        WorkoutGameClock clock(20, 4);
+        clock.reset(1000, 1000, true, 0.0);
+
+        const WorkoutGameClockAdvance stalled = clock.advance(2000);
+        QVERIFY(!stalled.ticks.empty());
+        QCOMPARE(stalled.ticks.back().workoutTimeMs, std::int64_t(1000));
+        QCOMPARE(clock.positionAt(10000), std::int64_t(1000));
+
+        clock.setAnchor(1450, 2000, true, 0.0);
+        QCOMPARE(clock.positionAt(10000), std::int64_t(1450));
+        const WorkoutGameClockAdvance advanced = clock.advance(2200);
+        QVERIFY(!advanced.ticks.empty());
+        QCOMPARE(advanced.ticks.back().workoutTimeMs, std::int64_t(1450));
+
+        // An explicit route seek is authoritative in both directions.
+        clock.setAnchor(600, 2200, true, 0.0);
+        QCOMPARE(clock.positionAt(10000), std::int64_t(600));
+
+        clock.setAnchor(600, 2300, false, 0.0);
+        QVERIFY(clock.advance(20000).ticks.empty());
+        clock.setAnchor(600, 20000, true, 0.0);
+        QCOMPARE(clock.positionAt(50000), std::int64_t(600));
+    }
+
     void pauseFreezesPositionAndResumeDoesNotCatchUpWallTime()
     {
         WorkoutGameClock clock(20, 4);

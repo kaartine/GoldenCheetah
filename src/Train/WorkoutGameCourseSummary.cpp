@@ -60,6 +60,7 @@ bool WorkoutGameCourseSummary::build(
     int eligibleSections = 0;
     int technicalEligibleSections = 0;
     int technicalRouteSections = 0;
+    std::set<std::size_t> eligibleSourceIntervals;
     std::set<WorkoutGameTerrainKind> featureKinds;
     std::set<std::size_t> countedClimbs;
     std::set<std::size_t> countedJumps;
@@ -98,6 +99,7 @@ bool WorkoutGameCourseSummary::build(
                 && WorkoutGameCourseTerrain::paletteEligible(section.feature);
         if (eligible) {
             ++eligibleSections;
+            eligibleSourceIntervals.insert(sourceIndex);
             eligibleDistance += section.lengthMeters;
             if (technical) {
                 ++technicalEligibleSections;
@@ -175,7 +177,8 @@ bool WorkoutGameCourseSummary::build(
                 10.0 * double(technicalRouteSections)
                     / double(course.sections.size());
     }
-    if (eligibleSections >= 10 && summary.technicalTerrainExposureApplicable
+    if (eligibleSourceIntervals.size() >= 10
+            && summary.technicalTerrainExposureApplicable
             && !completeFeatureShowcase) {
         const WorkoutGameCourseModeContract contract =
                 WorkoutGameCoursePrescription::contractFor(preset);

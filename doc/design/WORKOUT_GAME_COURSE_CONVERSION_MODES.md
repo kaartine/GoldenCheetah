@@ -16,10 +16,11 @@ increases deterministically from Calm training trail through Varied training
 trail to Technical game trail,
 while every result remains inside the common road-quality contract.
 
-The prescription transform audits every duration or power change before the
-distance-course builder fits terrain and distance around it. A failed audit,
-road-plan validation, road-quality audit or ETA causes conversion to fail
-closed; no artifact may be saved.
+The current transform preserves every normalized source duration and start/end
+target exactly, then fits distance, generated terrain effort and road geometry
+around that immutable profile. A failed audit, road-plan validation,
+road-quality audit or ETA causes conversion to fail closed; no artifact may be
+saved.
 
 ## Source-data limitation and fail-safe metadata rule
 
@@ -31,10 +32,11 @@ generated `WorkoutGameFeature` classification is not evidence that time is
 non-prescriptive.
 
 Consequently, absent prescription metadata makes every source interval
-prescribed. No conversion mode may shorten the nominal duration of any such
-interval. Runtime progression may reach a section boundary only after that
-mode's separately declared minimum exposure. Malformed, length-mismatched,
-unknown or unsupported metadata fails conversion closed. Schema 3 introduced
+prescribed. No current conversion mode may change the nominal duration of any
+source interval. Runtime section boundaries are reached only by ridden
+distance; elapsed time neither holds a rider before a boundary nor skips them
+past one. Malformed, length-mismatched, unknown or unsupported metadata fails
+conversion closed. Schema 3 introduced
 `source.prescriptionMetadata`; its version 1 format accepts one explicit role
 per source interval:
 
@@ -43,10 +45,11 @@ per source interval:
 - `non-prescriptive-cooldown`; or
 - `non-prescriptive-transition`.
 
-Only the final three roles authorize a duration adjustment. Metadata is an
-authorization boundary, not a hint: intensity or generated terrain may never
-promote `prescribed` to a non-prescriptive role. This task specifies that
-metadata contract and its tests enforce it in production code.
+Schemas 3--5 used the final three roles to authorize bounded duration changes.
+They remain readable for compatibility, but conversion algorithm 6 does not
+perform those changes. Metadata is still an authorization boundary, not a
+hint: intensity or generated terrain may never promote `prescribed` to a
+non-prescriptive role.
 
 Role validation is fail-closed. A non-prescriptive warmup must be the first
 interval, a non-prescriptive cooldown must be the last, and a non-prescriptive
@@ -88,79 +91,37 @@ are signed; negative means shorter or lighter. Per-interval retention is
 | Every key-effort duration error | 0 ms | 0 ms | 0 ms |
 | Every prescribed recovery duration error | 0 ms | 0 ms | 0 ms |
 | Unannotated interval duration error | 0 ms | 0 ms | 0 ms |
-| Explicit non-prescriptive part, per-interval absolute duration change | 0% | <= 3% | <= 8% |
-| Aggregate work-duration deviation | 0% | <= 3% absolute | <= 8% absolute |
-| Aggregate recovery-duration deviation | 0% | 0% | -5% to +8% |
-| Total nominal-duration deviation | 0% | <= 3% absolute | <= 8% absolute |
-| Absolute load deviation | 0% | <= 3% | <= 8% |
-| Minimum runtime key-effort exposure | 100% | 100% | 100% |
-| Minimum runtime prescribed work exposure | 100% | 100% | 100% |
-| Minimum runtime prescribed recovery exposure | 100% | 100% | 100% |
+| Explicit non-prescriptive part duration change | 0% | 0% | 0% |
+| Aggregate work-duration deviation | 0% | 0% | 0% |
+| Aggregate recovery-duration deviation | 0% | 0% | 0% |
+| Total nominal-duration deviation | 0% | 0% | 0% |
+| Absolute load deviation | 0% | 0% | 0% |
+| Runtime progression | ridden distance only | ridden distance only | ridden distance only |
 
-Calm training trail copies the duration and start/end watts of every interval
-exactly (0 ms and 0 W difference). Its runtime minimum exposure for each
-section is also the source duration; terrain must fit the prescription.
+All three presets copy the nominal duration and start/end watts of every source
+interval exactly. They differ only in distance, effort variation, elevation,
+road shape, technical density and feature choice. Current documents keep the
+legacy `minimumDurationMs` and `maximumDurationMs` fields equal to nominal
+duration for compatibility; playback ignores all three as progression gates.
 
-Varied training trail copies every prescribed interval exactly. It may
-adjust only an explicitly annotated non-prescriptive warmup, cooldown or
-transition, by at most 3% in either direction. Ordinary recovery must not be
-treated as a transition. Every adjustment and its metadata role is reported in
-the preview.
+Course position, active section, ramp progress, generated terrain target,
+trainer target lookup, cues and finish state all derive from the same clamped
+course distance. If raw distance does not increase, elapsed time cannot advance
+the route. If physics produces coasting distance it can advance the route,
+including under downhill gravity.
 
-Technical game trail also copies every prescribed interval exactly. It can
-change only an explicitly annotated non-prescriptive warmup, cooldown or
-transition, and total nominal duration remains within 8% of the source.
-Compactness, target distance and trail flow never authorize changing a
-prescribed interval. Stimulus, key efforts and recovery safety take precedence
-over flow.
-
-All allowed scaling is rounded once to integer milliseconds. The converter
-backs an authorized change off deterministically when any aggregate limit would
-otherwise be exceeded. It never changes a key effort or an unannotated part to
-satisfy a terrain, distance, load or duration target.
-
-Runtime progression caps each raw trainer-distance increment with a continuous
-time-derived bound measured from active movement in the current section.
-Reaching a section's distance early cannot finish it before its minimum
-exposure. Rejected excess distance is not banked for later. Stationary time does
-not satisfy the exposure gate or push the rider forward. A moving rider may use
-the interval between the minimum and maximum exposure to finish the distance;
-at the maximum, runtime advances without banking rejected trainer distance.
-Trainer slope lookup and game position use that same bounded course distance,
-so the display and trainer cannot disagree about the active section. Paused
-time is excluded by the training session clock.
-
-Within a ramp, target power follows active section time rather than distance.
-The rider can therefore move slowly without stretching the ramp's opening
-target across the whole section. Course position remains distance-driven; only
-the prescribed target timeline is time-driven. The same target is published to
-the training data generator and Workout Game telemetry/HUD.
-
-Preview ETA assumes continuous active riding at 85%, 100% or 115% of the
-prescribed target and applies the same maximum-section transition as runtime.
-For an entirely prescribed workout, all three estimates equal its authored
-duration. It does not predict stops; stationary time freezes runtime progress
-and therefore extends the actual ride beyond the preview estimate.
-
-Every prescribed interval has 100% minimum runtime exposure in every mode.
-Only explicitly versioned non-prescriptive roles may use a lower mode-specific
-minimum in a future transform.
-
-`maximumDurationMs` is a bounded active-riding envelope, not permission to move
-a stationary rider. When a moving rider reaches the maximum, playback advances
-deterministically to the next section (or finishes the course), reports that
-forced transition for the update and discards rejected trainer distance. Any
-active-time overrun is carried into the next section so a delayed update cannot
-extend a prescribed target without bound. This changes neither recorded data
-nor the immutable source prescription.
+Preview ETA simulates continuous riding at 85%, 100% and 115% of the generated
+reference-effort profile. The three estimates normally differ and are not
+forced to equal authored duration. They do not predict stops; stopping extends
+the actual ride because the route remains unfinished.
 
 ## Measurable terrain and feature guarantees
 
-The current generator supplies the mode anchors `gradeScale` 0.82/1.00/1.18 and
-`technicality` 0.15/0.55/0.95 and route-turn scales 1.00/1.30/2.60. The low
+The current generator supplies the mode anchors `gradeScale` 0.70/1.00/1.30 and
+`technicality` 0.10/0.55/0.95 and route-turn scales 1.00/1.60/3.20. The low
 (`<= 0.25`), middle and high (`>= 0.85`) palette branches define the terrain
-bands below. The common safety envelope is
-grade `[-12%, +12%]`, at most 85 degrees per non-berm road piece, no more than
+bands below. The generated effort profile uses a grade envelope of
+`[-3%, +12%]`, at most 85 degrees per non-berm road piece, no more than
 25 m near-straight, at least three alternating deliberate bends and at least 45
 degrees accumulated turn in every ordinary 100 m window, plus a 75--85 degree
 turn at least every 400 ordinary metres.
@@ -172,7 +133,7 @@ Palette-eligible means a section classified as `WarmupTrail`, `Trail` or
 climbs, sprint challenges and safety-exempt challenge branches are excluded
 from its denominator and audited separately. `Technical feature density` is
 the count of those technical sections per ten palette-eligible sections. Its
-2--4 / 5--7 / 8--10 bands deliberately keep all three modes playful while
+1--3 / 5--7 / 8--10 bands deliberately keep all three modes playful while
 providing increasing technical intensity and variety. A fully recovery-only
 workout is SmoothTrail in every mode and never gains technical terrain or a
 scored challenge. A workout with fewer than two palette-eligible work sections
@@ -181,20 +142,20 @@ the safe smooth fallback and reports exposure as `N/A`.
 
 | Terrain/flow metric | Calm training trail | Varied training trail | Technical game trail |
 | --- | ---: | ---: | ---: |
-| `gradeScale` | 0.82 | 1.00 | 1.18 |
-| `technicality` | 0.15 | 0.55 | 0.95 |
-| deterministic route-turn scale | 1.00 | 1.30 | 2.60 |
-| Palette-eligible technical terrain exposure target | 25--45% | 50--75% | 75--100% |
-| Technical feature density | 2--4 / 10 sections | 5--7 / 10 sections | 8--10 / 10 sections |
-| Palette | roots, rollers, easy rock garden and log-over mixed with smooth trail; climbs retained; no gap jump | roots, rollers, rock garden, log-over and skinny mixed with smooth trail; no gap jump | skinny, rock garden or rock slab trail; smooth recovery; log-over, tabletop or gated gap jump sprint |
-| Scored challenge on a suitable prescribed work/key-effort section | allowed without changing start/end power, interval time or minimum exposure | allowed without changing start/end power, interval time or minimum exposure | allowed without changing start/end power, interval time or minimum exposure |
+| `gradeScale` | 0.70 | 1.00 | 1.30 |
+| `technicality` | 0.10 | 0.55 | 0.95 |
+| deterministic route-turn scale | 1.00 | 1.60 | 3.20 |
+| Palette-eligible technical terrain exposure target | 10--30% | 50--75% | 75--100% |
+| Technical feature density | 1--3 / 10 sections | 5--7 / 10 sections | 8--10 / 10 sections |
+| Palette and effort-semantic features | roots and rollers; falling effort may become a drop and rising effort rollers | roots, rollers, rock garden, log-over and skinny, with effort-aligned drops, slabs or tabletops | dense technical palette with effort-aligned drops, slabs, climbs, tabletops and gated gap jumps |
+| Scored challenge on a suitable prescribed work/key-effort section | allowed without changing source start/end power or nominal duration | allowed without changing source start/end power or nominal duration | allowed without changing source start/end power or nominal duration |
 | Scored challenge on a prescribed recovery | never | never | never |
 
-Calm training trail is not a no-game mode: roots, rollers, an easy rock garden
-and a log-over are available inside its lower exposure and density bands. A
+Calm training trail is not a no-game mode: roots and rollers are available
+inside its lower exposure and density bands. A
 scored challenge may be attached to a suitable work or key-effort section in
 any mode, provided it does not change the section's start/end target power,
-interval duration, minimum exposure or any other prescription guarantee.
+nominal duration or any other prescription guarantee.
 Prescribed recovery never receives a scored challenge in any mode. Varied
 training trail and Technical game trail increase technical difficulty and
 variety through the existing safe feature catalog; their distinction from
@@ -211,10 +172,18 @@ long section cannot reverse the ordering. A generator unable to preserve the
 strict ordering and the common safety envelope fails closed instead of changing
 the prescription.
 
-The discrete section boundaries can still make an exact target band
-mathematically unreachable. Conversion preserves the workout and reports the
-actual strictly ordered exposure instead of splitting or changing a prescribed
-interval.
+Long source intervals are subdivided into visual sections at the configured
+variation wavelength without changing their aggregate duration or target
+endpoints. The discrete section boundaries can still make an exact exposure
+band mathematically unreachable; conversion preserves the workout and reports
+the actual strictly ordered exposure.
+
+The effort curve controls feature meaning as well as elevation. Falling effort
+is suitable for a drop or jump landing, rising effort for an acceleration
+approach, slab, tabletop or gap jump, and sustained high effort for a climb,
+slab or rock garden. Recovery remains smooth and unscored regardless of the
+palette. A climb shorter than its safe canonical geometry is downgraded rather
+than allowed to lengthen the fixed course.
 
 Gap jumps remain Technical-game-trail-only and deterministic. They retain the
 existing safe line, power, geometry and road-quality gates. A recovery section
@@ -234,17 +203,18 @@ long selected-mode details at 900x700 and shows:
 - preserved/total hard and easy segments.
 
 The selected-mode details retain load and duration deviations, generation
-anchors, feature count and density, and every authorized per-interval duration
-change.
+anchors, feature count and density, terrain-effort variation percentage and
+variation wavelength. Current conversion reports no per-interval duration
+changes.
 `Hard segment` and `easy segment` are deliberately used in the UI because the
 underlying ERG point-to-point segments are not authored workout step groups.
 
-The dialog states once that all three presets preserve prescribed targets and
-timing. Primary labels and descriptions use the rider-purpose concepts Calm
-training trail, Varied training trail and Technical game trail. A separate
-secondary detail line retains the 0.82/1.00/1.18 grade scales,
-1.00/1.30/2.60 curvature scales and 2--4/5--7/8--10 technical sections per ten
-eligible sections.
+The dialog states once that all three presets create a fixed-distance route,
+reference gear 6 follows generated terrain effort, virtual gears change
+resistance, and elapsed time alone never advances the route. Primary labels use
+`Workout first`, `Balanced`, and `Ride first`. A secondary detail line retains
+the 0.70/1.00/1.30 grade scales, 1.00/1.60/3.20 curvature scales and
+1--3/5--7/8--10 technical sections per ten eligible sections.
 
 Hard- and easy-segment retention must never be inferred only from aggregate
 work/rest percentages: both preserved/total counts are first-class preview
@@ -260,20 +230,19 @@ neither the course nor its sidecar exists or changes before the user invokes
 Create/Save. Create/Save persists the already-previewed deterministic result,
 apart from user-edited title/path metadata.
 
-New or explicitly regenerated documents use schema version 4 and conversion
-algorithm version 3, which identifies preset-scaled route curvature. They may
-also record prescription metadata version 1.
-Schema 4 also stores the original workout's ordered lap markers and timed text
-instructions; CRS export maps their source times onto generated course distance
-without changing target power or section timing. During a game ride, lap and
-text-cue lookup follows the active workout timeline rather than a slow rider's
-visual distance, so the instruction and its target remain aligned. Schema 1
-through 3 documents
-remain readable and canonical: loading never regenerates or silently adds
-metadata, and their missing metadata invokes the fail-safe prescribed role for
-every interval. An explicit save may upgrade the container while preserving
-the legacy conversion-algorithm identity and the selected mode's route shape.
-Unknown schema, algorithm or prescription-metadata versions fail closed.
+New or explicitly regenerated documents use schema version 6 and conversion
+algorithm version 6. They store terrain-effort parameters, reference effort at
+section endpoints, source annotations and the distance-authored road plan.
+Schema 6 does not calculate or persist a source-content hash: normalized source
+intervals are the regeneration input. Schemas 1 through 5 remain readable;
+their legacy SHA-256 field is validated when present, and an explicit save
+upgrades to schema 6 without carrying the hash forward.
+
+CRS export maps source lap and timed-text positions onto generated course
+distance. During a game ride, targets and cues follow the same distance-derived
+nominal source position as the route, so a stopped rider cannot advance either
+by waiting. Unknown schema, algorithm or prescription-metadata versions fail
+closed.
 
 ## Verification
 
@@ -288,8 +257,7 @@ The static suite verifies that this design contract, fixture and production APIs
 remain aligned. The corresponding C++/Qt suites exercise conversion,
 persistence, source adaptation, dialog behavior and runtime playback.
 
-ETA step splitting across a section boundary remains a deferred precision
-item. The estimator currently applies the correct maximum-exposure transition,
-but a simulation step that straddles a boundary uses the old section's physics
-inputs for the whole step. Fixing that requires splitting the physics update at
-the boundary and is intentionally outside this runtime-timeline task.
+ETA uses bounded fixed physics steps and clamps its final distance at the course
+finish. Runtime playback independently clamps raw distance and resolves every
+section boundary from that distance; it contains no minimum/maximum exposure
+transition path.

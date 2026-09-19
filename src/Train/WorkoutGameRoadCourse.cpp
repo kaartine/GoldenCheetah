@@ -489,8 +489,8 @@ double presetTurnScale(WorkoutGameCoursePreset preset)
     // the other modes add deterministic curvature without changing distance.
     switch (preset) {
     case WorkoutGameCoursePreset::WorkoutFirst: return 1.0;
-    case WorkoutGameCoursePreset::Balanced: return 1.30;
-    case WorkoutGameCoursePreset::RideFirst: return 2.60;
+    case WorkoutGameCoursePreset::Balanced: return 1.60;
+    case WorkoutGameCoursePreset::RideFirst: return 3.20;
     }
     return 1.0;
 }
@@ -1082,6 +1082,15 @@ WorkoutGameRoadCourse generateRoadCourse(
                                  challengeDistance
                                     - featureGeometry.startMeters + 1.5),
                         minimumObstacle, maximumObstacle);
+                if (section.terrain == WorkoutGameTerrainKind::Drop) {
+                    // A short section can pull the drop backwards to leave
+                    // landing clearance. Keep the rider's decision gate on
+                    // the approach side of the relocated obstacle.
+                    challengeDistance = std::min(
+                            challengeDistance, obstacleDistance);
+                }
+            } else {
+                featureFitsSection = false;
             }
         } else if (challenge.enabled
                 && section.terrain == WorkoutGameTerrainKind::Berm) {

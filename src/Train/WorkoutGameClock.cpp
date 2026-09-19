@@ -91,12 +91,29 @@ void WorkoutGameClock::setAnchor(
 {
     const std::int64_t workoutTimeMs = std::max<std::int64_t>(
             0, requestedWorkoutTimeMs);
+    const double hintedRate = validRate(rateHint);
     if (!initialized || monotonicTimeMs < anchorMonotonicTimeMs) {
-        reset(workoutTimeMs, monotonicTimeMs, requestedRunning, rateHint);
+        reset(workoutTimeMs, monotonicTimeMs, requestedRunning, hintedRate);
         return;
     }
 
     const bool runningChanged = running != requestedRunning;
+    if (hintedRate == 0.0) {
+        // A zero-rate source is authoritative rather than an interpolation
+        // hint. Distance courses use this mode so wall-clock time can publish
+        // frames, but can never move the workout across a route boundary.
+        anchorWorkoutTimeMs = workoutTimeMs;
+        anchorMonotonicTimeMs = monotonicTimeMs;
+        lastSourceWorkoutTimeMs = workoutTimeMs;
+        lastPublishedWorkoutTimeMs = workoutTimeMs;
+        timelineRate = 0.0;
+        running = requestedRunning;
+        if (runningChanged) {
+            nextDeadlineMonotonicMs = nextDeadlineAfter(monotonicTimeMs);
+        }
+        return;
+    }
+
     const std::int64_t predicted = positionAt(monotonicTimeMs);
     const bool sourceReversed = lastSourceWorkoutTimeMs
                 > DiscontinuityThresholdMs
@@ -114,7 +131,6 @@ void WorkoutGameClock::setAnchor(
     anchorWorkoutTimeMs = std::max(
             predicted, lastPublishedWorkoutTimeMs);
     anchorMonotonicTimeMs = monotonicTimeMs;
-    const double hintedRate = validRate(rateHint);
     double correctedRate = hintedRate + correctionRate;
     if (requestedRunning && hintedRate > 0.0) {
         correctedRate = std::max(

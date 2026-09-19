@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -23,7 +24,6 @@ from render_rider_bike_audit import (  # noqa: E402
     canonical_to_blender,
     normalize_png,
     point_at,
-    sha256,
 )
 from triposr_candidate import (  # noqa: E402
     CandidateError,
@@ -31,6 +31,14 @@ from triposr_candidate import (  # noqa: E402
     read_external_snapshot,
     verify_candidate_directory,
 )
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def parse_arguments() -> argparse.Namespace:

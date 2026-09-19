@@ -19,10 +19,8 @@ struct WorkoutGameDistancePlaybackSnapshot
 {
     bool ready = false;
     bool finished = false;
-    bool maximumExposureExceeded = false;
     std::size_t sectionIndex = 0;
     std::int64_t nominalTimeMs = 0;
-    std::int64_t sectionElapsedMs = 0;
     std::int64_t sectionDurationMs = 0;
     double distanceMeters = 0.0;
     double timelineDistanceMeters = 0.0;
@@ -60,10 +58,7 @@ private:
     WorkoutGameDistanceCourse configuredCourse;
     double lastRawDistanceMeters = 0.0;
     double progressDistanceMeters = 0.0;
-    std::size_t progressSectionIndex = 0;
-    std::int64_t progressSectionActiveTimeMs = 0;
     std::int64_t lastProgressTimeMs = 0;
-    bool maximumExposureExceededOnLastAdvance = false;
 };
 
 #endif

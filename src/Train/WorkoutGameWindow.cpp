@@ -384,8 +384,8 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     paused = false;
     sessionActive = false;
     presentationSuspended = false;
-    positionRate.reset(1.0);
     currentWorkoutTimeMs = 0;
+    currentWorkoutDistanceMeters = 0.0;
     lastTelemetryMonotonicTimeMs = -1;
     currentAnchorRate = 1.0;
     updateAtWorkoutPosition(0);
@@ -406,7 +406,13 @@ void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
     threeDWindow->setGeneratorState(generatorState);
     lastTelemetryMonotonicTimeMs =
             WorkoutGameRunner::monotonicMilliseconds();
-    updateRunnerTelemetry();
+    if (distanceRuntime.enabled() && sessionActive && !paused
+            && std::isfinite(telemetry.getRouteDistance())) {
+        updateAtWorkoutPosition(
+                std::max(0.0, telemetry.getRouteDistance()) * 1000.0);
+    } else {
+        updateRunnerTelemetry();
+    }
 }
 
 void WorkoutGameWindow::setNow(long workoutPosition)
@@ -442,7 +448,8 @@ void WorkoutGameWindow::start()
             isVisible() && renderStack->currentWidget() == sceneGraphContainer);
     threeDWindow->setSessionRunning(
             isVisible() && renderStack->currentWidget() == threeDContainer);
-    updateAtWorkoutPosition(context->getNow());
+    updateAtWorkoutPosition(distanceRuntime.enabled()
+            ? currentWorkoutDistanceMeters : double(context->getNow()));
     runner.start(currentWorkoutTimeMs, currentAnchorRate);
     if (!isVisible()) {
         runner.pause(currentWorkoutTimeMs);
@@ -459,7 +466,8 @@ void WorkoutGameWindow::pause()
     threeDWindow->pauseTrainingSessionTiming();
     threeDWindow->setSessionRunning(false);
     sceneGraphWindow->setSessionRunning(false);
-    updateAtWorkoutPosition(context->getNow());
+    updateAtWorkoutPosition(distanceRuntime.enabled()
+            ? currentWorkoutDistanceMeters : double(context->getNow()));
     runner.pause(currentWorkoutTimeMs);
 }
 
@@ -473,7 +481,8 @@ void WorkoutGameWindow::unpause()
     threeDWindow->setSessionRunning(
             sessionActive && isVisible()
             && renderStack->currentWidget() == threeDContainer);
-    updateAtWorkoutPosition(context->getNow());
+    updateAtWorkoutPosition(distanceRuntime.enabled()
+            ? currentWorkoutDistanceMeters : double(context->getNow()));
     if (isVisible()) {
         runner.resume(currentWorkoutTimeMs, currentAnchorRate);
         presentationSuspended = false;
@@ -537,18 +546,24 @@ void WorkoutGameWindow::useOpenGLFallback()
 }
 
 void WorkoutGameWindow::updateAtWorkoutPosition(
-        std::int64_t workoutPosition,
+        double workoutPosition,
         bool discontinuity)
 {
     if (distanceRuntime.enabled()) {
-        distanceSnapshot = distanceRuntime.atWorkoutPosition(workoutPosition);
+        const double requestedDistance = std::isfinite(workoutPosition)
+                ? std::max(0.0, workoutPosition) : 0.0;
+        currentWorkoutDistanceMeters = discontinuity
+                ? requestedDistance
+                : std::max(currentWorkoutDistanceMeters, requestedDistance);
+        distanceSnapshot = distanceRuntime.atWorkoutPosition(
+                currentWorkoutDistanceMeters);
         currentWorkoutTimeMs = distanceSnapshot.ready
                 ? distanceSnapshot.nominalTimeMs : 0;
     } else {
-        currentWorkoutTimeMs = std::max<std::int64_t>(0, workoutPosition);
+        currentWorkoutTimeMs = std::max<std::int64_t>(
+                0, std::int64_t(std::llround(workoutPosition)));
     }
-    const std::int64_t nowMs = WorkoutGameRunner::monotonicMilliseconds();
-    currentAnchorRate = anchorRate(currentWorkoutTimeMs, nowMs);
+    currentAnchorRate = anchorRate();
     static const bool traceWorkoutGame =
             qEnvironmentVariableIntValue("GC_WORKOUT_GAME_TRACE") != 0;
     if (traceWorkoutGame && sessionActive) {
@@ -579,24 +594,13 @@ void WorkoutGameWindow::updateAtWorkoutPosition(
     updateRunnerTelemetry();
 }
 
-double WorkoutGameWindow::anchorRate(
-        std::int64_t workoutTimeMs,
-        std::int64_t monotonicTimeMs)
+double WorkoutGameWindow::anchorRate() const
 {
-    if (!distanceRuntime.enabled()) return 1.0;
-    const bool moving = hasTelemetry
-            && (finiteClampedNonNegative(
-                    latestTelemetry.getSpeed(), MaximumSpeedKph) > 0.2
-                || finiteClampedNonNegative(
-                    latestTelemetry.getCadence(), MaximumCadenceRpm) > 0.0
-                || finiteClampedNonNegative(
-                    latestTelemetry.getWatts(), MaximumPowerWatts) > 5.0);
-    return positionRate.update({
-        workoutTimeMs,
-        monotonicTimeMs,
-        hasTelemetry,
-        moving
-    });
+    // Distance playback translates the trainer's accumulated distance to the
+    // nominal workout timeline. That translated position is authoritative:
+    // wall-clock interpolation must not cross terrain, effort or score
+    // boundaries while the rider is stationary.
+    return distanceRuntime.enabled() ? 0.0 : 1.0;
 }
 
 void WorkoutGameWindow::updateRunnerTelemetry()

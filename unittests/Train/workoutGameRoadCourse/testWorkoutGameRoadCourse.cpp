@@ -2860,7 +2860,13 @@ private slots:
                     plan, source.sections.size()),
                  WorkoutGameRoadPlanValidationStatus::Ready);
         int inspectedShortFeatures = 0;
+        bool undersizedDropDisabled = false;
         for (const WorkoutGameRoadPiece &piece : plan.pieces) {
+            if (piece.sourceSectionIndex == 4
+                    && piece.terrain == WorkoutGameTerrainKind::Drop
+                    && !piece.challenge.enabled) {
+                undersizedDropDisabled = true;
+            }
             if (!piece.challenge.enabled
                     || (piece.terrain != WorkoutGameTerrainKind::RockGarden
                         && piece.terrain != WorkoutGameTerrainKind::Drop)) {
@@ -2877,7 +2883,8 @@ private slots:
                     >= sectionStartMeters);
             ++inspectedShortFeatures;
         }
-        QCOMPARE(inspectedShortFeatures, 2);
+        QCOMPARE(inspectedShortFeatures, 1);
+        QVERIFY(undersizedDropDisabled);
         QVERIFY(WorkoutGameRoadCourseBuilder::materialize(source, plan).ready);
     }
 };

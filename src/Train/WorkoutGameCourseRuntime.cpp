@@ -62,6 +62,7 @@ WorkoutGameCourseRuntimeStatus WorkoutGameCourseRuntime::configure(
     }
     configuredFtpWatts = document.ftpWatts;
     configuredPreset = document.preset;
+    configuredReferenceGear = document.generationParameters.referenceGear;
     latestProgress = playback.atDistance(0.0);
     configured = true;
     return WorkoutGameCourseRuntimeStatus::Ready;
@@ -72,6 +73,7 @@ void WorkoutGameCourseRuntime::reset()
     configured = false;
     configuredFtpWatts = 0.0;
     configuredPreset = WorkoutGameCoursePreset::Balanced;
+    configuredReferenceGear = 6;
     configuredVisualCourse = WorkoutGameCourse();
     playback = WorkoutGameDistancePlayback();
     latestProgress = WorkoutGameDistancePlaybackSnapshot();
@@ -193,6 +195,14 @@ double WorkoutGameCourseRuntime::generatedProgressTargetWatts(
     }
     return std::clamp(
             latestProgress.targetWatts * relativeGearRatio, 0.0, 2500.0);
+}
+
+double WorkoutGameCourseRuntime::relativeGearRatio(int currentGear) const
+{
+    if (!configured) return 1.0;
+    const VirtualDrivetrain current(currentGear);
+    const VirtualDrivetrain reference(configuredReferenceGear);
+    return current.gearRatio() / reference.gearRatio();
 }
 
 double WorkoutGameCourseRuntime::updateProgressSpeedKph(

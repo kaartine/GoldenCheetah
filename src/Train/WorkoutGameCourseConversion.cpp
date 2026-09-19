@@ -55,14 +55,6 @@ std::vector<WorkoutGameInterval> generatedIntervals(
     return intervals;
 }
 
-bool sectionBelongsTo(
-        const WorkoutGameDistanceCourseSection &section,
-        const WorkoutGameInterval &source)
-{
-    return section.sourceStartMs >= source.startMs
-            && section.sourceStartMs < source.startMs + source.durationMs;
-}
-
 }
 
 WorkoutGameDistanceCourseGenerationParameters
@@ -86,17 +78,17 @@ WorkoutGameCourseConverter::parametersForPreset(
         parameters.gradeScale = 1.00;
         parameters.technicality = 0.55;
         parameters.workMinimumDurationScale = 1.0;
-        parameters.workMaximumDurationScale = 1.03;
+        parameters.workMaximumDurationScale = 1.0;
         parameters.recoveryMinimumDurationScale = 1.0;
-        parameters.recoveryMaximumDurationScale = 1.03;
+        parameters.recoveryMaximumDurationScale = 1.0;
         break;
     case WorkoutGameCoursePreset::RideFirst:
         parameters.gradeScale = 1.30;
         parameters.technicality = 0.95;
         parameters.workMinimumDurationScale = 1.0;
-        parameters.workMaximumDurationScale = 1.08;
+        parameters.workMaximumDurationScale = 1.0;
         parameters.recoveryMinimumDurationScale = 1.0;
-        parameters.recoveryMaximumDurationScale = 1.08;
+        parameters.recoveryMaximumDurationScale = 1.0;
         break;
     }
     return parameters;
@@ -117,6 +109,11 @@ WorkoutGameCourseConversionResult WorkoutGameCourseConverter::convert(
 
     result.generationParameters = parametersForPreset(
             request.preset, request.roadPhysics);
+    result.generationParameters.terrainVariationPercent =
+            request.terrainVariationPercent;
+    result.generationParameters.variationLengthMeters =
+            request.variationLengthMeters;
+    result.generationParameters.referenceGear = request.referenceGear;
     result.course = WorkoutGameDistanceCourseBuilder::build(
             request.intervals,
             request.ftpWatts,
@@ -126,23 +123,6 @@ WorkoutGameCourseConversionResult WorkoutGameCourseConverter::convert(
         result.status = WorkoutGameCourseConversionStatus::GenerationFailed;
         return result;
     }
-    for (std::size_t index = 0; index < request.intervals.size(); ++index) {
-        const WorkoutGameCourseIntervalRole role =
-                WorkoutGameCoursePrescription::roleAt(
-                    request.prescriptionMetadata, index);
-        if (request.preset == WorkoutGameCoursePreset::WorkoutFirst
-                || role == WorkoutGameCourseIntervalRole::Prescribed) {
-            for (WorkoutGameDistanceCourseSection &section :
-                    result.course.sections) {
-                if (!sectionBelongsTo(section, request.intervals[index])) {
-                    continue;
-                }
-                section.minimumDurationMs = section.nominalDurationMs;
-                section.maximumDurationMs = section.nominalDurationMs;
-            }
-        }
-    }
-
     const std::vector<WorkoutGameInterval> generated = generatedIntervals(
             result.course, request.intervals);
     if (generated.size() != request.intervals.size()) {
@@ -162,30 +142,6 @@ WorkoutGameCourseConversionResult WorkoutGameCourseConverter::convert(
         result.status = WorkoutGameCourseConversionStatus::GenerationFailed;
         return result;
     }
-    const WorkoutGameCourseModeContract contract =
-            WorkoutGameCoursePrescription::contractFor(request.preset);
-    for (std::size_t index = 0; index < request.intervals.size(); ++index) {
-        if (WorkoutGameCoursePrescription::isRecovery(
-                    request.intervals[index], request.ftpWatts)
-                ) {
-            std::int64_t minimumExposureMs = 0;
-            for (const WorkoutGameDistanceCourseSection &section :
-                    result.course.sections) {
-                if (sectionBelongsTo(section, request.intervals[index])) {
-                    minimumExposureMs += section.minimumDurationMs;
-                }
-            }
-            if (double(minimumExposureMs) + 1.0
-                    >= double(request.intervals[index].durationMs)
-                        * contract.minimumRecoveryExposure) {
-                continue;
-            }
-            result.course = WorkoutGameDistanceCourse();
-            result.status = WorkoutGameCourseConversionStatus::GenerationFailed;
-            return result;
-        }
-    }
-
     if (!WorkoutGameCourseSummary::build(
                 result.course, request.intervals, request.ftpWatts,
                 request.preset, prescription, request.roadPhysics,

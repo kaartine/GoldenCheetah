@@ -127,9 +127,9 @@ private slots:
         const WorkoutGameDistancePlaybackSnapshot slow =
                 runtime.atWorkoutProgress(20.0, 5000);
         QCOMPARE(slow.distanceMeters, 20.0);
-        QCOMPARE(slow.timelineDistanceMeters, 50.0);
-        QCOMPARE(runtime.workoutTimelinePositionMeters(), 50.0);
-        QCOMPARE(runtime.workoutTimelinePositionMs(), std::int64_t(5000));
+        QCOMPARE(slow.timelineDistanceMeters, 20.0);
+        QCOMPARE(runtime.workoutTimelinePositionMeters(), 20.0);
+        QCOMPARE(runtime.workoutTimelinePositionMs(), std::int64_t(2000));
         QCOMPARE(runtime.generatedProgressSectionDurationMs(),
                  std::int64_t(10000));
         QCOMPARE(runtime.generatedProgressSectionProgress(), 0.2);
@@ -237,9 +237,12 @@ private slots:
         QCOMPARE(runtime.generatedTargetWattsAt(50, 1.25), 250.0);
         QCOMPARE(runtime.generatedTargetWattsAt(50, 0.5), 100.0);
         QCOMPARE(runtime.generatedTargetWattsAt(200, 2.0), 200.0);
+        QCOMPARE(runtime.relativeGearRatio(6), 1.0);
+        QVERIFY(runtime.relativeGearRatio(5) < 1.0);
+        QVERIFY(runtime.relativeGearRatio(7) > 1.0);
     }
 
-    void runtimeConstrainsRawTrainerDistanceByElapsedExposure()
+    void runtimeProgressDependsOnlyOnDistance()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -254,25 +257,25 @@ private slots:
 
         const WorkoutGameDistancePlaybackSnapshot fast =
                 runtime.atWorkoutProgress(100, 4500);
-        QCOMPARE(fast.distanceMeters, 50.0);
-        QCOMPARE(fast.sectionIndex, std::size_t(0));
-        QCOMPARE(fast.targetWatts, 195.0);
-        QCOMPARE(runtime.generatedProgressTargetWatts(1.0), 195.0);
+        QCOMPARE(fast.distanceMeters, 100.0);
+        QCOMPARE(fast.sectionIndex, std::size_t(1));
+        QCOMPARE(fast.targetWatts, 100.0);
+        QCOMPARE(runtime.generatedProgressTargetWatts(1.0), 100.0);
 
         const WorkoutGameDistancePlaybackSnapshot stopped =
-                runtime.atWorkoutProgress(100, 6250);
-        QCOMPARE(stopped.distanceMeters, 50.0);
-        QCOMPARE(stopped.sectionIndex, std::size_t(0));
+                runtime.atWorkoutProgress(100, 6250, false);
+        QCOMPARE(stopped.distanceMeters, 100.0);
+        QCOMPARE(stopped.sectionIndex, std::size_t(1));
 
         const WorkoutGameDistancePlaybackSnapshot boundary =
-                runtime.atWorkoutProgress(150, 10750);
-        QCOMPARE(boundary.distanceMeters, 100.0);
+                runtime.atWorkoutProgress(150, 10750, true);
+        QCOMPARE(boundary.distanceMeters, 150.0);
         QCOMPARE(boundary.sectionIndex, std::size_t(1));
 
         const WorkoutGameDistancePlaybackSnapshot lateEntry =
                 runtime.atWorkoutProgress(200, 10850);
-        QVERIFY(lateEntry.distanceMeters >= 100.0);
-        QVERIFY(lateEntry.distanceMeters < 102.0);
+        QCOMPARE(lateEntry.distanceMeters, 200.0);
+        QCOMPARE(lateEntry.nominalTimeMs, std::int64_t(20000));
     }
 
     void restartingSessionClearsRuntimeProgress()

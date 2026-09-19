@@ -66,8 +66,10 @@ QT += xml sql network svg widgets quick quick3d concurrent serialport multimedia
 CONFIG += c++17
 
 # Precompile embedded QML when the selected Qt still ships the qmake feature.
-# Qt installations without it retain their normal runtime disk cache.
-exists($$[QT_INSTALL_ARCHDATA]/mkspecs/features/qtquickcompiler.prf) {
+# CONFIG+=no_qmlcache provides a build-only fallback for Qt distributions whose
+# qmlcachegen cannot resolve their bundled QML modules; runtime disk caching is
+# still available in that configuration.
+exists($$[QT_INSTALL_ARCHDATA]/mkspecs/features/qtquickcompiler.prf):!contains(CONFIG, no_qmlcache) {
     CONFIG += qtquickcompiler
 }
 

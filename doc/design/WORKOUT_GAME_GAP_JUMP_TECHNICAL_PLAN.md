@@ -31,8 +31,9 @@ feature engine:
 - `WorkoutGameCourse` and `WorkoutGameWorld` own persisted/runtime feature and
   terrain kinds.
 - `WorkoutGameDistanceCourse` and `WorkoutGameCourseDocument` generate and
-  persist deterministic MTB courses. The sidecar currently uses schema version
-  1 and stores terrain as a string.
+  persist deterministic MTB courses. The gap-jump work began with schema 1;
+  current schema 6 stores distance-bound terrain effort and omits the legacy
+  source-content hash while retaining string terrain identifiers.
 - `WorkoutGameRoadCourse` turns sections into connected road pieces. Challenge
   placement, obstacle anchors and bypass sockets are authored here.
 - `WorkoutGameFeatureChallenge` measures effort, cadence, speed and adherence.

@@ -19,6 +19,7 @@
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QSlider;
 class QToolButton;
 class WorkoutGameCoursePreviewWidget;
 
@@ -46,6 +47,7 @@ private slots:
     void selectRideFirst();
     void browseOutput();
     void createCourse();
+    void terrainSettingsChanged();
 
 private:
     void selectPreset(WorkoutGameCoursePreset preset);
@@ -64,6 +66,10 @@ private:
     QToolButton *workoutFirstButton = nullptr;
     QToolButton *balancedButton = nullptr;
     QToolButton *rideFirstButton = nullptr;
+    QSlider *terrainVariationSlider = nullptr;
+    QSlider *variationLengthSlider = nullptr;
+    QLabel *terrainVariationValue = nullptr;
+    QLabel *variationLengthValue = nullptr;
     QLabel *presetDescriptionLabel = nullptr;
     QLabel *presetMetricsLabel = nullptr;
     WorkoutGameCoursePreviewWidget *preview = nullptr;
