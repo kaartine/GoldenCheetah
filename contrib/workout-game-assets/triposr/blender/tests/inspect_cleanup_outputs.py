@@ -179,6 +179,8 @@ def main() -> None:
     parser.add_argument("--expected-up", default="+Y")
     parser.add_argument("--expected-forward", default="+Z")
     parser.add_argument("--expected-scale", default=1.0, type=float)
+    parser.add_argument("--expected-vertical-scale", default=1.0, type=float)
+    parser.add_argument("--reference-output-dir", type=Path)
     parser.add_argument("--max-lod-bound-error", default=0.05, type=float)
     arguments = parser.parse_args()
     if arguments.raw is not None:
@@ -235,6 +237,35 @@ def main() -> None:
     assert math.isclose(
         report["normalization"]["metresPerUnit"], arguments.expected_scale
     )
+    assert math.isclose(
+        report["normalization"]["verticalScale"],
+        arguments.expected_vertical_scale,
+    )
+    if arguments.reference_output_dir is not None:
+        _, reference_minimum, reference_maximum = inspect(
+            arguments.reference_output_dir / "candidate-lod0.glb",
+            "CandidateLOD0",
+            18_000,
+        )
+        reference_extents = [
+            maximum - minimum
+            for minimum, maximum in zip(reference_minimum, reference_maximum)
+        ]
+        extents = [
+            maximum - minimum
+            for minimum, maximum in zip(lod0_minimum, lod0_maximum)
+        ]
+        assert math.isclose(
+            extents[0], reference_extents[0], rel_tol=0.01
+        )
+        assert math.isclose(
+            extents[1],
+            reference_extents[1] * arguments.expected_vertical_scale,
+            rel_tol=0.01,
+        )
+        assert math.isclose(
+            extents[2], reference_extents[2], rel_tol=0.01
+        )
     assert report["technical"]["lod0"]["triangles"] == lod0
     assert report["technical"]["lod1"]["triangles"] == lod1
     assert report["technical"]["collision"]["triangles"] == collision

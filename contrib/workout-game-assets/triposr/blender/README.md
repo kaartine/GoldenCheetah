@@ -11,13 +11,17 @@ blender --background --factory-startup \
   --python contrib/workout-game-assets/triposr/blender/cleanup_triposr_glb.py -- \
   --input /private/triposr/raw.glb \
   --output-dir /private/triposr/cleaned \
-  --up +Y --forward +Z --scale 1.0
+  --up +Y --forward +Z --scale 1.0 --vertical-scale 1.0
 ```
 
 `--up` and `--forward` describe the raw glTF coordinate system before
 Blender's glTF import conversion. Output uses the GoldenCheetah canonical
 orientation in glTF form: `+Y` up, `+Z` forward and `+X` right. The mesh is
 centered horizontally, grounded, and exported with identity transforms.
+`--vertical-scale` applies an additional positive scale along the normalized
+up axis. It is intended for review candidates whose single-image depth
+estimate is visibly too tall; the applied value is recorded in
+`cleanup-report.json` and must remain part of candidate provenance.
 
 The fixed outputs are:
 
@@ -60,4 +64,5 @@ BLENDER=/opt/blender-4.0.2/blender \
 The test creates an external synthetic GLB containing cameras, a light,
 animation, skin, morph target and packed image material. It runs cleanup twice,
 checks byte-identical outputs, enforces budgets and identity transforms, and
-verifies that repository-local input and output paths are rejected.
+verifies both axis normalization and vertical scaling. It also verifies that
+repository-local input and output paths are rejected.

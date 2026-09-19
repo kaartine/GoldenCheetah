@@ -79,6 +79,12 @@ def parse_arguments() -> argparse.Namespace:
         default=1.0,
         help="Metres per raw coordinate unit after axis normalization",
     )
+    parser.add_argument(
+        "--vertical-scale",
+        type=float,
+        default=1.0,
+        help="Additional scale along the normalized up axis",
+    )
     parser.add_argument("--lod0-triangles", type=int, default=18_000)
     parser.add_argument("--lod1-triangles", type=int, default=6_000)
     parser.add_argument(
@@ -136,6 +142,11 @@ def resolve_external_output(value: str) -> Path:
 def validate_arguments(arguments: argparse.Namespace) -> None:
     if not math.isfinite(arguments.scale) or arguments.scale <= 0.0:
         raise RuntimeError("--scale must be a finite positive number")
+    if (
+        not math.isfinite(arguments.vertical_scale)
+        or arguments.vertical_scale <= 0.0
+    ):
+        raise RuntimeError("--vertical-scale must be a finite positive number")
     if not 1 <= arguments.lod0_triangles <= 18_000:
         raise RuntimeError("--lod0-triangles must be in 1..18000")
     if not 1 <= arguments.lod1_triangles <= 6_000:
@@ -436,7 +447,12 @@ def reset_and_import(path: Path) -> list[bpy.types.Object]:
     return mesh_objects
 
 
-def bake_mesh_object(obj: bpy.types.Object, transform: Matrix, scale: float) -> None:
+def bake_mesh_object(
+    obj: bpy.types.Object,
+    transform: Matrix,
+    scale: float,
+    vertical_scale: float,
+) -> None:
     if obj.data.shape_keys is not None:
         obj.shape_key_clear()
     obj.animation_data_clear()
@@ -446,6 +462,7 @@ def bake_mesh_object(obj: bpy.types.Object, transform: Matrix, scale: float) -> 
     world = obj.matrix_world.copy()
     for vertex in obj.data.vertices:
         vertex.co = transform @ (world @ vertex.co) * scale
+        vertex.co.z *= vertical_scale
     obj.parent = None
     obj.matrix_world = Matrix.Identity(4)
     obj.data.materials.clear()
@@ -535,7 +552,9 @@ def clean_imported_meshes(
     arguments: argparse.Namespace,
 ) -> tuple[list[bpy.types.Object], dict[str, int]]:
     for obj in mesh_objects:
-        bake_mesh_object(obj, transform, arguments.scale)
+        bake_mesh_object(
+            obj, transform, arguments.scale, arguments.vertical_scale
+        )
     joined = join_objects(mesh_objects)
     joined.name = "SOURCE_JOINED"
     triangulate_and_weld(joined)
@@ -864,6 +883,7 @@ def main() -> None:
                 "up": arguments.up,
                 "forward": arguments.forward,
                 "metresPerUnit": arguments.scale,
+                "verticalScale": arguments.vertical_scale,
                 "centeredOnGround": True,
             },
             "removed": removed,

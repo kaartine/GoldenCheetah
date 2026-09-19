@@ -13,6 +13,7 @@ raw="$temporary/raw-synthetic.glb"
 first="$temporary/first"
 second="$temporary/second"
 alternate="$temporary/alternate-axes"
+flattened="$temporary/flattened"
 
 "$blender" --background --factory-startup \
     --python "$blender_directory/render_candidate_audit.py" -- \
@@ -53,6 +54,19 @@ python3 "$test_directory/inspect_cleanup_outputs.py" \
     --expected-forward +Y \
     --expected-scale 2.0 \
     --max-lod-bound-error 0.20
+
+"$blender" --background --factory-startup \
+    --python "$blender_directory/cleanup_triposr_glb.py" -- \
+    --input "$raw" \
+    --output-dir "$flattened" \
+    --up +Y \
+    --forward +Z \
+    --scale 1.0 \
+    --vertical-scale 0.5
+python3 "$test_directory/inspect_cleanup_outputs.py" \
+    --output-dir "$flattened" \
+    --expected-vertical-scale 0.5 \
+    --reference-output-dir "$first"
 
 if "$blender" --background --factory-startup \
         --python "$blender_directory/cleanup_triposr_glb.py" -- \
