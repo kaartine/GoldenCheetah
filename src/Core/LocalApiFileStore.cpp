@@ -8,9 +8,11 @@
  */
 
 #include "LocalApiFileStore.h"
+#include "PortableFileName.h"
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <utility>
 
 namespace {
@@ -114,6 +116,26 @@ bool LocalApiFileStore::openDirectory(
         return false;
     }
 
+    return openDirectory(current, components, directory, error);
+}
+
+bool LocalApiFileStore::openDirectory(
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const QStringList &components,
+    AnchoredFileSystem::DirectoryAnchor &directory,
+    QString &error) const
+{
+    directory = {};
+    error.clear();
+    if (!baseDirectory.isValid()
+        || !baseDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The Local API base directory is unavailable");
+        }
+        return false;
+    }
+    AnchoredFileSystem::DirectoryAnchor current = baseDirectory;
     for (const QString &component : components) {
         AnchoredFileSystem::DirectoryAnchor child;
         if (!current.openChild(component, child, error)) return false;
@@ -140,9 +162,35 @@ bool LocalApiFileStore::captureRegularFile(
         return false;
     }
 
+    AnchoredFileSystem::DirectoryAnchor root;
+    if (!openDirectory({}, root, error)) {
+        return false;
+    }
+    return captureRegularFile(
+        root, directoryComponents, fileComponent,
+        generation, error, maximumSize);
+}
+
+bool LocalApiFileStore::captureRegularFile(
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const QStringList &directoryComponents,
+    const QString &fileComponent,
+    LocalApiFileGeneration &generation,
+    QString &error,
+    qint64 maximumSize) const
+{
+    error.clear();
+    generation = {};
+    if (maximumSize < 0) {
+        error = QStringLiteral(
+            "The Local API file size budget is invalid");
+        return false;
+    }
+
     LocalApiFileGeneration candidate;
     if (!openDirectory(
-            directoryComponents, candidate.parent_, error)) {
+            baseDirectory, directoryComponents,
+            candidate.parent_, error)) {
         return false;
     }
     candidate.entry_ = candidate.parent_.entry(fileComponent, error);
@@ -156,5 +204,42 @@ bool LocalApiFileStore::captureRegularFile(
     }
 
     generation = std::move(candidate);
+    return true;
+}
+
+bool LocalApiFileSnapshotDirectory::writeFile(
+    const QString &component,
+    const QByteArray &contents,
+    QString &path,
+    QString &error)
+{
+    path.clear();
+    error.clear();
+    if (!directory_.isValid()
+        || !PortableFileName::isValid(component)) {
+        error = QStringLiteral(
+            "The Local API snapshot destination is invalid");
+        return false;
+    }
+
+    const QString candidate = directory_.filePath(component);
+    QFile file(candidate);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+        || !file.setPermissions(
+            QFileDevice::ReadOwner | QFileDevice::WriteOwner)
+        || file.write(contents) != contents.size()
+        || !file.flush()) {
+        error = file.errorString();
+        file.close();
+        QFile::remove(candidate);
+        return false;
+    }
+    file.close();
+    if (file.error() != QFileDevice::NoError) {
+        error = file.errorString();
+        QFile::remove(candidate);
+        return false;
+    }
+    path = candidate;
     return true;
 }

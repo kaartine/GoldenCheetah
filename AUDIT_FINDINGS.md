@@ -7853,8 +7853,57 @@ commit before the next finding begins.
   atomic-publication/ACL environment failures reproduced on the clean base.
   The changed production objects compile with Qt 6.8.3. Native macOS and
   Windows runs remain required before claiming cross-platform verification.
-- ARCH-004B2 (queued): Migrate athlete validation, `rideDB.json`, individual
+- ARCH-004B2 (completed): Migrate athlete validation, `rideDB.json`, individual
   activity, zone, and individual mean-max reads to retained generations.
+- ARCH-004B2a (defect recorded before correction): The four zone response
+  branches heap-allocate parsers without releasing them. Replace them with
+  scoped ownership while migrating their input files.
+- ARCH-004B2b (defect recorded before correction): `listActivity` does not
+  release the `RideFile` returned by its factory. Adopt scoped ownership before
+  any conversion return path.
+- ARCH-004B2c (review findings recorded before correction): Individual
+  mean-max source/cache snapshots can collide when their derived names match,
+  and treating a missing cache as 404 breaks the existing empty-200 contract.
+  Use separate private snapshots and preserve the endpoint contract while
+  failing closed with no unverified data.
+- ARCH-004B2d (review finding recorded before correction): The initial 512 MiB
+  per-file budgets permit excessive combined memory, snapshot-disk, and parser
+  pressure. Define lower endpoint budgets and a bounded aggregate for requests
+  that read two files.
+- ARCH-004B2e (review finding recorded before correction): Athlete validation
+  releases its anchored generation before dispatch and endpoint helpers reopen
+  the name from the root. Carry one athlete directory anchor through dispatch
+  and resolve all B2 files relative to it.
+- ARCH-004B2f (test item recorded before correction): Add an endpoint-level
+  Local API harness for response-before-validation, budget rejection,
+  replacement, cleanup, and success/error contract tests. Adapter-only tests
+  and production compilation do not establish those endpoint behaviors.
+- ARCH-004B2g (review finding recorded before correction): Preserve
+  `QTextStream`'s RideDB byte-decoding/BOM behavior when replacing its QFile
+  source with verified bytes, and cover that conversion in the B2 test harness.
+- ARCH-004B2 resolution: One retained athlete directory anchor now crosses
+  dispatch, and all B2 endpoint inputs resolve relative to it. A move-only
+  endpoint-input seam prepares verified bytes or private snapshots completely
+  before exposing data or paths. RideDB, activity, zone, and individual
+  mean-max inputs have explicit 128 MiB, 64 MiB, 4 MiB, and bounded 128 MiB
+  aggregate policies. Individual mean-max uses separate snapshot directories,
+  publishes neither input on pair failure, and preserves the empty HTTP 200
+  CSV response when its cache is unavailable. Snapshot lifetimes clean up
+  automatically. Zone parsers and activity `RideFile` instances now have
+  scoped ownership, and RideDB decoding retains its prior `QTextStream` BOM
+  and non-ASCII behavior. This resolves ARCH-004B2a through ARCH-004B2g.
+- ARCH-004B2 verification: The focused adapter/endpoint-input suite passes
+  30/30 with Qt 6.4.2, under ASan/UBSan (leak detection disabled), and with
+  Qt 6.8.3. It covers exact-limit acceptance and oversize rejection, retained
+  athlete replacement, pairwise mean-max publication, matching snapshot names,
+  snapshot cleanup, endpoint status/body contracts, and RideDB text decoding.
+  The changed production `APIWebService`, endpoint-input, file-store, and
+  generated RideDB objects compile with Qt 6.8.3; only the pre-existing bison
+  grammar warnings remain. The full anchored filesystem suite remains at
+  82 passed, 12 known environment-dependent atomic-publication/ACL failures,
+  and 13 platform skips, matching the established clean-base baseline. An
+  independent final review found no remaining B2 security or TOCTOU blocker.
+  Native macOS and Windows runs remain required for cross-platform verification.
 - ARCH-004B3 (queued): Replace path-based athlete/activity enumeration and
   snapshot the multi-file bests and measures inputs before producing output.
 - ARCH-004C (prerequisite recorded): `listAthletes` initializes per-athlete

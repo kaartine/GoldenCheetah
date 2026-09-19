@@ -15,6 +15,7 @@
 #include <QByteArray>
 #include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
 
 class LocalApiFileGeneration
 {
@@ -59,13 +60,44 @@ public:
         QString &error,
         qint64 maximumSize) const;
 
+    bool captureRegularFile(
+        const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+        const QStringList &directoryComponents,
+        const QString &fileComponent,
+        LocalApiFileGeneration &generation,
+        QString &error,
+        qint64 maximumSize) const;
+
     bool openDirectory(
+        const QStringList &components,
+        AnchoredFileSystem::DirectoryAnchor &directory,
+        QString &error) const;
+
+    bool openDirectory(
+        const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
         const QStringList &components,
         AnchoredFileSystem::DirectoryAnchor &directory,
         QString &error) const;
 
 private:
     QString rootPath_;
+};
+
+// A process-private, auto-removed bridge for legacy readers that accept only
+// path-backed QFile objects or path strings. Only already verified bytes may
+// be written here.
+class LocalApiFileSnapshotDirectory
+{
+public:
+    bool isValid() const { return directory_.isValid(); }
+    bool writeFile(
+        const QString &component,
+        const QByteArray &contents,
+        QString &path,
+        QString &error);
+
+private:
+    QTemporaryDir directory_;
 };
 
 #endif

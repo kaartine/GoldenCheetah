@@ -1014,21 +1014,29 @@ bool RideCache::saveToFile(
 #include "RideMetadata.h"
 
 void
-APIWebService::listRides(QString athlete, HttpRequest &request, HttpResponse &response)
+APIWebService::listRides(QString athlete, const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, HttpRequest &request, HttpResponse &response)
 {
     listRideSettings settings;
 
-    // the ride db
-    QString ridedb = QString("%1/%2/cache/rideDB.json").arg(home.absolutePath()).arg(athlete);
-    QFile rideDB(ridedb);
+    QString rideDatabaseError;
+    LocalApiEndpointInput::PreparedInput rideDatabase =
+        LocalApiEndpointInput::prepareBytes(
+            fileStore, athleteDirectory, QStringLiteral("cache"),
+            QStringLiteral("rideDB.json"),
+            LocalApiEndpointInput::FileKind::RideDatabase,
+            rideDatabaseError);
+    const LocalApiEndpointInput::Contract inputContract =
+        LocalApiEndpointInput::contract(
+            LocalApiEndpointInput::Endpoint::RideDatabase,
+            rideDatabase.status());
 
     // list activities and associated metrics
     response.setHeader("Content-Type", "text; charset=ISO-8859-1");
 
     // not known..
-    if (!rideDB.exists()) {
-        response.setStatus(404);
-        response.write("malformed URL or unknown athlete.\n");
+    if (!inputContract.processInput) {
+        response.setStatus(inputContract.statusCode);
+        response.write(inputContract.bodyPrefix);
         return;
     }
 
@@ -1150,16 +1158,14 @@ APIWebService::listRides(QString athlete, HttpRequest &request, HttpResponse &re
         response.bwrite("\n");
 
         // parse the rideDB and write a line for each entry
-        if (rideDB.exists() && rideDB.open(QFile::ReadOnly)) {
+        if (inputContract.processInput) {
 
-            // ok, lets read it in
-            QTextStream stream(&rideDB);
-
-            // Read the entire file into a QString -- we avoid using fopen since it
-            // doesn't handle foreign characters well. Instead we use QFile and parse
-            // from a QString
-            QString contents = stream.readAll();
-            rideDB.close();
+            // The bytes were read from a pinned native handle and fully
+            // validated before the parser can observe them. Keep the prior
+            // QTextStream decoding and BOM behavior.
+            const QString contents =
+                LocalApiEndpointInput::decodeRideDatabase(
+                    rideDatabase.bytes());
 
             // create scanner context for reentrant parsing
             RideDBContext *jc = new RideDBContext;

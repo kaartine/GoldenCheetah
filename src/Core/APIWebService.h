@@ -20,6 +20,8 @@
 #define _GC_APIWebService_h
 
 #include "httprequesthandler.h"
+#include "LocalApiEndpointInput.h"
+#include "LocalApiFileStore.h"
 #include "RideItem.h"
 #include "RideMetadata.h"
 #include <QByteArray>
@@ -41,6 +43,7 @@ class APIWebService : public HttpRequestHandler
         APIWebService(QDir home, QByteArray bearerToken, quint16 port,
                       QObject *parent=NULL)
             : HttpRequestHandler(parent), home(home),
+              fileStore(this->home.absolutePath()),
               bearerToken(bearerToken), port(port) {}
 
         // request despatchers
@@ -49,10 +52,10 @@ class APIWebService : public HttpRequestHandler
 
         // Discrete API endpoints
         void listAthletes(HttpRequest &request, HttpResponse &response);
-        void listRides(QString athlete, HttpRequest &request, HttpResponse &response);
-        void listActivity(QString athlete, QStringList paths, HttpRequest &request, HttpResponse &response);
-        void listMMP(QString athlete, QStringList paths, HttpRequest &request, HttpResponse &response);
-        void listZones(QString athlete, QStringList paths, HttpRequest &request, HttpResponse &response);
+        void listRides(QString athlete, const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, HttpRequest &request, HttpResponse &response);
+        void listActivity(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);
+        void listMMP(QString athlete, const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);
+        void listZones(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response);
         void listMeasures(QString athlete, QStringList paths, HttpRequest &request, HttpResponse &response);
 
         // utility
@@ -60,6 +63,7 @@ class APIWebService : public HttpRequestHandler
 
     private:
         QDir home;
+        LocalApiFileStore fileStore;
         QByteArray bearerToken;
         quint16 port;
 };

@@ -34,6 +34,7 @@
 
 #include <QTemporaryFile>
 #include <QFile>
+#include <memory>
 
 void
 APIWebService::service(HttpRequest &request, HttpResponse &response)
@@ -94,6 +95,7 @@ APIWebService::service(HttpRequest &request, HttpResponse &response)
 void
 APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpResponse &response)
 {
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
 
     // check we have an athlete and it is valid
     if (paths.count() == 0) {
@@ -103,8 +105,23 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
         response.write("missing athlete.");
         return;
     } else {
-        QFile ridedb(home.absolutePath() + "/" + paths[0] + "/cache/rideDB.json");
-        if (!ridedb.exists()) {
+        QString error;
+        if (!fileStore.openDirectory(
+                {paths[0]}, athleteDirectory, error)) {
+            response.setStatus(404);
+            response.setHeader("Content-Type", "text; charset=ISO-8859-1");
+            response.write("unknown athlete " + paths[0].toLocal8Bit());
+            return;
+        }
+        // Retain the athlete anchor across dispatch. This route-level check
+        // verifies the database generation without reading a potentially
+        // large file that only listRides needs to consume.
+        LocalApiFileGeneration rideDatabase;
+        if (!fileStore.captureRegularFile(
+                athleteDirectory, {QStringLiteral("cache")},
+                QStringLiteral("rideDB.json"), rideDatabase, error,
+                LocalApiEndpointInput::maximumSize(
+                    LocalApiEndpointInput::FileKind::RideDatabase))) {
             response.setStatus(404); // malformed URL
             response.setHeader("Content-Type", "text; charset=ISO-8859-1");
             response.write("unknown athlete " + paths[0].toLocal8Bit());
@@ -115,7 +132,7 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
 
         // LIST ACTIVITIES FOR ATHLETE
         // http://localhost:12021/athlete
-        listRides(paths[0], request, response);
+        listRides(paths[0], athleteDirectory, request, response);
         return;
 
     } else if (paths.count() == 2) {
@@ -126,7 +143,7 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
         // GET ZONES
         // http://localhost:12021/athlete/zones
         if (paths[0] == "zones") {
-            listZones(athlete, paths, request, response);
+            listZones(athleteDirectory, paths, request, response);
             return;
         }
 
@@ -152,7 +169,7 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
         if (paths[0] == "activity") {
 
             paths.removeFirst();
-            listActivity(athlete, paths, request, response);
+            listActivity(athleteDirectory, paths, request, response);
             return;
         }
 
@@ -168,7 +185,7 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
             //    ?series=watts     (default)
             //    ?series=<xx>  xx=1 of (cad, speed, vam, IsoPower, xPower, nm)
             paths.removeFirst();
-            listMMP(athlete, paths, request, response);
+            listMMP(athlete, athleteDirectory, paths, request, response);
             return;
         }
 
@@ -327,18 +344,24 @@ APIWebService::writeRideLine(RideItem &item, HttpRequest *request, HttpResponse 
 }
 
 void
-APIWebService::listActivity(QString athlete, QStringList paths, HttpRequest &request, HttpResponse &response)
+APIWebService::listActivity(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response)
 {
-    // does it exist ?
-    QString filename = QString("%1/%2/activities/%3").arg(home.absolutePath()).arg(athlete).arg(paths[0]);
-
+    QString error;
+    LocalApiEndpointInput::PreparedInput input =
+        LocalApiEndpointInput::prepareSnapshot(
+            fileStore, athleteDirectory, QStringLiteral("activities"),
+            paths[0], LocalApiEndpointInput::FileKind::Activity, error);
+    const LocalApiEndpointInput::Contract inputContract =
+        LocalApiEndpointInput::contract(
+            LocalApiEndpointInput::Endpoint::Activity, input.status());
+    if (!inputContract.processInput) {
+        response.setStatus(inputContract.statusCode);
+        response.write(inputContract.bodyPrefix);
+        return;
+    }
     QString contents;
-    QFile file(filename);
-    if (file.exists() && file.open(QFile::ReadOnly | QFile::Text)) {
-
-        // close as we will open properly below
-        file.close();
-
+    QFile file(input.firstPath());
+    {
         // what format to use ?
         QString format(request.getParameter("format"));
         if (format == "") {
@@ -389,10 +412,12 @@ APIWebService::listActivity(QString athlete, QStringList paths, HttpRequest &req
 
         // lets read the file in as a ridefile
         QStringList errors;
-        RideFile *f = RideFileFactory::instance().openRideFile(NULL, file, errors);
+        std::unique_ptr<RideFile> f(
+            RideFileFactory::instance().openRideFile(
+                NULL, file, errors));
 
         // error reading (!)
-        if (f == NULL) {
+        if (!f) {
             response.setStatus(500);
             foreach(QString error, errors) {
                 response.write(error.toLocal8Bit());
@@ -416,9 +441,11 @@ APIWebService::listActivity(QString athlete, QStringList paths, HttpRequest &req
 
         if (format == "csv") {
             CsvFileReader writer;
-            success = writer.writeRideFile(NULL, f, out, CsvFileReader::gc);
+            success = writer.writeRideFile(
+                NULL, f.get(), out, CsvFileReader::gc);
         } else {
-            success = RideFileFactory::instance().writeRideFile(NULL, f, out, format);
+            success = RideFileFactory::instance().writeRideFile(
+                NULL, f.get(), out, format);
         }
 
         if (success) {
@@ -439,17 +466,11 @@ APIWebService::listActivity(QString athlete, QStringList paths, HttpRequest &req
             return;
         }
 
-    } else {
-
-       // nope?
-       response.setStatus(404);
-       response.write("file not found");
-       return;
     }
 }
 
 void
-APIWebService::listMMP(QString athlete, QStringList paths, HttpRequest &request, HttpResponse &response)
+APIWebService::listMMP(QString athlete, const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response)
 {
     // list activities and associated metrics
     response.setHeader("Content-Type", "text; charset=ISO-8859-1");
@@ -511,41 +532,35 @@ APIWebService::listMMP(QString athlete, QStringList paths, HttpRequest &request,
 
 
     } else {
-        const QDir athleteRoot(
-            QDir(home.absolutePath())
-                .filePath(athlete));
-        const QString sourceFilename =
-            athleteRoot.filePath(
-                QStringLiteral("activities/")
-                + filename);
-        const QString CPXfilename =
-            athleteRoot.filePath(
-                QStringLiteral("cache/")
-                + QFileInfo(filename)
-                      .completeBaseName()
-                + QStringLiteral(".cpx"));
+        QString error;
+        LocalApiEndpointInput::PreparedInput input =
+            LocalApiEndpointInput::prepareMeanMax(
+                fileStore, athleteDirectory, filename, error);
+        const LocalApiEndpointInput::Contract inputContract =
+            LocalApiEndpointInput::contract(
+                LocalApiEndpointInput::Endpoint::MeanMax,
+                input.status(), seriesp.toLocal8Bit());
+        response.setStatus(inputContract.statusCode);
+        response.bwrite(inputContract.bodyPrefix);
+        if (!inputContract.processInput) {
+            response.flush();
+            return;
+        }
 
-        // header
-        response.bwrite("secs, ");
-        response.bwrite(seriesp.toLocal8Bit());
-        response.bwrite("\n");
-
-        if (QFileInfo(CPXfilename).exists()) {
-            int secs=0;
-            foreach(float value, RideFileCache::meanMaxFor(
-                        sourceFilename,
-                        CPXfilename,
-                        series)) {
-                if (secs >0) response.bwrite(QString("%1, %2\n").arg(secs).arg(value).toLocal8Bit());
-                secs++;
-            }
+        int secs=0;
+        foreach(float value, RideFileCache::meanMaxFor(
+                    input.firstPath(),
+                    input.secondPath(),
+                    series)) {
+            if (secs >0) response.bwrite(QString("%1, %2\n").arg(secs).arg(value).toLocal8Bit());
+            secs++;
         }
         response.flush();
     }
 }
 
 void
-APIWebService::listZones(QString athlete, QStringList, HttpRequest &request, HttpResponse &response)
+APIWebService::listZones(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList, HttpRequest &request, HttpResponse &response)
 {
     // list activities and associated metrics
     response.setHeader("Content-Type", "text; charset=ISO-8859-1");
@@ -566,23 +581,31 @@ APIWebService::listZones(QString athlete, QStringList, HttpRequest &request, Htt
     // power zones
     if (zonesFor == "power") {
 
-        // Power Zones
-        QFile zonesFile(home.absolutePath() + "/" + athlete + "/config/power.zones");
-        if (zonesFile.exists()) {
-            Zones *zones = new Zones;
-            if (zones->read(zonesFile)) {
+        QString error;
+        LocalApiEndpointInput::PreparedInput input =
+            LocalApiEndpointInput::prepareSnapshot(
+                fileStore, athleteDirectory, QStringLiteral("config"),
+                QStringLiteral("power.zones"),
+                LocalApiEndpointInput::FileKind::Zone, error);
+        const LocalApiEndpointInput::Contract inputContract =
+            LocalApiEndpointInput::contract(
+                LocalApiEndpointInput::Endpoint::Zone, input.status());
+        if (inputContract.processInput) {
+            QFile zonesFile(input.firstPath());
+            Zones zones;
+            if (zones.read(zonesFile)) {
 
                 // success - write out
                 response.write("date, cp, w', pmax, aetp, ftp\n");
-                for(int i=0; i<zones->getRangeSize(); i++) {
+                for(int i=0; i<zones.getRangeSize(); i++) {
                     response.write(
                     QString("%1, %2, %3, %4, %5, %6\n")
-                           .arg(zones->getStartDate(i).toString("yyyy/MM/dd"))
-                           .arg(zones->getCP(i))
-                           .arg(zones->getWprime(i))
-                           .arg(zones->getPmax(i))
-                           .arg(zones->getAeT(i))
-                           .arg(zones->getFTP(i))
+                           .arg(zones.getStartDate(i).toString("yyyy/MM/dd"))
+                           .arg(zones.getCP(i))
+                           .arg(zones.getWprime(i))
+                           .arg(zones.getPmax(i))
+                           .arg(zones.getAeT(i))
+                           .arg(zones.getFTP(i))
                            .toLocal8Bit()
                     );
                 }
@@ -591,7 +614,7 @@ APIWebService::listZones(QString athlete, QStringList, HttpRequest &request, Htt
         }
 
         // drop here on fail
-        response.setStatus(500);
+        response.setStatus(inputContract.statusCode);
         response.write("unable to read/parse the athlete's power.zones file.\n");
         return;
     }
@@ -599,22 +622,30 @@ APIWebService::listZones(QString athlete, QStringList, HttpRequest &request, Htt
     // hr zones
     if (zonesFor == "hr") {
 
-        // Zones
-        QFile zonesFile(home.absolutePath() + "/" + athlete + "/config/hr.zones");
-        if (zonesFile.exists()) {
-            HrZones *zones = new HrZones;
-            if (zones->read(zonesFile)) {
+        QString error;
+        LocalApiEndpointInput::PreparedInput input =
+            LocalApiEndpointInput::prepareSnapshot(
+                fileStore, athleteDirectory, QStringLiteral("config"),
+                QStringLiteral("hr.zones"),
+                LocalApiEndpointInput::FileKind::Zone, error);
+        const LocalApiEndpointInput::Contract inputContract =
+            LocalApiEndpointInput::contract(
+                LocalApiEndpointInput::Endpoint::Zone, input.status());
+        if (inputContract.processInput) {
+            QFile zonesFile(input.firstPath());
+            HrZones zones;
+            if (zones.read(zonesFile)) {
 
                 // success - write out
                 response.write("date, lthr, aethr, maxhr, rhr\n");
-                for(int i=0; i<zones->getRangeSize(); i++) {
+                for(int i=0; i<zones.getRangeSize(); i++) {
                     response.write(
                     QString("%1, %2, %3, %4, %5\n")
-                           .arg(zones->getStartDate(i).toString("yyyy/MM/dd"))
-                           .arg(zones->getLT(i))
-                           .arg(zones->getAeT(i))
-                           .arg(zones->getMaxHr(i))
-                           .arg(zones->getRestHr(i))
+                           .arg(zones.getStartDate(i).toString("yyyy/MM/dd"))
+                           .arg(zones.getLT(i))
+                           .arg(zones.getAeT(i))
+                           .arg(zones.getMaxHr(i))
+                           .arg(zones.getRestHr(i))
                            .toLocal8Bit()
                     );
                 }
@@ -623,7 +654,7 @@ APIWebService::listZones(QString athlete, QStringList, HttpRequest &request, Htt
         }
 
         // drop here on fail
-        response.setStatus(500);
+        response.setStatus(inputContract.statusCode);
         response.write("unable to read/parse the athlete's hr.zones file.\n");
         return;
     }
@@ -631,20 +662,28 @@ APIWebService::listZones(QString athlete, QStringList, HttpRequest &request, Htt
     // pace zones
     if (zonesFor == "pace") {
 
-        // Zones
-        QFile zonesFile(home.absolutePath() + "/" + athlete + "/config/run-pace.zones");
-        if (zonesFile.exists()) {
-            PaceZones *zones = new PaceZones;
-            if (zones->read(zonesFile)) {
+        QString error;
+        LocalApiEndpointInput::PreparedInput input =
+            LocalApiEndpointInput::prepareSnapshot(
+                fileStore, athleteDirectory, QStringLiteral("config"),
+                QStringLiteral("run-pace.zones"),
+                LocalApiEndpointInput::FileKind::Zone, error);
+        const LocalApiEndpointInput::Contract inputContract =
+            LocalApiEndpointInput::contract(
+                LocalApiEndpointInput::Endpoint::Zone, input.status());
+        if (inputContract.processInput) {
+            QFile zonesFile(input.firstPath());
+            PaceZones zones;
+            if (zones.read(zonesFile)) {
 
                 // success - write out
                 response.write("date, CV, AeTV\n");
-                for(int i=0; i<zones->getRangeSize(); i++) {
+                for(int i=0; i<zones.getRangeSize(); i++) {
                     response.write(
                     QString("%1, %2, %3\n")
-                           .arg(zones->getStartDate(i).toString("yyyy/MM/dd"))
-                           .arg(zones->getCV(i))
-                           .arg(zones->getAeT(i))
+                           .arg(zones.getStartDate(i).toString("yyyy/MM/dd"))
+                           .arg(zones.getCV(i))
+                           .arg(zones.getAeT(i))
                            .toLocal8Bit()
                     );
                 }
@@ -653,7 +692,7 @@ APIWebService::listZones(QString athlete, QStringList, HttpRequest &request, Htt
         }
 
         // drop here on fail
-        response.setStatus(500);
+        response.setStatus(inputContract.statusCode);
         response.write("unable to read/parse the athlete's run-pace.zones file.\n");
         return;
     }
@@ -661,20 +700,28 @@ APIWebService::listZones(QString athlete, QStringList, HttpRequest &request, Htt
     // swim pace zones
     if (zonesFor == "swimpace") {
 
-        // Zones
-        QFile zonesFile(home.absolutePath() + "/" + athlete + "/config/swim-pace.zones");
-        if (zonesFile.exists()) {
-            PaceZones *zones = new PaceZones;
-            if (zones->read(zonesFile)) {
+        QString error;
+        LocalApiEndpointInput::PreparedInput input =
+            LocalApiEndpointInput::prepareSnapshot(
+                fileStore, athleteDirectory, QStringLiteral("config"),
+                QStringLiteral("swim-pace.zones"),
+                LocalApiEndpointInput::FileKind::Zone, error);
+        const LocalApiEndpointInput::Contract inputContract =
+            LocalApiEndpointInput::contract(
+                LocalApiEndpointInput::Endpoint::Zone, input.status());
+        if (inputContract.processInput) {
+            QFile zonesFile(input.firstPath());
+            PaceZones zones;
+            if (zones.read(zonesFile)) {
 
                 // success - write out
                 response.write("date, CV, AeTV\n");
-                for(int i=0; i<zones->getRangeSize(); i++) {
+                for(int i=0; i<zones.getRangeSize(); i++) {
                     response.write(
                     QString("%1, %2, %3\n")
-                           .arg(zones->getStartDate(i).toString("yyyy/MM/dd"))
-                           .arg(zones->getCV(i))
-                           .arg(zones->getAeT(i))
+                           .arg(zones.getStartDate(i).toString("yyyy/MM/dd"))
+                           .arg(zones.getCV(i))
+                           .arg(zones.getAeT(i))
                            .toLocal8Bit()
                     );
                 }
@@ -683,7 +730,7 @@ APIWebService::listZones(QString athlete, QStringList, HttpRequest &request, Htt
         }
 
         // drop here on fail
-        response.setStatus(500);
+        response.setStatus(inputContract.statusCode);
         response.write("unable to read/parse the athlete's swim-pace.zones file.\n");
         return;
     }

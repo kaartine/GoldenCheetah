@@ -478,8 +478,8 @@ DEPENDPATH += $$HTPATH
 
 DEFINES += GC_WANT_HTTP
 
-HEADERS +=  Core/APIWebService.h Core/LocalApiFileStore.h
-SOURCES +=  Core/APIWebService.cpp Core/LocalApiFileStore.cpp
+HEADERS +=  Core/APIWebService.h Core/LocalApiEndpointInput.h Core/LocalApiFileStore.h
+SOURCES +=  Core/APIWebService.cpp Core/LocalApiEndpointInput.cpp Core/LocalApiFileStore.cpp
 HEADERS +=  Core/LocalApiSecurityPolicy.h
 SOURCES +=  Core/LocalApiSecurityPolicy.cpp
 

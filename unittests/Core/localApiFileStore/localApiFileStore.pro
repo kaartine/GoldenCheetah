@@ -10,9 +10,11 @@ CONFIG -= debug
 
 SOURCES += testLocalApiFileStore.cpp
 SOURCES += ../../../src/Core/LocalApiFileStore.cpp
+SOURCES += ../../../src/Core/LocalApiEndpointInput.cpp
 SOURCES += ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS += ../../../src/Core/LocalApiFileStore.h
+HEADERS += ../../../src/Core/LocalApiEndpointInput.h
 HEADERS += ../../../src/FileIO/AnchoredFileSystem.h
 
 INCLUDEPATH += ../../../src/FileIO
