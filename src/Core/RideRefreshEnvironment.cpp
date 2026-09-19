@@ -10,15 +10,24 @@
 #include "RideRefreshEnvironment.h"
 
 #include "RideRefreshMeasures.h"
+#include "RideRefreshCacheInputs.h"
 #include "RideRefreshRoutes.h"
 #include "RideRefreshZones.h"
 
 #include <QDate>
+#include <QDir>
 #include <QTime>
 
 #include <cmath>
 #include <limits>
 #include <utility>
+
+bool RideRefreshEnvironment::StoragePaths::isComplete() const
+{
+    return QDir::isAbsolutePath(cache)
+        && QDir::isAbsolutePath(activities)
+        && QDir::isAbsolutePath(planned);
+}
 
 QStringList RideRefreshEnvironment::globalSettingKeys()
 {
@@ -63,7 +72,8 @@ RideRefreshEnvironment::create(
     std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry,
     std::shared_ptr<const RideRefreshZones> zones,
     std::shared_ptr<const RideRefreshMeasures> measures,
-    std::shared_ptr<const RideRefreshRoutes> routes)
+    std::shared_ptr<const RideRefreshRoutes> routes,
+    StoragePaths storagePaths)
 {
     return std::shared_ptr<const RideRefreshEnvironment>(
         new RideRefreshEnvironment(
@@ -77,7 +87,8 @@ RideRefreshEnvironment::create(
             std::move(metricRegistry),
             std::move(zones),
             std::move(measures),
-            std::move(routes)));
+            std::move(routes),
+            std::move(storagePaths)));
 }
 
 RideRefreshEnvironment::RideRefreshEnvironment(
@@ -91,7 +102,8 @@ RideRefreshEnvironment::RideRefreshEnvironment(
     std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry,
     std::shared_ptr<const RideRefreshZones> zones,
     std::shared_ptr<const RideRefreshMeasures> measures,
-    std::shared_ptr<const RideRefreshRoutes> routes)
+    std::shared_ptr<const RideRefreshRoutes> routes,
+    StoragePaths storagePaths)
     : generation_(generation)
     , settings_(std::move(settings))
     , useMetricUnits_(useMetricUnits)
@@ -103,6 +115,7 @@ RideRefreshEnvironment::RideRefreshEnvironment(
     , zones_(std::move(zones))
     , measures_(std::move(measures))
     , routes_(std::move(routes))
+    , storagePaths_(std::move(storagePaths))
 {
 }
 
@@ -244,4 +257,22 @@ std::optional<unsigned long> RideRefreshEnvironment::rideItemWeightMilligrams(
         return std::nullopt;
     }
     return static_cast<unsigned long>(milligrams);
+}
+
+QByteArray RideRefreshEnvironment::rideFileCacheAnalysisFingerprint(
+    const QDate &date,
+    const QString &sport,
+    bool isSwim,
+    double weight) const
+{
+    RideRefreshCacheSettings settings;
+    settings.wbalFormula = globalSetting(
+        QStringLiteral("<global-general>wbal/formula"),
+        QStringLiteral("int")).toString();
+    settings.wbalTau = athleteSetting(
+        QStringLiteral("<athlete-preferences>wbaltau"), 300).toInt();
+    settings.wheelSize = athleteSetting(
+        QStringLiteral("<athlete-preferences>wheelsize"), 2100).toInt();
+    return rideRefreshCacheAnalysisFingerprint(
+        zones_.get(), settings, date, sport, isSwim, weight);
 }

@@ -10,6 +10,7 @@
 #ifndef GC_RIDEREFRESHENVIRONMENT_H
 #define GC_RIDEREFRESHENVIRONMENT_H
 
+#include <QByteArray>
 #include <QColor>
 #include <QDate>
 #include <QHash>
@@ -45,6 +46,14 @@ public:
         bool interval = false;
     };
 
+    struct StoragePaths {
+        QString cache;
+        QString activities;
+        QString planned;
+
+        bool isComplete() const;
+    };
+
     using TextLookup = std::function<QString(const QString &)>;
     using MetricLookup =
         std::function<QString(const QString &, bool useMetricUnits)>;
@@ -61,7 +70,8 @@ public:
         std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry = {},
         std::shared_ptr<const RideRefreshZones> zones = {},
         std::shared_ptr<const RideRefreshMeasures> measures = {},
-        std::shared_ptr<const RideRefreshRoutes> routes = {});
+        std::shared_ptr<const RideRefreshRoutes> routes = {},
+        StoragePaths storagePaths = {});
 
     quint64 generation() const { return generation_; }
     bool useMetricUnits() const { return useMetricUnits_; }
@@ -90,6 +100,12 @@ public:
         const QDate &date, const QString &metadataWeight) const;
     static std::optional<unsigned long> rideItemWeightMilligrams(
         double kilograms);
+    QByteArray rideFileCacheAnalysisFingerprint(
+        const QDate &date,
+        const QString &sport,
+        bool isSwim,
+        double weight) const;
+    const StoragePaths &storagePaths() const { return storagePaths_; }
 
     const RideMetricRegistrySnapshot *metricRegistry() const
     {
@@ -111,7 +127,8 @@ private:
         std::shared_ptr<const RideMetricRegistrySnapshot> metricRegistry,
         std::shared_ptr<const RideRefreshZones> zones,
         std::shared_ptr<const RideRefreshMeasures> measures,
-        std::shared_ptr<const RideRefreshRoutes> routes);
+        std::shared_ptr<const RideRefreshRoutes> routes,
+        StoragePaths storagePaths);
 
     static QString formatCalendarField(
         const CalendarField &field, const QString &value);
@@ -127,6 +144,7 @@ private:
     const std::shared_ptr<const RideRefreshZones> zones_;
     const std::shared_ptr<const RideRefreshMeasures> measures_;
     const std::shared_ptr<const RideRefreshRoutes> routes_;
+    const StoragePaths storagePaths_;
 };
 
 std::shared_ptr<const RideRefreshEnvironment>

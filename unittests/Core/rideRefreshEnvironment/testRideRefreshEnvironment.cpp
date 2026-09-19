@@ -3,6 +3,7 @@
 #include "AthleteRefreshLifecycle.h"
 #include "AthleteSession.h"
 #include "RideRefreshEnvironment.h"
+#include "RideRefreshCacheInputs.h"
 #include "RideRefreshMeasures.h"
 #include "RideRefreshRoutes.h"
 #include "RideRefreshZones.h"
@@ -65,6 +66,7 @@ private slots:
     void rideItemFingerprintFailsClosedOnMissingDomains();
     void rideItemWeightPreservesLegacyFallbacks();
     void rideItemWeightMilligramsRejectsUnsafeConversions();
+    void cacheInputsAndStoragePathsAreGenerationBound();
     void measuresSnapshotIsRetainedByTheGeneration();
     void routesSnapshotIsRetainedByTheGeneration();
     void zonesSnapshotIsRetainedByTheGeneration();
@@ -557,6 +559,96 @@ rideItemWeightMilligramsRejectsUnsafeConversions()
     QVERIFY(RideRefreshEnvironment::rideItemWeightMilligrams(belowBoundary));
     QVERIFY(!RideRefreshEnvironment::rideItemWeightMilligrams(
         aboveBoundary));
+}
+
+void TestRideRefreshEnvironment::
+cacheInputsAndStoragePathsAreGenerationBound()
+{
+    RideRefreshEnvironment::Settings settings;
+    settings.global.insert(
+        QStringLiteral("<global-general>wbal/formula"),
+        QStringLiteral("differential"));
+    settings.athlete.insert(
+        QStringLiteral("<athlete-preferences>wbaltau"), 412);
+    settings.athlete.insert(
+        QStringLiteral("<athlete-preferences>wheelsize"), 2096);
+    const auto zones = RideRefreshZones::create({}, {}, {}, {});
+    const RideRefreshEnvironment::StoragePaths paths{
+        QStringLiteral("/snapshot/cache"),
+        QStringLiteral("/snapshot/activities"),
+        QStringLiteral("/snapshot/planned")};
+    const auto snapshot = RideRefreshEnvironment::create(
+        12, settings, true, {}, {}, {}, {}, {}, zones, {}, {}, paths);
+    QVERIFY(snapshot->storagePaths().isComplete());
+    QCOMPARE(snapshot->storagePaths().cache, paths.cache);
+    QCOMPARE(snapshot->storagePaths().activities, paths.activities);
+    QCOMPARE(snapshot->storagePaths().planned, paths.planned);
+
+    RideRefreshCacheSettings expectedSettings;
+    expectedSettings.wbalFormula = QStringLiteral("differential");
+    expectedSettings.wbalTau = 412;
+    expectedSettings.wheelSize = 2096;
+    const QDate date(2024, 6, 7);
+    QCOMPARE(snapshot->rideFileCacheAnalysisFingerprint(
+                 date, QStringLiteral("Bike"), false, 72.5),
+             rideRefreshCacheAnalysisFingerprint(
+                 zones.get(), expectedSettings,
+                 date, QStringLiteral("Bike"), false, 72.5));
+    QVERIFY(snapshot->rideFileCacheAnalysisFingerprint(
+        date, QStringLiteral("Bike"), false, 0.0).isEmpty());
+
+    const RideRefreshEnvironment::Settings defaultSettings;
+    const auto defaultSnapshot = RideRefreshEnvironment::create(
+        13, defaultSettings, true, {}, {}, {}, {}, {}, zones, {}, {}, paths);
+    const RideRefreshCacheSettings expectedDefaultSettings;
+    QCOMPARE(defaultSnapshot->rideFileCacheAnalysisFingerprint(
+                 date, QStringLiteral("Bike"), false, 72.5),
+             rideRefreshCacheAnalysisFingerprint(
+                 zones.get(), expectedDefaultSettings,
+                 date, QStringLiteral("Bike"), false, 72.5));
+    QVERIFY(RideRefreshEnvironment::create(
+        14, settings, true, {}, {}, {}, {}, {}, {}, {}, {}, paths)
+                 ->rideFileCacheAnalysisFingerprint(
+                     date, QStringLiteral("Bike"), false, 72.5).isEmpty());
+    const RideRefreshEnvironment::StoragePaths incompletePaths{
+        {}, paths.activities, paths.planned};
+    QVERIFY(!incompletePaths.isComplete());
+    const auto incompleteSnapshot = RideRefreshEnvironment::create(
+        15, settings, true, {}, {}, {}, {}, {}, zones, {}, {},
+        incompletePaths);
+    QVERIFY(!incompleteSnapshot->storagePaths().isComplete());
+    QCOMPARE(incompleteSnapshot->storagePaths().activities, paths.activities);
+    const RideRefreshEnvironment::StoragePaths relativePaths{
+        QStringLiteral("cache"),
+        QStringLiteral("activities"),
+        QStringLiteral("planned")};
+    QVERIFY(!relativePaths.isComplete());
+
+    const QDir root(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)));
+    QFile captureFile(root.filePath(
+        QStringLiteral("src/Core/RideRefreshEnvironmentCapture.cpp")));
+    QVERIFY(captureFile.open(QIODevice::ReadOnly));
+    const QByteArray capture = captureFile.readAll();
+    const qsizetype ownerGuard = capture.indexOf(
+        "Q_ASSERT(QThread::currentThread() == context->thread())");
+    const qsizetype homeGuard = capture.indexOf(
+        "Q_ASSERT(context->athlete->home)", ownerGuard);
+    const qsizetype createCall = capture.indexOf(
+        "return RideRefreshEnvironment::create(", homeGuard);
+    const qsizetype cacheRoot = capture.indexOf(
+        "context->athlete->home->cache().absolutePath()", createCall);
+    const qsizetype activitiesRoot = capture.indexOf(
+        "context->athlete->home->activities().absolutePath()", cacheRoot);
+    const qsizetype plannedRoot = capture.indexOf(
+        "context->athlete->home->planned().absolutePath()", activitiesRoot);
+    const qsizetype callClose = capture.indexOf("\n        });", plannedRoot);
+    QVERIFY(ownerGuard >= 0);
+    QVERIFY(homeGuard > ownerGuard);
+    QVERIFY(createCall > homeGuard);
+    QVERIFY(cacheRoot > createCall);
+    QVERIFY(activitiesRoot > cacheRoot);
+    QVERIFY(plannedRoot > activitiesRoot);
+    QVERIFY(callClose > plannedRoot);
 }
 
 void TestRideRefreshEnvironment::sessionPublishesWholeGenerationsAtomically()

@@ -8948,6 +8948,28 @@ commit before the next finding begins.
   Reject such a source before multiplication/conversion, continue the same
   fallback chain, and pin the upper boundary without relying on a rounded
   double representation of `ULONG_MAX`.
+- ARCH-003F2c2c3 (cache environment foundation recorded before correction):
+  Capture the athlete cache, activities, and planned roots in each immutable
+  generation and expose the existing value-only cache analysis fingerprint
+  through that same generation's zones and typed settings. Missing roots or
+  zones must remain distinguishable so the later RideFileCache worker cutover
+  can fail closed without Context, Athlete, home-directory, or appsettings
+  fallback.
+- ARCH-003F2c2c3a (default fingerprint settings test gap recorded before
+  correction): The cache-environment test covers only explicit settings, so a
+  regression in the legacy `int` / `300` / `2100` defaults would escape. Pin
+  an empty-settings environment against the value-only helper's default
+  settings.
+- ARCH-003F2c2c3b (capture source-contract gap recorded before correction):
+  The source-contract test orders root expressions after the owner/home
+  assertions but does not prove that they remain arguments of the environment
+  factory call. Bound all three expressions inside that call and retain an
+  incomplete path set through an environment generation.
+- ARCH-003F2c2c3c (relative storage roots recorded before correction):
+  `StoragePaths::isComplete()` accepts nonempty relative paths even though the
+  production capture promises legacy absolute roots. Treat completeness as an
+  anchored-path admission check so later worker cutover cannot silently depend
+  on the process working directory.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9340,6 +9362,28 @@ commit before the next finding begins.
   mutable RideItem in the worker. The remaining c2c work must stage item
   metadata and redirect RideFileCache analysis/path checks to immutable inputs.
   F3 still owns detached publication after generation acceptance.
+- ARCH-003F2c2c3/F2c2c3a-c resolution: each immutable refresh generation now
+  retains absolute cache, activities, and planned roots captured on the owner
+  thread. It exposes the existing value-only cache analysis fingerprint through
+  retained zones and typed settings, including the exact legacy
+  `int` / `300` / `2100` defaults. Missing zones yield no fingerprint, and
+  missing or relative roots remain an explicitly incomplete path set.
+- ARCH-003F2c2c3 verification: the focused suite passes 17/17 normally and
+  under ASan/UBSan. It compares both explicit and default settings directly to
+  the trusted value-only helper, covers invalid weight and missing zones,
+  retains incomplete paths through an environment, rejects relative paths,
+  and pins all three production root expressions inside the owner-thread
+  factory call. Qt 6.8.3 production builds of `RideRefreshEnvironment.cpp` and
+  `RideRefreshEnvironmentCapture.cpp` pass with warnings as errors; source
+  dependencies pass 14/14 and `git diff --check` passes. Independent review
+  first returned NO-GO for the three test/API gaps recorded as F2c2c3a-c;
+  final re-review: GO with no blocker, major, or minor finding.
+- ARCH-003F2c2c3 residual: this foundation does not yet redirect
+  `RideFileCache::checkStale`. The worker cutover must require both a nonempty
+  generation fingerprint and complete absolute storage roots without falling
+  back to live Context, Athlete, home, or settings. Mutable per-item cache
+  inputs still need an owner-thread snapshot, and F3 still owns detached
+  publication after generation acceptance.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

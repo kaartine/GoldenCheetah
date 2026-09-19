@@ -140,6 +140,7 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
     Q_ASSERT(measures);
     const auto routes = captureRideRefreshRoutes(context->athlete->routes);
     Q_ASSERT(routes);
+    Q_ASSERT(context->athlete->home);
 
     return RideRefreshEnvironment::create(
         generation,
@@ -153,5 +154,10 @@ captureRideRefreshEnvironment(Context *context, quint64 generation)
             RideMetricFactory::instance().snapshot()),
         zones,
         measures,
-        routes);
+        routes,
+        {
+            context->athlete->home->cache().absolutePath(),
+            context->athlete->home->activities().absolutePath(),
+            context->athlete->home->planned().absolutePath()
+        });
 }
