@@ -909,6 +909,9 @@ Context::Context(MainWindow *window)
 
 Context::~Context() = default;
 
+bool Context::beginConfigTransition() { return true; }
+bool Context::finishConfigTransition() { return true; }
+
 void Context::notifyErgFileSelected(ErgFile *workout)
 {
     emit ergFileSelected(workout);
@@ -1165,7 +1168,7 @@ void RideItem::close()
     ride_ = nullptr;
 }
 
-void RideItem::refresh() {}
+bool RideItem::refresh() { return true; }
 
 void RideItem::setDirty(bool dirty)
 {

@@ -213,11 +213,12 @@ struct RefreshResultDisposition
 };
 
 inline RefreshResultDisposition refreshResultDisposition(
-    bool generationAccepted)
+    bool generationAccepted,
+    bool refreshSucceeded)
 {
     return {
-        !generationAccepted,
-        generationAccepted
+        !generationAccepted || !refreshSucceeded,
+        generationAccepted && refreshSucceeded
     };
 }
 

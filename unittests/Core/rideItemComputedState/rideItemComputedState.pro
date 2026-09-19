@@ -15,6 +15,7 @@ SOURCES = testRideItemComputedState.cpp \
 HEADERS = ../../../src/Core/RideCacheSnapshot.h \
           ../../../src/Core/RideCacheStartup.h \
           ../../../src/Core/RideItem.h \
+          ../../../src/Core/RideItemRefreshResult.h \
           ../../../src/FileIO/RideFile.h
 
 INCLUDEPATH += ../../../src \

@@ -9332,6 +9332,73 @@ commit before the next finding begins.
   detached build an explicit success/failure disposition; only a successfully
   published clean proposal or refresh result may clear stale state or set the
   generation's changed flag.
+- ARCH-003F3c2a resolution: `RideItem::refresh()` now returns success when no
+  refresh was needed or after valid computed item state has been published.
+  Persistence may already be current, be intentionally absent, commit its
+  prepared artifact successfully, or fail preparation/writing in the existing
+  reportable non-fatal mode; that last case still publishes valid item state.
+  Every fingerprint, source-open, cache-preparation, identity, and CPX source
+  rejection path returns failure. The worker combines that outcome with the
+  generation-acceptance gate, so a failed or superseded refresh remains stale
+  and cannot set `refreshChanged_`; successful accepted refreshes preserve the
+  prior clean-and-changed behavior. The four success/failure and
+  accepted/superseded combinations are covered by the disposition regression,
+  and the production source-contract test requires the worker to consume the
+  explicit result. This is a bounded defect fix only: the worker still performs
+  the build and mutation addressed by ARCH-003F3c/F3c1-F3c2 and must move to
+  their owner-thread bounded publication transaction before the concurrency
+  finding can close.
+- ARCH-003F3c2a1 (test-double signature regression found by independent review
+  and recorded before correction): The ride-cache-removal target still defines
+  its `RideItem::refresh()` test stub with the former `void` return type. Update
+  the stub to the production `bool` contract and compile/run the registered
+  target before accepting ARCH-003F3c2a.
+- ARCH-003F3c2a1 resolution: The removal double now implements `bool refresh()`
+  and returns the successful no-op result appropriate to that target. The
+  complete target compiles and links, and its isolated archived-removal case
+  passes 3/3 including fixture setup and teardown.
+- ARCH-003F3c2a2 (return-path coverage gap found by independent review and
+  recorded before correction): The disposition truth table proves how a
+  returned failure is consumed, but it does not execute `RideItem::refresh()`
+  through its early exits. Add a focused seam or direct fixture that pins the
+  failure classification without requiring the unsafe worker publication that
+  remains in ARCH-003F3c.
+- ARCH-003F3c2a2 resolution: The production method now names every terminal
+  result with `RideItemRefreshOutcome`, and all returns are derived through the
+  single `rideItemRefreshSucceeded()` seam. Its focused test covers both
+  successful outcomes and all five failure outcomes normally and under
+  ASan/UBSan. This pins the contract without adding a worker-thread fixture
+  around the still-open F3c publication design.
+- ARCH-003F3c2a3 (removal-target linkage regression found during verification
+  and recorded before correction): The registered ride-cache-removal target's
+  `Context` double predates the config-transition API, so moc references to
+  `beginConfigTransition()` and `finishConfigTransition()` cannot link. Add
+  policy-neutral successful stubs and run the complete removal target; this is
+  test-harness compatibility, not production transition coverage.
+- ARCH-003F3c2a3 resolution: The removal double now supplies successful no-op
+  definitions for both transition methods. The target links and its isolated
+  archived-removal case passes; transition behavior remains covered by the
+  dedicated lifecycle suites rather than this removal fixture.
+- ARCH-003F3c2a4 (atomic-publication test-harness failure found during
+  verification and recorded before correction): The full removal target and
+  five full snapshot cases fail after `NewAtomicFileWriter::commit()` reports
+  `Atomic publication is not open`; the removal run later crashes while
+  cascading through dependent cases. The same removal binary's isolated
+  non-publication case passes, and the focused F3c2a tests pass. Diagnose this
+  atomic-writer/test-harness failure independently before treating either full
+  target as current regression evidence; do not fold a storage-transaction
+  change into the refresh-result fix.
+- ARCH-003F3c2a verification: The outcome suite passes 10/10 normally and under
+  ASan/UBSan, the four generation/success dispositions pass 3/3 normally and
+  under ASan/UBSan, and the refresh-environment suite passes 20/20 in both
+  configurations. `RideItem.cpp` and `RideCache.cpp` compile with warnings as
+  errors. The repaired removal target compiles and links and its isolated
+  archived-removal case passes 3/3. The source-module analyzer accepts the
+  baseline and its unit suite passes 14/14; `git diff --check` is clean.
+  Independent review found and then cleared the stale test signature, outcome
+  coverage, and audit-wording blockers. The unresolved full-target failures are
+  recorded separately as ARCH-003F3c2a4, and the owner-thread publication work
+  remains ARCH-003F3c/F3c1-F3c4 rather than being claimed by this bounded fix.
 - ARCH-003F3c3 (completion, cancellation, and save barrier recorded before
   correction): `threadCompleted`, `cancel`, and synchronous-save settlement
   currently reason only about worker threads. They must also close/discard or

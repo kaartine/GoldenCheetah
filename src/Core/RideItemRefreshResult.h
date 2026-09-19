@@ -19,6 +19,23 @@
 
 class RideFile;
 
+enum class RideItemRefreshOutcome
+{
+    AlreadyCurrent,
+    Published,
+    SourceFingerprintFailed,
+    SourceOpenFailed,
+    CachePreparationInvalid,
+    IdentityRejected,
+    CacheSourceRejected
+};
+
+constexpr bool rideItemRefreshSucceeded(RideItemRefreshOutcome outcome)
+{
+    return outcome == RideItemRefreshOutcome::AlreadyCurrent
+        || outcome == RideItemRefreshOutcome::Published;
+}
+
 struct RideItemRefreshIdentity
 {
     QString path;

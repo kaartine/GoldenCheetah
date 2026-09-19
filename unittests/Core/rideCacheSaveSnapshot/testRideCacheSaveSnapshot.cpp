@@ -411,14 +411,24 @@ TestRideCacheSaveSnapshot::
 supersededRefreshResultRemainsStale()
 {
     const auto current =
-        RideCacheStartup::refreshResultDisposition(true);
+        RideCacheStartup::refreshResultDisposition(true, true);
     QVERIFY(!current.keepStale);
     QVERIFY(current.markCacheChanged);
 
     const auto superseded =
-        RideCacheStartup::refreshResultDisposition(false);
+        RideCacheStartup::refreshResultDisposition(false, true);
     QVERIFY(superseded.keepStale);
     QVERIFY(!superseded.markCacheChanged);
+
+    const auto failed =
+        RideCacheStartup::refreshResultDisposition(true, false);
+    QVERIFY(failed.keepStale);
+    QVERIFY(!failed.markCacheChanged);
+
+    const auto failedAndSuperseded =
+        RideCacheStartup::refreshResultDisposition(false, false);
+    QVERIFY(failedAndSuperseded.keepStale);
+    QVERIFY(!failedAndSuperseded.markCacheChanged);
 }
 
 void

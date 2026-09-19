@@ -867,10 +867,13 @@ bool RideItem::hasLinkedActivity() const
     return ! getLinkedFileName().isEmpty();
 }
 
-void
+bool
 RideItem::refresh()
 {
-    if (!isstale) return;
+    if (!isstale) {
+        return rideItemRefreshSucceeded(
+            RideItemRefreshOutcome::AlreadyCurrent);
+    }
 
     const bool targetWasOpen = isOpen();
     RideFile *const expectedOpenRide = ride_;
@@ -883,7 +886,8 @@ RideItem::refresh()
     RideFileCRC::ContentFingerprint sourceFingerprint;
     if (!RideFileCRC::computeFileFingerprint(
             sourcePath, sourceFingerprint)) {
-        return;
+        return rideItemRefreshSucceeded(
+            RideItemRefreshOutcome::SourceFingerprintFailed);
     }
 
     std::unique_ptr<RideFile> computationRide;
@@ -898,7 +902,8 @@ RideItem::refresh()
     RideFile *const sourceRide = computationRide.get();
     if (!sourceRide) {
         qDebug()<<"** FILE READ ERROR: "<<fileName;
-        return;
+        return rideItemRefreshSucceeded(
+            RideItemRefreshOutcome::SourceOpenFailed);
     }
 
     // Compute against an unregistered item.  It borrows both collaborators;
@@ -968,7 +973,8 @@ RideItem::refresh()
             sourceRide, !targetWasOpen || !isdirty);
     if (cachePreparation.outcome
         == RideFileCache::PreparedRefresh::Outcome::Invalid) {
-        return;
+        return rideItemRefreshSucceeded(
+            RideItemRefreshOutcome::CachePreparationInvalid);
     }
 
     const RideMetricRegistrySnapshot metricRegistry =
@@ -1048,7 +1054,8 @@ RideItem::refresh()
             {path, fileName, dateTime, isOpen(), ride_},
             currentSourcePath,
             currentSourceFingerprint)) {
-        return;
+        return rideItemRefreshSucceeded(
+            RideItemRefreshOutcome::IdentityRejected);
     }
 
     // Complete every allocating/throwing part of item publication before
@@ -1065,7 +1072,8 @@ RideItem::refresh()
                 &context->athleteSession().persistenceService());
         if (outcome
             == RideFileCache::PreparedCommitOutcome::SourceRejected) {
-            return;
+            return rideItemRefreshSucceeded(
+                RideItemRefreshOutcome::CacheSourceRejected);
         }
     } else if (result.cache.outcome
                == RideFileCache::PreparedRefresh::Outcome::
@@ -1086,6 +1094,9 @@ RideItem::refresh()
         ride_->wstale = true;
         ride_->recalculateDerivedSeries(true);
     }
+
+    return rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::Published);
 }
 
 double

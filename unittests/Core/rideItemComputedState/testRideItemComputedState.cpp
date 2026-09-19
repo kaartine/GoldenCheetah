@@ -12,6 +12,7 @@
 #include "IntervalItem.h"
 #include "RideCacheSnapshot.h"
 #include "RideItem.h"
+#include "RideItemRefreshResult.h"
 
 class RideItemRefreshTestAccess
 {
@@ -314,6 +315,7 @@ private slots:
     void emptyStatePublishesOnce();
     void startupSnapshotPreservesFlagsAndComputedState();
     void rejectedStartupSnapshotLeavesCanonicalStateUntouched();
+    void refreshOutcomeClassifiesOnlyPublishedStateAsSuccess();
 };
 
 void TestRideItemComputedState::
@@ -480,6 +482,25 @@ rejectedStartupSnapshotLeavesCanonicalStateUntouched()
     QCOMPARE(existing->name, QStringLiteral("Existing"));
     QVERIFY(RideItemRefreshTestAccess::metricsEmpty(target));
     RideItemRefreshTestAccess::verifyUiFlags(target);
+}
+
+void TestRideItemComputedState::
+refreshOutcomeClassifiesOnlyPublishedStateAsSuccess()
+{
+    QVERIFY(rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::AlreadyCurrent));
+    QVERIFY(rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::Published));
+    QVERIFY(!rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::SourceFingerprintFailed));
+    QVERIFY(!rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::SourceOpenFailed));
+    QVERIFY(!rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::CachePreparationInvalid));
+    QVERIFY(!rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::IdentityRejected));
+    QVERIFY(!rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::CacheSourceRejected));
 }
 
 QTEST_GUILESS_MAIN(TestRideItemComputedState)

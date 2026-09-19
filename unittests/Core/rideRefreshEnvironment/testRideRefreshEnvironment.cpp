@@ -892,7 +892,11 @@ productionWorkersRetainTheirPublishedGeneration()
     const qsizetype backgroundGate = source.indexOf(
         "!work->inputs.backgroundRefreshAllowed", staleCheck);
     const qsizetype refreshCall = source.indexOf(
-        "item->refresh()", backgroundGate);
+        "const bool refreshed = item->refresh()", backgroundGate);
+    const qsizetype disposition = source.indexOf(
+        "refreshResultDisposition(", refreshCall);
+    const qsizetype refreshOutcome = source.indexOf(
+        "refreshed);", disposition);
     const qsizetype constructor = source.indexOf(
         "RideCacheRefreshThread::RideCacheRefreshThread(");
     const qsizetype retained = source.indexOf(
@@ -913,6 +917,8 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(staleCheck > nextRefresh);
     QVERIFY(backgroundGate > staleCheck);
     QVERIFY(refreshCall > backgroundGate);
+    QVERIFY(disposition > refreshCall);
+    QVERIFY(refreshOutcome > disposition);
     QVERIFY(constructor >= 0);
     QVERIFY(retained > constructor);
     QVERIFY(retainedWorkset > retained);
