@@ -17,6 +17,7 @@
  */
 
 #include <QMessageBox>
+#include <QRegExp>
 #include "Zones.h"
 #include "Colors.h"
 #include "Settings.h"

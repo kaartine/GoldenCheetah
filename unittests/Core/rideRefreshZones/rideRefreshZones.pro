@@ -1,5 +1,4 @@
-QT += concurrent core gui network sql testlib widgets xml \
-      positioning webenginequick charts openglwidgets
+QT += core gui testlib widgets
 greaterThan(QT_MAJOR_VERSION, 5): QT += core5compat
 
 TEMPLATE = app
@@ -14,6 +13,7 @@ DEFINES += GC_TEST_SOURCE_ROOT="$${GC_TEST_SOURCE_ROOT}"
 include(../../section-gc.prf)
 
 SOURCES = testRideRefreshZones.cpp \
+          ../../../src/Core/RideRefreshCacheInputs.cpp \
           ../../../src/Core/RideRefreshZones.cpp \
           ../../../src/Core/RideRefreshZonesCapture.cpp \
           ../../../src/Core/RideRefreshZonesAssembly.cpp \
@@ -22,7 +22,8 @@ SOURCES = testRideRefreshZones.cpp \
           ../../../src/Metrics/PaceZones.cpp \
           ../../../src/Core/Units.cpp
 
-HEADERS = ../../../src/Core/RideRefreshZones.h \
+HEADERS = ../../../src/Core/RideRefreshCacheInputs.h \
+          ../../../src/Core/RideRefreshZones.h \
           ../../../src/Core/Units.h \
           ../../../src/Metrics/Zones.h \
           ../../../src/Metrics/HrZones.h \

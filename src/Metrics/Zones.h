@@ -19,7 +19,6 @@
 #ifndef _Zones_h
 #define _Zones_h
 #include "GoldenCheetah.h"
-#include "Athlete.h"
 
 #include <QtCore>
 

@@ -8861,6 +8861,12 @@ commit before the next finding begins.
   the immutable zone/settings values, including absent-domain semantics, so
   F2c can remove Context/Athlete/appsettings reads without changing cache
   invalidation or on-disk compatibility.
+- ARCH-003F2b4a (zone test dependency excess recorded before correction): The
+  focused zone/cache-input value suite declares Positioning, WebEngineQuick,
+  Charts, Core5Compat, and other Qt modules outside its source boundary. This
+  blocks the architecture contract on an otherwise sufficient Qt test
+  environment. Reduce the manifest to modules proven necessary by a clean
+  complete build before accepting F2b4.
 - ARCH-003F2c (worker cutover work item recorded before correction): Bind one
   shared immutable environment to each refresh generation and route every
   `checkStale`, `refresh`, interval discovery, RideFileCache, built-in metric,
@@ -9127,6 +9133,35 @@ commit before the next finding begins.
   `IntervalItem` objects on the owner thread only after generation acceptance.
   The full real-Athlete capture path and TSan-instrumented generation handoff
   remain integration/release checks for those stages.
+- ARCH-003F2b4 resolution: `RideRefreshCacheInputs` now derives the CPX analysis
+  SHA-256 solely from immutable zone histories, typed W'bal/tau/wheel settings,
+  and explicit ride date/sport/swim/weight values. It preserves the legacy
+  Qt 4.6 big-endian stream layout, field types/order, zone lows/highs, resolved
+  AeT rules, defaults, and hash bytes. A missing generation snapshot or invalid
+  weight fails closed, while valid absent domains, present domains without a
+  date range, exact-null sport entries, and Bike fallback remain distinct.
+  The companion distribution DTO owns selected power/HR/pace ranges and exposes
+  domain presence separately from range selection, covering every CP, AeT, W',
+  LT, CV, and band-classification input used by `computeDistribution`.
+- ARCH-003F2b4a resolution: `Zones.h` and `PaceZones.h` no longer expose unused
+  Athlete/Context includes. Their QRegExp and GlobalContext dependencies are
+  direct implementation includes, reducing three public Metrics-to-Core edges
+  to the one real `PaceZones.cpp -> Context.h` edge. The focused test manifest
+  now declares only Core, Gui, Widgets, Test, and Core5Compat.
+- ARCH-003F2b4 verification: the complete focused zone/cache-input suite passes
+  18/18 normally and under ASan/UBSan. Live-vs-value hashes cover active run
+  ranges, swim default AeT, all-absent domains, present-without-range domains,
+  exact-null fallback suppression, every typed setting, and invalid weights.
+  The three changed production translation units compile with warnings as
+  errors; source dependencies pass 14/14 against the reduced baseline, and
+  `git diff --check` passes. Independent final re-review: GO with no blocker,
+  major, or minor finding.
+- ARCH-003F2b4 residual: F2c must require these inputs for every RideFileCache
+  worker consumer, reject `valid == false`, and forbid fallback to Context,
+  Athlete, or appsettings. A full application rebuild after the public header
+  dependency reduction remains a merge prerequisite because this worktree has
+  no generated application Makefile; the focused build compiles the live
+  Zones/HrZones/PaceZones sources but not every reverse-include consumer.
 - ARCH-003G (queued registry work recorded before correction): The global raw
   `Context *` list and broad public mutable Context state provide only a
   lock-free TOCTOU validity check. Constrain registry mutation/broadcast to the

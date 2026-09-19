@@ -20,8 +20,10 @@
  */
 
 #include <QMessageBox>
+#include <QRegExp>
 #include "PaceZones.h"
 #include "Colors.h"
+#include "Context.h"
 #include "Settings.h"
 #include "TimeUtils.h"
 #include "Units.h"

@@ -22,8 +22,6 @@
 #ifndef _PaceZones_h
 #define _PaceZones_h
 #include "GoldenCheetah.h"
-#include "Context.h"
-#include "Athlete.h"
 
 #include <QtCore>
 

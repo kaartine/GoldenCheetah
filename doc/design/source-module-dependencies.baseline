@@ -10989,6 +10989,12 @@
     {
       "source": "src/Metrics/PaceZones.cpp",
       "source_module": "Metrics",
+      "target": "src/Core/Context.h",
+      "target_module": "Core"
+    },
+    {
+      "source": "src/Metrics/PaceZones.cpp",
+      "source_module": "Metrics",
       "target": "src/Core/Settings.h",
       "target_module": "Core"
     },
@@ -11015,18 +11021,6 @@
       "source_module": "Metrics",
       "target": "src/Charts/GoldenCheetah.h",
       "target_module": "Charts"
-    },
-    {
-      "source": "src/Metrics/PaceZones.h",
-      "source_module": "Metrics",
-      "target": "src/Core/Athlete.h",
-      "target_module": "Core"
-    },
-    {
-      "source": "src/Metrics/PaceZones.h",
-      "source_module": "Metrics",
-      "target": "src/Core/Context.h",
-      "target_module": "Core"
     },
     {
       "source": "src/Metrics/PeakHr.cpp",
@@ -11741,12 +11735,6 @@
       "source_module": "Metrics",
       "target": "src/Charts/GoldenCheetah.h",
       "target_module": "Charts"
-    },
-    {
-      "source": "src/Metrics/Zones.h",
-      "source_module": "Metrics",
-      "target": "src/Core/Athlete.h",
-      "target_module": "Core"
     },
     {
       "source": "src/Metrics/aBikeScore.cpp",
