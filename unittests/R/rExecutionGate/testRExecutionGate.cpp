@@ -44,6 +44,7 @@ private slots:
     void moveTransfersSingleCleanup();
     void runsCoalescedWorkAfterCleanupAndRelease();
     void guardsEvaluationContinuations();
+    void guardsPumpedObjectLists();
     void productionEntrypointsUseGate();
 };
 
@@ -244,6 +245,40 @@ TestRExecutionGate::guardsEvaluationContinuations()
 }
 
 void
+TestRExecutionGate::guardsPumpedObjectLists()
+{
+    QObject *contextObject = new QObject;
+    QObject *athleteObject = new QObject;
+    QObject *firstItem = new QObject;
+    QObject *secondItem = new QObject;
+
+    const QPointer<QObject> context(contextObject);
+    const QPointer<QObject> athlete(athleteObject);
+    const QList<QPointer<QObject>> guardedItems = {firstItem, secondItem};
+    int dereferenceCount = 0;
+
+    for (const QPointer<QObject> &guardedItem : guardedItems) {
+        // Simulate athlete/cache teardown dispatched by processEvents().
+        delete athleteObject;
+        athleteObject = nullptr;
+        delete firstItem;
+        firstItem = nullptr;
+        delete secondItem;
+        secondItem = nullptr;
+
+        if (!context || !athlete || !guardedItem) break;
+        ++dereferenceCount;
+    }
+
+    QCOMPARE(dereferenceCount, 0);
+    QVERIFY(context);
+    QVERIFY(!athlete);
+    QVERIFY(guardedItems[0].isNull());
+    QVERIFY(guardedItems[1].isNull());
+    delete contextObject;
+}
+
+void
 TestRExecutionGate::productionEntrypointsUseGate()
 {
     QFile chart(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/Charts/RChart.cpp"));
@@ -270,6 +305,11 @@ TestRExecutionGate::productionEntrypointsUseGate()
     QVERIFY(toolSource.contains(
         "tryAcquireExecution(NULL, NULL, NULL, NULL)"));
     QVERIFY(toolSource.contains("appearanceRefreshPending.exchange("));
+    QVERIFY(toolSource.contains("QList<QPointer<RideItem>> guardedActivities;"));
+    QVERIFY(toolSource.contains(
+        "executionContext->athlete != executionAthlete.data()"));
+    QVERIFY(toolSource.contains("RideItem *item = guardedItem.data();"));
+    QVERIFY(!toolSource.contains("foreach(RideItem *item, activities)"));
 
     QFile toolHeader(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTool.h"));
     QVERIFY2(

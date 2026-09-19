@@ -7989,6 +7989,41 @@ commit before the next finding begins.
   release check. Raw `rtool`, Context, Perspective, Athlete/RideItem chains,
   device `Close`/`GCdisplay` ownership, the explicit activity event pump, and
   any cross-thread access are outside this item and remain ARCH-003B2/003C.
+- ARCH-003B2b (FIXED; implementation item recorded before correction):
+  `RTool::activity()` keeps a `QList<RideItem*>` across an explicit
+  `QApplication::processEvents()` call, then dereferences the current and later
+  list entries even though athlete/cache teardown can delete the whole list
+  during that pump. Snapshot guarded RideItem targets before the first pump and
+  revalidate the execution Context/Athlete pair and current item immediately
+  afterward; abort the loop before `isOpen()`, `ride()`, or `close()` when any
+  target was invalidated.
+- ARCH-003B2b resolution: the user-selected activity branch snapshots every
+  `RideItem` into `QPointer` storage before its first event pump and captures
+  guarded Context/Athlete identity. Immediately after every pump it stops on
+  cancellation, deleted/replaced Context or Athlete, or a deleted current
+  RideItem, before performing any item dereference. Deleting later list entries
+  also clears their snapshot slots, so the next iteration cannot reconstruct a
+  guard from an already-dangling raw pointer.
+- ARCH-003B2b verification: The focused gate/lifetime suite passes 11/11 on Qt
+  6.4.2 normally and 11/11 under ASan/UBSan with leak detection disabled. Its
+  pumped-list teardown case deletes the athlete and all snapshotted objects and
+  verifies no continuation dereference; production source checks pin the
+  guarded list and post-pump identity barrier. `RTool.cpp` compiles with staged
+  R 4.3.3/Rcpp/RInside headers under `GC_WANT_R` and `STRICT_R_HEADERS`; the
+  source dependency baseline suite passes 14/14 and `git diff --check` is
+  clean. Independent review approved the scoped lifetime change after the
+  adjacent pre-existing R protection defect was recorded as ARCH-003B2c.
+  Raw `rtool`/cross-thread deletion remain ARCH-003C; a cache replacement that
+  leaves old items alive is a stale-snapshot semantic risk rather than this
+  UAF and still needs generation identity in the broader snapshot design.
+- ARCH-003B2c (queued R memory-safety work recorded before correction): the
+  same `RTool::activity()` user-list branch accumulates `SEXP` data frames in a
+  plain `QList` after `dfForActivity()` has unprotected them, so later R
+  allocations may collect those frames before the result list roots them. The
+  branch also calls `UNPROTECT(3)` despite owning only the result-list and
+  row-name protections, thereby popping one caller/outer protection. Define a
+  balanced RAII/protection strategy, add allocation-pressure real-R coverage,
+  and verify every early-return/exception path before correcting this item.
 - ARCH-003C (queued lifetime work recorded before correction): `rtool` is a raw
   process global, self-publishes before construction finishes, leaks failed and
   successful instances, and has an unreachable/unconditional finalizer. Define

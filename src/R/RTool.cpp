@@ -2407,19 +2407,30 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
     // user requested specific activities?
     if (userlist) {
 
+            const QPointer<Context> executionContext(rtool->context);
+            const QPointer<Athlete> executionAthlete(
+                executionContext ? executionContext->athlete : nullptr);
+            QList<QPointer<RideItem>> guardedActivities;
+            guardedActivities.reserve(activities.size());
+            for (RideItem *activity : activities) guardedActivities.append(activity);
+
             // we collect a list to return, appending as we go, rather
             // than pre-allocating, since we decide to split and may
             // get multiple responses
             QList<SEXP> f;
 
             // create a data.frame for each and add to list
-            foreach(RideItem *item, activities) {
+            for (const QPointer<RideItem> &guardedItem : guardedActivities) {
 
                 // we DO NOT use R_CheckUserInterrupt since it longjmps
                 // and leaves quite a mess behind. We check ourselves
                 // if a cancel was requested we honour it
                 QApplication::processEvents();
                 if (rtool->cancelled) break;
+                if (!executionContext || !executionAthlete || !guardedItem
+                    || executionContext->athlete != executionAthlete.data()) break;
+
+                RideItem *item = guardedItem.data();
 
                 // we open, if it wasn't open we also close
                 // to make sure we don't exhause memory
