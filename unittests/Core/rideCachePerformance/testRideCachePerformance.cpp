@@ -1,11 +1,15 @@
 #include <QtTest>
 
+#include <QMutex>
+#include <QSemaphore>
+
 #include "RideCacheAggregate.h"
 #include "RideCacheStartup.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <thread>
 
 namespace {
 
@@ -36,6 +40,8 @@ private slots:
     void invalidationScope_data();
     void invalidationScope();
     void refreshGenerationsRejectSupersededWork();
+    void crossThreadRequestReservationPrecedesOwnerCallback();
+    void crossThreadReservationIsVisibleToConfigQuiesce();
     void refreshCancellationSettlesPendingWork();
     void batchAggregationPreservesMetricSemantics();
     void batchAggregationScalesWithoutRepeatedMetricReads();
@@ -246,6 +252,139 @@ refreshGenerationsRejectSupersededWork()
     QVERIFY(generations.accepts(latest));
     QVERIFY(!generations.finish(latest));
     QVERIFY(!generations.hasActive());
+}
+
+void TestRideCachePerformance::
+crossThreadRequestReservationPrecedesOwnerCallback()
+{
+    using Action = RideCacheStartup::ReservedRefreshAction;
+
+    RideCacheStartup::RefreshGeneration generations;
+    QMutex mutex;
+    QSemaphore startRequest;
+    QSemaphore requestReserved;
+    QSemaphore completionObserved;
+    quint64 reserved = 0;
+    bool oldAcceptedAfterReservation = true;
+    bool completionFoundPending = false;
+    Action actionBeforeStart = Action::Ignore;
+    quint64 started = 0;
+
+    const quint64 old = generations.request();
+    QCOMPARE(generations.beginLatest(), old);
+
+    std::thread requester([&]() {
+        startRequest.acquire();
+        {
+            QMutexLocker locker(&mutex);
+            reserved = generations.request();
+        }
+        requestReserved.release();
+        completionObserved.acquire();
+    });
+
+    startRequest.release();
+    requestReserved.acquire();
+    {
+        QMutexLocker locker(&mutex);
+        oldAcceptedAfterReservation = generations.accepts(old);
+        completionFoundPending = generations.finish(old);
+        actionBeforeStart = RideCacheStartup::reservedRefreshAction(
+            generations, reserved, false);
+        started = generations.beginLatest();
+    }
+    completionObserved.release();
+    requester.join();
+
+    QVERIFY(!oldAcceptedAfterReservation);
+    QVERIFY(completionFoundPending);
+    QCOMPARE(actionBeforeStart, Action::StartLatest);
+    QCOMPARE(started, reserved);
+    QCOMPARE(reserved, quint64(2));
+    QCOMPARE(
+        RideCacheStartup::reservedRefreshAction(
+            generations, reserved, false),
+        Action::Ignore);
+
+    const quint64 superseding = generations.request();
+    QCOMPARE(
+        RideCacheStartup::reservedRefreshAction(
+            generations, reserved, false),
+        Action::Ignore);
+    QCOMPARE(
+        RideCacheStartup::reservedRefreshAction(
+            generations, superseding, true),
+        Action::Defer);
+    QCOMPARE(
+        RideCacheStartup::reservedRefreshAction(
+            generations, superseding, false),
+        Action::InterruptActive);
+
+    generations.cancel();
+    QCOMPARE(
+        RideCacheStartup::reservedRefreshAction(
+            generations, superseding, false),
+        Action::Ignore);
+
+    const quint64 deferred = generations.request();
+    QCOMPARE(
+        RideCacheStartup::reservedRefreshAction(
+            generations, deferred, true),
+        Action::Defer);
+    QCOMPARE(
+        RideCacheStartup::reservedRefreshAction(
+            generations, deferred, false),
+        Action::StartLatest);
+
+    QVERIFY(generations.abandonRequest(deferred));
+    QVERIFY(!generations.abandonRequest(deferred));
+    const quint64 newer = generations.request();
+    QVERIFY(!generations.abandonRequest(deferred));
+    QVERIFY(generations.ownsCurrentRequest(newer));
+    QCOMPARE(generations.beginLatest(), newer);
+    QVERIFY(!generations.abandonRequest(newer));
+    QVERIFY(generations.accepts(newer));
+    QVERIFY(generations.isActive(newer));
+}
+
+void TestRideCachePerformance::
+crossThreadReservationIsVisibleToConfigQuiesce()
+{
+    RideCacheStartup::RefreshGeneration generations;
+    QMutex mutex;
+    QSemaphore startRequest;
+    QSemaphore requestReserved;
+    QSemaphore quiesceObserved;
+    bool resume = false;
+
+    std::thread requester([&]() {
+        startRequest.acquire();
+        {
+            QMutexLocker locker(&mutex);
+            generations.request();
+        }
+        requestReserved.release();
+        quiesceObserved.acquire();
+    });
+
+    startRequest.release();
+    requestReserved.acquire();
+    {
+        QMutexLocker locker(&mutex);
+        resume = RideCacheStartup::refreshNeedsResume(
+            false, 0, generations);
+    }
+    quiesceObserved.release();
+    requester.join();
+
+    QVERIFY(resume);
+    generations.cancel();
+    QVERIFY(!RideCacheStartup::refreshNeedsResume(
+        false, 0, generations));
+    QVERIFY(RideCacheStartup::refreshNeedsResume(
+        true, 0, generations));
+    QVERIFY(RideCacheStartup::refreshNeedsResume(
+        false, 1, generations));
 }
 
 void TestRideCachePerformance::

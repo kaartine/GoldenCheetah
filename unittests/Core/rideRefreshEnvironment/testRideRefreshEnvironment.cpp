@@ -904,6 +904,32 @@ productionWorkersRetainTheirPublishedGeneration()
     const qsizetype retainedWorkset = source.indexOf(
         "workset(std::move(workset))", retained);
     const qsizetype constructorBody = source.indexOf("\n{", constructor);
+    const qsizetype refresh = source.indexOf("RideCache::refresh()");
+    const qsizetype nonOwner = source.indexOf(
+        "QThread::currentThread() != thread()", refresh);
+    const qsizetype reservation = source.indexOf(
+        "request = refreshGeneration_.request()", nonOwner);
+    const qsizetype queued = source.indexOf(
+        "QMetaObject::invokeMethod(", reservation);
+    const qsizetype reservedHandler = source.indexOf(
+        "handleRefreshRequest(request)", queued);
+    const qsizetype abandon = source.indexOf(
+        "abandonRequest(request)", reservedHandler);
+    const qsizetype handleDefinition = source.indexOf(
+        "RideCache::handleRefreshRequest(quint64 request)",
+        abandon);
+    const qsizetype replacementGate = source.indexOf(
+        "replacementRefreshBlocked_", handleDefinition);
+    const qsizetype removalGate = source.indexOf(
+        "removalInProgress_", replacementGate);
+    const qsizetype action = source.indexOf(
+        "reservedRefreshAction(", removalGate);
+    const qsizetype quiesce = source.indexOf(
+        "RideCache::quiesceForConfigTransition()", action);
+    const qsizetype quiesceLock = source.indexOf(
+        "QMutexLocker locker(&updateMutex)", quiesce);
+    const qsizetype resumeDecision = source.indexOf(
+        "refreshNeedsResume(", quiesceLock);
     QVERIFY(start >= 0);
     QVERIFY(capture > start);
     QVERIFY(validation > capture);
@@ -923,6 +949,21 @@ productionWorkersRetainTheirPublishedGeneration()
     QVERIFY(retained > constructor);
     QVERIFY(retainedWorkset > retained);
     QVERIFY(constructorBody > retainedWorkset);
+    QVERIFY(refresh >= 0);
+    QVERIFY(nonOwner > refresh);
+    QVERIFY(reservation > nonOwner);
+    QVERIFY(queued > reservation);
+    QVERIFY(reservedHandler > queued);
+    QVERIFY(abandon > reservedHandler);
+    QVERIFY(handleDefinition > abandon);
+    QVERIFY(replacementGate > handleDefinition);
+    QVERIFY(removalGate > replacementGate);
+    QVERIFY(action > removalGate);
+    QVERIFY(quiesce > action);
+    QVERIFY(quiesceLock > quiesce);
+    QVERIFY(resumeDecision > quiesceLock);
+    QVERIFY(!source.mid(nonOwner, queued - nonOwner).contains(
+        "&RideCache::refresh"));
 
     QFile headerFile(root.filePath(QStringLiteral("src/Core/RideCache.h")));
     QVERIFY(headerFile.open(QIODevice::ReadOnly));

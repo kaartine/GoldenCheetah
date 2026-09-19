@@ -891,8 +891,23 @@ void
 RideCache::refresh()
 {
     if (QThread::currentThread() != thread()) {
-        QMetaObject::invokeMethod(
-            this, &RideCache::refresh, Qt::QueuedConnection);
+        quint64 request = 0;
+        {
+            QMutexLocker locker(&updateMutex);
+            if (exiting || isCancelled) return;
+            // Invalidate the active generation before crossing the queued
+            // owner-thread boundary.  Its completion may already be queued.
+            request = refreshGeneration_.request();
+        }
+        const bool queued = QMetaObject::invokeMethod(
+            this,
+            [this, request]() { handleRefreshRequest(request); },
+            Qt::QueuedConnection);
+        if (!queued) {
+            QMutexLocker locker(&updateMutex);
+            refreshGeneration_.abandonRequest(request);
+            qWarning() << "Cannot queue ride cache refresh request";
+        }
         return;
     }
 
@@ -910,28 +925,78 @@ RideCache::refresh()
         return;
     }
 
-    bool active = false;
-    bool deferStart = false;
+    quint64 request = 0;
     {
         QMutexLocker locker(&updateMutex);
         if (exiting || isCancelled) return;
-        refreshGeneration_.request();
-        active = refreshGeneration_.hasActive();
-        deferStart = saveSnapshotBoundary_;
-        if (!active) refreshChanged_ = false;
+        request = refreshGeneration_.request();
     }
 
-    if (deferStart) return;
-    if (active) interruptActiveRefresh();
-    else startLatestRefresh();
+    handleRefreshRequest(request);
+}
+
+void
+RideCache::handleRefreshRequest(quint64 request)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+
+    {
+        QMutexLocker locker(&updateMutex);
+        if (exiting || isCancelled
+            || !refreshGeneration_.ownsCurrentRequest(request)) {
+            return;
+        }
+    }
+
+    if (!context->athleteSession().refreshLifecycle().admitsWork()) {
+        refreshAfterConfigTransition_ = true;
+        return;
+    }
+
+    if (replacementRefreshBlocked_
+        && *replacementRefreshBlocked_)
+        return;
+
+    if (removalInProgress_ && *removalInProgress_) {
+        removalRefreshPending_ = true;
+        return;
+    }
+
+    RideCacheStartup::ReservedRefreshAction action =
+        RideCacheStartup::ReservedRefreshAction::Ignore;
+    {
+        QMutexLocker locker(&updateMutex);
+        if (exiting || isCancelled) return;
+        action = RideCacheStartup::reservedRefreshAction(
+            refreshGeneration_, request, saveSnapshotBoundary_);
+        if (action
+                != RideCacheStartup::ReservedRefreshAction::Ignore
+            && !refreshGeneration_.hasActive()) {
+            refreshChanged_ = false;
+        }
+    }
+
+    if (action
+        == RideCacheStartup::ReservedRefreshAction::InterruptActive) {
+        interruptActiveRefresh();
+    } else if (action
+               == RideCacheStartup::ReservedRefreshAction::StartLatest) {
+        startLatestRefresh();
+    }
 }
 
 void
 RideCache::quiesceForConfigTransition()
 {
     Q_ASSERT(QThread::currentThread() == thread());
-    refreshAfterConfigTransition_ = refreshAfterConfigTransition_
-        || isRunning() || refreshGeneration_.hasPending();
+    {
+        QMutexLocker locker(&updateMutex);
+        refreshAfterConfigTransition_ =
+            RideCacheStartup::refreshNeedsResume(
+                refreshAfterConfigTransition_,
+                refreshThreads.size(),
+                refreshGeneration_);
+    }
     estimatorAfterConfigTransition_ = estimator
         && estimator->hasPendingOrRunning();
 

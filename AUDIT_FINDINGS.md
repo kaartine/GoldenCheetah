@@ -9443,6 +9443,30 @@ commit before the next finding begins.
   request API owner-thread-only with every caller explicitly marshalled; test
   the request-before-completion linearization rather than relying on event
   delivery order across senders.
+- ARCH-003F3c5 resolution: A non-owner refresh now reserves its monotonically
+  newer request under `updateMutex` before crossing the queued owner-thread
+  boundary. The owner handler consumes that exact reservation without
+  incrementing again, ignores superseded/cancelled/already-started callbacks,
+  coalesces to the latest request, and preserves save-boundary deferral. Thus
+  an older completion observes the newer reservation even when its event is
+  delivered first. Config quiescence reads worker/generation state under the
+  same mutex, teardown admission uses atomic `exiting`, and a failed Qt queue
+  abandons only the still-current, not-yet-active exact reservation without
+  rolling back a newer request or invalidating work that has already started.
+- ARCH-003F3c5 verification: The latch-controlled generation suite passes
+  17/17 normally and covers reservation-before-callback, completion-before-
+  callback, older-callback suppression, newer-request coalescing, cancel-
+  before-callback, exact abandon, save deferral, and config-quiesce visibility.
+  The production contract suite passes 20/20 and pins reservation before
+  queueing, guarded handler ordering, failed-queue abandon, and locked config
+  quiescence. Both suites also pass under ASan/UBSan. `RideCache.cpp` compiles
+  with warnings as errors, the complete snapshot and removal regressions pass
+  29/29 and 408/408, and the source-module dependency suite passes 14/14.
+  Independent review exposed and then cleared the config-quiesce and teardown
+  admission races plus the failed-queue orphan case. This is a control-plane
+  ordering fix only: workers still mutate live items before the
+  F3c/F3c1-F3c4 owner-thread publication cutover, so it does not close the
+  broader publication finding.
 - ARCH-003F4 (required deterministic verification recorded before correction):
   Add latch-controlled tests for config transition and teardown joining,
   generation N rejection while N+1 is requested, exception/early-exit lease

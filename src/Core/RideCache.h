@@ -477,7 +477,7 @@ class RideCache : public QObject
         RideItem *modelRideAt(int row) const;
         int modelIndexOf(RideItem *item) const;
         RideCacheModel *model_ = nullptr;
-        bool exiting = false;
+        std::atomic<bool> exiting{false};
 	    bool refreshAfterConfigTransition_ = false;
 	    bool estimatorAfterConfigTransition_ = false;
 	    double progress_; // percent
@@ -518,6 +518,7 @@ class RideCache : public QObject
         QStringList startupRideFiles(const QDir &directory) const;
 
         void startLatestRefresh();
+        void handleRefreshRequest(quint64 request);
         void interruptActiveRefresh();
         void quiesceForConfigTransition();
         void resumeAfterConfigTransition();

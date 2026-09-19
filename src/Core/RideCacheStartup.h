@@ -171,11 +171,32 @@ public:
         return active_ == generation && requested_ == generation;
     }
 
+    bool ownsCurrentRequest(quint64 generation) const
+    {
+        return generation != 0
+            && requested_ == generation
+            && completed_ < generation;
+    }
+
+    bool isActive(quint64 generation) const
+    {
+        return generation != 0 && active_ == generation;
+    }
+
     bool finish(quint64 generation)
     {
         if (active_ == generation) active_ = 0;
         completed_ = std::max(completed_, generation);
         return hasPending();
+    }
+
+    bool abandonRequest(quint64 generation)
+    {
+        if (!ownsCurrentRequest(generation) || isActive(generation)) {
+            return false;
+        }
+        completed_ = generation;
+        return true;
     }
 
     void cancel()
@@ -205,6 +226,40 @@ private:
     quint64 active_ = 0;
     quint64 completed_ = 0;
 };
+
+enum class ReservedRefreshAction
+{
+    Ignore,
+    Defer,
+    InterruptActive,
+    StartLatest
+};
+
+inline ReservedRefreshAction reservedRefreshAction(
+    const RefreshGeneration &generations,
+    quint64 request,
+    bool deferStart)
+{
+    if (!generations.ownsCurrentRequest(request)
+        || generations.isActive(request)) {
+        return ReservedRefreshAction::Ignore;
+    }
+    if (deferStart) return ReservedRefreshAction::Defer;
+    return generations.hasActive()
+        ? ReservedRefreshAction::InterruptActive
+        : ReservedRefreshAction::StartLatest;
+}
+
+inline bool refreshNeedsResume(
+    bool alreadyDeferred,
+    qsizetype workerCount,
+    const RefreshGeneration &generations)
+{
+    return alreadyDeferred
+        || workerCount > 0
+        || generations.hasActive()
+        || generations.hasPending();
+}
 
 struct RefreshResultDisposition
 {
