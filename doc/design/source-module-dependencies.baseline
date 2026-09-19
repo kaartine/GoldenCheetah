@@ -5371,13 +5371,13 @@
       "target_module": "Metrics"
     },
     {
-      "source": "src/Core/RideRefreshZonesAthleteCapture.cpp",
+      "source": "src/Core/RideRefreshZonesAssembly.cpp",
       "source_module": "Core",
       "target": "src/Metrics/PaceZones.h",
       "target_module": "Metrics"
     },
     {
-      "source": "src/Core/RideRefreshZonesAthleteCapture.cpp",
+      "source": "src/Core/RideRefreshZonesAssembly.cpp",
       "source_module": "Core",
       "target": "src/Metrics/Zones.h",
       "target_module": "Metrics"

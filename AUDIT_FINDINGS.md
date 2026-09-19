@@ -8746,6 +8746,13 @@ commit before the next finding begins.
   complete application object graph. Production warnings-as-errors compilation
   and review cover this seam for the bounded foundation commit, but do not
   replace runtime coverage before the F2c cutover.
+- ARCH-003F2b1c (zone assembly review blocker recorded before correction): The
+  first lightweight seam moved the owner-thread check into a helper but passed
+  `Athlete` maps and pace accessors as arguments. C++ evaluates those mutable
+  Athlete reads before entering the helper, so a wrong-thread caller still
+  crosses the ownership boundary before rejection. Keep a wrapper-level
+  owner-thread check before every Athlete member access and pin that ordering
+  in the focused production contract.
 - ARCH-003F2b2 (measures breadth gap recorded before correction): The initial
   F2b wording names Body/HRV, but refresh-time user metrics can query every
   configured Measures group and field, date range, and series through both
@@ -8936,6 +8943,26 @@ commit before the next finding begins.
   worker path and preserve absence/fallback behavior when removing live zone
   and `appsettings` reads. ARCH-003F2b1b and a TSan-instrumented Qt run remain
   verification prerequisites before the complete F2 safety claim.
+- ARCH-003F2b1b/F2b1c resolution: Zone snapshot assembly now has a lightweight
+  owner-thread contract seam that accepts already-captured settings and exact
+  live-map presence. The production Athlete wrapper rejects null and
+  wrong-thread calls before evaluating any mutable Athlete map or pace
+  accessor, then delegates to the same tested assembly. Exact null entries,
+  absent-sport Bike fallback, dynamic CP-for-FTP settings, distinct run/swim
+  pace settings, and generation unit fallback are preserved. The published
+  environment retains the assembled zones through shared ownership.
+- ARCH-003F2b1b/F2b1c verification: the expanded zone suite passes 15/15 and
+  the environment publication suite passes 10/10, both normally and under
+  ASan/UBSan. The tests cover wrong-thread rejection, source ordering before
+  every Athlete member read, captured-setting propagation, exact-null and
+  fallback behavior, and environment ownership. All changed production
+  translation units compile with warnings as errors; the source dependency
+  suite passes 14/14 and `git diff --check` is clean. Independent final
+  re-review: GO; the argument-evaluation blocker in the first draft is fixed.
+- ARCH-003F2b1b residual: the lightweight seam deliberately avoids constructing
+  the complete Athlete object graph. The F2c integration/native-runtime suite
+  must exercise the real wrapper during worker cutover, and a TSan-instrumented
+  Qt run remains a prerequisite for the complete F2 concurrency claim.
 - ARCH-003F2b2/F2b2a/F2b2d resolution: `RideRefreshMeasures` now captures every
   resolved measures group in its existing order, complete field metadata, all
   sixteen value slots, observation metadata, and the observation list order as

@@ -9,12 +9,15 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
+GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
+DEFINES += GC_TEST_SOURCE_ROOT="$${GC_TEST_SOURCE_ROOT}"
 QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
 QMAKE_LFLAGS += -Wl,--gc-sections
 
 SOURCES = testRideRefreshZones.cpp \
           ../../../src/Core/RideRefreshZones.cpp \
           ../../../src/Core/RideRefreshZonesCapture.cpp \
+          ../../../src/Core/RideRefreshZonesAssembly.cpp \
           ../../../src/Metrics/Zones.cpp \
           ../../../src/Metrics/HrZones.cpp \
           ../../../src/Metrics/PaceZones.cpp \

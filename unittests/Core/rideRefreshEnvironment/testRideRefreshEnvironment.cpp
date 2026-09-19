@@ -4,6 +4,7 @@
 #include "AthleteSession.h"
 #include "RideRefreshEnvironment.h"
 #include "RideRefreshMeasures.h"
+#include "RideRefreshZones.h"
 #include "SessionServices.h"
 
 #include <atomic>
@@ -52,6 +53,7 @@ private slots:
     void colorRulesPreserveEngineOrderingAndFallback();
     void calendarFormattingPreservesFieldAndUnitSemantics();
     void measuresSnapshotIsRetainedByTheGeneration();
+    void zonesSnapshotIsRetainedByTheGeneration();
     void sessionPublishesWholeGenerationsAtomically();
     void publicationIsOwnerThreadOnlyAndClosedByLifecycle();
 };
@@ -189,6 +191,17 @@ void TestRideRefreshEnvironment::measuresSnapshotIsRetainedByTheGeneration()
 
     QVERIFY(snapshot->measures());
     QVERIFY(snapshot->measures()->groups().isEmpty());
+}
+
+void TestRideRefreshEnvironment::zonesSnapshotIsRetainedByTheGeneration()
+{
+    auto zones = RideRefreshZones::create({}, {}, {}, {});
+    auto snapshot = RideRefreshEnvironment::create(
+        4, {}, true, {}, {}, {}, {}, {}, zones);
+    zones.reset();
+
+    QVERIFY(snapshot->zones());
+    QVERIFY(!snapshot->zones()->power(QStringLiteral("Bike")));
 }
 
 void TestRideRefreshEnvironment::sessionPublishesWholeGenerationsAtomically()

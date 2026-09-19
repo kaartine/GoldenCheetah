@@ -5,10 +5,17 @@
 #include "PaceZones.h"
 #include "Zones.h"
 
+#include <QThread>
+#include <QDir>
+#include <QFile>
+
 #include <cmath>
 #include <limits>
 
 namespace {
+
+#define GC_STRINGIFY_IMPL(value) #value
+#define GC_STRINGIFY(value) GC_STRINGIFY_IMPL(value)
 
 RideRefreshZones::PowerRange powerRange(
     QDate begin, QDate end, int cp = 300, int aet = 0)
@@ -48,6 +55,8 @@ private slots:
     void productionCaptureMatchesLivePowerZones();
     void productionCaptureMatchesLiveHeartRateZones();
     void productionCaptureMatchesLivePaceZones();
+    void ownerThreadAssemblyUsesCapturedSettingsAndPreservesNulls();
+    void athleteWrapperChecksOwnerBeforeReadingState();
 };
 
 void TestRideRefreshZones::
@@ -301,6 +310,83 @@ void TestRideRefreshZones::productionCaptureMatchesLivePaceZones()
     QCOMPARE(captured.paceUnits(), live.paceUnits(false));
 }
 
-QTEST_APPLESS_MAIN(TestRideRefreshZones)
+void TestRideRefreshZones::
+ownerThreadAssemblyUsesCapturedSettingsAndPreservesNulls()
+{
+    QObject owner;
+    Zones bike(QStringLiteral("Bike"));
+    bike.addZoneRange(QDate(), QDate(), 300, 0, 280, 20000, 1000);
+    PaceZones run(false);
+    PaceZones swim(true);
+
+    QHash<QString, Zones *> power = {
+        {QStringLiteral("Bike"), &bike},
+        {QStringLiteral("Run"), nullptr}
+    };
+    QHash<QString, HrZones *> heartRate = {
+        {QStringLiteral("Run"), nullptr}
+    };
+    QHash<QString, QVariant> globalSettings;
+    globalSettings.insert(run.paceSetting(), false);
+    globalSettings.insert(swim.paceSetting(), true);
+    QHash<QString, QVariant> athleteSettings;
+    athleteSettings.insert(bike.useCPforFTPSetting(), 1);
+
+    const auto captured = captureRideRefreshZonesForOwner(
+        &owner, power, heartRate, &run, &swim,
+        globalSettings, athleteSettings, true);
+    QVERIFY(captured);
+    QVERIFY(captured->power(QStringLiteral("Bike")));
+    QVERIFY(!captured->power(QStringLiteral("Bike"))->cpOverridesFtp());
+    QVERIFY(!captured->power(QStringLiteral("Run")));
+    QCOMPARE(captured->power(QStringLiteral("Other"))->sport,
+             QStringLiteral("Bike"));
+    QVERIFY(!captured->heartRate(QStringLiteral("Run")));
+    QVERIFY(captured->pace(false));
+    QVERIFY(!captured->pace(false)->metricPace);
+    QVERIFY(captured->pace(true)->metricPace);
+
+    QThread foreignThread;
+    QObject foreignOwner;
+    foreignOwner.moveToThread(&foreignThread);
+    foreignThread.start();
+    QVERIFY(!captureRideRefreshZonesForOwner(
+        &foreignOwner, power, heartRate, &run, &swim,
+        globalSettings, athleteSettings, true));
+    QThread *testThread = QThread::currentThread();
+    QMetaObject::invokeMethod(
+        &foreignOwner,
+        [&foreignOwner, testThread]() {
+            foreignOwner.moveToThread(testThread);
+        },
+        Qt::BlockingQueuedConnection);
+    foreignThread.quit();
+    QVERIFY(foreignThread.wait());
+}
+
+void TestRideRefreshZones::athleteWrapperChecksOwnerBeforeReadingState()
+{
+    QFile file(QDir(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)))
+                   .filePath(QStringLiteral(
+                       "src/Core/RideRefreshZonesAthleteCapture.cpp")));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray source = file.readAll();
+    const qsizetype function = source.indexOf("captureRideRefreshZones(");
+    const qsizetype ownerCheck = source.indexOf(
+        "QThread::currentThread() != athlete->thread()", function);
+    const qsizetype firstPowerRead = source.indexOf("athlete->zones_", function);
+    const qsizetype firstHeartRateRead = source.indexOf(
+        "athlete->hrzones_", function);
+    const qsizetype firstPaceRead = source.indexOf(
+        "athlete->paceZones(false)", function);
+
+    QVERIFY(function >= 0);
+    QVERIFY(ownerCheck > function);
+    QVERIFY(firstPowerRead > ownerCheck);
+    QVERIFY(firstHeartRateRead > ownerCheck);
+    QVERIFY(firstPaceRead > ownerCheck);
+}
+
+QTEST_GUILESS_MAIN(TestRideRefreshZones)
 
 #include "testRideRefreshZones.moc"

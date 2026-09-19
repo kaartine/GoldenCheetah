@@ -20,6 +20,7 @@
 
 class Athlete;
 class HrZones;
+class QObject;
 class PaceZones;
 class Zones;
 
@@ -151,6 +152,18 @@ RideRefreshZones::PaceHistory captureRideRefreshPaceZones(
 std::shared_ptr<const RideRefreshZones>
 captureRideRefreshZones(
     const Athlete *athlete,
+    const QHash<QString, QVariant> &globalSettings,
+    const QHash<QString, QVariant> &athleteSettings,
+    bool useMetricUnits);
+
+// Lightweight owner-thread assembly seam used by Athlete capture and tests.
+std::shared_ptr<const RideRefreshZones>
+captureRideRefreshZonesForOwner(
+    const QObject *owner,
+    const QHash<QString, Zones *> &powerZones,
+    const QHash<QString, HrZones *> &heartRateZones,
+    const PaceZones *run,
+    const PaceZones *swim,
     const QHash<QString, QVariant> &globalSettings,
     const QHash<QString, QVariant> &athleteSettings,
     bool useMetricUnits);
