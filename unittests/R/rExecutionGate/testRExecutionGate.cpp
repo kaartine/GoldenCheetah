@@ -9,6 +9,7 @@
 
 #include "R/RExecutionGate.h"
 #include "R/RDeferredUiWork.h"
+#include "R/RRuntimeInitialization.h"
 #include "Charts/RConsolePromptPolicy.h"
 #include "Charts/RWidgetExecutionGuard.h"
 
@@ -72,6 +73,20 @@ private:
     QStringList &order_;
 };
 
+class FaultingRuntime
+{
+public:
+    enum class State { NotStarted, InterpreterInitialized };
+
+    void initialize()
+    {
+        state = State::InterpreterInitialized;
+        throw std::runtime_error("post-initialization setup failed");
+    }
+
+    State state = State::NotStarted;
+};
+
 void returnEarly(RExecutionGate &gate, int &cleanupCount)
 {
     RExecutionGate::Lease lease = gate.tryAcquire([&cleanupCount]() {
@@ -102,6 +117,8 @@ private slots:
     void redefersPromptAcrossNewLease();
     void drainsDeferredWorkOnException();
     void appliesConsolePromptPolicy();
+    void preservesRuntimeStateAcrossInitializationException();
+    void productionRuntimeInitializationIsTwoPhase();
     void productionEntrypointsUseGate();
 };
 
@@ -522,6 +539,81 @@ TestRExecutionGate::appliesConsolePromptPolicy()
     QString ordinaryOutput = QStringLiteral("> result");
     ordinaryOutput += RConsolePromptPolicy::prompt(false);
     QCOMPARE(ordinaryOutput, QStringLiteral("> result> "));
+}
+
+void
+TestRExecutionGate::preservesRuntimeStateAcrossInitializationException()
+{
+    FaultingRuntime runtime;
+    FaultingRuntime::State ownerState = FaultingRuntime::State::NotStarted;
+    bool caught = false;
+
+    try {
+        initializeRuntimeAndSynchronize(
+            &runtime,
+            [&ownerState](FaultingRuntime *candidate) {
+                if (candidate->state
+                    != FaultingRuntime::State::NotStarted) {
+                    ownerState = FaultingRuntime::State::InterpreterInitialized;
+                }
+            });
+    } catch (const std::runtime_error &) {
+        caught = true;
+    }
+
+    QVERIFY(caught);
+    QCOMPARE(ownerState, FaultingRuntime::State::InterpreterInitialized);
+    const bool cleanupOrRetryAllowed =
+        ownerState == FaultingRuntime::State::NotStarted;
+    QVERIFY(!cleanupOrRetryAllowed);
+}
+
+void
+TestRExecutionGate::productionRuntimeInitializationIsTwoPhase()
+{
+    QFile embed(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/REmbed.cpp"));
+    QVERIFY2(embed.open(QIODevice::ReadOnly), qPrintable(embed.errorString()));
+    const QByteArray embedSource = embed.readAll();
+    const qsizetype initialize = embedSource.indexOf("REmbed::initialize()");
+    const qsizetype initCall = embedSource.indexOf("Rf_initEmbeddedR(", initialize);
+    const qsizetype initCheck = embedSource.indexOf("if (initResult < 0)", initCall);
+    const qsizetype initializedState = embedSource.indexOf(
+        "InitializationState::InterpreterInitialized", initCheck);
+    const qsizetype replSetup = embedSource.indexOf("R_ReplDLLinit()", initializedState);
+    const qsizetype readyState = embedSource.indexOf(
+        "InitializationState::Ready", replSetup);
+    QVERIFY(initialize >= 0);
+    QVERIFY(initCall > initialize);
+    QVERIFY(initCheck > initCall);
+    QVERIFY(initializedState > initCheck);
+    QVERIFY(replSetup > initializedState);
+    QVERIFY(readyState > replSetup);
+    QVERIFY(!embedSource.contains("Rf_endEmbeddedR("));
+    QVERIFY(!embedSource.contains("R_RunExitFinalizers("));
+    QVERIFY(!embedSource.contains("R_CleanTempDir("));
+
+    QFile embedHeader(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/REmbed.h"));
+    QVERIFY2(
+        embedHeader.open(QIODevice::ReadOnly),
+        qPrintable(embedHeader.errorString()));
+    const QByteArray embedHeaderSource = embedHeader.readAll();
+    QVERIFY(embedHeaderSource.contains("void initialize();"));
+    QVERIFY(embedHeaderSource.contains("NotStarted"));
+    QVERIFY(embedHeaderSource.contains("InterpreterInitialized"));
+    QVERIFY(embedHeaderSource.contains("Ready"));
+
+    QFile tool(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTool.cpp"));
+    QVERIFY2(tool.open(QIODevice::ReadOnly), qPrintable(tool.errorString()));
+    const QByteArray toolSource = tool.readAll();
+    QVERIFY(toolSource.contains("R = new REmbed();"));
+    QVERIFY(toolSource.contains("initializeRuntimeAndSynchronize(R"));
+    QVERIFY(toolSource.contains(
+        "initializationState_ = InitializationState::InterpreterInitialized;"));
+    QVERIFY(toolSource.contains(
+        "initializationState_ = InitializationState::Ready;"));
+    QCOMPARE(toolSource.count("R = NULL;"), 1);
+    QVERIFY(toolSource.contains(
+        "if (initializationState_ != InitializationState::NotStarted) return;"));
 }
 
 void

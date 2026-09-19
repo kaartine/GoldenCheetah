@@ -17,6 +17,7 @@
  */
 
 #include "RTool.h"
+#include "RRuntimeInitialization.h"
 #include "RGraphicsDevice.h"
 #include "RProtectionScope.h"
 #include "GcUpgrade.h"
@@ -75,6 +76,8 @@ RTool::RTool()
     // setup the R runtime elements
     failed = false;
     starting = true;
+    R = NULL;
+    dev = NULL;
     canvas = NULL;
     perspective = NULL;
     chart = NULL;
@@ -94,10 +97,19 @@ RTool::RTool()
 
         // initialise
         R = new REmbed();
+        initializeRuntimeAndSynchronize(R, [this](REmbed *runtime) {
+            if (runtime->initializationState()
+                != REmbed::InitializationState::NotStarted) {
+                initializationState_ = InitializationState::InterpreterInitialized;
+            }
+        });
 
         // failed to load
         if (R->loaded == false) {
             failed=true;
+            appsettings->setValue(GC_EMBED_R, false);
+            version = "none";
+            starting = false;
             return;
         }
 
@@ -364,6 +376,7 @@ RTool::RTool()
         rtool->messages.clear();
 
         configChanged();
+        initializationState_ = InitializationState::Ready;
 
     } catch(std::exception& ex) {
 
@@ -382,8 +395,6 @@ fail:
         qDebug() << "R Embed failed to start, RConsole disabled.";
         appsettings->setValue(GC_EMBED_R, false);
         version = "none";
-        R = NULL;
-
         // end embedding
         // Don't bug the user, most of them don't care
         //QMessageBox warn(QMessageBox::Information, QObject::tr("R version Incompatible"),
@@ -391,6 +402,13 @@ fail:
         //warn.exec();
     }
     starting = false;
+}
+
+RTool::~RTool()
+{
+    if (initializationState_ != InitializationState::NotStarted) return;
+    delete dev;
+    delete R;
 }
 
 void

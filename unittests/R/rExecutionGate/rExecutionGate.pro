@@ -16,6 +16,7 @@ SOURCES = testRExecutionGate.cpp \
 HEADERS = $$PWD/../../../src/R/RExecutionGate.h \
           $$PWD/../../../src/R/RDeferredUiWork.h \
           $$PWD/../../../src/R/RProtectionScope.h \
+          $$PWD/../../../src/R/RRuntimeInitialization.h \
           $$PWD/../../../src/Charts/RConsolePromptPolicy.h \
           $$PWD/../../../src/Charts/RWidgetExecutionGuard.h
 

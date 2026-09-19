@@ -49,10 +49,10 @@ int setenv(QString name, QString value, bool overwrite)
 
 REmbed::~REmbed()
 {
-    R_dot_Last();
-    R_RunExitFinalizers();
-    R_CleanTempDir();
-    Rf_endEmbeddedR(0);
+    // Deliberately no finalization here. Safe shutdown needs every callback,
+    // device, and interpreter user drained on the initialization thread; that
+    // ordering is not yet proven. Initialized wrappers are retained by their
+    // process-lifetime owner until the explicit shutdown work is complete.
 }
 
 // Windows API defines Read and Write Console macros
@@ -67,9 +67,16 @@ REmbed::~REmbed()
 #endif
 #endif
 
-REmbed::REmbed(const bool verbose, const bool interactive) : verbose(verbose), interactive(interactive)
+REmbed::REmbed(const bool verbose, const bool interactive)
+    : verbose(verbose), interactive(interactive)
 {
     loaded = false;
+}
+
+void
+REmbed::initialize()
+{
+    if (initializationState_ != InitializationState::NotStarted) return;
 
     // need to load the library
     RLibrary rlib;
@@ -101,7 +108,10 @@ REmbed::REmbed(const bool verbose, const bool interactive) : verbose(verbose), i
     const char *R_argv[] = {name, "--gui=none", "--no-save",
                             "--no-readline", "--silent", "--vanilla", "--slave"};
     int R_argc = sizeof(R_argv) / sizeof(R_argv[0]);
-    Rf_initEmbeddedR(R_argc, (char**)R_argv);
+    const int initResult = Rf_initEmbeddedR(R_argc, (char**)R_argv);
+    if (initResult < 0) return;
+    initializationState_ = InitializationState::InterpreterInitialized;
+
     R_ReplDLLinit();                    // this is to populate the repl console buffers
 
     structRstart Rst;
@@ -122,6 +132,7 @@ REmbed::REmbed(const bool verbose, const bool interactive) : verbose(verbose), i
     R_SetParams(&Rst);
 
     loaded = true;
+    initializationState_ = InitializationState::Ready;
 }
 
 // this is a non-throwing version returning an error code

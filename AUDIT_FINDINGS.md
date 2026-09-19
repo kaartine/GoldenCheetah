@@ -8160,6 +8160,58 @@ commit before the next finding begins.
   successful instances, and has an unreachable/unconditional finalizer. Define
   initialization-state-aware ownership and tested shutdown ordering before
   enabling R finalization.
+- ARCH-003C1 (implementation item recorded before correction): give `REmbed`
+  and `RTool` explicit `NotStarted`, `InterpreterInitialized`, and `Ready`
+  states. Construct through a GUI-thread process-lifetime owner, publish the
+  compatibility `rtool` alias only for `Ready`, destroy only a definitely
+  pre-init failure, and retain initialized failures/successes without retry or
+  finalization until C2 proves shutdown. Replace constructor self-publication
+  with a construction-scoped private active-instance binding used by R console
+  callbacks, appearance setup, and the graphics device; that binding must be
+  cleared on every constructor exit and must not become the public alias.
+- ARCH-003C1a (FIXED; two-phase prerequisite recorded after design review and
+  before correction): an `REmbed` constructor that initializes R can throw or
+  fail after `Rf_initEmbeddedR`, making its initialization state inaccessible
+  to an outer owner. Fully construct the wrapper first, move initialization into an
+  explicit call, capture the init return code, and publish
+  `InterpreterInitialized` immediately on documented success before any later
+  setup. `RTool` must null-initialize and retain its R/device pointers, mirror
+  partial versus Ready state, and stop erasing `R` on failure. Disable the
+  current unconditional `REmbed` destructor finalization for every state; C2
+  owns any future proven shutdown. This item deliberately does not yet remove
+  `rtool` constructor self-publication or install the process owner; those need
+  the complete callback/device null-safety inventory in C1b.
+- ARCH-003C1a1 (FIXED; exception handoff defect found in independent ARCH-003C1a
+  review and recorded before correction): `REmbed` can transition to
+  `InterpreterInitialized` and then throw during its remaining setup, while
+  `RTool` currently mirrors that state only after `initialize()` returns. Make
+  the outer transition monotonic and exception-safe, and fault-inject the
+  post-initialization throw so cleanup or retry cannot misclassify it as a
+  pre-init failure.
+- ARCH-003C1a2 (FIXED; standalone-test metadata omission found in independent
+  re-review and recorded before correction): list the production
+  initialization helper in the focused qmake project's headers so IDE/source
+  packaging metadata follows its actual include dependency.
+- ARCH-003C1a resolution: `REmbed` is now fully constructed before its explicit
+  `initialize()` call. It records `InterpreterInitialized` immediately after a
+  successful `Rf_initEmbeddedR` and `Ready` only after wrapper setup. `RTool`
+  null-initializes and retains its R/device ownership, exposes a monotonic
+  outer state, and synchronizes that state on both normal and exceptional
+  initialization exits. Only definitely pre-init wrappers may be destroyed;
+  the destructor deliberately performs no R finalization until C2 proves safe
+  shutdown ordering.
+- ARCH-003C1a verification: the focused gate/lifecycle suite passes 19/19 on
+  Qt 6.4.2 normally and 19/19 under ASan/UBSan with leak detection disabled.
+  Its fault-injected runtime throws after the partial-state transition and
+  proves that cleanup/retry remains denied. The modified production
+  `RTool.cpp` compiles with the staged R 4.3.3/Rcpp/RInside and Qt headers
+  under `GC_WANT_R` and `STRICT_R_HEADERS`; the wider R production source set
+  compiled and linked before the final exception-handoff-only adjustment. The
+  source dependency suite passes 14/14, `git diff --check` is clean, and
+  independent re-review returned GO. A real R fault injected specifically
+  between partial and Ready, process ownership, public-alias removal, and
+  callback/device null safety remain C1b release checks rather than claims of
+  this prerequisite.
 - ARCH-003D (queued lifetime work recorded before correction): `PythonEmbed` is
   another raw process global whose failed and successful instances are never
   deleted, while its empty destructor cannot balance the saved interpreter

@@ -34,7 +34,15 @@ class RTool {
 
 
     public:
+        enum class InitializationState {
+            NotStarted,
+            InterpreterInitialized,
+            Ready
+        };
+
         RTool();
+        ~RTool();
+        InitializationState initializationState() const { return initializationState_; }
         void  configChanged();
         RExecutionGate::Lease tryAcquireExecution(
             Context *executionContext,
@@ -143,6 +151,7 @@ class RTool {
         RDeferredUiWork deferredUiWork;
         RExecutionGate executionGate;
         std::atomic_bool appearanceRefreshPending{false};
+        InitializationState initializationState_ = InitializationState::NotStarted;
 
 };
 

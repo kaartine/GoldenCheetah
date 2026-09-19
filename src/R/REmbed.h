@@ -57,9 +57,16 @@ extern int setenv(QString name,  QString value, bool overwrite);
 class REmbed {
 
     public:
+        enum class InitializationState {
+            NotStarted,
+            InterpreterInitialized,
+            Ready
+        };
     
-    REmbed(const bool verbose=false, const bool interactive=false);
-    ~REmbed();
+        REmbed(const bool verbose=false, const bool interactive=false);
+        ~REmbed();
+        void initialize();
+        InitializationState initializationState() const { return initializationState_; }
 
     // modelled on equivalents for RInside to help transition
     int  parseEval(QString cmd, SEXP &ans);
@@ -75,6 +82,9 @@ class REmbed {
     bool interactive;
 
     bool loaded;
+
+    private:
+        InitializationState initializationState_ = InitializationState::NotStarted;
 };
 
 #endif
