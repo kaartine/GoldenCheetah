@@ -10,6 +10,7 @@
 #include "Python/PythonChartOwner.h"
 #include "Python/PythonChartRunner.h"
 #include "Python/PythonExecutionGate.h"
+#include "Core/ProcessLifetimeRuntimeOwner.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -28,6 +29,22 @@
 #include <thread>
 
 namespace {
+
+class FakeEmbeddedRuntime
+{
+public:
+    enum class InitializationState { NotStarted, InterpreterInitialized, Ready };
+
+    FakeEmbeddedRuntime(InitializationState state, int *destructionCount)
+        : state_(state), destructionCount_(destructionCount) {}
+    ~FakeEmbeddedRuntime() { ++*destructionCount_; }
+
+    InitializationState initializationState() const { return state_; }
+
+private:
+    InitializationState state_;
+    int *destructionCount_;
+};
 
 template<typename Predicate>
 bool waitUntil(Predicate predicate, int timeoutMs = 2000)
@@ -77,7 +94,9 @@ private slots:
     void executionGateCancelsWaitingCaller();
     void executionGateSerializesWaitingCallers();
     void executionGateRejectsInterpreterLockHolderAndAllocatesTokens();
+    void processLifetimeOwnerControlsPublication();
     void programNameStorageOutlivesPythonInitialization();
+    void pythonInitializationOwnershipWiring();
 };
 
 void
@@ -951,6 +970,87 @@ executionGateRejectsInterpreterLockHolderAndAllocatesTokens()
 }
 
 void
+TestPythonChartLifecycle::processLifetimeOwnerControlsPublication()
+{
+    using State = FakeEmbeddedRuntime::InitializationState;
+
+    FakeEmbeddedRuntime *alias = nullptr;
+    int preInitDestructions = 0;
+    {
+        ProcessLifetimeRuntimeOwner<FakeEmbeddedRuntime> owner(alias);
+        QCOMPARE(owner.initialize([&]() {
+            return std::make_unique<FakeEmbeddedRuntime>(
+                State::NotStarted, &preInitDestructions);
+        }), nullptr);
+        QCOMPARE(preInitDestructions, 1);
+        QVERIFY(!owner.hasInitializedRuntime());
+        QCOMPARE(alias, nullptr);
+    }
+
+    int partialDestructions = 0;
+    int partialFactoryCalls = 0;
+    FakeEmbeddedRuntime *partialStorage = nullptr;
+    {
+        ProcessLifetimeRuntimeOwner<FakeEmbeddedRuntime> owner(alias);
+        QCOMPARE(owner.initialize([&]() {
+            ++partialFactoryCalls;
+            auto candidate = std::make_unique<FakeEmbeddedRuntime>(
+                State::InterpreterInitialized, &partialDestructions);
+            partialStorage = candidate.get();
+            return candidate;
+        }), nullptr);
+        QCOMPARE(owner.initialize([&]() {
+            ++partialFactoryCalls;
+            return std::make_unique<FakeEmbeddedRuntime>(
+                State::Ready, &partialDestructions);
+        }), nullptr);
+        QCOMPARE(partialFactoryCalls, 1);
+        QCOMPARE(alias, nullptr);
+        QVERIFY(owner.hasInitializedRuntime());
+    }
+    QCOMPARE(partialDestructions, 0);
+    delete partialStorage;
+    QCOMPARE(partialDestructions, 1);
+
+    int readyDestructions = 0;
+    int readyFactoryCalls = 0;
+    FakeEmbeddedRuntime *readyStorage = nullptr;
+    {
+        ProcessLifetimeRuntimeOwner<FakeEmbeddedRuntime> owner(alias);
+        FakeEmbeddedRuntime *published = owner.initialize([&]() {
+            ++readyFactoryCalls;
+            auto candidate = std::make_unique<FakeEmbeddedRuntime>(
+                State::Ready, &readyDestructions);
+            readyStorage = candidate.get();
+            return candidate;
+        });
+        QCOMPARE(published, readyStorage);
+        QCOMPARE(alias, readyStorage);
+        QCOMPARE(owner.initialize([&]() {
+            ++readyFactoryCalls;
+            return std::unique_ptr<FakeEmbeddedRuntime>();
+        }), readyStorage);
+        QCOMPARE(readyFactoryCalls, 1);
+
+        std::atomic_bool wrongThreadFactoryCalled{false};
+        FakeEmbeddedRuntime *wrongThreadResult = readyStorage;
+        std::thread wrongThread([&]() {
+            wrongThreadResult = owner.initialize([&]() {
+                wrongThreadFactoryCalled = true;
+                return std::unique_ptr<FakeEmbeddedRuntime>();
+            });
+        });
+        wrongThread.join();
+        QCOMPARE(wrongThreadResult, nullptr);
+        QVERIFY(!wrongThreadFactoryCalled);
+    }
+    QCOMPARE(alias, nullptr);
+    QCOMPARE(readyDestructions, 0);
+    delete readyStorage;
+    QCOMPARE(readyDestructions, 1);
+}
+
+void
 TestPythonChartLifecycle::programNameStorageOutlivesPythonInitialization()
 {
     QFile header(QStringLiteral(
@@ -972,6 +1072,32 @@ TestPythonChartLifecycle::programNameStorageOutlivesPythonInitialization()
         "Py_SetProgramName(programNameStorage_.data());"));
     QVERIFY(!implementationSource.contains(
         "pybin.toStdWString().c_str()"));
+}
+
+void
+TestPythonChartLifecycle::pythonInitializationOwnershipWiring()
+{
+    QFile mainFile(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/Core/main.cpp"));
+    QVERIFY2(mainFile.open(QIODevice::ReadOnly), qPrintable(mainFile.errorString()));
+    const QByteArray mainSource = mainFile.readAll();
+
+    QVERIFY(mainSource.contains(
+        "ProcessLifetimeRuntimeOwner<PythonEmbed> pythonProcessLifetimeOwner(python);"));
+    QVERIFY(mainSource.contains(
+        "!pythonProcessLifetimeOwner.hasInitializedRuntime()"));
+    QVERIFY(mainSource.contains("pythonProcessLifetimeOwner.initialize([]()"));
+    QVERIFY(!mainSource.contains("python = new PythonEmbed()"));
+
+    QFile implementation(QStringLiteral(
+        GC_TEST_SOURCE_ROOT "/src/Python/PythonEmbed.cpp"));
+    QVERIFY2(
+        implementation.open(QIODevice::ReadOnly),
+        qPrintable(implementation.errorString()));
+    const QByteArray implementationSource = implementation.readAll();
+    QVERIFY(implementationSource.contains(
+        "initializationState_ = InitializationState::InterpreterInitialized;"));
+    QVERIFY(implementationSource.contains(
+        "initializationState_ = InitializationState::Ready;"));
 }
 
 QTEST_GUILESS_MAIN(TestPythonChartLifecycle)

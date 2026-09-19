@@ -91,9 +91,16 @@ class ScriptContext {
 class PythonEmbed {
 
     public:
+        enum class InitializationState {
+            NotStarted,
+            InterpreterInitialized,
+            Ready
+        };
     
     PythonEmbed(const bool verbose=false, const bool interactive=false);
     ~PythonEmbed();
+
+    InitializationState initializationState() const { return initializationState_; }
 
     static QString buildVersion(); // Python version used at build time
     // find installed binary and check version and module path
@@ -133,6 +140,7 @@ class PythonEmbed {
     bool loaded;
 
 private:
+    InitializationState initializationState_ = InitializationState::NotStarted;
     std::wstring programNameStorage_;
     PythonExecutionGate executionGate;
     unsigned long activeThreadId = 0;

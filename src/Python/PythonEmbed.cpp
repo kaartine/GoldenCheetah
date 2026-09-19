@@ -326,6 +326,11 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
         // need to load the interpreter etc
         printd("PyInitializeEx(0)\n");
         Py_InitializeEx(0);
+        if (!Py_IsInitialized()) {
+            fprintf(stderr, "Python interpreter initialization did not complete.\n");
+            return;
+        }
+        initializationState_ = InitializationState::InterpreterInitialized;
 
         // set path - allocate storage for it...
         //printd("set path=%s\n", pypath.toStdString().c_str());
@@ -406,6 +411,7 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
             printd("PyEval_InitThreads\n");
             PyEval_InitThreads();
             mainThreadState = PyEval_SaveThread();
+            initializationState_ = InitializationState::Ready;
             loaded = true;
 
             printd("Embedding completes\n");

@@ -7943,6 +7943,42 @@ commit before the next finding begins.
   another raw process global whose failed and successful instances are never
   deleted, while its empty destructor cannot balance the saved interpreter
   thread state. Define explicit shutdown ownership before finalization changes.
+- ARCH-003D1 (FIXED; implementation item recorded before correction): direct
+  construction into the compatibility global loses the only pointer on every
+  failure and permits an application restart to initialize CPython again after
+  `Py_InitializeEx` has already succeeded. Add explicit `NotStarted`,
+  `InterpreterInitialized`, and `Ready` states; construct under a GUI-thread
+  process-lifetime owner; publish the global only for `Ready`; destroy only
+  `NotStarted` failures; and quarantine initialized failures without retrying.
+  Retaining initialized storage until OS process teardown is deliberate until
+  ARCH-003D2 can reject/drain callers, restore the initializing thread state,
+  release Python references, and prove `Py_FinalizeEx` ordering.
+- ARCH-003D1 resolution: `PythonEmbed` now reports explicit initialization
+  state. A GUI-thread `ProcessLifetimeRuntimeOwner` constructs a candidate
+  outside the compatibility global, publishes only a `Ready` runtime, destroys
+  pre-initialization failures, and retains an initialized or ready wrapper
+  across the application restart loop. Partial initialization therefore cannot
+  trigger another `PyImport_AppendInittab`/`Py_InitializeEx` attempt, while the
+  existing global consumers never observe a half-built runtime. Initialized
+  storage is intentionally released to OS-process lifetime rather than passed
+  through the still-unproven empty destructor/finalization path.
+- ARCH-003D1 verification: The Python chart lifecycle suite passes 16/16 on Qt
+  6.4.2 normally and 16/16 under ASan/UBSan with leak detection disabled. It
+  covers pre-init destruction, partial-init quarantine/no retry/no publication,
+  ready publication/reuse, wrong-thread rejection, compatibility-alias
+  clearing, deliberate retention, and production source wiring. The source
+  dependency baseline suite passes 14/14 and `git diff --check` is clean.
+  `PythonEmbed.cpp` compiles as C++17 against staged Python 3.12 headers (only
+  the existing `Py_SetProgramName` and `PyEval_InitThreads` deprecation
+  warnings), and `main.cpp` passes a `GC_WANT_PYTHON` syntax-only production
+  compile using a declaration-only shim for the unavailable qtkeychain header.
+  Independent lifecycle review returned GO. LSan remains unavailable under the
+  ptrace environment. ARCH-003D2 still owns caller drain, reference release,
+  `PyConfig` migration, and real embedded-CPython finalization tests; until
+  then initialized storage is deliberately retained. A theoretical
+  `Py_InitializeEx` return with `Py_IsInitialized()==false` after program-name
+  publication also remains for that migration (supported CPython normally
+  succeeds or terminates fatally).
 - ARCH-003E (FIXED; concrete defect recorded before correction):
   `Py_SetProgramName` receives storage from a temporary `std::wstring`, although
   CPython requires that storage to remain valid for the interpreter lifetime.

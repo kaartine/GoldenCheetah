@@ -51,6 +51,7 @@
 #endif
 #ifdef GC_WANT_PYTHON
 #include "PythonEmbed.h"
+#include "ProcessLifetimeRuntimeOwner.h"
 #include "FixPySettings.h"
 #endif
 #include <signal.h>
@@ -519,6 +520,7 @@ main(int argc, char *argv[])
 #endif
 #ifdef GC_WANT_PYTHON
     python = NULL;
+    ProcessLifetimeRuntimeOwner<PythonEmbed> pythonProcessLifetimeOwner(python);
 #endif
 
     // numerous bugs related to autoscaling and opengl that have persisted since Qt5.6 on and off
@@ -666,9 +668,12 @@ main(int argc, char *argv[])
 
 #ifdef GC_WANT_PYTHON
         bool embed = appsettings->value(NULL, GC_EMBED_PYTHON, true).toBool();
-        if (embed && noPy == false && python == NULL) {
-            python = new PythonEmbed(); // initialise python in this thread ?
-            if (python->loaded == false) python=NULL;
+        if (embed && noPy == false && python == NULL
+            && !pythonProcessLifetimeOwner.hasInitializedRuntime()) {
+            Q_ASSERT(pythonProcessLifetimeOwner.isOwnerThread());
+            pythonProcessLifetimeOwner.initialize([]() {
+                return std::make_unique<PythonEmbed>();
+            });
         }
 #endif
 
