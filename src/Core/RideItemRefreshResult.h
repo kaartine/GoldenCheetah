@@ -25,6 +25,7 @@ enum class RideItemRefreshOutcome
     Published,
     SourceFingerprintFailed,
     SourceOpenFailed,
+    EnvironmentFingerprintUnavailable,
     CachePreparationInvalid,
     IdentityRejected,
     CacheSourceRejected

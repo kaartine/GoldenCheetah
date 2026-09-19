@@ -1029,6 +1029,16 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
     staging.isSwim = sourceRide->isSwim();
     staging.isXtrain = sourceRide->isXtrain();
     staging.isAero = sourceRide->isAero();
+    std::optional<unsigned long> boundBuildFingerprint;
+    if (environment) {
+        boundBuildFingerprint = environment->rideItemFingerprint(
+            expectedDateTime.date(), staging.sport, staging.isSwim);
+        if (!boundBuildFingerprint) {
+            return rideItemRefreshSucceeded(
+                RideItemRefreshOutcome::
+                    EnvironmentFingerprintUnavailable);
+        }
+    }
     const QString boundColorText = environment
         ? sourceRide->getTag(environment->colorField(), "")
         : QString();
@@ -1097,24 +1107,29 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
     }
 
     staging.updateIntervals(false);
-    staging.fingerprint = static_cast<unsigned long>(
-            context->athlete->zones(staging.sport)->getFingerprint(
-                dateTime.date()))
-        + (appsettings->cvalue(
-               context->athlete->cyclist,
-               context->athlete->zones(staging.sport)->useCPforFTPSetting(),
-               0).toInt() ? 1 : 0)
-        + static_cast<unsigned long>(
-            context->athlete->paceZones(staging.isSwim)->getFingerprint(
-                dateTime.date()))
-        + static_cast<unsigned long>(
-            context->athlete->hrZones(staging.sport)->getFingerprint(
-                dateTime.date()))
-        + static_cast<unsigned long>(
-            context->athlete->routes->getFingerprint())
-        + static_cast<unsigned long>(staging.getHrvFingerprint())
-        + appsettings->cvalue(
-            context->athlete->cyclist, GC_DISCOVERY, 57).toInt();
+    if (boundBuildFingerprint) {
+        staging.fingerprint = *boundBuildFingerprint;
+    } else {
+        staging.fingerprint = static_cast<unsigned long>(
+                context->athlete->zones(staging.sport)->getFingerprint(
+                    dateTime.date()))
+            + (appsettings->cvalue(
+                   context->athlete->cyclist,
+                   context->athlete->zones(
+                       staging.sport)->useCPforFTPSetting(),
+                   0).toInt() ? 1 : 0)
+            + static_cast<unsigned long>(
+                context->athlete->paceZones(
+                    staging.isSwim)->getFingerprint(dateTime.date()))
+            + static_cast<unsigned long>(
+                context->athlete->hrZones(
+                    staging.sport)->getFingerprint(dateTime.date()))
+            + static_cast<unsigned long>(
+                context->athlete->routes->getFingerprint())
+            + static_cast<unsigned long>(staging.getHrvFingerprint())
+            + appsettings->cvalue(
+                context->athlete->cyclist, GC_DISCOVERY, 57).toInt();
+    }
     staging.dbversion = DBSchemaVersion;
     staging.udbversion = metricRegistry.userMetricSchemaVersion();
     staging.timestamp = QDateTime::currentDateTime().toSecsSinceEpoch();

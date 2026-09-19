@@ -1725,8 +1725,17 @@ productionWorkersRetainTheirPublishedGeneration()
     const qsizetype refreshImpl = itemSource.indexOf(
         "RideItem::refreshImpl(const RideRefreshEnvironment *environment)",
         boundRefreshDelegate);
+    const qsizetype buildSport = itemSource.indexOf(
+        "staging.sport = sourceRide->sport()", refreshImpl);
+    const qsizetype boundBuildFingerprint = itemSource.indexOf(
+        "std::optional<unsigned long> boundBuildFingerprint", buildSport);
+    const qsizetype boundFingerprintCall = itemSource.indexOf(
+        "environment->rideItemFingerprint(", boundBuildFingerprint);
+    const qsizetype boundFingerprintFailure = itemSource.indexOf(
+        "EnvironmentFingerprintUnavailable", boundFingerprintCall);
     const qsizetype boundColorText = itemSource.indexOf(
-        "const QString boundColorText = environment", refreshImpl);
+        "const QString boundColorText = environment",
+        boundFingerprintFailure);
     const qsizetype boundColorField = itemSource.indexOf(
         "sourceRide->getTag(environment->colorField(), \"\")",
         boundColorText);
@@ -1734,15 +1743,44 @@ productionWorkersRetainTheirPublishedGeneration()
         "rideRefreshBuildColor(", boundColorField);
     const qsizetype nextBuildField = itemSource.indexOf(
         "staging.present =", boundColorEvaluation);
+    const qsizetype cacheBuilder = itemSource.indexOf(
+        "RideFileCache updater(", nextBuildField);
+    const qsizetype boundFingerprintPublish = itemSource.indexOf(
+        "if (boundBuildFingerprint)", cacheBuilder);
+    const qsizetype boundFingerprintValue = itemSource.indexOf(
+        "staging.fingerprint = *boundBuildFingerprint",
+        boundFingerprintPublish);
+    const qsizetype legacyFingerprint = itemSource.indexOf(
+        "context->athlete->routes->getFingerprint()",
+        boundFingerprintValue);
+    const qsizetype nextTerminalField = itemSource.indexOf(
+        "staging.dbversion =", legacyFingerprint);
     QVERIFY(legacyRefresh >= 0);
     QVERIFY(legacyRefreshDelegate > legacyRefresh);
     QVERIFY(boundRefresh > legacyRefreshDelegate);
     QVERIFY(boundRefreshDelegate > boundRefresh);
     QVERIFY(refreshImpl > boundRefreshDelegate);
+    QVERIFY(buildSport > refreshImpl);
+    QVERIFY(boundBuildFingerprint > buildSport);
+    QVERIFY(boundFingerprintCall > boundBuildFingerprint);
+    QVERIFY(boundFingerprintFailure > boundFingerprintCall);
     QVERIFY(boundColorText > refreshImpl);
     QVERIFY(boundColorField > boundColorText);
     QVERIFY(boundColorEvaluation > boundColorField);
     QVERIFY(nextBuildField > boundColorEvaluation);
+    QVERIFY(cacheBuilder > boundFingerprintFailure);
+    QVERIFY(boundFingerprintCall < cacheBuilder);
+    QVERIFY(boundFingerprintPublish > cacheBuilder);
+    QVERIFY(boundFingerprintValue > boundFingerprintPublish);
+    QVERIFY(legacyFingerprint > boundFingerprintValue);
+    QVERIFY(nextTerminalField > legacyFingerprint);
+
+    const QByteArray boundFingerprintBody = itemSource.mid(
+        boundBuildFingerprint,
+        boundColorText - boundBuildFingerprint);
+    QVERIFY(!boundFingerprintBody.contains("context->"));
+    QVERIFY(!boundFingerprintBody.contains("appsettings"));
+    QVERIFY(!boundFingerprintBody.contains("getHrvFingerprint"));
 
     const QByteArray captureBody = itemSource.mid(
         captureInputs, boundOverload - captureInputs);

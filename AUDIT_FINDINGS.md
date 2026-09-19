@@ -9045,6 +9045,20 @@ commit before the next finding begins.
   through its retained snapshot. Preserve the legacy overload for synchronous
   callers and keep parser, weight, zones, cache construction, metrics,
   intervals, fingerprint, and calendar text explicitly open under F2c3.
+- ARCH-003F2c3c (retained build fingerprint recorded before correction): The
+  bound builder still recomputes its terminal fingerprint from live athlete
+  zones, settings, routes, and measures even though its retained environment
+  already exposes the same immutable generation calculation used by stale
+  evaluation. Route only this terminal field through the retained environment,
+  fail closed when a required captured domain is missing, and preserve the
+  existing live calculation solely for the environment-free compatibility
+  overload. Keep weight, zone indices, cache construction, metrics, intervals,
+  parser context, and Calendar Text open under F2c3.
+- ARCH-003F2c3c1 (outcome-count evidence drift found by independent review and
+  recorded before correction): Adding the fail-closed environment-fingerprint
+  outcome makes six failure outcomes, while the earlier F3c2a2 verification
+  still claims its classification test covers five. Update that historical
+  evidence statement to match the expanded exhaustive outcome matrix.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9642,7 +9656,7 @@ commit before the next finding begins.
 - ARCH-003F3c2a2 resolution: The production method now names every terminal
   result with `RideItemRefreshOutcome`, and all returns are derived through the
   single `rideItemRefreshSucceeded()` seam. Its focused test covers both
-  successful outcomes and all five failure outcomes normally and under
+  successful outcomes and all six failure outcomes normally and under
   ASan/UBSan. This pins the contract without adding a worker-thread fixture
   around the still-open F3c publication design.
 - ARCH-003F3c2a3 (removal-target linkage regression found during verification
@@ -10233,6 +10247,30 @@ commit before the next finding begins.
   metric singleton and live metric context, interval construction and update,
   fingerprint inputs, and Calendar Text formatting. Those remain under
   ARCH-003F2c3; detached owner-thread publication remains under ARCH-003F3.
+- ARCH-003F2c3c resolution: after parsing the detached source's sport and swim
+  identity, the bound builder now resolves its terminal fingerprint from the
+  retained environment before cache preparation or metric calculation. A
+  missing captured zone, measure, HRV, route, or sport domain returns the
+  explicit `EnvironmentFingerprintUnavailable` failure without consulting a
+  live fallback. The environment-free compatibility path retains the original
+  live sum, including nonzero CP-setting, signed discovery, and default-value
+  semantics; a valid captured zero remains distinguishable from no value.
+- ARCH-003F2c3c1 resolution: the earlier F3c2a2 verification now records all
+  six failure outcomes covered by its exhaustive success-classification test.
+- ARCH-003F2c3c verification: the environment suite passes 22/22 and the
+  computed-state outcome suite 10/10, each normally and under ASan/UBSan. The
+  production-mutator suite passes 3/3 in both configurations, `RideItem.cpp`
+  compiles with warnings as errors, source dependencies pass 14/14, and
+  `git diff --check` is clean. The source contract pins immutable resolution
+  after parsed sport identity and before `RideFileCache` construction, excludes
+  live fallback tokens from that branch, and pins application of the captured
+  value before the legacy branch. Independent review returned GO with no
+  blocker or major finding and identified only the corrected c3c1 evidence
+  drift.
+- ARCH-003F2c3c residual: parser context, weight, zone indices, cache
+  preparation, metric registry/context, interval construction and update, and
+  Calendar Text remain live builder dependencies under ARCH-003F2c3. Detached
+  owner-thread publication remains under ARCH-003F3.
 - ARCH-003F2c3a residual: generation-bound `checkStale` still writes color,
   weight, CRC, and stale state in the worker, as tracked by ARCH-003F3c2. The
   builder's remaining live environment consumers are tracked by ARCH-003F2c3,
