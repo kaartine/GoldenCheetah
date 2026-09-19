@@ -235,6 +235,65 @@ bool LocalApiFileStore::captureListedRegularFile(
     return true;
 }
 
+bool LocalApiFileStore::captureRegularFileIfExists(
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const QStringList &directoryComponents,
+    const QString &fileComponent,
+    LocalApiFileGeneration &generation,
+    bool &exists,
+    QString &error,
+    qint64 maximumSize) const
+{
+    generation = {};
+    exists = false;
+    error.clear();
+    if (maximumSize < 0
+        || !baseDirectory.isValid()
+        || !baseDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = maximumSize < 0
+                ? QStringLiteral(
+                    "The Local API file size budget is invalid")
+                : QStringLiteral(
+                    "The Local API base directory is unavailable");
+        }
+        return false;
+    }
+
+    AnchoredFileSystem::DirectoryAnchor parent = baseDirectory;
+    for (const QString &component : directoryComponents) {
+        AnchoredFileSystem::DirectoryAnchor child;
+        bool childExists = false;
+        if (!parent.openChildIfExists(
+                component, child, childExists, error)) {
+            return false;
+        }
+        if (!childExists) return parent.pathMatches(error);
+        parent = std::move(child);
+    }
+    if (!parent.pathMatches(error)) return false;
+
+    LocalApiFileGeneration candidate;
+    candidate.parent_ = parent;
+    candidate.entry_ = parent.entry(fileComponent, error);
+    if (!candidate.entry_.isValid()
+        || !AnchoredFileSystem::entryExists(
+            candidate.entry_, exists, error)) {
+        return false;
+    }
+    if (!exists) return parent.pathMatches(error);
+    if (!AnchoredFileSystem::pinRegularFile(
+            candidate.entry_, candidate.file_, error, maximumSize)
+        || !AnchoredFileSystem::guardFileGeneration(
+            candidate.entry_, candidate.file_, candidate.guard_, error)
+        || !candidate.validateIdentity(error)) {
+        exists = false;
+        return false;
+    }
+    generation = std::move(candidate);
+    return true;
+}
+
 bool LocalApiFileSnapshotDirectory::writeFile(
     const QString &component,
     const QByteArray &contents,

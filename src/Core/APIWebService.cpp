@@ -36,6 +36,18 @@
 #include <QFile>
 #include <memory>
 
+namespace {
+
+bool isReadableMeasuresSnapshot(const QString &fileName)
+{
+    if (fileName.isEmpty()) return true;
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    return LocalApiEndpointInput::isReadableMeasuresData(file.readAll());
+}
+
+} // namespace
+
 void
 APIWebService::service(HttpRequest &request, HttpResponse &response)
 {
@@ -137,7 +149,6 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
 
     } else if (paths.count() == 2) {
 
-        QString athlete = paths[0];
         paths.removeFirst();
 
         // GET ZONES
@@ -152,13 +163,12 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
 
             // http://localhost:12021/athlete/measures
             paths.removeFirst();
-            listMeasures(athlete, paths, request, response);
+            listMeasures(athleteDirectory, paths, request, response);
             return;
         }
 
     } else if (paths.count() == 3) {
 
-        QString athlete = paths[0];
         paths.removeFirst();
 
         // GET ACTIVITY
@@ -195,7 +205,7 @@ APIWebService::athleteData(QStringList &paths, HttpRequest &request, HttpRespons
             // http://localhost:12021/athlete/measures/Body
             // http://localhost:12021/athlete/measures/Hrv
             paths.removeFirst();
-            listMeasures(athlete, paths, request, response);
+            listMeasures(athleteDirectory, paths, request, response);
             return;
         }
 
@@ -789,26 +799,54 @@ APIWebService::listZones(const AnchoredFileSystem::DirectoryAnchor &athleteDirec
 }
 
 void
-APIWebService::listMeasures(QString athlete, QStringList paths, HttpRequest &request, HttpResponse &response)
+APIWebService::listMeasures(const AnchoredFileSystem::DirectoryAnchor &athleteDirectory, QStringList paths, HttpRequest &request, HttpResponse &response)
 {
-    QDir configDir(home.absolutePath() + "/" + athlete + "/config");
-
     // list activities and associated metrics
     response.setHeader("Content-Type", "text; charset=ISO-8859-1");
 
+    QString error;
+    AnchoredFileSystem::DirectoryAnchor rootDirectory;
+    if (!fileStore.openDirectory({}, rootDirectory, error)) {
+        response.setStatus(500);
+        response.write("unable to prepare measures schema safely.\n");
+        return;
+    }
+    LocalApiEndpointInput::PreparedInput schemaInput =
+        LocalApiEndpointInput::prepareOptionalSnapshotDirectory(
+            fileStore, rootDirectory, {}, QStringLiteral("measures.ini"),
+            LocalApiEndpointInput::FileKind::MeasuresSchema, error);
+    if (schemaInput.status() != LocalApiEndpointInput::Status::Ready) {
+        response.setStatus(500);
+        response.write("unable to prepare measures schema safely.\n");
+        return;
+    }
+    const Measures::Configuration measuresConfiguration =
+        schemaInput.secondPath().isEmpty()
+        ? Measures::Configuration::builtIn()
+        : Measures::Configuration::snapshot(schemaInput.secondPath());
+    Measures metadata(
+        QDir(), false, measuresConfiguration);
+    QStringList measuresDataFileNames;
+    if (!LocalApiEndpointInput::prepareMeasuresDataFileNames(
+            metadata.getGroupSymbols(), measuresDataFileNames, error)) {
+        response.setStatus(500);
+        response.write("measures schema contains an unsafe group.\n");
+        return;
+    }
+
     if (paths.isEmpty()) {
 
-        foreach (QString group, Measures(configDir).getGroupSymbols()) {
+        foreach (QString group, metadata.getGroupSymbols()) {
             response.write(group.toLocal8Bit());
             response.write("\n");
         }
         return;
     }
 
-    Measures measures = Measures(configDir, true);
-    int group_index = measures.getGroupSymbols().indexOf(paths[0]);
-    MeasuresGroup* measuresGroup = measures.getGroup(group_index);
-    if (group_index < 0 || measuresGroup == NULL) {
+    const int metadataGroupIndex =
+        metadata.getGroupSymbols().indexOf(paths[0]);
+    MeasuresGroup *metadataGroup = metadata.getGroup(metadataGroupIndex);
+    if (metadataGroupIndex < 0 || metadataGroup == nullptr) {
 
         // unknown group
         response.setStatus(500);
@@ -816,12 +854,36 @@ APIWebService::listMeasures(QString athlete, QStringList paths, HttpRequest &req
         return;
     }
 
-    response.write("Date");
-    QStringList field_symbols = measuresGroup->getFieldSymbols();
-    for (int i=0; i<field_symbols.count(); i++) {
-        response.write(", ");
-        response.write(field_symbols[i].toLocal8Bit());
+    const QString dataFileName =
+        measuresDataFileNames.at(metadataGroupIndex);
+    LocalApiEndpointInput::PreparedInput dataInput =
+        LocalApiEndpointInput::prepareOptionalSnapshotDirectory(
+            fileStore, athleteDirectory, {QStringLiteral("config")},
+            dataFileName, LocalApiEndpointInput::FileKind::MeasuresData,
+            error);
+    if (dataInput.status() != LocalApiEndpointInput::Status::Ready) {
+        response.setStatus(500);
+        response.write("unable to prepare measures data safely.\n");
+        return;
     }
+    if (!isReadableMeasuresSnapshot(dataInput.secondPath())) {
+        response.setStatus(500);
+        response.write("unable to parse prepared measures data.\n");
+        return;
+    }
+
+    Measures measures(
+        QDir(dataInput.firstPath()), true, measuresConfiguration);
+    const int group_index =
+        measures.getGroupSymbols().indexOf(paths[0]);
+    MeasuresGroup *measuresGroup = measures.getGroup(group_index);
+    if (group_index < 0 || measuresGroup == nullptr) {
+        response.setStatus(500);
+        response.write("unable to apply the prepared measures schema.\n");
+        return;
+    }
+
+    QStringList field_symbols = measuresGroup->getFieldSymbols();
 
     // honour the since parameter
     QString sincep(request.getParameter("since"));
@@ -837,7 +899,23 @@ APIWebService::listMeasures(QString athlete, QStringList paths, HttpRequest &req
     QDate endDate = measuresGroup->getEndDate();
     if (before < endDate) endDate = before;
 
-    while (date <= endDate) {
+    qint64 responseRows = 0;
+    if (!LocalApiEndpointInput::prepareInclusiveDateRowCount(
+            date, endDate,
+            LocalApiEndpointInput::MeasuresMaximumResponseRows,
+            responseRows)) {
+        response.setStatus(500);
+        response.write("measures response exceeds its row budget.\n");
+        return;
+    }
+
+    response.write("Date");
+    for (int i=0; i<field_symbols.count(); i++) {
+        response.write(", ");
+        response.write(field_symbols[i].toLocal8Bit());
+    }
+
+    for (qint64 row = 0; row < responseRows; ++row) {
         response.write("\n");
         response.write(date.toString("yyyy/MM/dd").toLocal8Bit());
 

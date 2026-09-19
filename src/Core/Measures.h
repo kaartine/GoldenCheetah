@@ -142,9 +142,37 @@ private:
 class Measures {
     Q_DECLARE_TR_FUNCTIONS(Measures)
 public:
+    struct Configuration
+    {
+        enum class Source {
+            Global,
+            BuiltIn,
+            Snapshot
+        };
+
+        Source source = Source::Global;
+        QString snapshotFile;
+
+        static Configuration global() { return {}; }
+        static Configuration builtIn()
+        {
+            Configuration result;
+            result.source = Source::BuiltIn;
+            return result;
+        }
+        static Configuration snapshot(const QString &file)
+        {
+            Configuration result;
+            result.source = Source::Snapshot;
+            result.snapshotFile = file;
+            return result;
+        }
+    };
+
     // Default constructor intended to access metadata,
     // directory and withData must be provided to access data.
     Measures(QDir dir=QDir(), bool withData=false);
+    Measures(QDir dir, bool withData, Configuration configuration);
     ~Measures();
     void saveConfig();
 

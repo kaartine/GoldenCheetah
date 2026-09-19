@@ -99,6 +99,11 @@ private slots:
     void meanMaxCollectionRollsBackAfterLaterReplacement();
     void meanMaxCollectionRejectsPairBudget();
     void meanMaxCollectionByteBudgetBoundaries();
+    void preparesOptionalSnapshotDirectory();
+    void optionalSnapshotRejectsUnsafeDerivedName();
+    void measuresDateRowBudgetBoundaries();
+    void measuresJsonAcceptanceMatchesLegacy();
+    void measuresSchemaRejectsUnsafeNonSelectedGroup();
 };
 
 void TestLocalApiFileStore::opensRetainedRegularFile()
@@ -1061,6 +1066,125 @@ void TestLocalApiFileStore::meanMaxCollectionByteBudgetBoundaries()
         1, LocalApiEndpointInput::MeanMaxCollectionMaximumSize));
     QVERIFY(!LocalApiEndpointInput::fitsMeanMaxCollectionByteBudget(-1, 0));
     QVERIFY(!LocalApiEndpointInput::fitsMeanMaxCollectionByteBudget(0, -1));
+}
+
+void TestLocalApiFileStore::preparesOptionalSnapshotDirectory()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice")));
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+
+    LocalApiEndpointInput::PreparedInput missing =
+        LocalApiEndpointInput::prepareOptionalSnapshotDirectory(
+            store, athleteDirectory, {QStringLiteral("config")},
+            QStringLiteral("bodymeasures.json"),
+            LocalApiEndpointInput::FileKind::MeasuresData, error);
+    QVERIFY2(missing.status() == LocalApiEndpointInput::Status::Ready,
+             qPrintable(error));
+    QVERIFY(QFileInfo(missing.firstPath()).isDir());
+    QVERIFY(missing.secondPath().isEmpty());
+
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/config")));
+    QVERIFY(writeFile(
+        QDir(root.path()).filePath(
+            QStringLiteral("alice/config/bodymeasures.json")),
+        QByteArrayLiteral("verified-measures")));
+    QString snapshotDirectory;
+    QString snapshotFile;
+    {
+        LocalApiEndpointInput::PreparedInput present =
+            LocalApiEndpointInput::prepareOptionalSnapshotDirectory(
+                store, athleteDirectory, {QStringLiteral("config")},
+                QStringLiteral("bodymeasures.json"),
+                LocalApiEndpointInput::FileKind::MeasuresData, error);
+        QVERIFY2(present.status() == LocalApiEndpointInput::Status::Ready,
+                 qPrintable(error));
+        snapshotDirectory = present.firstPath();
+        snapshotFile = present.secondPath();
+        QCOMPARE(QFileInfo(snapshotFile).absolutePath(), snapshotDirectory);
+        QFile file(snapshotFile);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(file.readAll(), QByteArrayLiteral("verified-measures"));
+    }
+    QVERIFY(!QFileInfo::exists(snapshotDirectory));
+}
+
+void TestLocalApiFileStore::optionalSnapshotRejectsUnsafeDerivedName()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("alice/config")));
+    LocalApiFileStore store(root.path());
+    AnchoredFileSystem::DirectoryAnchor athleteDirectory;
+    QString error;
+    QVERIFY2(store.openDirectory(
+                 {QStringLiteral("alice")}, athleteDirectory, error),
+             qPrintable(error));
+    LocalApiEndpointInput::PreparedInput input =
+        LocalApiEndpointInput::prepareOptionalSnapshotDirectory(
+            store, athleteDirectory, {QStringLiteral("config")},
+            QStringLiteral("../bodymeasures.json"),
+            LocalApiEndpointInput::FileKind::MeasuresData, error);
+    QVERIFY(input.status()
+            == LocalApiEndpointInput::Status::InternalError);
+    QVERIFY(input.firstPath().isEmpty());
+    QVERIFY(input.secondPath().isEmpty());
+    QVERIFY(!error.isEmpty());
+}
+
+void TestLocalApiFileStore::measuresDateRowBudgetBoundaries()
+{
+    const QDate start(2026, 1, 1);
+    qint64 rows = -1;
+    QVERIFY(LocalApiEndpointInput::prepareInclusiveDateRowCount(
+        start, start.addDays(2), 3, rows));
+    QCOMPARE(rows, qint64(3));
+    QVERIFY(!LocalApiEndpointInput::prepareInclusiveDateRowCount(
+        start, start.addDays(3), 3, rows));
+    QCOMPARE(rows, qint64(0));
+    QVERIFY(LocalApiEndpointInput::prepareInclusiveDateRowCount(
+        QDate(), start, 3, rows));
+    QCOMPARE(rows, qint64(0));
+    QVERIFY(LocalApiEndpointInput::prepareInclusiveDateRowCount(
+        start.addDays(1), start, 3, rows));
+    QCOMPARE(rows, qint64(0));
+    QVERIFY(!LocalApiEndpointInput::prepareInclusiveDateRowCount(
+        start, start, -1, rows));
+}
+
+void TestLocalApiFileStore::measuresJsonAcceptanceMatchesLegacy()
+{
+    QVERIFY(LocalApiEndpointInput::isReadableMeasuresData(
+        QByteArrayLiteral("{\"measures\":[]}")));
+    QVERIFY(LocalApiEndpointInput::isReadableMeasuresData(
+        QByteArrayLiteral("[]")));
+    QVERIFY(!LocalApiEndpointInput::isReadableMeasuresData({}));
+    QVERIFY(!LocalApiEndpointInput::isReadableMeasuresData(
+        QByteArrayLiteral("{not-json}")));
+}
+
+void TestLocalApiFileStore::measuresSchemaRejectsUnsafeNonSelectedGroup()
+{
+    QStringList fileNames;
+    QString error;
+    QVERIFY(!LocalApiEndpointInput::prepareMeasuresDataFileNames(
+        {QStringLiteral("Safe"), QStringLiteral("../Unsafe")},
+        fileNames, error));
+    QVERIFY(fileNames.isEmpty());
+    QVERIFY(!error.isEmpty());
+
+    QVERIFY(LocalApiEndpointInput::prepareMeasuresDataFileNames(
+        {QStringLiteral("Body"), QStringLiteral("Custom")},
+        fileNames, error));
+    QCOMPARE(fileNames,
+             QStringList({QStringLiteral("bodymeasures.json"),
+                          QStringLiteral("custommeasures.json")}));
 }
 
 QTEST_MAIN(TestLocalApiFileStore)

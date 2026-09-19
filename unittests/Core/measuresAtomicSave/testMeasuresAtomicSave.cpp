@@ -117,6 +117,7 @@ private slots:
     void failedWritesPreservePreviousFile_data();
     void failedWritesPreservePreviousFile();
     void successfulWritePublishesCompleteJson();
+    void explicitConfigurationSnapshotControlsSchemaAndData();
 };
 
 void TestMeasuresAtomicSave::failedWritesPreservePreviousFile_data()
@@ -184,6 +185,46 @@ void TestMeasuresAtomicSave::successfulWritePublishesCompleteJson()
         measures.at(0).toObject()
             .value(QStringLiteral("weight")).toDouble(),
         72.5);
+}
+
+void TestMeasuresAtomicSave::explicitConfigurationSnapshotControlsSchemaAndData()
+{
+    QTemporaryDir globalRoot;
+    QTemporaryDir snapshotRoot;
+    QTemporaryDir dataRoot;
+    QVERIFY(globalRoot.isValid());
+    QVERIFY(snapshotRoot.isValid());
+    QVERIFY(dataRoot.isValid());
+    gcroot = globalRoot.path();
+    QVERIFY(writeFile(
+        globalRoot.filePath(QStringLiteral("measures.ini")),
+        QByteArrayLiteral(
+            "[General]\nMeasures=Global\n[Global]\nFields=IGNORED\n")));
+    const QString snapshotPath =
+        snapshotRoot.filePath(QStringLiteral("measures.ini"));
+    QVERIFY(writeFile(
+        snapshotPath,
+        QByteArrayLiteral(
+            "[General]\nMeasures=Snap\n"
+            "[Snap]\nFields=VALUE\nNames=Value\n"
+            "MetricUnits=u\nImperialUnits=u\nUnitsFactors=1\n")));
+    QVERIFY(writeFile(
+        dataRoot.filePath(QStringLiteral("snapmeasures.json")),
+        QByteArrayLiteral(
+            "{\"version\":1,\"measures\":[{"
+            "\"when\":1782864000,\"value\":42.5,"
+            "\"source\":0}]}")));
+
+    Measures measures(
+        QDir(dataRoot.path()), true,
+        Measures::Configuration::snapshot(snapshotPath));
+    QCOMPARE(measures.getGroupSymbols(), QStringList({QStringLiteral("Snap")}));
+    MeasuresGroup *group = measures.getGroup(0);
+    QVERIFY(group != nullptr);
+    QCOMPARE(group->getFieldSymbols(),
+             QStringList({QStringLiteral("VALUE")}));
+    QCOMPARE(group->getFieldValue(QDate(2026, 7, 1), 0), 42.5);
+
 }
 
 QTEST_MAIN(TestMeasuresAtomicSave)

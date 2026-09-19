@@ -13,6 +13,7 @@
 #include "LocalApiFileStore.h"
 
 #include <QByteArray>
+#include <QDate>
 #include <QString>
 #include <memory>
 
@@ -22,13 +23,18 @@ enum class FileKind {
     RideDatabase,
     Activity,
     Cache,
-    Zone
+    Zone,
+    MeasuresSchema,
+    MeasuresData
 };
 
 inline constexpr qint64 RideDatabaseMaximumSize = 128LL * 1024 * 1024;
 inline constexpr qint64 ActivityMaximumSize = 64LL * 1024 * 1024;
 inline constexpr qint64 CacheMaximumSize = 64LL * 1024 * 1024;
 inline constexpr qint64 ZoneMaximumSize = 4LL * 1024 * 1024;
+inline constexpr qint64 MeasuresSchemaMaximumSize = 1LL * 1024 * 1024;
+inline constexpr qint64 MeasuresDataMaximumSize = 16LL * 1024 * 1024;
+inline constexpr qint64 MeasuresMaximumResponseRows = 36600;
 inline constexpr qint64 MeanMaxAggregateMaximumSize = 128LL * 1024 * 1024;
 inline constexpr qsizetype AthleteDirectoryMaximumEntries = 1024;
 inline constexpr qsizetype ActivityDirectoryMaximumEntries = 32768;
@@ -41,6 +47,16 @@ static_assert(
 
 qint64 maximumSize(FileKind kind);
 bool fitsMeanMaxCollectionByteBudget(qint64 currentSize, qint64 addedSize);
+bool prepareInclusiveDateRowCount(
+    const QDate &start,
+    const QDate &end,
+    qint64 maximumRows,
+    qint64 &rows);
+bool isReadableMeasuresData(const QByteArray &contents);
+bool prepareMeasuresDataFileNames(
+    const QStringList &groupSymbols,
+    QStringList &fileNames,
+    QString &error);
 
 enum class Status {
     Ready,
@@ -101,6 +117,10 @@ private:
         const LocalApiFileStore &,
         const AnchoredFileSystem::DirectoryAnchor &,
         const QList<AnchoredFileSystem::DirectoryEntry> &, QString &);
+    friend PreparedInput prepareOptionalSnapshotDirectory(
+        const LocalApiFileStore &,
+        const AnchoredFileSystem::DirectoryAnchor &,
+        const QStringList &, const QString &, FileKind, QString &);
 };
 
 enum class ListingKind {
@@ -142,6 +162,16 @@ PreparedInput prepareMeanMaxCollection(
     const LocalApiFileStore &store,
     const AnchoredFileSystem::DirectoryAnchor &athleteDirectory,
     const QList<AnchoredFileSystem::DirectoryEntry> &activityEntries,
+    QString &error);
+
+// Produces a private directory in firstPath(). When the source exists its
+// verified snapshot file is in secondPath(); absence leaves that path empty.
+PreparedInput prepareOptionalSnapshotDirectory(
+    const LocalApiFileStore &store,
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const QStringList &directoryComponents,
+    const QString &fileName,
+    FileKind kind,
     QString &error);
 
 PreparedListing prepareListing(

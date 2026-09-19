@@ -8,10 +8,12 @@
  */
 
 #include "LocalApiEndpointInput.h"
+#include "PortableFileName.h"
 
 #include <QBuffer>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonDocument>
 #include <QSet>
 #include <QTextStream>
 #include <algorithm>
@@ -29,6 +31,10 @@ qint64 maximumSize(FileKind kind)
         return CacheMaximumSize;
     case FileKind::Zone:
         return ZoneMaximumSize;
+    case FileKind::MeasuresSchema:
+        return MeasuresSchemaMaximumSize;
+    case FileKind::MeasuresData:
+        return MeasuresDataMaximumSize;
     }
     return -1;
 }
@@ -40,6 +46,53 @@ bool fitsMeanMaxCollectionByteBudget(
         && addedSize >= 0
         && currentSize <= MeanMaxCollectionMaximumSize
         && addedSize <= MeanMaxCollectionMaximumSize - currentSize;
+}
+
+bool prepareInclusiveDateRowCount(
+    const QDate &start,
+    const QDate &end,
+    qint64 maximumRows,
+    qint64 &rows)
+{
+    rows = 0;
+    if (maximumRows < 0) return false;
+    if (!start.isValid() || !end.isValid() || start > end) return true;
+    const qint64 days = start.daysTo(end);
+    if (days < 0 || days >= maximumRows) return false;
+    rows = days + 1;
+    return true;
+}
+
+bool isReadableMeasuresData(const QByteArray &contents)
+{
+    QJsonParseError parseError;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(contents, &parseError);
+    return parseError.error == QJsonParseError::NoError
+        && !document.isEmpty()
+        && !document.isNull();
+}
+
+bool prepareMeasuresDataFileNames(
+    const QStringList &groupSymbols,
+    QStringList &fileNames,
+    QString &error)
+{
+    fileNames.clear();
+    error.clear();
+    fileNames.reserve(groupSymbols.size());
+    for (const QString &symbol : groupSymbols) {
+        const QString fileName =
+            symbol.toLower() + QStringLiteral("measures.json");
+        if (!PortableFileName::isValid(fileName)) {
+            fileNames.clear();
+            error = QStringLiteral(
+                "A measures group produces an unsafe data filename");
+            return false;
+        }
+        fileNames.append(fileName);
+    }
+    return true;
 }
 
 const QByteArray &PreparedInput::bytes() const
@@ -366,6 +419,50 @@ PreparedInput prepareMeanMaxCollection(
     }
     result.firstPath_ = result.firstSnapshot_->path();
     result.secondPath_ = result.secondSnapshot_->path();
+    result.status_ = Status::Ready;
+    return result;
+}
+
+PreparedInput prepareOptionalSnapshotDirectory(
+    const LocalApiFileStore &store,
+    const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+    const QStringList &directoryComponents,
+    const QString &fileName,
+    FileKind kind,
+    QString &error)
+{
+    error.clear();
+    PreparedInput result;
+    LocalApiFileGeneration generation;
+    bool exists = false;
+    if (!store.captureRegularFileIfExists(
+            baseDirectory, directoryComponents, fileName,
+            generation, exists, error, maximumSize(kind))) {
+        result.status_ = Status::InternalError;
+        return result;
+    }
+
+    QByteArray contents;
+    if (exists && !generation.readAll(contents, error)) {
+        result.status_ = Status::InternalError;
+        return result;
+    }
+    result.firstSnapshot_ =
+        std::make_unique<LocalApiFileSnapshotDirectory>();
+    if (!result.firstSnapshot_->isValid()) {
+        error = QStringLiteral(
+            "Cannot create private optional-input directory");
+        result = {};
+        result.status_ = Status::InternalError;
+        return result;
+    }
+    result.firstPath_ = result.firstSnapshot_->path();
+    if (exists && !result.firstSnapshot_->writeFile(
+            fileName, contents, result.secondPath_, error)) {
+        result = {};
+        result.status_ = Status::InternalError;
+        return result;
+    }
     result.status_ = Status::Ready;
     return result;
 }

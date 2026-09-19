@@ -8010,9 +8010,68 @@ commit before the next finding begins.
   generated RideDB objects compile with Qt 6.8.3; only the established bison
   warnings remain. Independent re-review found no remaining commit blocker.
   Native Windows/macOS execution remains required for platform verification.
-- ARCH-004B3c (queued): Inventory the configured measures groups and snapshot
+- ARCH-004B3c (completed): Inventory the configured measures groups and snapshot
   every athlete measure input needed by one response before constructing the
   legacy `Measures` reader. Keep the global measures-schema dependency explicit.
+- ARCH-004B3c1 (security finding recorded before correction): A custom group
+  symbol from global `measures.ini` is lower-cased and concatenated into an
+  athlete data pathname without component validation. Reject schema-derived
+  names that cannot be one portable snapshot component.
+- ARCH-004B3c2 (consistency finding recorded before correction): The global
+  `measures.ini` schema is read implicitly each time `Measures` is constructed,
+  so group inventory and data parsing can observe different schema generations.
+  Snapshot the optional global schema once per response and make the built-in
+  fallback versus exact snapshot source explicit to the legacy reader.
+- ARCH-004B3c3 (availability finding recorded before correction): A measures
+  file can select a multi-millennial start/end range and make the Local API
+  emit one row per day without a response-work cap. Validate and cap the row
+  range before writing any response body.
+- ARCH-004B3c4 (availability finding recorded before correction): The legacy
+  measures parser opens a modal `QMessageBox` when JSON is unreadable, which
+  can block a Local API request indefinitely. Validate the private snapshot
+  with the parser's JSON acceptance condition before constructing `Measures`,
+  and return an error without publishing a body or opening UI.
+- ARCH-004B3c5 (security review finding recorded before correction): Validating
+  only the selected group's derived filename is insufficient because the
+  legacy `Measures(withData=true)` constructor instantiates every configured
+  group and concatenates every symbol into a path. Validate all configured
+  symbols before constructing any data-reading legacy instance; cover a safe
+  selected group combined with an unsafe non-selected group.
+- ARCH-004B3c6 (review finding recorded before correction): The first optional
+  capture helper returns a successful absence without a final retained-parent
+  path check. Revalidate the parent before every absent return so a Windows
+  display-path replacement cannot silently select the fallback.
+- ARCH-004B3c7 (compatibility review finding recorded before correction): Adding
+  a defaulted third argument replaces the existing `Measures(QDir, bool)`
+  symbol and breaks alternate test definitions and ABI. Preserve the original
+  two-argument constructor as a delegating overload and add a distinct explicit
+  configuration overload.
+- ARCH-004B3c resolution: Each response now snapshots the optional global
+  `measures.ini` generation with a 1 MiB cap, or explicitly selects the
+  built-in schema when that file is absent. Every configured group is
+  inventoried and its derived data filename validated before any data-reading
+  legacy `Measures` instance is constructed. The selected optional athlete
+  JSON is read through the retained athlete directory, capped at 16 MiB, and
+  copied into a private directory; absence preserves the header-only response.
+  Malformed JSON and unsafe schema symbols fail before legacy parsing or body
+  output. Inclusive output is capped at 36,600 daily rows before the CSV header
+  is written. Optional absence revalidates the retained parent, and the legacy
+  two-argument `Measures` constructor remains intact while an explicit
+  configuration-source overload consumes the schema snapshot. This resolves
+  ARCH-004B3c1 through ARCH-004B3c7.
+- ARCH-004B3c verification: The focused Local API input suite passes 45/45 with
+  Qt 6.8.3 and under Qt 6.4.2 ASan/UBSan (leak detection disabled). The new
+  explicit-schema/data `Measures` test passes, and the legacy two-argument
+  constructor's athlete-migration test stub compiles. The complete local
+  measures atomic-save suite reports 7 passes and one failure in its unchanged
+  successful atomic-publication case; this environment is already known to
+  fail anchored atomic publication/ACL checks, and no green result is claimed
+  for that case. The changed production Local API, endpoint-input, file-store,
+  anchored-filesystem, `Measures`, and generated RideDB objects compile with
+  Qt 6.8.3; only the established bison warnings remain. Independent final
+  review found no remaining blocker. Native Windows/macOS execution and a
+  clean capable-filesystem run of the atomic-save suite remain verification
+  prerequisites.
 - ARCH-004B3d (correctness finding recorded before correction): The RideDB
   parser assigns `RideItem::path` from `<athlete-root>/activities`, omitting the
   selected athlete component. Confirm the parser's path contract with a focused

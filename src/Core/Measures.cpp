@@ -316,12 +316,31 @@ MeasuresGroup::removeField(int field)
 
 ///////////////////////////// Measures class ////////////////////////////////
 
-Measures::Measures(QDir dir, bool withData) : dir(dir), withData(withData)
+Measures::Measures(QDir dir, bool withData)
+    : Measures(dir, withData, Configuration::global())
 {
-    // load user defined measures from measures.ini
-    QString filename = QDir(gcroot).canonicalPath() + "/measures.ini";
+}
 
-    if (!QFile(filename).exists()) {
+Measures::Measures(
+    QDir dir, bool withData, Configuration configuration)
+    : dir(dir), withData(withData)
+{
+    QString filename;
+    bool loadBuiltIn = false;
+    switch (configuration.source) {
+    case Configuration::Source::Global:
+        filename = QDir(gcroot).canonicalPath() + "/measures.ini";
+        loadBuiltIn = !QFile(filename).exists();
+        break;
+    case Configuration::Source::BuiltIn:
+        loadBuiltIn = true;
+        break;
+    case Configuration::Source::Snapshot:
+        filename = configuration.snapshotFile;
+        break;
+    }
+
+    if (loadBuiltIn) {
         // pre-load mandatory measures in MeasuresGroupType order
 
         groups.append(new MeasuresGroup("Body", tr("Body"),
@@ -357,7 +376,7 @@ Measures::Measures(QDir dir, bool withData) : dir(dir), withData(withData)
             dir, withData));
 
             // other standard measures can be loaded from resources
-            filename = ":/ini/measures.ini";
+        filename = ":/ini/measures.ini";
     }
 
     QSettings config(filename, QSettings::IniFormat);

@@ -76,6 +76,17 @@ public:
         QString &error,
         qint64 maximumSize) const;
 
+    // A missing directory or file is a successful empty result. Existing
+    // unsafe, aliased, non-regular, changed, or oversized entries fail.
+    bool captureRegularFileIfExists(
+        const AnchoredFileSystem::DirectoryAnchor &baseDirectory,
+        const QStringList &directoryComponents,
+        const QString &fileComponent,
+        LocalApiFileGeneration &generation,
+        bool &exists,
+        QString &error,
+        qint64 maximumSize) const;
+
     bool openDirectory(
         const QStringList &components,
         AnchoredFileSystem::DirectoryAnchor &directory,
