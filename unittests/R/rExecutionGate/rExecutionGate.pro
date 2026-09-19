@@ -13,7 +13,8 @@ DEFINES += GC_TEST_SOURCE_ROOT=\\\"$${GC_TEST_SOURCE_ROOT}\\\"
 SOURCES = testRExecutionGate.cpp \
           $$PWD/../../../src/R/RExecutionGate.cpp
 
-HEADERS = $$PWD/../../../src/R/RExecutionGate.h
+HEADERS = $$PWD/../../../src/R/RExecutionGate.h \
+          $$PWD/../../../src/Charts/RWidgetExecutionGuard.h
 
 INCLUDEPATH += $$PWD/../../../src
 

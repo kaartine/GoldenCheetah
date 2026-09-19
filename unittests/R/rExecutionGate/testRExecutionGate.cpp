@@ -8,6 +8,7 @@
  */
 
 #include "R/RExecutionGate.h"
+#include "Charts/RWidgetExecutionGuard.h"
 
 #include <QFile>
 #include <QTest>
@@ -42,6 +43,7 @@ private slots:
     void cleansOnExceptionAndEarlyReturn();
     void moveTransfersSingleCleanup();
     void runsCoalescedWorkAfterCleanupAndRelease();
+    void guardsEvaluationContinuations();
     void productionEntrypointsUseGate();
 };
 
@@ -189,6 +191,59 @@ TestRExecutionGate::runsCoalescedWorkAfterCleanupAndRelease()
 }
 
 void
+TestRExecutionGate::guardsEvaluationContinuations()
+{
+    QObject *owner = new QObject;
+    QObject *console = new QObject;
+    QObject *canvas = new QObject;
+    RWidgetExecutionGuard guard(owner, {console, canvas});
+    QVERIFY(guard.isValid());
+
+    int continuationCount = 0;
+    QVERIFY(guard.runAndValidate([]() {}));
+    QVERIFY(!guard.runAndValidate([&]() { delete canvas; }));
+    if (guard.isValid()) ++continuationCount;
+    QCOMPARE(continuationCount, 0);
+    delete console;
+    delete owner;
+
+    QObject *secondCallOwner = new QObject;
+    QObject *secondCallDependency = new QObject;
+    RWidgetExecutionGuard secondCallGuard(
+        secondCallOwner, {secondCallDependency});
+    QVERIFY(secondCallGuard.runAndValidate([]() {}));
+    QVERIFY(!secondCallGuard.runAndValidate(
+        [&]() { delete secondCallDependency; }));
+    if (secondCallGuard.isValid()) ++continuationCount;
+    QCOMPARE(continuationCount, 0);
+    delete secondCallOwner;
+
+    QObject *printOwner = new QObject;
+    RWidgetExecutionGuard printGuard(printOwner);
+    QVERIFY(!printGuard.runAndValidate([&]() { delete printOwner; }));
+    if (printGuard.isValid()) ++continuationCount;
+    QCOMPARE(continuationCount, 0);
+
+    int cleanupCount = 0;
+    QObject *throwingOwner = new QObject;
+    RWidgetExecutionGuard throwingGuard(throwingOwner);
+    try {
+        RExecutionGate gate;
+        RExecutionGate::Lease lease = gate.tryAcquire([&]() { ++cleanupCount; });
+        QVERIFY(lease);
+        throwingGuard.runAndValidate([&]() {
+            delete throwingOwner;
+            throw std::runtime_error("deleted during evaluation");
+        });
+        QFAIL("evaluation exception was not propagated");
+    } catch (const std::runtime_error &) {
+        QVERIFY(!throwingGuard.isValid());
+    }
+    QCOMPARE(cleanupCount, 1);
+    QCOMPARE(continuationCount, 0);
+}
+
+void
 TestRExecutionGate::productionEntrypointsUseGate()
 {
     QFile chart(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/Charts/RChart.cpp"));
@@ -196,6 +251,14 @@ TestRExecutionGate::productionEntrypointsUseGate()
     const QByteArray source = chart.readAll();
 
     QCOMPARE(source.count("rtool->tryAcquireExecution("), 2);
+    QCOMPARE(source.count("RWidgetExecutionGuard lifetimeGuard("), 2);
+    QVERIFY(source.contains("lifetimeGuard.runAndValidate("));
+    QVERIFY(source.contains("OverrideCursorGuard cursorGuard;"));
+    QVERIFY(source.contains("WidgetUpdatesGuard updatesGuard(this);"));
+    QCOMPARE(source.count("QApplication::setOverrideCursor("), 1);
+    QCOMPARE(source.count("QApplication::restoreOverrideCursor("), 1);
+    QCOMPARE(source.count("setUpdatesEnabled(false)"), 1);
+    QCOMPARE(source.count("setUpdatesEnabled(true)"), 1);
     QVERIFY(!source.contains("rtool->context ="));
     QVERIFY(!source.contains("rtool->canvas ="));
     QVERIFY(!source.contains("rtool->perspective ="));

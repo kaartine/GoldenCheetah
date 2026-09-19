@@ -24,9 +24,43 @@
 #include "AbstractView.h"
 #include "GenericChart.h"
 #include "HelpWhatsThis.h"
+#include "RWidgetExecutionGuard.h"
 
 // unique identifier for each chart
 static int id=0;
+
+namespace {
+
+class OverrideCursorGuard
+{
+public:
+    OverrideCursorGuard() { QApplication::setOverrideCursor(Qt::WaitCursor); }
+    ~OverrideCursorGuard() { QApplication::restoreOverrideCursor(); }
+
+    OverrideCursorGuard(const OverrideCursorGuard &) = delete;
+    OverrideCursorGuard &operator=(const OverrideCursorGuard &) = delete;
+};
+
+class WidgetUpdatesGuard
+{
+public:
+    explicit WidgetUpdatesGuard(QWidget *widget) : widget_(widget)
+    {
+        if (widget_) widget_->setUpdatesEnabled(false);
+    }
+    ~WidgetUpdatesGuard()
+    {
+        if (widget_) widget_->setUpdatesEnabled(true);
+    }
+
+    WidgetUpdatesGuard(const WidgetUpdatesGuard &) = delete;
+    WidgetUpdatesGuard &operator=(const WidgetUpdatesGuard &) = delete;
+
+private:
+    QPointer<QWidget> widget_;
+};
+
+}
 
 RConsole::RConsole(Context *context, RChart *parent)
     : QTextEdit(parent)
@@ -173,6 +207,8 @@ void RConsole::keyPressEvent(QKeyEvent *e)
 
         if (line != "") {
 
+            RWidgetExecutionGuard lifetimeGuard(this);
+
             history << line;
             hpos = history.count();
 
@@ -203,23 +239,33 @@ void RConsole::keyPressEvent(QKeyEvent *e)
                 SEXP ret = NULL;
 
                 rtool->cancelled = false;
-                int rc = rtool->R->parseEval(line, ret);
+                int rc = -1;
+                if (!lifetimeGuard.runAndValidate([&]() {
+                        rc = rtool->R->parseEval(line, ret);
+                    })) return;
 
                 // if this isn't an assignment then print the result
                 // bit hacky, there must be a better way!
-                if(rc == 0 && ret != NULL && !Rf_isNull(ret) && !line.contains("<-") && !line.contains("print"))
-                    Rf_PrintValue(ret);
+                if(rc == 0 && ret != NULL && !Rf_isNull(ret) && !line.contains("<-") && !line.contains("print")) {
+                    if (!lifetimeGuard.runAndValidate([&]() {
+                            Rf_PrintValue(ret);
+                        })) return;
+                }
 
                 putData(GColor(CPLOTMARKER), rtool->messages.join(""));
                 rtool->messages.clear();
 
             } catch(std::exception& ex) {
 
+                if (!lifetimeGuard.isValid()) return;
+
                 putData(QColor(Qt::red), QString("%1\n").arg(QString(ex.what())));
                 putData(QColor(Qt::red), rtool->messages.join(""));
                 rtool->messages.clear();
 
             } catch(...) {
+
+                if (!lifetimeGuard.isValid()) return;
 
                 putData(QColor(Qt::red), "error: general exception.\n");
                 putData(QColor(Qt::red), rtool->messages.join(""));
@@ -542,6 +588,8 @@ RChart::runScript()
 
     if (script->toPlainText() != "") {
 
+        RWidgetExecutionGuard lifetimeGuard(this, {script, console, canvas, chart});
+
         RExecutionGate::Lease executionLease =
             rtool->tryAcquireExecution(
                 context,
@@ -551,17 +599,19 @@ RChart::runScript()
         if (!executionLease) return;
 
         // hourglass .. for long running ones this helps user know its busy
-        QApplication::setOverrideCursor(Qt::WaitCursor);
+        OverrideCursorGuard cursorGuard;
 
         // turn off updates for a sec
-        setUpdatesEnabled(false);
+        WidgetUpdatesGuard updatesGuard(this);
 
         // set default page size
         rtool->width = rtool->height = 0; // sets the canvas to the window size
 
         // set to defaults with gc applied
         rtool->cancelled = false;
-        rtool->R->parseEvalQNT("par(par.gc)\n");
+        if (!lifetimeGuard.runAndValidate([&]() {
+                rtool->R->parseEvalQNT("par(par.gc)\n");
+            })) return;
 
         QString line = script->toPlainText();
 
@@ -571,7 +621,9 @@ RChart::runScript()
             line = line.replace("$$", console->chartid);
 
             // run it
-            rtool->R->parseEval(line);
+            if (!lifetimeGuard.runAndValidate([&]() {
+                    rtool->R->parseEval(line);
+                })) return;
 
             // output on console
             if (rtool->messages.count()) {
@@ -582,6 +634,8 @@ RChart::runScript()
 
         } catch(std::exception& ex) {
 
+            if (!lifetimeGuard.isValid()) return;
+
             console->putData(QColor(Qt::red), QString("\n%1\n").arg(QString(ex.what())));
             console->putData(QColor(Qt::red), rtool->messages.join(""));
             rtool->messages.clear();
@@ -590,6 +644,8 @@ RChart::runScript()
             canvas->newPage();
 
         } catch(...) {
+
+            if (!lifetimeGuard.isValid()) return;
 
             console->putData(QColor(Qt::red), "\nerror: general exception.\n");
             console->putData(QColor(Qt::red), rtool->messages.join(""));
@@ -601,12 +657,6 @@ RChart::runScript()
 
         // finalise the chart (even if not on show)
         chart->finaliseChart();
-
-        // turn off updates for a sec
-        setUpdatesEnabled(true);
-
-        // reset cursor
-        QApplication::restoreOverrideCursor();
 
         // if the program expects more we clear it, otherwise
         // weird things can happen!

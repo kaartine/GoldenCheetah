@@ -7934,6 +7934,37 @@ commit before the next finding begins.
   QObject pointers. Reentrancy exclusion does not make those pointers lifetime
   safe. Before changing this path, design a constrained event/cancellation pump
   or guarded QObject bindings and add close-during-evaluation coverage.
+- ARCH-003B1 (FIXED; implementation item recorded before correction): both
+  `RConsole::keyPressEvent()` and `RChart::runScript()` continue dereferencing
+  their widget, child widgets, and cursor/update state after embedded-R calls
+  that can pump GUI events and synchronously delete the active chart. Add
+  guarded owner/dependency lifetime checks immediately after every evaluation
+  and at exception-handler entry, and move global override-cursor balancing to
+  stack ownership that does not dereference a deleted widget. Cover deletion
+  during simulated evaluation before proceeding to the broader ARCH-003B2
+  Context/Athlete/RideItem binding work.
+- ARCH-003B1 resolution: `RConsole` and `RChart` now couple each embedded-R
+  call to a `QPointer`-backed owner/dependency validation boundary. If the
+  console, chart, script editor, canvas, or generic chart dies while R pumps
+  GUI events, normal-return and exception continuations stop before the next
+  widget dereference. Stack guards restore the process-global override cursor
+  independently of widget lifetime and re-enable updates only when the chart
+  still exists.
+- ARCH-003B1 verification: The focused gate/lifetime suite passes 10/10 on Qt
+  6.4.2 normally and 10/10 under ASan/UBSan with leak detection disabled. It
+  covers normal continuation, dependency deletion at first- and second-call
+  equivalents, owner deletion at the `Rf_PrintValue` equivalent, exception
+  propagation, and single gate cleanup; production source checks pin all four
+  R-call boundaries and cursor/update RAII wiring. `RChart.cpp` compiles with
+  staged R 4.3.3/Rcpp/RInside headers under `GC_WANT_R` and
+  `STRICT_R_HEADERS`; the source dependency baseline suite passes 14/14 and
+  `git diff --check` is clean. Independent re-review returned GO. This item
+  guarantees only that the two entrypoints do not continue touching dead
+  widgets after an R call returns or throws. Raw `rtool`
+  Context/Athlete/RideItem/canvas/chart bindings can still be dereferenced by
+  native or graphics callbacks before that return; the explicit activity-loop
+  event pump is also unchanged. Both remain ARCH-003B2, so ARCH-003B and
+  close-during-evaluation safety as a whole are not yet complete.
 - ARCH-003C (queued lifetime work recorded before correction): `rtool` is a raw
   process global, self-publishes before construction finishes, leaks failed and
   successful instances, and has an unreachable/unconditional finalizer. Define

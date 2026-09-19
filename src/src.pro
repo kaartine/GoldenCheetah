@@ -310,7 +310,7 @@ contains(DEFINES, "GC_WANT_R") {
     SOURCES += R/REmbed.cpp R/RTool.cpp R/RExecutionGate.cpp R/RGraphicsDevice.cpp R/RSyntax.cpp R/RLibrary.cpp
 
     ## R based charts
-    HEADERS += Charts/RChart.h Charts/RCanvas.h
+    HEADERS += Charts/RChart.h Charts/RCanvas.h Charts/RWidgetExecutionGuard.h
     SOURCES += Charts/RChart.cpp Charts/RCanvas.cpp
 
     ## For hardware accelerated scene rendering
