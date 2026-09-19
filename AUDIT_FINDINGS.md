@@ -9005,6 +9005,24 @@ commit before the next finding begins.
   DTO header from `RideFileCache.h` adds a new FileIO-to-Core dependency and
   breaks the checked module inventory. Keep the FileIO value input owned by
   FileIO and copy the cache fields at the existing Core-to-FileIO call site.
+- ARCH-003F2c3 (refresh-builder cutover blocker recorded before correction):
+  The detached F3b builder is mutation-free with respect to its target, but it
+  still runs in `RideCacheRefreshThread` and reads live `Context`, `Athlete`,
+  `GlobalContext`, `appsettings`, metric-registry, zone, route, measure, and
+  interval-discovery state. F3c cannot move its result across a generation
+  gate while construction retains those mutable QObject/settings fallbacks.
+  Capture every remaining build input into the immutable generation and
+  per-item workset, make missing inputs fail closed, and add a structural plus
+  executable guard that rejects live fallback from the bound build path.
+- ARCH-003F2c3a (open-item worker policy recorded before correction): The F3b
+  synchronous adapter deep-copies an already-open `RideFile` at its call site,
+  but doing that copy in a worker would read a mutable owner-thread QObject and
+  transferring a QObject-derived copy across thread affinity is not a proven
+  value boundary. Capture pure ride data on the owner thread and reconstruct a
+  worker-local ride, or reject open, dirty, and editing items from background
+  construction while leaving them stale for an owner-thread operation. Bind
+  acceptance to a monotonic item mutation revision; pointer identity and the
+  dirty flag alone do not detect same-object edits.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -9271,6 +9289,48 @@ commit before the next finding begins.
   reassess placement when the worker-facing contract is finalized. A
   TSan-instrumented Qt run and native Windows build/run remain release
   prerequisites for the complete ARCH-003F concurrency claim.
+- ARCH-003F3c (owner-thread generation publication recorded before correction):
+  Carry each immutable-worker result to `RideCache` ownership and publish only
+  after the complete generation is accepted on the cache thread. A per-item
+  queued callback is insufficient: cancellation or a newer request can be
+  ordered after an early callback, and the current `threadCompleted` path can
+  finish the generation, notify, or open a save-snapshot boundary before queued
+  results drain. Use one bounded per-generation batch/dispatch owner, close it
+  before joins, and make final generation settlement require both physical
+  worker completion and owner-thread result drainage.
+- ARCH-003F3c1 (target lifetime and identity gate recorded before correction):
+  The current workset carries a raw `RideItem *`; a pre-computation liveness
+  check does not pin that object through construction or prevent address reuse.
+  Results must identify an owner-held target token/work index and be resolved
+  on the owner thread, then validate liveness, generation, monotonic mutation
+  revision, item identity, open-ride identity, source path, and full source
+  fingerprint before any stale patch, CPX commit/error report, item-state swap,
+  notification, aggregate invalidation, or save mutation.
+- ARCH-003F3c2 (stale-proposal transaction recorded before correction): Bound
+  `checkStale` currently writes color, resolved weight, source CRC, and
+  `isstale` in the worker before refresh construction. Return those fields as a
+  detached proposal. A clean proposal and a complete refresh result must cross
+  the same generation gate; a rejected generation publishes neither.
+- ARCH-003F3c3 (completion, cancellation, and save barrier recorded before
+  correction): `threadCompleted`, `cancel`, and synchronous-save settlement
+  currently reason only about worker threads. They must also close/discard or
+  drain the generation result owner without blocking a worker on the GUI
+  thread, and `refreshChanged_`, refresh-end notification, garbage collection,
+  and `saveSnapshotBoundary_` may advance only after accepted publication or
+  rejected-result destruction. Deterministic tests must force result-before-
+  finished and finished-before-drain schedules, N rejection/N+1 acceptance,
+  target deletion/revision, cancellation/teardown, and synchronous save.
+- ARCH-003F3c4 (bounded publication linearization recorded before correction):
+  Buffering the entire generation before acceptance is also unsafe because
+  every prepared CPX result owns a pinned descriptor and private artifact;
+  a large stale workset can exhaust file descriptors and temporary storage.
+  Use a bounded mailbox/stream whose capacity is tied to worker count and an
+  explicit Computing (still rejectable) -> Publishing (irrevocably accepted)
+  -> Finished state machine. A newer request before the first publication gate
+  rejects the old generation without side effects; once Publishing begins it
+  becomes one logical accepted transaction, and newer work remains pending
+  until its drain completes. Configuration quiescence may discard Computing
+  work, but must drain/join Publishing before mutating captured dependencies.
 - ARCH-003F4 (required deterministic verification recorded before correction):
   Add latch-controlled tests for config transition and teardown joining,
   generation N rejection while N+1 is requested, exception/early-exit lease
