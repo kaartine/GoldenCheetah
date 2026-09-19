@@ -373,7 +373,9 @@ bool pinRegularFileIdentity(
     QString &error);
 
 // Detects transient replacement as well as a replacement still visible by
-// pathname. Keep the guard alive across opening a path-based third-party API.
+// pathname. A content-pinned file also treats write events as compromise;
+// an identity-only pin deliberately permits in-place writes for mutable files
+// such as SQLite databases. Keep the guard alive across any dependent read.
 bool guardFileGeneration(
     const EntryRef &entry,
     const PinnedFile &file,

@@ -7829,6 +7829,38 @@ commit before the next finding begins.
   third-party ride, cache, zone, and measures readers. Cover symlink, hardlink,
   replacement, and platform-specific stable-access behavior before replacing
   the current path-based readers.
+- ARCH-004B1 (completed): Built and tested the reusable read-only file-generation
+  adapter. A review rejected direct `QFile`/stable-path handoff because a
+  transient replace-open-restore race cannot be proven safe on every platform;
+  the adapter must instead return bytes read from the pinned handle only after
+  complete identity, event, and digest validation. Path-only third-party
+  readers will consume private snapshots of those verified bytes.
+- ARCH-004B1a (blocking defect found by RED test): Metadata/identity-only
+  post-validation can miss an in-place same-size rewrite. Add pinned-content
+  digest revalidation before any third-party reader result may be exposed.
+- ARCH-004B1 resolution: The adapter now accepts only an absolute root and an
+  explicit non-negative byte budget, rejects directory aliases, file aliases,
+  hard links, replacements, and oversize files, and returns bytes only after
+  reading the pinned native handle and completing identity, event, and digest
+  checks. Direct stable-path and `QFile` handoff was removed after independent
+  review found a Windows replace-open-restore race. Content pins now watch
+  write events on Linux/macOS; identity-only guards retain their mutable-file
+  semantics. ARCH-004B1a is fixed by the event and digest checks.
+- ARCH-004B1 verification: 12 adapter cases pass with Qt 6.4.2, under
+  ASan/UBSan (leak detection disabled), and with Qt 6.8.3. The new content-pin
+  and identity-only guard tests pass. The full anchored filesystem suite is
+  82 passed, 12 failed, and 13 skipped; its twelve failures are the same
+  atomic-publication/ACL environment failures reproduced on the clean base.
+  The changed production objects compile with Qt 6.8.3. Native macOS and
+  Windows runs remain required before claiming cross-platform verification.
+- ARCH-004B2 (queued): Migrate athlete validation, `rideDB.json`, individual
+  activity, zone, and individual mean-max reads to retained generations.
+- ARCH-004B3 (queued): Replace path-based athlete/activity enumeration and
+  snapshot the multi-file bests and measures inputs before producing output.
+- ARCH-004C (prerequisite recorded): `listAthletes` initializes per-athlete
+  settings through the global `appsettings` path API after filesystem
+  validation. Inventory those settings files and add a generation-aware
+  settings adapter before claiming that endpoint is fully anchored.
 
 ### ARCH-005: The build does not enforce component boundaries
 

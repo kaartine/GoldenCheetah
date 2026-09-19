@@ -739,6 +739,8 @@ private slots:
     void permitsConcurrentPinsOfOneIdentity();
 #ifdef Q_OS_LINUX
     void fileGenerationGuardAnchorsWatchToPinnedFile();
+    void fileGenerationGuardDetectsContentWrite();
+    void fileIdentityGuardPermitsContentWrite();
 #endif
     void permitsOrdinaryQtReadsWhilePinned();
     void permitsOrdinaryQtReadsOfPinnedCopy();
@@ -1109,6 +1111,58 @@ void TestAnchoredFilesystem::fileGenerationGuardAnchorsWatchToPinnedFile()
 
     QVERIFY(!guard.unchanged(error));
     QVERIFY(!error.isEmpty());
+}
+
+void TestAnchoredFilesystem::fileGenerationGuardDetectsContentWrite()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    writeFixture(source.displayPath(), QByteArray("original"));
+    const PinnedFile pinned = pin(source);
+
+    FileGenerationGuard guard;
+    QString error;
+    QVERIFY2(
+        guardFileGeneration(source, pinned, guard, error),
+        qPrintable(error));
+    QFile replacement(source.displayPath());
+    QVERIFY(replacement.open(
+        QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(replacement.write(QByteArray("modified")), qint64(8));
+    QVERIFY(replacement.flush());
+    replacement.close();
+
+    QVERIFY(!guard.unchanged(error));
+    QVERIFY(!error.isEmpty());
+}
+
+void TestAnchoredFilesystem::fileIdentityGuardPermitsContentWrite()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    writeFixture(source.displayPath(), QByteArray("original"));
+
+    PinnedFile pinned;
+    QString error;
+    QVERIFY2(
+        pinRegularFileIdentity(source, pinned, error),
+        qPrintable(error));
+    FileGenerationGuard guard;
+    QVERIFY2(
+        guardFileGeneration(source, pinned, guard, error),
+        qPrintable(error));
+
+    QFile writer(source.displayPath());
+    QVERIFY(writer.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(writer.write(QByteArray("modified")), qint64(8));
+    QVERIFY(writer.flush());
+    writer.close();
+
+    QVERIFY2(guard.unchanged(error), qPrintable(error));
 }
 #endif
 

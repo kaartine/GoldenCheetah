@@ -17,6 +17,7 @@ exists(unittests.pri) {
 			   Core/dataFilterSafety \
 			   Core/dataFilterZones \
 			   Core/localApiSecurity \
+			   Core/localApiFileStore \
 			   Cloud/credentialTransportSafety \
 			   Cloud/cloudDbChartImportPolicy \
 			   Cloud/oauthCallbackPolicy \

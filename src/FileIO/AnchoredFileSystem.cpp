@@ -4211,7 +4211,10 @@ bool guardFileGeneration(
         + QByteArray::number(file.state_->descriptor.get());
     state->watch = ::inotify_add_watch(
         state->notifications.get(), path.constData(),
-        IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT);
+        IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT
+            | (file.state_->sha256.isEmpty()
+                   ? 0
+                   : (IN_MODIFY | IN_CLOSE_WRITE)));
     if (state->watch < 0) {
         error = nativeError(
             QStringLiteral("Cannot watch a file generation"), errno);
@@ -4272,7 +4275,10 @@ bool guardFileGeneration(
     EV_SET(
         &changes[0], state->watchedFile.get(), EVFILT_VNODE,
         EV_ADD | EV_CLEAR,
-        NOTE_DELETE | NOTE_LINK | NOTE_RENAME | NOTE_REVOKE,
+        NOTE_DELETE | NOTE_LINK | NOTE_RENAME | NOTE_REVOKE
+            | (file.state_->sha256.isEmpty()
+                   ? 0
+                   : (NOTE_WRITE | NOTE_EXTEND)),
         0, nullptr);
     for (size_t index = 0;
          index < state->watchedDirectories.size(); ++index) {
