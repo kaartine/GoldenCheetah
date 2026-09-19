@@ -25,6 +25,7 @@
 #include <QPair>
 #include <QVector>
 
+#include <cstdio>
 #include <memory>
 #include <thread>
 
@@ -113,6 +114,40 @@ struct RideFileCacheStaleInputs {
 class RideFileCache
 {
     public:
+        class PreparedCacheCommit
+        {
+            friend class RideFileCache;
+
+            public:
+                PreparedCacheCommit(const PreparedCacheCommit &) = delete;
+                PreparedCacheCommit &operator=(
+                    const PreparedCacheCommit &) = delete;
+                ~PreparedCacheCommit();
+
+            private:
+                PreparedCacheCommit() = default;
+
+                QString cachePath;
+                QString sourcePath;
+                QString artifactDirectoryPath;
+                QString artifactPath;
+                RideFile::SourceFingerprint sourceFingerprint;
+                RideFileCRC::ContentFingerprint
+                    persistedSourceFingerprint;
+                QByteArray analysisFingerprint;
+                double analysisWeight = 0.0;
+                QDate rideDate;
+                qint64 byteCount = 0;
+                QByteArray artifactDigest;
+                std::FILE *artifact = nullptr;
+        };
+
+        enum class PreparedCommitOutcome {
+            Persisted,
+            SourceRejected,
+            WriteFailed
+        };
+
         enum cachetype { meanmax, distribution, none };
         typedef enum cachetype CacheType;
         QDate start, end;
@@ -133,6 +168,18 @@ class RideFileCache
             RideFile *ride = 0,
             bool check = false,
             bool refresh = true,
+            AthletePersistenceService *persistenceService = nullptr);
+
+        // Preparation computes the in-memory arrays and a self-owned CPX
+        // artifact without replacing the final cache path. Publication is a
+        // separate operation so callers can place an acceptance gate between
+        // computation and every externally visible persistence side effect.
+        std::unique_ptr<PreparedCacheCommit>
+            preparePersistentCommit();
+        static PreparedCommitOutcome publishPreparedCommit(
+            std::unique_ptr<PreparedCacheCommit> prepared,
+            Context *context,
+            RideFile *validationRide,
             AthletePersistenceService *persistenceService = nullptr);
 
         // Construct a ridefile cache that represents the data
@@ -295,6 +342,23 @@ class RideFileCache
                 const QString &,
                 const QString &,
                 qint64)> &beforePreparedCommit = {});
+        std::unique_ptr<PreparedCacheCommit>
+            preparePersistentCommitForTest(
+                const QString &sourcePath,
+                const QString &cachePath);
+        static PreparedCommitOutcome publishPreparedCommitForTest(
+            std::unique_ptr<PreparedCacheCommit> prepared,
+            Context *context,
+            RideFile *validationRide,
+            const std::function<bool(
+                const QString &,
+                const RideFileCacheIntegrity::CacheWriteOperation &,
+                const RideFileCacheIntegrity::
+                    CachePreCommitValidator &,
+                QString *)> &writeCache,
+            const std::function<void(
+                const QString &,
+                const QString &)> &reportError = {});
 #endif
 
         // Rank is the one-based descending insertion position before ties.
@@ -387,14 +451,22 @@ class RideFileCache
 
     private:
 
-        struct PreparedCacheCommit;
         std::unique_ptr<PreparedCacheCommit>
             prepareCacheCommit();
-        bool commitPreparedCache(
+        static bool commitPreparedCache(
             PreparedCacheCommit &prepared,
+            Context *context,
+            RideFile *validationRide,
             const PersistenceOperations *operations,
             bool &sourceValidationRejected,
             QString *error);
+        static PreparedCommitOutcome publishPreparedCommit(
+            std::unique_ptr<PreparedCacheCommit> prepared,
+            Context *context,
+            RideFile *validationRide,
+            AthletePersistenceService *persistenceService,
+            const PersistenceOperations *operations,
+            const std::function<Context *()> &currentContext = {});
 
         Context *context;
         AthletePersistenceService *persistenceService_;

@@ -9165,6 +9165,30 @@ commit before the next finding begins.
   CPX replacement, aggregate-cache invalidation, and persistence-error
   reporting must occur only in the immediate synchronous publication adapter
   so F3c can later place one generation gate in front of all publication.
+- ARCH-003F3b6a foundation resolution: The prepared CPX request is now a
+  public, uniquely owned value whose destructor and authenticated artifact
+  outlive the `RideFileCache` that computed it. A static publication adapter
+  accepts only publication-time Context, optional validation RideFile, and
+  persistence service arguments; it can independently reopen the source and
+  retains no originating cache, ride, athlete, or Context pointer. The legacy
+  refresh immediately composes the same prepare/publish operations. Its
+  stack-only Context provider preserves the prior callback-time fallback and
+  aggregate-invalidation semantics without entering the detached request.
+  Publication reports distinct persisted, source-rejected, and write-failed
+  outcomes, and only a successful commit invalidates aggregate CPX caches.
+- ARCH-003F3b6a verification: The detached-publication regression proves that
+  the final path is untouched during preparation, the request survives cache
+  destruction, a null validation ride is independently reopened, authenticated
+  bytes reach the explicit publication operation, and a later source change is
+  rejected. The focused prepared-artifact and source-change set passes 6/6
+  normally and under ASan/UBSan. The full normal refresh suite passes 49/50;
+  its sole failure remains the pre-existing
+  `savedRideRebindsAndPersistsAtomically` baseline. Independent re-review: GO
+  with no remaining blocker or major finding after restoring publication-time
+  Context fallback behavior. The changed production translation unit compiles
+  with warnings as errors, the source-module dependency suite passes 14/14,
+  and `git diff --check` is clean. Carrying this request inside the complete
+  detached item result remains part of ARCH-003F3b rather than this foundation.
 - ARCH-003F4 (required deterministic verification recorded before correction):
   Add latch-controlled tests for config transition and teardown joining,
   generation N rejection while N+1 is requested, exception/early-exit lease

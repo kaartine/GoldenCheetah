@@ -533,6 +533,7 @@ private slots:
     void directPointMutationSkipsPersistence();
     void sourceChangeBeforeCommitSkipsPersistence();
     void verifiedRefreshStreamsPayloadInBoundedWrites();
+    void preparedCommitOutlivesCacheAndPublishesExplicitly();
     void preparedArtifactIgnoresLiveCacheMutation();
     void preparedArtifactPinsBoundsAndCleansUp();
     void concurrentPersistenceFailuresKeepComputedResults();
@@ -2465,6 +2466,98 @@ TestRideFileCacheRefresh::verifiedRefreshStreamsPayloadInBoundedWrites()
         largestWrite <= WriteChunkLimit,
         qPrintable(QStringLiteral(
             "largest CPX write was %1 bytes").arg(largestWrite)));
+}
+
+void
+TestRideFileCacheRefresh::
+preparedCommitOutlivesCacheAndPublishesExplicitly()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("source.provenance"));
+    const QString firstCachePath = directory.filePath(
+        QStringLiteral("cache/first.cpx"));
+    const QString rejectedCachePath = directory.filePath(
+        QStringLiteral("cache/rejected.cpx"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors));
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+
+    std::unique_ptr<RideFileCache::PreparedCacheCommit> prepared;
+    {
+        RideFileCache cache(
+            ride.get(),
+            RideFileCache::SkipInitialComputeForTest {});
+        prepared = cache.preparePersistentCommitForTest(
+            sourcePath, firstCachePath);
+        QVERIFY(prepared);
+        QVERIFY(!QFileInfo::exists(firstCachePath));
+    }
+
+    QByteArray publishedBytes;
+    int publishCalls = 0;
+    bool publishPathMatched = false;
+    QCOMPARE(
+        RideFileCache::publishPreparedCommitForTest(
+            std::move(prepared),
+            nullptr,
+            nullptr,
+            [&](const QString &path,
+                const RideFileCacheIntegrity::CacheWriteOperation &write,
+                const RideFileCacheIntegrity::CachePreCommitValidator &validate,
+                QString *error) {
+                ++publishCalls;
+                publishPathMatched = path == firstCachePath;
+                QBuffer output(&publishedBytes);
+                if (!output.open(QIODevice::WriteOnly)
+                    || !write(output, error)) {
+                    return false;
+                }
+                return validate(error);
+            }),
+        RideFileCache::PreparedCommitOutcome::Persisted);
+    QCOMPARE(publishCalls, 1);
+    QVERIFY(publishPathMatched);
+    QVERIFY(!publishedBytes.isEmpty());
+    QVERIFY(!QFileInfo::exists(firstCachePath));
+
+    std::unique_ptr<RideFileCache::PreparedCacheCommit> rejected;
+    {
+        RideFileCache cache(
+            ride.get(),
+            RideFileCache::SkipInitialComputeForTest {});
+        rejected = cache.preparePersistentCommitForTest(
+            sourcePath, rejectedCachePath);
+        QVERIFY(rejected);
+        QVERIFY(!QFileInfo::exists(rejectedCachePath));
+    }
+
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-b"));
+    QCOMPARE(
+        RideFileCache::publishPreparedCommitForTest(
+            std::move(rejected),
+            nullptr,
+            nullptr,
+            [](const QString &,
+               const RideFileCacheIntegrity::CacheWriteOperation &write,
+               const RideFileCacheIntegrity::CachePreCommitValidator &validate,
+               QString *error) {
+                QBuffer output;
+                if (!output.open(QIODevice::WriteOnly)
+                    || !write(output, error)) {
+                    return false;
+                }
+                return validate(error);
+            }),
+        RideFileCache::PreparedCommitOutcome::SourceRejected);
+    QVERIFY(!QFileInfo::exists(rejectedCachePath));
 }
 
 void

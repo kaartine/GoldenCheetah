@@ -227,34 +227,15 @@ struct SerializedCacheDigest
 
 } // namespace
 
-struct RideFileCache::PreparedCacheCommit
+RideFileCache::PreparedCacheCommit::~PreparedCacheCommit()
 {
-    PreparedCacheCommit() = default;
-    PreparedCacheCommit(const PreparedCacheCommit &) = delete;
-    PreparedCacheCommit &operator=(
-        const PreparedCacheCommit &) = delete;
-    ~PreparedCacheCommit()
-    {
-        if (artifact)
-            std::fclose(artifact);
-        if (!artifactPath.isEmpty())
-            QFile::remove(artifactPath);
-        if (!artifactDirectoryPath.isEmpty())
-            QDir().rmdir(artifactDirectoryPath);
-    }
-
-    QString cachePath;
-    QString sourcePath;
-    QString artifactDirectoryPath;
-    QString artifactPath;
-    RideFile::SourceFingerprint sourceFingerprint;
-    RideFileCRC::ContentFingerprint persistedSourceFingerprint;
-    QByteArray analysisFingerprint;
-    double analysisWeight = 0.0;
-    QDate rideDate;
-    SerializedCacheDigest digest;
-    std::FILE *artifact = nullptr;
-};
+    if (artifact)
+        std::fclose(artifact);
+    if (!artifactPath.isEmpty())
+        QFile::remove(artifactPath);
+    if (!artifactDirectoryPath.isEmpty())
+        QDir().rmdir(artifactDirectoryPath);
+}
 
 namespace {
 
@@ -1496,6 +1477,41 @@ RideFileCache::refreshCacheWithValidatorForTest(
     };
     return refreshCache(&operations);
 }
+
+std::unique_ptr<RideFileCache::PreparedCacheCommit>
+RideFileCache::preparePersistentCommitForTest(
+    const QString &sourcePath,
+    const QString &cachePath)
+{
+    rideFileName = sourcePath;
+    cacheFileName = cachePath;
+    return preparePersistentCommit();
+}
+
+RideFileCache::PreparedCommitOutcome
+RideFileCache::publishPreparedCommitForTest(
+    std::unique_ptr<PreparedCacheCommit> prepared,
+    Context *context,
+    RideFile *validationRide,
+    const std::function<bool(
+        const QString &,
+        const RideFileCacheIntegrity::CacheWriteOperation &,
+        const RideFileCacheIntegrity::CachePreCommitValidator &,
+        QString *)> &writeCache,
+    const std::function<void(
+        const QString &,
+        const QString &)> &reportError)
+{
+    const PersistenceOperations operations {
+        writeCache, reportError, {}
+    };
+    return publishPreparedCommit(
+        std::move(prepared),
+        context,
+        validationRide,
+        nullptr,
+        &operations);
+}
 #endif
 
 int
@@ -1776,6 +1792,8 @@ RideFileCache::createCacheFor(RideFile*rideFile)
 bool
 RideFileCache::commitPreparedCache(
     PreparedCacheCommit &prepared,
+    Context *context,
+    RideFile *validationRide,
     const PersistenceOperations *operations,
     bool &sourceValidationRejected,
     QString *error)
@@ -1790,8 +1808,8 @@ RideFileCache::commitPreparedCache(
         || !prepared.persistedSourceFingerprint.isValid()
         || prepared.analysisFingerprint.size()
             != RideFileCRC::Sha256Size
-        || prepared.digest.byteCount <= 0
-        || prepared.digest.sha256.size()
+        || prepared.byteCount <= 0
+        || prepared.artifactDigest.size()
             != RideFileCRC::Sha256Size) {
         if (error) {
             *error = QStringLiteral(
@@ -1810,7 +1828,7 @@ RideFileCache::commitPreparedCache(
 #endif
             prepared.artifactPath,
             prepared.artifactDirectoryPath,
-            prepared.digest.byteCount);
+            prepared.byteCount);
     }
 
     QDir().mkpath(
@@ -1831,7 +1849,7 @@ RideFileCache::commitPreparedCache(
             QByteArray chunk(
                 RideFileCacheIntegrity::CacheWriteChunkBytes,
                 Qt::Uninitialized);
-            qint64 remaining = prepared.digest.byteCount;
+            qint64 remaining = prepared.byteCount;
             while (remaining > 0) {
                 const size_t requested = static_cast<size_t>(
                     std::min<qint64>(remaining, chunk.size()));
@@ -1872,7 +1890,9 @@ RideFileCache::commitPreparedCache(
             const SerializedCacheDigest copiedDigest {
                 forwarded.byteCount(), forwarded.digest()
             };
-            if (!(copiedDigest == prepared.digest)) {
+            if (copiedDigest.byteCount != prepared.byteCount
+                || copiedDigest.sha256
+                    != prepared.artifactDigest) {
                 if (writeError) {
                     *writeError = QStringLiteral(
                         "Prepared CPX cache changed before commit");
@@ -1883,20 +1903,31 @@ RideFileCache::commitPreparedCache(
         };
     const RideFileCacheIntegrity::CachePreCommitValidator
         validateBeforeCommit =
-            [this,
+            [context,
+             validationRide,
              &prepared,
              &sourceValidationRejected](QString *validationError) {
+                std::unique_ptr<RideFile> reopenedRide;
+                RideFile *currentRide = validationRide;
+                if (!currentRide) {
+                    QFile source(prepared.sourcePath);
+                    QStringList errors;
+                    reopenedRide.reset(
+                        RideFileFactory::instance().openRideFile(
+                            context, source, errors));
+                    currentRide = reopenedRide.get();
+                }
                 RideFile::SourceFingerprint current;
                 const bool valid =
-                    ride
-                    && ride->getWeight()
+                    currentRide
+                    && currentRide->getWeight()
                         == prepared.analysisWeight
                     && analysisFingerprintForRide(
                            context,
-                           ride,
+                           currentRide,
                            prepared.analysisWeight)
                         == prepared.analysisFingerprint
-                    && ride->sourceProvenanceMatches(
+                    && currentRide->sourceProvenanceMatches(
                         prepared.sourceFingerprint)
                     && RideFile::captureSourceFingerprint(
                         prepared.sourcePath, current)
@@ -1980,8 +2011,8 @@ RideFileCache::prepareCacheCommit()
     // bound before the artifact digest is computed.
     crc = sourceFingerprint.crc;
 
-    auto prepared =
-        std::make_unique<PreparedCacheCommit>();
+    auto prepared = std::unique_ptr<PreparedCacheCommit>(
+        new PreparedCacheCommit());
     prepared->cachePath = cacheFileName;
     prepared->sourcePath = rideFileName;
     prepared->sourceFingerprint = sourceFingerprint;
@@ -2013,13 +2044,11 @@ RideFileCache::prepareCacheCommit()
         || !artifact.flush()) {
         return {};
     }
-    prepared->digest = {
-        artifactOutput.byteCount(),
-        artifactOutput.digest()
-    };
-    if (prepared->digest.sha256.size()
+    prepared->byteCount = artifactOutput.byteCount();
+    prepared->artifactDigest = artifactOutput.digest();
+    if (prepared->artifactDigest.size()
             != RideFileCRC::Sha256Size
-        || prepared->digest.byteCount <= 0) {
+        || prepared->byteCount <= 0) {
         return {};
     }
 
@@ -2072,7 +2101,8 @@ RideFileCache::prepareCacheCommit()
             persistedSourceFingerprint,
             persistedAnalysisFingerprint,
             verifiedDigest)
-        || !(prepared->digest == verifiedDigest)) {
+        || prepared->byteCount != verifiedDigest.byteCount
+        || prepared->artifactDigest != verifiedDigest.sha256) {
         return {};
     }
 
@@ -2115,34 +2145,79 @@ RideFileCache::refreshCache(
 {
     std::unique_ptr<PreparedCacheCommit> prepared =
         prepareCacheCommit();
+    return publishPreparedCommit(
+               std::move(prepared),
+               context,
+               ride,
+               persistenceService_,
+               operations,
+               [this]() { return context; })
+        == PreparedCommitOutcome::Persisted;
+}
+
+std::unique_ptr<RideFileCache::PreparedCacheCommit>
+RideFileCache::preparePersistentCommit()
+{
+    return prepareCacheCommit();
+}
+
+RideFileCache::PreparedCommitOutcome
+RideFileCache::publishPreparedCommit(
+    std::unique_ptr<PreparedCacheCommit> prepared,
+    Context *context,
+    RideFile *validationRide,
+    AthletePersistenceService *persistenceService)
+{
+    return publishPreparedCommit(
+        std::move(prepared),
+        context,
+        validationRide,
+        persistenceService,
+        nullptr);
+}
+
+RideFileCache::PreparedCommitOutcome
+RideFileCache::publishPreparedCommit(
+    std::unique_ptr<PreparedCacheCommit> prepared,
+    Context *context,
+    RideFile *validationRide,
+    AthletePersistenceService *persistenceService,
+    const PersistenceOperations *operations,
+    const std::function<Context *()> &currentContext)
+{
     if (!prepared)
-        return false;
+        return PreparedCommitOutcome::WriteFailed;
     QString writeError;
     bool sourceValidationRejected = false;
     const bool persisted =
         commitPreparedCache(
             *prepared,
+            context,
+            validationRide,
             operations,
             sourceValidationRejected,
             &writeError);
+    Context *const publicationContext = currentContext
+        ? currentContext() : context;
 
     if (persisted) {
         // invalidate any incore cache of aggregate
         // that contains this ride in its date range
         const QDate date = prepared->rideDate;
-        if (context && context->athlete) {
-            for (int i=0; i<context->athlete->cpxCache.count();) {
-                if (date >= context->athlete->cpxCache.at(i)->start &&
-                    date <= context->athlete->cpxCache.at(i)->end) {
-                    delete context->athlete->cpxCache.at(i);
-                    context->athlete->cpxCache.removeAt(i);
+        if (publicationContext && publicationContext->athlete) {
+            for (int i=0;
+                 i<publicationContext->athlete->cpxCache.count();) {
+                if (date >= publicationContext->athlete->cpxCache.at(i)->start &&
+                    date <= publicationContext->athlete->cpxCache.at(i)->end) {
+                    delete publicationContext->athlete->cpxCache.at(i);
+                    publicationContext->athlete->cpxCache.removeAt(i);
                 } else i++;
             }
         }
-        return true;
+        return PreparedCommitOutcome::Persisted;
     } else {
         if (sourceValidationRejected)
-            return false;
+            return PreparedCommitOutcome::SourceRejected;
         if (!operations) {
             qWarning().noquote()
                 << QStringLiteral("Cannot create cache file %1: %2.")
@@ -2151,22 +2226,24 @@ RideFileCache::refreshCache(
         if (operations && operations->reportError) {
             operations->reportError(
                 prepared->cachePath, writeError);
-        } else if (persistenceService_) {
-            persistenceService_->reportCacheWriteFailure(
+        } else if (persistenceService) {
+            persistenceService->reportCacheWriteFailure(
                 prepared->cachePath, writeError);
-        } else if (context) {
+        } else if (publicationContext) {
 #ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
             if (contextPersistenceFallbackHookForTest) {
                 contextPersistenceFallbackHookForTest(
-                    context, prepared->cachePath, writeError);
+                    publicationContext,
+                    prepared->cachePath,
+                    writeError);
             } else
 #endif
             {
-                context->reportCacheWriteFailure(
+                publicationContext->reportCacheWriteFailure(
                     prepared->cachePath, writeError);
             }
         }
-        return false;
+        return PreparedCommitOutcome::WriteFailed;
     }
 }
 
