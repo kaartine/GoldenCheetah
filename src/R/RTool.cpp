@@ -2472,13 +2472,14 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
 
             // cool we can return a list of intervals to compare
             QList<SEXP> f;
+            RProtectionScope protectionScope;
 
             // a named list with data.frame 'activity' and color 'color'
             SEXP namedlist;
 
             // names
             SEXP names;
-            PROTECT(names=Rf_allocVector(STRSXP, 2));
+            names = protectionScope.protectValue(Rf_allocVector(STRSXP, 2));
             SET_STRING_ELT(names, 0, Rf_mkChar("activity"));
             SET_STRING_ELT(names, 1, Rf_mkChar("color"));
 
@@ -2488,14 +2489,18 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
 
                     foreach(SEXP df,  rtool->dfForActivity(p.rideItem->ride(), split, join)) {
 
+                        protectionScope.protectValue(df);
+
                         // create a named list
-                        PROTECT(namedlist=Rf_allocVector(VECSXP, 2));
+                        namedlist = protectionScope.protectValue(
+                            Rf_allocVector(VECSXP, 2));
 
                         SET_VECTOR_ELT(namedlist, 0, df);
 
                         // add the color
                         SEXP color;
-                        PROTECT(color=Rf_allocVector(STRSXP, 1));
+                        color = protectionScope.protectValue(
+                            Rf_allocVector(STRSXP, 1));
                         SET_STRING_ELT(color, 0, Rf_mkChar(p.color.name().toLatin1().constData()));
                         SET_VECTOR_ELT(namedlist, 1, color);
 
@@ -2505,17 +2510,15 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
                         // add to back and move on
                         f << namedlist;
 
-                        UNPROTECT(2);
                     }
                 }
             }
 
             // now create an R list
             SEXP list;
-            PROTECT(list=Rf_allocVector(VECSXP, f.count()));
+            list = protectionScope.protectValue(
+                Rf_allocVector(VECSXP, f.count()));
             for(int index=0; index < f.count(); index++) SET_VECTOR_ELT(list, index, f[index]);
-
-            UNPROTECT(2); // list and names
 
             return list;
 
@@ -2524,10 +2527,11 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
             // just return a list of one ride
             // cool we can return a list of intervals to compare
             QList<SEXP> files;
+            RProtectionScope protectionScope;
 
             // names
             SEXP names;
-            PROTECT(names=Rf_allocVector(STRSXP, 2));
+            names = protectionScope.protectValue(Rf_allocVector(STRSXP, 2));
             SET_STRING_ELT(names, 0, Rf_mkChar("activity"));
             SET_STRING_ELT(names, 1, Rf_mkChar("color"));
 
@@ -2536,15 +2540,19 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
             f->recalculateDerivedSeries();
             foreach(SEXP df, rtool->dfForActivity(f, split, join)) {
 
+                protectionScope.protectValue(df);
+
                 // named list of activity and color
                 SEXP namedlist;
-                PROTECT(namedlist=Rf_allocVector(VECSXP, 2));
+                namedlist = protectionScope.protectValue(
+                    Rf_allocVector(VECSXP, 2));
 
                 SET_VECTOR_ELT(namedlist, 0, df);
 
                 // add the color
                 SEXP color;
-                PROTECT(color=Rf_allocVector(STRSXP, 1));
+                color = protectionScope.protectValue(
+                    Rf_allocVector(STRSXP, 1));
                 SET_STRING_ELT(color, 0, Rf_mkChar("#FF00FF"));
                 SET_VECTOR_ELT(namedlist, 1, color);
 
@@ -2554,15 +2562,14 @@ RTool::activity(SEXP datetime, SEXP pCompare, SEXP pSplit, SEXP pJoin)
                 // add to back and move on
                 files << namedlist;
 
-                UNPROTECT(2);
             }
 
             // now create an R list
             SEXP list;
-            PROTECT(list=Rf_allocVector(VECSXP, files.count()));
+            list = protectionScope.protectValue(
+                Rf_allocVector(VECSXP, files.count()));
             for(int index=0; index < files.count(); index++) SET_VECTOR_ELT(list, index, files[index]);
 
-            UNPROTECT(2);
             return list;
         }
 

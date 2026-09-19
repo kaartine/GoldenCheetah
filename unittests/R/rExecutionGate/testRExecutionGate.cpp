@@ -317,6 +317,8 @@ TestRExecutionGate::productionEntrypointsUseGate()
     QVERIFY(toolSource.contains(
         "rownames = protectionScope.protectValue(Rf_allocVector(STRSXP, f.count()));"));
     QVERIFY(!toolSource.contains("UNPROTECT(3); // list and names and rownames"));
+    QCOMPARE(toolSource.count("RProtectionScope protectionScope;"), 3);
+    QCOMPARE(toolSource.count("protectionScope.protectValue(df);"), 3);
 
     QFile toolHeader(QStringLiteral(GC_TEST_SOURCE_ROOT "/src/R/RTool.h"));
     QVERIFY2(

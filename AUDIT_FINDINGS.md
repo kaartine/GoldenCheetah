@@ -8044,12 +8044,30 @@ commit before the next finding begins.
   independent re-review returned GO. The real-R pressure test remains a
   one-off release check; `dfForActivity()` internal exceptions are its own
   callee contract and the adjacent unrooted callers remain ARCH-003B2d.
-- ARCH-003B2d (queued adjacent R protection work recorded before correction):
+- ARCH-003B2d (FIXED; adjacent R protection work recorded before correction):
   the compare/split branches also receive unprotected frames from
   `dfForActivity()` and perform a new R allocation for `namedlist` before
   rooting each frame. Inventory every `dfForActivity()` caller and give the
   returned frames a common ownership/protection contract; do not assume the
   bounded ARCH-003B2c user-list correction resolves these adjacent paths.
+- ARCH-003B2d resolution: both accumulating compare/split callers now use a
+  branch-local `RProtectionScope`. Each `dfForActivity()` frame is rooted
+  before allocating its named wrapper or color, and frames, wrappers, shared
+  names, colors, and the final result remain protected until return-expression
+  evaluation. The fourth caller returns its sole unsplit frame without any
+  intervening R allocation and therefore needs no additional scope.
+- ARCH-003B2d verification: The source contract first failed with only one of
+  three accumulating callers protected, then the focused suite passed 11/11 on
+  Qt 6.4.2 normally and 11/11 under ASan/UBSan with leak detection disabled.
+  It pins three branch scopes and three immediate frame roots. `RTool.cpp`
+  compiles with staged R 4.3.3/Rcpp/RInside headers under `GC_WANT_R` and
+  `STRICT_R_HEADERS`. A real embedded-R test held 256 frame/named-list/color
+  aggregates through a forced GC on every iteration and after final rooting,
+  then verified all nested frame values. The source dependency baseline passes
+  14/14, `git diff --check` is clean, and independent review returned GO.
+  Extremely large split/compare outputs retain a proportional protection-stack
+  segment until branch return and remain a scalability release-test residual;
+  raw compare-RideItem lifetime is separate from this R-protection item.
 - ARCH-003C (queued lifetime work recorded before correction): `rtool` is a raw
   process global, self-publishes before construction finishes, leaks failed and
   successful instances, and has an unreachable/unconditional finalizer. Define
