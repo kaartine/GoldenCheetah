@@ -56,6 +56,11 @@ const WorkoutGameRoadPiece &challengePiece(const WorkoutGameRoadCourse &course)
     return *result;
 }
 
+std::size_t challengePieceIndex(const WorkoutGameRoadCourse &course)
+{
+    return std::size_t(&challengePiece(course) - course.pieces.data());
+}
+
 }
 
 class TestWorkoutGame3DFeatureAsset : public QObject
@@ -63,6 +68,55 @@ class TestWorkoutGame3DFeatureAsset : public QObject
     Q_OBJECT
 
 private slots:
+    void placesResolvedLogAssetFromPersistedRenderFit()
+    {
+        WorkoutGameRoadCourse course = courseWith(
+                WorkoutGameTerrainKind::LogOver, 0.6);
+        const std::size_t pieceIndex = challengePieceIndex(course);
+        const WorkoutGameRoadPiece &piece = course.pieces[pieceIndex];
+
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        snapshot->catalogSchemaVersion = 1;
+        snapshot->physicsDefinitions.resize(1);
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log-over-greybox");
+        binding.definitionIndex = 0;
+        binding.nativeForwardOriginMm = -1020;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 350;
+        binding.resolvedExtentMm = 700;
+        snapshot->bindings.push_back(binding);
+        snapshot->pieceBindings.resize(course.pieces.size());
+        auto &pieceBinding = snapshot->pieceBindings[pieceIndex];
+        pieceBinding.definitionIndex = 0;
+        pieceBinding.bindingIndex = 0;
+        pieceBinding.obstacleAnchorMm = std::int32_t(std::llround(
+                piece.challenge.obstacleDistanceMeters * 1000.0));
+        course.assetPhysicsSnapshot = snapshot;
+
+        const WorkoutGame3DFeatureAssetSnapshot asset =
+                WorkoutGame3DFeatureAsset::placeAt(course, pieceIndex);
+        QVERIFY(asset.ready);
+        QCOMPARE(asset.terrain, WorkoutGameTerrainKind::LogOver);
+        QCOMPARE(asset.scaleZ, 700.0 / 540.0);
+        QCOMPARE(asset.scaleY, 2.0);
+
+        const double expectedDistance =
+                double(pieceBinding.obstacleAnchorMm) / 1000.0
+                - 1.02 * asset.scaleZ;
+        const WorkoutGameRoadSample road =
+                WorkoutGameRoadCourseBuilder::sample(course, expectedDistance);
+        QVERIFY(road.ready);
+        QVERIFY(std::abs(asset.xMeters - road.center.xMeters) < 1e-12);
+        QVERIFY(std::abs(asset.yMeters
+                         - road.visualGroundElevationMeters()) < 1e-12);
+        QVERIFY(std::abs(asset.zMeters - road.center.zMeters) < 1e-12);
+
+        snapshot->pieceBindings[pieceIndex].bindingIndex = 99;
+        QVERIFY(!WorkoutGame3DFeatureAsset::placeAt(course, pieceIndex).ready);
+    }
+
     void rejectsUnsupportedOrUnavailableFeatures()
     {
         QVERIFY(!WorkoutGame3DFeatureAsset::place({}, {}).ready);
