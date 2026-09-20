@@ -170,7 +170,8 @@ def _catalog_profiles(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 def _admitted_asset(
     root: Path, manifest: dict[str, Any], aliases: dict[str, str]
 ) -> dict[str, Any] | None:
-    if manifest["review"]["status"] != "approved":
+    review = manifest["review"]
+    if review["status"] != "approved":
         return None
     license_data = manifest["license"]
     scopes = set(license_data.get("distributionScopes", []))
@@ -183,6 +184,20 @@ def _admitted_asset(
         raise AssetValidationError(
             f"asset is not approved for production: {manifest['assetId']}"
         )
+    if not review.get("reviewer") or not review.get("reviewedAt"):
+        raise AssetValidationError(
+            f"approved asset lacks review evidence: {manifest['assetId']}"
+        )
+    accepted_clearance = {"clear", "not-applicable"}
+    for field in (
+        "trademarkStatus",
+        "personReleaseStatus",
+        "propertyReleaseStatus",
+    ):
+        if review.get(field) not in accepted_clearance:
+            raise AssetValidationError(
+                f"approved asset lacks {field} clearance: {manifest['assetId']}"
+            )
 
     resources = []
     for entry in manifest["files"]:

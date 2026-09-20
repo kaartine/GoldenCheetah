@@ -87,6 +87,26 @@ class WorkoutGameRuntimeCatalogTest(unittest.TestCase):
         })
         self.assertNotIn("rollingResistanceMicros", profile["surface"])
 
+    def test_approved_asset_requires_review_evidence_and_clearance(self) -> None:
+        manifest = json.loads(
+            (TOOLS / "manifests/FT-02-log-over-greybox.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        aliases = catalog.qrc_aliases(REPOSITORY)
+        manifest["review"].pop("reviewer")
+        with self.assertRaisesRegex(
+            catalog.AssetValidationError, "review evidence"
+        ):
+            catalog._admitted_asset(REPOSITORY, manifest, aliases)
+
+        manifest["review"]["reviewer"] = "reviewer"
+        manifest["review"]["trademarkStatus"] = "review-required"
+        with self.assertRaisesRegex(
+            catalog.AssetValidationError, "trademarkStatus clearance"
+        ):
+            catalog._admitted_asset(REPOSITORY, manifest, aliases)
+
 
 def first_ids(document: dict) -> set[str]:
     return {asset["assetId"] for asset in document["assets"]}
