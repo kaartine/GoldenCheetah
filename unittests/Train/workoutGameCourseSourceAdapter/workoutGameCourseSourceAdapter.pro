@@ -16,16 +16,12 @@ SOURCES = testWorkoutGameCourseSourceAdapter.cpp \
           ../../../src/Train/WorkoutGameDistancePlayback.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
-          ../../../src/Train/WorkoutGameAssetCatalog.cpp \
-          ../../../src/Train/WorkoutGameAssetPhysicsResolver.cpp \
           ../../../src/Train/WorkoutGameAssetPhysicsSampler.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \
           ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameRoadPhysics.cpp \
-          ../../../src/Train/TrainerTargetCoordinator.cpp \
-          ../../../src/Train/WorkoutGameTrainerTargetPlanner.cpp \
           ../../../src/Train/WorkoutGameWorkoutAdapter.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
@@ -43,8 +39,6 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameRoadQuality.h \
           ../../../src/Train/WorkoutGameRoadPhysics.h \
           ../../../src/Train/WorkoutGameWorkoutAdapter.h
-
-RESOURCES += ../../../src/Resources/workout-game-assets.qrc
 
 include(../../unittests.pri)
 

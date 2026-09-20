@@ -8,8 +8,6 @@
  */
 
 #include "WorkoutGameCourseSourceAdapter.h"
-#include "WorkoutGameAssetCatalog.h"
-#include "WorkoutGameAssetPhysicsResolver.h"
 #include "WorkoutGameDistancePlayback.h"
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameRoadPlan.h"
@@ -40,13 +38,6 @@ bool validTitle(const QString &title)
             && !title.contains(QLatin1Char('\r'));
 }
 
-const WorkoutGameAssetCatalog *assetCatalog()
-{
-    static const std::unique_ptr<const WorkoutGameAssetCatalog> catalog =
-            WorkoutGameAssetCatalog::load();
-    return catalog.get();
-}
-
 bool attachRoadPlan(
         WorkoutGameDistanceCourse &course,
         double ftpWatts,
@@ -60,15 +51,8 @@ bool attachRoadPlan(
                     WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
                     preset
                 });
-    const WorkoutGameAssetCatalog *catalog = assetCatalog();
-    if (!catalog) return false;
-    const WorkoutGameAssetPhysicsResolution resolution =
-            WorkoutGameAssetPhysicsResolver::resolve(*catalog, plan.pieces);
-    if (resolution.status != WorkoutGameAssetPhysicsResolveStatus::Ready
-            || !resolution.snapshot) {
-        return false;
-    }
-    plan.assetPhysicsSnapshot = resolution.snapshot;
+    plan.assetPhysicsSnapshot =
+            WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan);
     if (WorkoutGameRoadPlanValidator::validate(plan, course.sections.size())
             != WorkoutGameRoadPlanValidationStatus::Ready
             || !plan.assetPhysicsSnapshot

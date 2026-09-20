@@ -13,14 +13,12 @@
 #include "Train/WorkoutGameRoadCourse.h"
 #include "Train/WorkoutGameRoadPlan.h"
 #include "Train/WorkoutGameRoadQuality.h"
-#include "Train/WorkoutGameTrainerTargetPlanner.h"
 
 #include <QTemporaryDir>
 #include <QTest>
 
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <set>
 
 namespace {
@@ -125,14 +123,6 @@ double accumulatedTurn(const WorkoutGameRoadPlan &plan)
     return radians;
 }
 
-std::uint64_t doubleBits(double value)
-{
-    std::uint64_t result = 0;
-    static_assert(sizeof(result) == sizeof(value));
-    std::memcpy(&result, &value, sizeof(result));
-    return result;
-}
-
 }
 
 class TestWorkoutGameCourseSourceAdapter : public QObject
@@ -140,85 +130,6 @@ class TestWorkoutGameCourseSourceAdapter : public QObject
     Q_OBJECT
 
 private slots:
-    void resolvedPhysicsLeavesEveryTrainerTargetBitIdentical()
-    {
-        const WorkoutGameCourseSourceResult converted =
-                WorkoutGameCourseSourceAdapter::convert(sampleRequest());
-        QCOMPARE(converted.status, WorkoutGameCourseSourceStatus::Ready);
-        QCOMPARE(converted.document.schemaVersion,
-                 WorkoutGameCourseDocumentCodec::AssetPhysicsSchemaVersion);
-        QVERIFY(converted.document.course.roadPlan);
-        const auto resolvedSnapshot =
-                converted.document.course.roadPlan->assetPhysicsSnapshot;
-        QVERIFY(resolvedSnapshot);
-        QCOMPARE(resolvedSnapshot->catalogSchemaVersion, std::uint32_t(1));
-        QVERIFY(WorkoutGameCourseDocumentCodec::encode(converted.document)
-                .contains("\"assetPhysicsSnapshot\""));
-
-        WorkoutGameDistanceCourse legacyCourse = converted.document.course;
-        auto legacyPlan = std::make_shared<WorkoutGameRoadPlan>(
-                *legacyCourse.roadPlan);
-        legacyPlan->assetPhysicsSnapshot =
-                WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(*legacyPlan);
-        QVERIFY(legacyPlan->assetPhysicsSnapshot);
-        legacyCourse.roadPlan = legacyPlan;
-
-        WorkoutGameDistancePlayback resolvedPlayback;
-        WorkoutGameDistancePlayback legacyPlayback;
-        QVERIFY(resolvedPlayback.configure(converted.document.course));
-        QVERIFY(legacyPlayback.configure(legacyCourse));
-        for (int sample = 0; sample <= 512; ++sample) {
-            const double distance = converted.document.course.totalDistanceMeters
-                    * double(sample) / 512.0;
-            const auto resolved = resolvedPlayback.atDistance(distance);
-            const auto legacy = legacyPlayback.atDistance(distance);
-            QCOMPARE(resolved.ready, legacy.ready);
-            QCOMPARE(resolved.sectionIndex, legacy.sectionIndex);
-            QCOMPARE(resolved.terrain, legacy.terrain);
-            QCOMPARE(resolved.sectionDurationMs, legacy.sectionDurationMs);
-            QCOMPARE(doubleBits(resolved.sectionProgress),
-                     doubleBits(legacy.sectionProgress));
-            QCOMPARE(doubleBits(resolved.targetWatts),
-                     doubleBits(legacy.targetWatts));
-            QCOMPARE(doubleBits(resolved.gradePercent),
-                     doubleBits(legacy.gradePercent));
-
-            for (bool targetPowerSupported : {false, true}) {
-                for (double gearRatio : {0.83, 1.0, 1.19}) {
-                    WorkoutGameTrainerTargetInput resolvedInput;
-                    resolvedInput.preset = converted.document.preset;
-                    resolvedInput.targetPowerSupported = targetPowerSupported;
-                    resolvedInput.prescribedWatts = resolved.targetWatts;
-                    resolvedInput.relativeGearRatio = gearRatio;
-                    resolvedInput.gradePercent = resolved.gradePercent;
-                    resolvedInput.terrain = resolved.terrain;
-                    resolvedInput.sectionProgress = resolved.sectionProgress;
-                    resolvedInput.sectionDurationMs = resolved.sectionDurationMs;
-                    resolvedInput.windResistance = 0.31;
-                    resolvedInput.workoutPosition = resolved.nominalTimeMs;
-                    WorkoutGameTrainerTargetInput legacyInput = resolvedInput;
-                    legacyInput.prescribedWatts = legacy.targetWatts;
-                    legacyInput.gradePercent = legacy.gradePercent;
-                    legacyInput.terrain = legacy.terrain;
-                    legacyInput.sectionProgress = legacy.sectionProgress;
-                    legacyInput.sectionDurationMs = legacy.sectionDurationMs;
-                    legacyInput.workoutPosition = legacy.nominalTimeMs;
-                    const TrainerTarget resolvedTarget =
-                            WorkoutGameTrainerTargetPlanner::plan(resolvedInput);
-                    const TrainerTarget legacyTarget =
-                            WorkoutGameTrainerTargetPlanner::plan(legacyInput);
-                    QCOMPARE(resolvedTarget.mode, legacyTarget.mode);
-                    QCOMPARE(doubleBits(resolvedTarget.value),
-                             doubleBits(legacyTarget.value));
-                    QCOMPARE(doubleBits(resolvedTarget.windResistance),
-                             doubleBits(legacyTarget.windResistance));
-                    QCOMPARE(doubleBits(resolvedTarget.workoutPosition),
-                             doubleBits(legacyTarget.workoutPosition));
-                }
-            }
-        }
-    }
-
     void terrainControlsRemainConvertibleAcrossSupportedRange_data()
     {
         QTest::addColumn<int>("preset");
@@ -819,8 +730,10 @@ private slots:
         QCOMPARE(reopened.schemaVersion,
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QVERIFY(reopened.course.roadPlan);
+        // The production schema-6 writer persists generation 2 while
+        // generation 3/snapshot persistence is prepared behind the codec gate.
         QCOMPARE(reopened.course.roadPlan->generationVersion,
-                 WorkoutGameRoadPlan::CurrentGenerationVersion);
+                 WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(reopened),
                  WorkoutGameCourseDocumentCodec::encode(
                      regenerated.document));

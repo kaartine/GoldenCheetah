@@ -2253,8 +2253,10 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentStore::loadForCourse(
         return status;
     }
     if (document.schemaVersion > WorkoutGameCourseDocumentCodec::CurrentSchemaVersion) {
+        // Codec preparation does not imply support by playback consumers.
+        // Enable this format only with the resolver and legacy parity work.
         document = WorkoutGameCourseDocument();
-        error = QStringLiteral("Course metadata version is not supported by this build");
+        error = QStringLiteral("Asset physics course playback is not supported by this build");
         return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
     }
 
