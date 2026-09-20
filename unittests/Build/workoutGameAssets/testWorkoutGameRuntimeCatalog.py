@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+import unittest
+
+
+REPOSITORY = Path(__file__).resolve().parents[3]
+TOOLS = REPOSITORY / "contrib/workout-game-assets"
+sys.path.insert(0, str(TOOLS))
+
+import generate_runtime_asset_catalog as catalog  # noqa: E402
+
+
+CATALOG_PATH = (
+    REPOSITORY / "src/Resources/json/workout-game-asset-catalog.json"
+)
+
+
+class WorkoutGameRuntimeCatalogTest(unittest.TestCase):
+    def test_generated_catalog_is_deterministic_and_fresh(self) -> None:
+        first = catalog.generate_catalog_bytes(REPOSITORY)
+        second = catalog.generate_catalog_bytes(REPOSITORY)
+
+        self.assertEqual(first, second)
+        self.assertTrue(first.endswith(b"\n"))
+        self.assertEqual(first, CATALOG_PATH.read_bytes())
+
+    def test_catalog_admits_only_approved_assets(self) -> None:
+        document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
+        self.assertEqual(document["schemaVersion"], 1)
+        self.assertEqual(document["generatorVersion"], 4)
+        self.assertEqual(
+            [asset["assetId"] for asset in document["assets"]],
+            [
+                "EN-03-distant-ridges",
+                "EN-08-forest-floor-props",
+                "EN-09-forest-verge-clusters",
+                "FT-02-log-over-greybox",
+                "FT-03-bunny-hop-greybox",
+                "FT-04-drop-greybox",
+                "RB-01-rider-bike",
+                "TR-08-surface-atlas",
+            ],
+        )
+        self.assertNotIn("EN-01-conifer-set", first_ids(document))
+        self.assertNotIn("FT-01-tabletop-greybox", first_ids(document))
+        self.assertNotIn("FT-12-gap-jump-three-line", first_ids(document))
+
+    def test_catalog_resources_are_packaged_and_physics_is_explicit(self) -> None:
+        document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
+        qrc_aliases = catalog.qrc_aliases(REPOSITORY)
+
+        for asset in document["assets"]:
+            self.assertEqual(asset["physics"]["authority"], "external")
+            self.assertTrue(asset["resources"])
+            for resource in asset["resources"]:
+                self.assertEqual(
+                    qrc_aliases[resource["repositoryPath"]],
+                    resource["url"],
+                )
+
+    def test_catalog_does_not_persist_source_or_content_hashes(self) -> None:
+        document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
+        self.assertNotIn("catalogSha256", document)
+        for asset in document["assets"]:
+            for resource in asset["resources"]:
+                self.assertNotIn("sha256", resource)
+
+    def test_log_over_profile_is_canonical_and_bound_to_main_route(self) -> None:
+        document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
+        log_asset = next(
+            asset for asset in document["assets"]
+            if asset["assetId"] == "FT-02-log-over-greybox"
+        )
+        self.assertEqual(
+            log_asset["physics"]["routeProfiles"],
+            [{
+                "nativeForwardExtentMm": 540,
+                "nativeForwardOriginMm": -1020,
+                "nativeUpExtentMm": 540,
+                "profileId": "FT-02-log-over-v1",
+                "routeKey": "main",
+                "variantKey": "",
+            }],
+        )
+        self.assertEqual(len(document["profiles"]), 1)
+        profile = document["profiles"][0]
+        self.assertEqual(profile["profileId"], "FT-02-log-over-v1")
+        self.assertEqual(profile["operation"], "add-obstacle")
+        points = profile["chains"][0]["points"]
+        self.assertEqual(len(points), 13)
+        self.assertEqual(points[:2], [
+            {"forwardMm": -276, "heightMm": 0},
+            {"forwardMm": -270, "heightMm": 0},
+        ])
+        self.assertEqual(points[-2:], [
+            {"forwardMm": 270, "heightMm": 0},
+            {"forwardMm": 276, "heightMm": 0},
+        ])
+        self.assertEqual(points[len(points) // 2], {
+            "forwardMm": 0,
+            "heightMm": 540,
+        })
+        self.assertNotIn("rollingResistanceMicros", profile["surface"])
+
+    def test_approved_asset_requires_review_evidence_and_clearance(self) -> None:
+        manifest = json.loads(
+            (TOOLS / "manifests/FT-02-log-over-greybox.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        aliases = catalog.qrc_aliases(REPOSITORY)
+        manifest["review"].pop("reviewer")
+        with self.assertRaisesRegex(
+            catalog.AssetValidationError, "review evidence"
+        ):
+            catalog._admitted_asset(REPOSITORY, manifest, aliases)
+
+        manifest["review"]["reviewer"] = "reviewer"
+        manifest["review"]["trademarkStatus"] = "review-required"
+        with self.assertRaisesRegex(
+            catalog.AssetValidationError, "trademarkStatus clearance"
+        ):
+            catalog._admitted_asset(REPOSITORY, manifest, aliases)
+
+
+def first_ids(document: dict) -> set[str]:
+    return {asset["assetId"] for asset in document["assets"]}
+
+
+if __name__ == "__main__":
+    unittest.main()

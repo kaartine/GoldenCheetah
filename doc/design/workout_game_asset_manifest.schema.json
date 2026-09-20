@@ -5,6 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "manifestVersion",
     "assetId",
     "displayName",
     "role",
@@ -12,9 +13,13 @@
     "license",
     "files",
     "technical",
+    "physics",
     "review"
   ],
   "properties": {
+    "manifestVersion": {
+      "const": 1
+    },
     "assetId": {
       "type": "string",
       "pattern": "^[A-Z]{2}-[0-9]{2}(-[a-z0-9-]+)?$"
@@ -280,17 +285,12 @@
         "surface": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["friction", "rollingResistance", "restitution"],
+          "required": ["coulombFriction", "restitution"],
           "properties": {
-            "friction": {
+            "coulombFriction": {
               "type": "number",
               "minimum": 0.0,
               "maximum": 2.0
-            },
-            "rollingResistance": {
-              "type": "number",
-              "minimum": 0.0,
-              "maximum": 0.1
             },
             "restitution": {
               "type": "number",
@@ -310,6 +310,122 @@
               "minLength": 1,
               "maxLength": 128,
               "pattern": "^[ -~]+$"
+            }
+          }
+        },
+        "routeProfiles": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "routeKey",
+              "profileId",
+              "profileVersion",
+              "kind",
+              "operation",
+              "renderFit",
+              "chains"
+            ],
+            "properties": {
+              "routeKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "pattern": "^[a-z0-9-]+$"
+              },
+              "profileId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9-]+$"
+              },
+              "profileVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295
+              },
+              "kind": { "const": "height-offset-polyline" },
+              "operation": {
+                "enum": ["add-obstacle", "replace-surface"]
+              },
+              "renderFit": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "variantKey",
+                  "nativeForwardOriginMm",
+                  "nativeForwardExtentMm",
+                  "nativeUpExtentMm"
+                ],
+                "properties": {
+                  "variantKey": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "pattern": "^[A-Za-z0-9_-]*$"
+                  },
+                  "nativeForwardOriginMm": {
+                    "type": "integer",
+                    "minimum": -64000,
+                    "maximum": 64000
+                  },
+                  "nativeForwardExtentMm": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 128000
+                  },
+                  "nativeUpExtentMm": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16000
+                  }
+                }
+              },
+              "chains": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["points"],
+                  "properties": {
+                    "points": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 256,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["forwardMm", "heightMm"],
+                        "properties": {
+                          "forwardMm": {
+                            "type": "integer",
+                            "minimum": -64000,
+                            "maximum": 64000
+                          },
+                          "heightMm": {
+                            "type": "integer",
+                            "minimum": -16000,
+                            "maximum": 16000
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "difficultyScale": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["nativeExtentMm", "baseExtentMm", "difficultyExtentMm"],
+                "properties": {
+                  "nativeExtentMm": { "type": "integer", "minimum": 1, "maximum": 64000 },
+                  "baseExtentMm": { "type": "integer", "minimum": 1, "maximum": 64000 },
+                  "difficultyExtentMm": { "type": "integer", "minimum": -64000, "maximum": 64000 }
+                }
+              }
             }
           }
         }

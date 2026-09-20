@@ -420,6 +420,44 @@ private slots:
                 >= first.visual.world.rider.distanceMeters);
     }
 
+    void authoritativeDistanceAnchorNeverAdvancesOnWallClockTime()
+    {
+        WorkoutGameRunner runner;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        QVERIFY(runner.configure(course, 200.0, true));
+        runner.start(1000, 0.0);
+
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        QCOMPARE(frame.visual.simulation.workoutTimeMs, std::int64_t(1000));
+        const int stalledSection = frame.visual.simulation.activeSection;
+        const std::uint64_t stalledScore = frame.visual.simulation.score;
+
+        QTest::qWait(100);
+        QVERIFY(waitForFrame(runner, frame));
+        QCOMPARE(frame.visual.simulation.workoutTimeMs, std::int64_t(1000));
+        QCOMPARE(frame.visual.simulation.activeSection, stalledSection);
+        QCOMPARE(frame.visual.simulation.score, stalledScore);
+
+        runner.pause(1000);
+        while (runner.takeLatest(frame)) {}
+        QTest::qWait(60);
+        QVERIFY(!runner.takeLatest(frame));
+        runner.resume(1000, 0.0);
+        QVERIFY(waitForFrame(runner, frame));
+        QCOMPARE(frame.visual.simulation.workoutTimeMs, std::int64_t(1000));
+        QCOMPARE(frame.visual.simulation.activeSection, stalledSection);
+        QCOMPARE(frame.visual.simulation.score, stalledScore);
+
+        runner.synchronizeAnchor(1450, 0.0);
+        QVERIFY(waitForFrameAtOrAfter(runner, 1450, frame));
+        QCOMPARE(frame.visual.simulation.workoutTimeMs, std::int64_t(1450));
+
+        QTest::qWait(100);
+        QVERIFY(waitForFrame(runner, frame));
+        QCOMPARE(frame.visual.simulation.workoutTimeMs, std::int64_t(1450));
+    }
+
     void pauseStopsTicksAndResumeDoesNotResetProgress()
     {
         WorkoutGameRunner runner;

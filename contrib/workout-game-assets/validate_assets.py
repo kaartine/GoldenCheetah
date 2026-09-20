@@ -599,6 +599,59 @@ def _validate_glb_document(
                 raise AssetValidationError(
                     f"collision proxy names unknown GLB node: {node_name}"
                 )
+        route_profiles = physics.get("routeProfiles", [])
+        if interaction == "visual-only" and route_profiles:
+            raise AssetValidationError(
+                "visual-only physics must not define route profiles"
+            )
+        route_keys: set[str] = set()
+        profile_ids: set[str] = set()
+        for profile in route_profiles:
+            route_key = profile["routeKey"]
+            profile_id = profile["profileId"]
+            if route_key in route_keys or profile_id in profile_ids:
+                raise AssetValidationError("duplicate route profile key or ID")
+            route_keys.add(route_key)
+            profile_ids.add(profile_id)
+            variant_key = profile["renderFit"]["variantKey"]
+            if variant_key and variant_key not in variant_keys:
+                raise AssetValidationError(
+                    f"route profile names unknown runtime variant: {variant_key}"
+                )
+            point_count = 0
+            previous_chain_end: int | None = None
+            for chain in profile["chains"]:
+                points = chain["points"]
+                point_count += len(points)
+                for previous, current in zip(points, points[1:]):
+                    if current["forwardMm"] <= previous["forwardMm"]:
+                        raise AssetValidationError(
+                            "route profile points must be strictly increasing"
+                        )
+                if (
+                    previous_chain_end is not None
+                    and points[0]["forwardMm"] <= previous_chain_end
+                ):
+                    raise AssetValidationError(
+                        "route profile chains must be ordered and non-overlapping"
+                    )
+                previous_chain_end = points[-1]["forwardMm"]
+            if point_count > 256:
+                raise AssetValidationError(
+                    "route profile exceeds aggregate point limit"
+                )
+            scale = profile.get("difficultyScale")
+            if scale is not None:
+                minimum_extent = scale["baseExtentMm"] + min(
+                    0, scale["difficultyExtentMm"]
+                )
+                maximum_extent = scale["baseExtentMm"] + max(
+                    0, scale["difficultyExtentMm"]
+                )
+                if minimum_extent <= 0 or maximum_extent > 64000:
+                    raise AssetValidationError(
+                        "route profile difficulty extent is invalid"
+                    )
     expected_bounds = technical.get("boundsMeters", {})
     if not _vector_close(bounds_min, expected_bounds.get("minimum", [])):
         raise AssetValidationError("GLB minimum bounds do not match manifest")

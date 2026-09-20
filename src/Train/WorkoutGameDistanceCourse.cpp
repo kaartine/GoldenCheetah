@@ -8,7 +8,10 @@
  */
 
 #include "WorkoutGameDistanceCourse.h"
+#include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGameCourseTerrain.h"
+#include "WorkoutGameGapJumpGeometry.h"
+#include "WorkoutGameTabletopGeometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,13 +29,27 @@ double averageWatts(const WorkoutGameInterval &interval)
     return (interval.startWatts + interval.endWatts) * 0.5;
 }
 
-double targetAt(
+double prescribedTargetAt(
         const WorkoutGameDistanceCourseSection &section,
         double progress)
 {
     const double clamped = std::clamp(progress, 0.0, 1.0);
     return section.targetStartWatts
             + (section.targetEndWatts - section.targetStartWatts) * clamped;
+}
+
+double referenceEffortAt(
+        const WorkoutGameDistanceCourseSection &section,
+        double progress)
+{
+    const bool hasReferenceEffort = section.referenceEffortStartWatts >= 0.0
+            && section.referenceEffortEndWatts >= 0.0;
+    const double start = hasReferenceEffort
+            ? section.referenceEffortStartWatts : section.targetStartWatts;
+    const double end = hasReferenceEffort
+            ? section.referenceEffortEndWatts : section.targetEndWatts;
+    const double clamped = std::clamp(progress, 0.0, 1.0);
+    return start + (end - start) * clamped;
 }
 
 bool isRecoveryFeature(WorkoutGameFeature feature)
@@ -112,14 +129,28 @@ bool subdivideLongSections(
         std::vector<WorkoutGameDistanceCourseSection> &sections,
         std::vector<WorkoutGameSection> &adaptedSections,
         std::vector<bool> &sourceRecoveries,
+        const std::vector<bool> &featureGeometryReservations,
+        double maximumLengthMeters,
         std::size_t maximumSections)
 {
+    if (featureGeometryReservations.size() != sections.size()) return false;
     std::size_t required = 0;
-    for (const WorkoutGameDistanceCourseSection &section : sections) {
-        required += std::size_t(std::max<std::int64_t>(
+    for (std::size_t index = 0; index < sections.size(); ++index) {
+        const WorkoutGameDistanceCourseSection &section = sections[index];
+        const WorkoutGameFeature feature = adaptedSections[index].feature;
+        const double samplingLengthMeters =
+                featureGeometryReservations[index]
+                    || feature == WorkoutGameFeature::SprintJump
+                    || feature == WorkoutGameFeature::Climb
+            ? maximumLengthMeters : maximumLengthMeters / 3.0;
+        const std::int64_t timeParts = std::max<std::int64_t>(
                 1, (section.nominalDurationMs
                     + MaximumVisualSectionDurationMs - 1)
-                        / MaximumVisualSectionDurationMs));
+                        / MaximumVisualSectionDurationMs);
+        const std::int64_t distanceParts = std::max<std::int64_t>(
+                1, std::int64_t(std::ceil(
+                    section.lengthMeters / samplingLengthMeters)));
+        required += std::size_t(std::max(timeParts, distanceParts));
         if (required > maximumSections) return false;
     }
 
@@ -132,10 +163,19 @@ bool subdivideLongSections(
     for (std::size_t index = 0; index < sections.size(); ++index) {
         const WorkoutGameDistanceCourseSection &source = sections[index];
         const WorkoutGameSection &adapted = adaptedSections[index];
-        const int partCount = int(std::max<std::int64_t>(
+        const double samplingLengthMeters =
+                featureGeometryReservations[index]
+                    || adapted.feature == WorkoutGameFeature::SprintJump
+                    || adapted.feature == WorkoutGameFeature::Climb
+            ? maximumLengthMeters : maximumLengthMeters / 3.0;
+        const std::int64_t timeParts = std::max<std::int64_t>(
                 1, (source.nominalDurationMs
                     + MaximumVisualSectionDurationMs - 1)
-                        / MaximumVisualSectionDurationMs));
+                        / MaximumVisualSectionDurationMs);
+        const std::int64_t distanceParts = std::max<std::int64_t>(
+                1, std::int64_t(std::ceil(
+                    source.lengthMeters / samplingLengthMeters)));
+        const int partCount = int(std::max(timeParts, distanceParts));
         for (int part = 0; part < partCount; ++part) {
             const std::int64_t startOffset = proportionalBoundary(
                     source.nominalDurationMs, part, partCount);
@@ -171,8 +211,8 @@ bool subdivideLongSections(
             section.endElevationMeters = source.startElevationMeters
                     + (source.endElevationMeters
                        - source.startElevationMeters) * endProgress;
-            section.targetStartWatts = targetAt(source, startProgress);
-            section.targetEndWatts = targetAt(source, endProgress);
+            section.targetStartWatts = prescribedTargetAt(source, startProgress);
+            section.targetEndWatts = prescribedTargetAt(source, endProgress);
             section.visualVariant = source.visualVariant
                     ^ std::uint32_t((part + 1) * 0x9e3779b9u);
 
@@ -192,6 +232,235 @@ bool subdivideLongSections(
     adaptedSections = std::move(subdividedAdapted);
     sourceRecoveries = std::move(subdividedRecoveries);
     return true;
+}
+
+double asymmetricTerrainSignal(
+        double distanceMeters,
+        double wavelengthMeters,
+        std::uint32_t seed)
+{
+    constexpr double Pi = 3.14159265358979323846;
+    constexpr double RiseShare = 0.65;
+    const double seedPhase = double(seed % 1009u) / 1009.0;
+    double phase = std::fmod(distanceMeters / wavelengthMeters + seedPhase, 1.0);
+    if (phase < 0.0) phase += 1.0;
+    if (phase < RiseShare) {
+        return -std::cos(Pi * phase / RiseShare);
+    }
+    return std::cos(Pi * (phase - RiseShare) / (1.0 - RiseShare));
+}
+
+void applyTerrainEffortProfile(
+        WorkoutGameDistanceCourse &course,
+        double ftpWatts,
+        const WorkoutGameDistanceCourseGenerationParameters &parameters)
+{
+    if (course.sections.empty()) return;
+
+    const double amplitude = parameters.terrainVariationPercent / 100.0;
+    std::vector<double> terrainSignals(course.sections.size() + 1u, 0.0);
+    for (std::size_t index = 0; index < course.sections.size(); ++index) {
+        terrainSignals[index] = asymmetricTerrainSignal(
+                course.sections[index].startDistanceMeters,
+                parameters.variationLengthMeters, course.seed);
+    }
+    const WorkoutGameDistanceCourseSection &last = course.sections.back();
+    terrainSignals.back() = asymmetricTerrainSignal(
+            last.startDistanceMeters + last.lengthMeters,
+            parameters.variationLengthMeters, course.seed);
+
+    // Weight shared boundary values exactly as the piecewise-linear effort
+    // curve will be integrated. Subtracting this mean preserves the source
+    // workout's total effort even when its prescribed watts change.
+    double weightedSignal = 0.0;
+    double totalWeight = 0.0;
+    for (std::size_t index = 0; index < course.sections.size(); ++index) {
+        const WorkoutGameDistanceCourseSection &section = course.sections[index];
+        const double halfDuration = 0.5 * double(section.nominalDurationMs);
+        const double startWeight = section.targetStartWatts * halfDuration;
+        const double endWeight = section.targetEndWatts * halfDuration;
+        weightedSignal += terrainSignals[index] * startWeight
+                + terrainSignals[index + 1u] * endWeight;
+        totalWeight += startWeight + endWeight;
+    }
+    const double meanSignal = totalWeight > 0.0
+            ? weightedSignal / totalWeight : 0.0;
+    double maximumMagnitude = 0.0;
+    for (double &signal : terrainSignals) {
+        signal -= meanSignal;
+        maximumMagnitude = std::max(maximumMagnitude, std::abs(signal));
+    }
+    if (maximumMagnitude > 0.0) {
+        for (double &signal : terrainSignals) signal /= maximumMagnitude;
+    }
+
+    course.elevationGainMeters = 0.0;
+    course.elevationLossMeters = 0.0;
+    double elevationMeters = 0.0;
+    for (std::size_t index = 0; index < course.sections.size(); ++index) {
+        WorkoutGameDistanceCourseSection &section = course.sections[index];
+        const double startFactor = 1.0 + amplitude * terrainSignals[index];
+        const double endFactor = 1.0 + amplitude * terrainSignals[index + 1u];
+        section.referenceEffortStartWatts = std::max(
+                0.0, section.targetStartWatts * startFactor);
+        section.referenceEffortEndWatts = std::max(
+                0.0, section.targetEndWatts * endFactor);
+        const double referenceEffort = 0.5
+                * (section.referenceEffortStartWatts
+                   + section.referenceEffortEndWatts);
+        const double intensity = referenceEffort / ftpWatts;
+        section.gradePercent = std::clamp(
+                (intensity - 0.45) * 10.0 * parameters.gradeScale,
+                -3.0, 12.0);
+        section.startElevationMeters = elevationMeters;
+        const double riseMeters = section.lengthMeters
+                * section.gradePercent / 100.0;
+        elevationMeters += riseMeters;
+        section.endElevationMeters = elevationMeters;
+        course.elevationGainMeters += std::max(0.0, riseMeters);
+        course.elevationLossMeters += std::max(0.0, -riseMeters);
+    }
+}
+
+double averagePrescribedEffort(
+        const WorkoutGameDistanceCourseSection &section)
+{
+    return 0.5 * (section.targetStartWatts + section.targetEndWatts);
+}
+
+struct EffortSemantics
+{
+    bool falling = false;
+    bool rising = false;
+    bool sustainedHigh = false;
+
+    bool hasFeature() const
+    {
+        return falling || rising || sustainedHigh;
+    }
+};
+
+EffortSemantics effortSemanticsAt(
+        const WorkoutGameDistanceCourse &course,
+        std::size_t index,
+        double ftpWatts)
+{
+    EffortSemantics result;
+    if (index >= course.sections.size()) return result;
+    const WorkoutGameDistanceCourseSection &section = course.sections[index];
+    const double effort = averagePrescribedEffort(section);
+    const double previousEffort = index == 0
+            ? effort : averagePrescribedEffort(course.sections[index - 1]);
+    const double nextEffort = index + 1 == course.sections.size()
+            ? effort : averagePrescribedEffort(course.sections[index + 1]);
+    const double threshold = 0.03 * ftpWatts;
+    const double localChange = section.targetEndWatts
+            - section.targetStartWatts;
+    result.falling = localChange <= -threshold
+            || nextEffort - effort <= -threshold;
+    result.rising = localChange >= threshold
+            || effort - previousEffort >= threshold
+            || nextEffort - effort >= threshold;
+    result.sustainedHigh = effort >= 0.90 * ftpWatts
+            && std::abs(localChange) < threshold
+            && std::abs(nextEffort - effort) < threshold;
+    return result;
+}
+
+void alignTechnicalTerrainWithEffort(
+        WorkoutGameSection &visual,
+        const WorkoutGameDistanceCourse &course,
+        std::size_t index,
+        double ftpWatts,
+        WorkoutGameCoursePreset preset,
+        const WorkoutGameCourseTerrainSelection &selection,
+        bool sourceRecovery)
+{
+    if (sourceRecovery || index >= course.sections.size()) {
+        return;
+    }
+    const bool alreadyTechnical = visual.feature == WorkoutGameFeature::Climb
+            || visual.feature == WorkoutGameFeature::SprintJump;
+    const WorkoutGameDistanceCourseSection &section = course.sections[index];
+    const EffortSemantics semantics =
+            effortSemanticsAt(course, index, ftpWatts);
+
+    // Effort semantics decide where a feature belongs. Palette density still
+    // controls ordinary decoration, but it must not hide a real acceleration,
+    // release or sustained hard effort from the generated terrain.
+    if (!selection.technical && !alreadyTechnical && !semantics.falling) {
+        return;
+    }
+
+    if (semantics.falling) {
+        visual.feature = WorkoutGameFeature::SprintJump;
+        visual.terrain = WorkoutGameTerrainKind::Drop;
+    } else if (semantics.rising) {
+        visual.feature = WorkoutGameFeature::SprintJump;
+        if (preset == WorkoutGameCoursePreset::WorkoutFirst) {
+            visual.terrain = WorkoutGameTerrainKind::Rollers;
+        } else if (preset == WorkoutGameCoursePreset::Balanced) {
+            visual.terrain = selection.ordinal % 2u == 0u
+                    ? WorkoutGameTerrainKind::RockSlab
+                    : WorkoutGameTerrainKind::Tabletop;
+        } else if (section.lengthMeters >= 38.0
+                && selection.ordinal % 2u == 0u) {
+            visual.terrain = WorkoutGameTerrainKind::GapJump;
+        } else {
+            visual.terrain = WorkoutGameTerrainKind::RockSlab;
+        }
+    } else if (semantics.sustainedHigh) {
+        switch (selection.ordinal % 3u) {
+        case 0u:
+            visual.feature = WorkoutGameFeature::Climb;
+            visual.terrain = WorkoutGameTerrainKind::Climb;
+            break;
+        case 1u:
+            visual.terrain = WorkoutGameTerrainKind::RockSlab;
+            break;
+        default:
+            visual.terrain = WorkoutGameTerrainKind::RockGarden;
+            break;
+        }
+    }
+    if (visual.terrain == WorkoutGameTerrainKind::Climb
+            && section.lengthMeters + 1.0e-9
+                < WorkoutGameClimbGeometry::profile(
+                    visual.difficulty).minimumLengthMeters) {
+        visual.feature = WorkoutGameFeature::Trail;
+        visual.terrain = WorkoutGameTerrainKind::RockSlab;
+    }
+    if (visual.terrain == WorkoutGameTerrainKind::Tabletop) {
+        const WorkoutGameTabletopGeometryProfile tabletop =
+                WorkoutGameTabletopGeometry::profile(visual.difficulty);
+        const double minimumLength = std::max(
+                tabletop.splitLeadMeters
+                    + tabletop.minimumBypassLengthMeters,
+                2.0 * tabletop.splitLeadMeters + 4.0
+                    + tabletop.endMeters
+                    + tabletop.bypassExitRunoutMeters);
+        if (!tabletop.ready
+                || section.lengthMeters + 1.0e-9 < minimumLength) {
+            visual.terrain = WorkoutGameTerrainKind::RockSlab;
+        }
+    }
+    if (visual.terrain == WorkoutGameTerrainKind::GapJump) {
+        const WorkoutGameGapJumpGeometryProfile authority =
+                WorkoutGameGapJumpGeometry::profile(visual.difficulty);
+        const WorkoutGameGapJumpGeometryProfile geometry =
+                WorkoutGameGapJumpGeometry::canonicalProfile();
+        const double maximumGap = geometry.ready
+                ? geometry.lines.back().gapLengthMeters : 0.0;
+        const double minimumLength = authority.prepareLeadMeters
+                + maximumGap + 6.0 + geometry.mergeLengthMeters;
+        if (!authority.ready || !geometry.ready
+                || section.lengthMeters + 1.0e-9 < minimumLength) {
+            visual.terrain = WorkoutGameTerrainKind::RockSlab;
+        }
+    }
+    visual.challengeCount = visual.terrain
+            == WorkoutGameTerrainKind::SmoothTrail
+        ? 0 : std::max(1, visual.challengeCount);
 }
 
 void distributeShowcaseSelections(
@@ -257,6 +526,8 @@ bool validCourseForEstimate(const WorkoutGameDistanceCourse &course)
                 || !std::isfinite(section.endElevationMeters)
                 || !std::isfinite(section.targetStartWatts)
                 || !std::isfinite(section.targetEndWatts)
+                || !std::isfinite(section.referenceEffortStartWatts)
+                || !std::isfinite(section.referenceEffortEndWatts)
                 || !std::isfinite(section.gradePercent)
                 || !std::isfinite(section.difficulty)
                 || std::abs(section.startDistanceMeters - expectedStart) > 0.001
@@ -268,6 +539,12 @@ bool validCourseForEstimate(const WorkoutGameDistanceCourse &course)
                 || section.lengthMeters < MinimumSectionLengthMeters
                 || section.targetStartWatts < 0.0
                 || section.targetEndWatts < 0.0
+                || (section.referenceEffortStartWatts < 0.0
+                    && section.referenceEffortStartWatts != -1.0)
+                || (section.referenceEffortEndWatts < 0.0
+                    && section.referenceEffortEndWatts != -1.0)
+                || ((section.referenceEffortStartWatts < 0.0)
+                    != (section.referenceEffortEndWatts < 0.0))
                 || section.gradePercent < -30.0
                 || section.gradePercent > 30.0
                 || section.difficulty < 0.0
@@ -303,6 +580,14 @@ bool WorkoutGameDistanceCourseBuilder::validParameters(
             && std::isfinite(parameters.technicality)
             && parameters.technicality >= 0.0
             && parameters.technicality <= 1.0
+            && std::isfinite(parameters.terrainVariationPercent)
+            && parameters.terrainVariationPercent >= 0.0
+            && parameters.terrainVariationPercent <= 30.0
+            && std::isfinite(parameters.variationLengthMeters)
+            && parameters.variationLengthMeters >= 20.0
+            && parameters.variationLengthMeters <= 200.0
+            && parameters.referenceGear >= 1
+            && parameters.referenceGear <= 12
             && std::isfinite(parameters.workMinimumDurationScale)
             && parameters.workMinimumDurationScale > 0.0
             && parameters.workMinimumDurationScale <= 1.0
@@ -449,15 +734,27 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
     const double generatedDistanceMeters = result.sections.empty() ? 0.0
             : result.sections.back().startDistanceMeters
                 + result.sections.back().lengthMeters;
-    if (generatedDistanceMeters >= FeatureRichCourseMinimumDistanceMeters
-            && !subdivideLongSections(
+    // Reserve enough continuous route for effort-semantic geometry before
+    // sampling the terrain curve. Reservation does not itself enable an
+    // obstacle or bypass the preset's technical-density selection.
+    std::vector<bool> featureGeometryReservations(
+            result.sections.size(), false);
+    for (std::size_t index = 0; index < result.sections.size(); ++index) {
+        featureGeometryReservations[index] = !sourceRecoveries[index]
+                && effortSemanticsAt(result, index, ftpWatts).hasFeature();
+    }
+    if (!subdivideLongSections(
                 result.sections, adaptedSections, sourceRecoveries,
+                featureGeometryReservations,
+                parameters.variationLengthMeters,
                 parameters.maximumSections)) {
         result.status = WorkoutGameDistanceCourseStatus::ResourceLimit;
         result.sections.clear();
         return result;
     }
-    const bool showcaseCandidate = generatedDistanceMeters >= 5000.0
+    applyTerrainEffortProfile(result, ftpWatts, parameters);
+    const bool showcaseCandidate =
+            generatedDistanceMeters >= FeatureRichCourseMinimumDistanceMeters
             && std::any_of(
                 sourceRecoveries.begin(), sourceRecoveries.end(),
                 [](bool recovery) { return !recovery; })
@@ -503,6 +800,9 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
         WorkoutGameCourseTerrain::apply(
                 adaptedSections[index], terrainPreset, selection,
                 source.seed, sourceRecovery);
+        alignTechnicalTerrainWithEffort(
+                adaptedSections[index], result, index, ftpWatts,
+                terrainPreset, selection, sourceRecovery);
         result.sections[index].feature = adaptedSections[index].feature;
         result.sections[index].terrain = adaptedSections[index].terrain;
         result.sections[index].challengeCount =
@@ -540,75 +840,37 @@ WorkoutGameDistanceCourseEstimate WorkoutGameDistanceCourseEstimator::estimate(
     const std::int64_t maximumDurationMs = std::clamp<std::int64_t>(
             scaledMaximum, 60000, MaximumEstimateDurationMs);
     std::size_t sectionIndex = 0;
-    double rawDistanceMeters = 0.0;
     double progressDistanceMeters = 0.0;
-    std::int64_t sectionActiveTimeMs = 0;
     while (result.elapsedTimeMs < maximumDurationMs) {
         const WorkoutGameDistanceCourseSection &section =
                 course.sections[sectionIndex];
         const std::int64_t stepMs = std::min(
                 rawSimulationStepMs,
                 maximumDurationMs - result.elapsedTimeMs);
-        const double targetProgress = std::clamp(
-                (double(sectionActiveTimeMs) + double(stepMs) * 0.5)
-                    / double(section.nominalDurationMs),
+        const double distanceProgress = std::clamp(
+                (progressDistanceMeters - section.startDistanceMeters)
+                    / section.lengthMeters,
                 0.0, 1.0);
+        const double targetProgress = std::min(
+                1.0, distanceProgress + std::max(
+                    0.01, 1.0 / section.lengthMeters));
         const double targetWatts =
-                targetAt(section, targetProgress) * rawPowerScale;
+                referenceEffortAt(section, targetProgress) * rawPowerScale;
         const WorkoutGameRoadPhysicsSnapshot after = physics.update({
             targetWatts,
             section.gradePercent,
             0.0
         }, stepMs);
         result.elapsedTimeMs += stepMs;
-        const double rawAdvance = std::max(
-                0.0, after.distanceMeters - rawDistanceMeters);
-        rawDistanceMeters = after.distanceMeters;
-        // ETA assumes continuous active riding. Apply the same bounded
-        // section exposure as runtime so preview and playback agree.
-        const std::int64_t timeUntilMaximum =
-                section.maximumDurationMs - sectionActiveTimeMs;
-        const bool reachedMaximumExposure = stepMs >= timeUntilMaximum;
-        std::int64_t carriedActiveTimeMs = 0;
-        if (reachedMaximumExposure) {
-            sectionActiveTimeMs = section.maximumDurationMs;
-            carriedActiveTimeMs = stepMs - timeUntilMaximum;
-        } else {
-            sectionActiveTimeMs += stepMs;
-        }
-        const double timeProgress = std::clamp(
-                double(sectionActiveTimeMs)
-                    / double(section.minimumDurationMs),
-                0.0, 1.0);
-        const double sectionEnd = section.startDistanceMeters
-                + section.lengthMeters;
-        const double timeBound = section.startDistanceMeters
-                + section.lengthMeters * timeProgress;
-        const double availableAdvance = std::max(
-                0.0, std::min(sectionEnd, timeBound)
-                    - progressDistanceMeters);
-        progressDistanceMeters += std::min(rawAdvance, availableAdvance);
+        progressDistanceMeters = std::min(
+                after.distanceMeters, course.totalDistanceMeters);
         constexpr double BoundaryEpsilonMeters = 1.0e-9;
-        if (progressDistanceMeters >= sectionEnd - BoundaryEpsilonMeters
-                || reachedMaximumExposure) {
-            progressDistanceMeters = sectionEnd;
-            while (sectionIndex + 1 < course.sections.size()) {
-                ++sectionIndex;
-                if (!reachedMaximumExposure) {
-                    sectionActiveTimeMs = 0;
-                    break;
-                }
-                const WorkoutGameDistanceCourseSection &nextSection =
-                        course.sections[sectionIndex];
-                if (carriedActiveTimeMs < nextSection.maximumDurationMs) {
-                    sectionActiveTimeMs = carriedActiveTimeMs;
-                    break;
-                }
-                carriedActiveTimeMs -= nextSection.maximumDurationMs;
-                sectionActiveTimeMs = nextSection.maximumDurationMs;
-                progressDistanceMeters = nextSection.startDistanceMeters
-                        + nextSection.lengthMeters;
-            }
+        while (sectionIndex + 1 < course.sections.size()
+                && progressDistanceMeters
+                    >= course.sections[sectionIndex].startDistanceMeters
+                        + course.sections[sectionIndex].lengthMeters
+                        - BoundaryEpsilonMeters) {
+            ++sectionIndex;
         }
         result.distanceMeters = progressDistanceMeters;
         const WorkoutGameDistanceCourseSection &positionSection =

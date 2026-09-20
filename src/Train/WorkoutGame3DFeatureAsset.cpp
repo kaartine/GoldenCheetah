@@ -9,6 +9,7 @@
 
 #include "WorkoutGame3DFeatureAsset.h"
 
+#include "WorkoutGameAssetPhysicsSampler.h"
 #include "WorkoutGameFeatureGeometry.h"
 
 #include <algorithm>
@@ -40,13 +41,59 @@ AssetSpec specFor(WorkoutGameTerrainKind terrain)
     }
 }
 
+WorkoutGameAssetRenderTransform snapshotRenderTransform(
+        const WorkoutGameRoadCourse &course,
+        const WorkoutGameRoadPiece &piece,
+        std::size_t pieceIndex)
+{
+    if (!course.assetPhysicsSnapshot) return {};
+    WorkoutGameAssetRenderTransform result =
+            WorkoutGameAssetPhysicsSampler::renderTransform(
+                *course.assetPhysicsSnapshot, pieceIndex);
+    if (result.status == WorkoutGameAssetRenderFitStatus::Ready
+            && (piece.terrain != WorkoutGameTerrainKind::LogOver
+                || result.assetId
+                    != QStringLiteral("FT-02-log-over-greybox"))) {
+        result.status = WorkoutGameAssetRenderFitStatus::Invalid;
+    }
+    return result;
 }
 
-WorkoutGame3DFeatureAssetSnapshot WorkoutGame3DFeatureAsset::place(
+WorkoutGame3DFeatureAssetSnapshot placePiece(
         const WorkoutGameRoadCourse &course,
-        const WorkoutGameRoadPiece &piece)
+        const WorkoutGameRoadPiece &piece,
+        std::size_t pieceIndex)
 {
     WorkoutGame3DFeatureAssetSnapshot result;
+    const WorkoutGameAssetRenderTransform renderTransform =
+            snapshotRenderTransform(course, piece, pieceIndex);
+    if (renderTransform.status == WorkoutGameAssetRenderFitStatus::Invalid) {
+        return result;
+    }
+
+    if (renderTransform.status == WorkoutGameAssetRenderFitStatus::Ready) {
+        if (renderTransform.assetStartDistanceMeters < 0.0
+                || renderTransform.assetStartDistanceMeters
+                    > course.totalLengthMeters) {
+            return result;
+        }
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sample(
+                    course, renderTransform.assetStartDistanceMeters);
+        if (!sample.ready) return result;
+        result.ready = true;
+        result.terrain = piece.terrain;
+        result.xMeters = sample.center.xMeters;
+        result.yMeters = sample.visualGroundElevationMeters();
+        result.zMeters = sample.center.zMeters;
+        result.yawDegrees = sample.center.headingRadians * 180.0 / Pi;
+        result.pitchDegrees = -std::atan(sample.baseGradePercent / 100.0)
+                * 180.0 / Pi;
+        result.scaleY = renderTransform.upScale;
+        result.scaleZ = renderTransform.forwardScale;
+        return result;
+    }
+
     if (course.ready && piece.challenge.enabled
             && piece.terrain == WorkoutGameTerrainKind::GapJump
             && piece.gapJump.enabled) {
@@ -118,4 +165,29 @@ WorkoutGame3DFeatureAssetSnapshot WorkoutGame3DFeatureAsset::place(
     result.scaleY = scaleY;
     result.scaleZ = scaleZ;
     return result;
+}
+
+}
+
+WorkoutGame3DFeatureAssetSnapshot WorkoutGame3DFeatureAsset::place(
+        const WorkoutGameRoadCourse &course,
+        const WorkoutGameRoadPiece &piece)
+{
+    std::size_t pieceIndex = course.pieces.size();
+    for (std::size_t candidate = 0;
+            candidate < course.pieces.size(); ++candidate) {
+        if (&course.pieces[candidate] == &piece) {
+            pieceIndex = candidate;
+            break;
+        }
+    }
+    return placePiece(course, piece, pieceIndex);
+}
+
+WorkoutGame3DFeatureAssetSnapshot WorkoutGame3DFeatureAsset::placeAt(
+        const WorkoutGameRoadCourse &course,
+        std::size_t pieceIndex)
+{
+    if (pieceIndex >= course.pieces.size()) return {};
+    return placePiece(course, course.pieces[pieceIndex], pieceIndex);
 }

@@ -1,6 +1,8 @@
 {
-  "contractVersion": 4,
-  "conversionAlgorithmVersion": 5,
+  "contractVersion": 6,
+  "conversionAlgorithmVersion": 6,
+  "runtimeProgression": "distance-only",
+  "referenceVirtualGear": 6,
   "ftpWatts": 190.0,
   "prescriptionMetadata": null,
   "intervals": [
@@ -25,10 +27,7 @@
       "technicality": 0.10,
       "technicalTerrainExposurePercent": [10.0, 30.0],
       "technicalFeatureDensityPerTenSections": [1.0, 3.0],
-      "minimumRuntimeWorkExposurePercent": 100.0,
-      "minimumRuntimeKeyEffortExposurePercent": 100.0,
-      "minimumRuntimeRecoveryExposurePercent": 100.0,
-      "allowedTechnicalTerrain": ["roots", "rollers"],
+      "paletteTerrain": ["roots", "rollers"],
       "scoredChallengeOnWorkAllowed": true,
       "scoredChallengeOnRecoveryAllowed": false
     },
@@ -46,10 +45,7 @@
       "technicality": 0.55,
       "technicalTerrainExposurePercent": [50.0, 75.0],
       "technicalFeatureDensityPerTenSections": [5.0, 7.0],
-      "minimumRuntimeWorkExposurePercent": 100.0,
-      "minimumRuntimeKeyEffortExposurePercent": 100.0,
-      "minimumRuntimeRecoveryExposurePercent": 100.0,
-      "allowedTechnicalTerrain": ["roots", "rollers", "rock-garden", "log-over", "skinny"],
+      "paletteTerrain": ["roots", "rollers", "rock-garden", "log-over", "skinny"],
       "scoredChallengeOnWorkAllowed": true,
       "scoredChallengeOnRecoveryAllowed": false
     },
@@ -67,10 +63,7 @@
       "technicality": 0.95,
       "technicalTerrainExposurePercent": [75.0, 100.0],
       "technicalFeatureDensityPerTenSections": [8.0, 10.0],
-      "minimumRuntimeWorkExposurePercent": 100.0,
-      "minimumRuntimeKeyEffortExposurePercent": 100.0,
-      "minimumRuntimeRecoveryExposurePercent": 100.0,
-      "allowedTechnicalTerrain": ["roots", "rollers", "rock-garden", "log-over", "skinny", "rock-slab", "tabletop", "gap-jump"],
+      "paletteTerrain": ["roots", "rollers", "rock-garden", "log-over", "skinny", "rock-slab", "tabletop", "gap-jump"],
       "scoredChallengeOnWorkAllowed": true,
       "scoredChallengeOnRecoveryAllowed": false
     }

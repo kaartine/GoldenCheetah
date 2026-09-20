@@ -1,4 +1,5 @@
 {
+  "manifestVersion": 1,
   "assetId": "EN-01-conifer-set",
   "displayName": "Workout Game Low-Poly Finnish Mixed-Forest Grove Set",
   "role": "vegetation",
@@ -149,6 +150,11 @@
       ]
     }
   ],
+  "physics": {
+    "authority": "external",
+    "interaction": "visual-only",
+    "collisionProxy": { "kind": "none" }
+  },
   "review": {
     "status": "candidate",
     "trademarkStatus": "not-applicable",

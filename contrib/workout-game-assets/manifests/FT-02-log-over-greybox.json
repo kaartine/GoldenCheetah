@@ -1,4 +1,5 @@
 {
+  "manifestVersion": 1,
   "assetId": "FT-02-log-over-greybox",
   "displayName": "Workout Game Log Over Greybox",
   "role": "feature",
@@ -103,6 +104,57 @@
       "maxMaterials": 6,
       "maxTextureBytes": 0
     }
+  },
+  "physics": {
+    "authority": "external",
+    "interaction": "rideable-feature",
+    "surface": {
+      "coulombFriction": 1.1,
+      "restitution": 0.0
+    },
+    "collisionProxy": {
+      "kind": "node",
+      "node": "GEO_LogOverObstacle_LOD0"
+    },
+    "routeProfiles": [
+      {
+        "routeKey": "main",
+        "profileId": "FT-02-log-over-v1",
+        "profileVersion": 1,
+        "kind": "height-offset-polyline",
+        "operation": "add-obstacle",
+        "renderFit": {
+          "variantKey": "",
+          "nativeForwardOriginMm": -1020,
+          "nativeForwardExtentMm": 540,
+          "nativeUpExtentMm": 540
+        },
+        "chains": [
+          {
+            "points": [
+              { "forwardMm": -276, "heightMm": 0 },
+              { "forwardMm": -270, "heightMm": 0 },
+              { "forwardMm": -250, "heightMm": 201 },
+              { "forwardMm": -249, "heightMm": 208 },
+              { "forwardMm": -191, "heightMm": 382 },
+              { "forwardMm": -103, "heightMm": 499 },
+              { "forwardMm": 0, "heightMm": 540 },
+              { "forwardMm": 103, "heightMm": 499 },
+              { "forwardMm": 191, "heightMm": 382 },
+              { "forwardMm": 249, "heightMm": 208 },
+              { "forwardMm": 250, "heightMm": 201 },
+              { "forwardMm": 270, "heightMm": 0 },
+              { "forwardMm": 276, "heightMm": 0 }
+            ]
+          }
+        ],
+        "difficultyScale": {
+          "nativeExtentMm": 540,
+          "baseExtentMm": 440,
+          "difficultyExtentMm": 200
+        }
+      }
+    ]
   },
   "review": {
     "status": "approved",

@@ -77,8 +77,7 @@ class WorkoutGameAssetDocumentTest(unittest.TestCase):
         )
         self.assertEqual(document.physics.authority, "external")
         self.assertEqual(document.physics.interaction, "rideable-feature")
-        self.assertEqual(document.physics.friction, 1.0)
-        self.assertEqual(document.physics.rolling_resistance, 0.0)
+        self.assertEqual(document.physics.coulomb_friction, 1.1)
         self.assertEqual(document.physics.restitution, 0.0)
         self.assertEqual(document.physics.collision_node, "")
         self.assertEqual(self.manifest.read_bytes(), before)
@@ -96,8 +95,7 @@ class WorkoutGameAssetDocumentTest(unittest.TestCase):
         )
         document.set_physics(
             interaction="rideable-feature",
-            friction=1.25,
-            rolling_resistance=0.035,
+            coulomb_friction=1.25,
             restitution=0.1,
             collision_node="ROOT_Tabletop",
         )
@@ -120,8 +118,7 @@ class WorkoutGameAssetDocumentTest(unittest.TestCase):
         )
         self.assertEqual(reopened.physics.authority, "external")
         self.assertEqual(reopened.physics.interaction, "rideable-feature")
-        self.assertAlmostEqual(reopened.physics.friction, 1.25)
-        self.assertAlmostEqual(reopened.physics.rolling_resistance, 0.035)
+        self.assertAlmostEqual(reopened.physics.coulomb_friction, 1.25)
         self.assertAlmostEqual(reopened.physics.restitution, 0.1)
         self.assertEqual(reopened.physics.collision_node, "ROOT_Tabletop")
         self.assertEqual(reopened.review_status, "candidate")
@@ -173,9 +170,7 @@ class WorkoutGameAssetDocumentTest(unittest.TestCase):
         with self.assertRaisesRegex(AssetDocumentError, "roughness"):
             document.set_material("MAT_TabletopTrail_Grey", roughness=1.01)
         with self.assertRaisesRegex(AssetDocumentError, "friction"):
-            document.set_physics(friction=2.01)
-        with self.assertRaisesRegex(AssetDocumentError, "rolling resistance"):
-            document.set_physics(rolling_resistance=-0.01)
+            document.set_physics(coulomb_friction=2.01)
         with self.assertRaisesRegex(AssetDocumentError, "restitution"):
             document.set_physics(restitution=float("nan"))
         with self.assertRaisesRegex(AssetDocumentError, "interaction"):
@@ -278,8 +273,7 @@ class WorkoutGameAssetDocumentTest(unittest.TestCase):
             "authority": "external",
             "interaction": "visual-only",
             "surface": {
-                "friction": 1.0,
-                "rollingResistance": 0.0,
+                "coulombFriction": 1.0,
                 "restitution": 0.0,
             },
             "collisionProxy": {"kind": "none", "node": "ROOT_Tabletop"},
@@ -305,6 +299,43 @@ class WorkoutGameAssetDocumentTest(unittest.TestCase):
         saved = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertNotIn("surface", saved["physics"])
         self.assertEqual(saved["physics"]["collisionProxy"], {"kind": "none"})
+
+    def test_save_preserves_authored_route_profiles(self) -> None:
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        route_profiles = [{
+            "routeKey": "main",
+            "profileId": "FT-01-main-v1",
+            "profileVersion": 1,
+            "kind": "height-offset-polyline",
+            "operation": "add-obstacle",
+            "renderFit": {
+                "variantKey": "",
+                "nativeForwardOriginMm": -100,
+                "nativeForwardExtentMm": 200,
+                "nativeUpExtentMm": 200,
+            },
+            "chains": [{
+                "points": [
+                    {"forwardMm": -100, "heightMm": 0},
+                    {"forwardMm": 0, "heightMm": 200},
+                    {"forwardMm": 100, "heightMm": 0},
+                ],
+            }],
+        }]
+        manifest["physics"]["routeProfiles"] = route_profiles
+        self.manifest.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        document = AssetDocument.open(
+            self.repository,
+            "FT-01-tabletop-greybox",
+        )
+        document.set_material("MAT_TabletopTrail_Grey", roughness=0.42)
+
+        self.assertTrue(document.save())
+        saved = json.loads(self.manifest.read_text(encoding="utf-8"))
+        self.assertEqual(saved["physics"]["routeProfiles"], route_profiles)
 
     @unittest.skipIf(os.name == "nt", "POSIX advisory-lock behavior")
     def test_save_waits_for_cross_process_manifest_lock(self) -> None:

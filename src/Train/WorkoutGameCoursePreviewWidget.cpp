@@ -16,27 +16,6 @@
 #include <algorithm>
 #include <cmath>
 
-namespace {
-
-QString elapsedTimeText(std::int64_t durationMs)
-{
-    const std::int64_t totalSeconds = std::max<std::int64_t>(
-            0, (durationMs + 500) / 1000);
-    const std::int64_t hours = totalSeconds / 3600;
-    const std::int64_t minutes = totalSeconds / 60 % 60;
-    const std::int64_t seconds = totalSeconds % 60;
-    return hours > 0
-            ? QStringLiteral("%1:%2:%3")
-                .arg(hours)
-                .arg(minutes, 2, 10, QLatin1Char('0'))
-                .arg(seconds, 2, 10, QLatin1Char('0'))
-            : QStringLiteral("%1:%2")
-                .arg(minutes)
-                .arg(seconds, 2, 10, QLatin1Char('0'));
-}
-
-}
-
 WorkoutGameCoursePreviewWidget::WorkoutGameCoursePreviewWidget(QWidget *parent)
     : QWidget(parent)
 {
@@ -94,12 +73,6 @@ void WorkoutGameCoursePreviewWidget::paintEvent(QPaintEvent *)
     }
 
     const WorkoutGameDistanceCourse &course = currentResult.document.course;
-    const std::vector<WorkoutGameInterval> &sourceIntervals =
-            currentResult.document.sourceIntervals;
-    const std::int64_t sourceDurationMs = sourceIntervals.empty()
-            ? 0
-            : sourceIntervals.back().startMs
-                + sourceIntervals.back().durationMs;
     double minimumElevation = 0.0;
     double maximumElevation = 0.0;
     double maximumPower = 1.0;
@@ -109,9 +82,11 @@ void WorkoutGameCoursePreviewWidget::paintEvent(QPaintEvent *)
         maximumElevation = std::max({maximumElevation,
                 section.startElevationMeters, section.endElevationMeters});
     }
-    for (const WorkoutGameInterval &interval : sourceIntervals) {
+    for (const WorkoutGameDistanceCourseSection &section : course.sections) {
         maximumPower = std::max({maximumPower,
-                interval.startWatts, interval.endWatts});
+                section.targetStartWatts, section.targetEndWatts,
+                section.referenceEffortStartWatts,
+                section.referenceEffortEndWatts});
     }
     const double elevationRange = std::max(
             1.0, maximumElevation - minimumElevation);
@@ -142,20 +117,49 @@ void WorkoutGameCoursePreviewWidget::paintEvent(QPaintEvent *)
     painter.setPen(QPen(QColor(42, 112, 73), 2.5));
     painter.drawPath(elevation);
 
-    const std::vector<WorkoutGameCoursePreviewPoint> powerProfile =
-            WorkoutGameCoursePreviewMetrics::workoutPowerProfile(
-                sourceIntervals);
-    QPainterPath power;
-    for (std::size_t index = 0; index < powerProfile.size(); ++index) {
-        const QPointF point(
-                powerChart.left() + powerChart.width()
-                    * powerProfile[index].progress,
-                yForPower(powerProfile[index].value));
-        if (index == 0u) power.moveTo(point);
-        else power.lineTo(point);
+    QPainterPath sourcePower;
+    QPainterPath terrainEffort;
+    for (std::size_t index = 0; index < course.sections.size(); ++index) {
+        const WorkoutGameDistanceCourseSection &section = course.sections[index];
+        const double referenceStart = section.referenceEffortStartWatts >= 0.0
+                ? section.referenceEffortStartWatts : section.targetStartWatts;
+        const double referenceEnd = section.referenceEffortEndWatts >= 0.0
+                ? section.referenceEffortEndWatts : section.targetEndWatts;
+        const QPointF sourceStart(
+                xForDistance(section.startDistanceMeters),
+                yForPower(section.targetStartWatts));
+        const QPointF sourceEnd(
+                xForDistance(section.startDistanceMeters + section.lengthMeters),
+                yForPower(section.targetEndWatts));
+        const QPointF effortStart(
+                xForDistance(section.startDistanceMeters),
+                yForPower(referenceStart));
+        const QPointF effortEnd(
+                xForDistance(section.startDistanceMeters + section.lengthMeters),
+                yForPower(referenceEnd));
+        if (index == 0u) {
+            sourcePower.moveTo(sourceStart);
+            terrainEffort.moveTo(effortStart);
+        } else {
+            sourcePower.lineTo(sourceStart);
+            terrainEffort.lineTo(effortStart);
+        }
+        sourcePower.lineTo(sourceEnd);
+        terrainEffort.lineTo(effortEnd);
     }
-    painter.setPen(QPen(QColor(218, 139, 42), 2.5));
-    painter.drawPath(power);
+    painter.setPen(QPen(QColor(218, 139, 42), 2.0));
+    painter.drawPath(sourcePower);
+    painter.setPen(QPen(QColor(55, 120, 190), 2.5));
+    painter.drawPath(terrainEffort);
+
+    painter.setPen(QPen(QColor(120, 90, 150, 150), 1.0));
+    for (const WorkoutGameDistanceCourseSection &section : course.sections) {
+        if (section.challengeCount <= 0) continue;
+        const double x = xForDistance(
+                section.startDistanceMeters + section.lengthMeters * 0.5);
+        painter.drawLine(QPointF(x, terrainChart.top()),
+                         QPointF(x, terrainChart.top() + 8.0));
+    }
 
     painter.setPen(palette().color(QPalette::Text));
     const QFontMetrics metrics(painter.font());
@@ -178,17 +182,18 @@ void WorkoutGameCoursePreviewWidget::paintEvent(QPaintEvent *)
             QRectF(powerChart.left(), powerChart.top() - metrics.height() - 3.0,
                    powerChart.width(), metrics.height()),
             Qt::AlignHCenter | Qt::AlignBottom,
-            tr("Original workout power - time"));
+            tr("Workout baseline and generated terrain effort - distance"));
     painter.drawText(
             QRectF(powerChart.left(), powerChart.bottom() + 4.0,
                    powerChart.width(), metrics.height()),
             Qt::AlignLeft | Qt::AlignTop,
-            QStringLiteral("0:00"));
+            QStringLiteral("0 km"));
     painter.drawText(
             QRectF(powerChart.left(), powerChart.bottom() + 4.0,
                    powerChart.width(), metrics.height()),
             Qt::AlignRight | Qt::AlignTop,
-            elapsedTimeText(sourceDurationMs));
+            QStringLiteral("%1 km").arg(
+                course.totalDistanceMeters / 1000.0, 0, 'f', 1));
     painter.drawText(
             QRectF(terrainChart.left(), terrainChart.top() - metrics.height() - 3.0,
                    terrainChart.width(), metrics.height()),

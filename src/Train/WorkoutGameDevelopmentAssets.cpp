@@ -355,7 +355,8 @@ QString requiredString(
 void validateManifestContract(const QJsonObject &manifest)
 {
     const QSet<QString> topLevel = {
-        QStringLiteral("assetId"), QStringLiteral("displayName"),
+        QStringLiteral("manifestVersion"), QStringLiteral("assetId"),
+        QStringLiteral("displayName"),
         QStringLiteral("role"), QStringLiteral("source"),
         QStringLiteral("license"), QStringLiteral("files"),
         QStringLiteral("processing"), QStringLiteral("technical"),
@@ -363,11 +364,18 @@ void validateManifestContract(const QJsonObject &manifest)
         QStringLiteral("runtimeVariants"), QStringLiteral("review"),
     };
     requireObjectShape(manifest,
-            {QStringLiteral("assetId"), QStringLiteral("displayName"),
+            {QStringLiteral("manifestVersion"), QStringLiteral("assetId"),
+             QStringLiteral("displayName"),
              QStringLiteral("role"), QStringLiteral("source"),
              QStringLiteral("license"), QStringLiteral("files"),
-             QStringLiteral("technical"), QStringLiteral("review")},
+             QStringLiteral("technical"), QStringLiteral("physics"),
+             QStringLiteral("review")},
             topLevel, QStringLiteral("manifest"));
+    const QJsonValue manifestVersion = manifest.value(
+            QStringLiteral("manifestVersion"));
+    if (!manifestVersion.isDouble() || manifestVersion.toDouble() != 1.0) {
+        throw BuildError(QStringLiteral("unsupported manifest version"));
+    }
     requiredString(manifest, QStringLiteral("assetId"), QStringLiteral("manifest"), 128);
     requiredString(manifest, QStringLiteral("displayName"), QStringLiteral("manifest"));
     const QSet<QString> roles = {
@@ -1319,6 +1327,12 @@ void validateGlbDocument(
         }
     }
 
+    QSet<QString> declaredVariantKeys;
+    for (const QJsonValue &variantValue : manifest.value(
+            QStringLiteral("runtimeVariants")).toArray()) {
+        declaredVariantKeys.insert(variantValue.toObject().value(
+                QStringLiteral("key")).toString());
+    }
     if (manifest.contains(QStringLiteral("physics"))) {
         if (!manifest.value(QStringLiteral("physics")).isObject()) {
             throw BuildError(QStringLiteral("invalid physics contract: %1")
@@ -1330,7 +1344,8 @@ void validateGlbDocument(
                 {QStringLiteral("authority"), QStringLiteral("interaction"),
                  QStringLiteral("collisionProxy")},
                 {QStringLiteral("authority"), QStringLiteral("interaction"),
-                 QStringLiteral("surface"), QStringLiteral("collisionProxy")},
+                 QStringLiteral("surface"), QStringLiteral("collisionProxy"),
+                 QStringLiteral("routeProfiles")},
                 QStringLiteral("physics"));
         const QString interaction = physics.value(
                 QStringLiteral("interaction")).toString();
@@ -1375,28 +1390,205 @@ void validateGlbDocument(
             const QJsonObject surface = physics.value(
                     QStringLiteral("surface")).toObject();
             requireObjectShape(surface,
-                    {QStringLiteral("friction"),
-                     QStringLiteral("rollingResistance"),
+                    {QStringLiteral("coulombFriction"),
                      QStringLiteral("restitution")},
-                    {QStringLiteral("friction"),
-                     QStringLiteral("rollingResistance"),
+                    {QStringLiteral("coulombFriction"),
                      QStringLiteral("restitution")},
                     QStringLiteral("physics surface"));
             const double friction = surface.value(
-                    QStringLiteral("friction")).toDouble(-1.0);
-            const double rolling = surface.value(
-                    QStringLiteral("rollingResistance")).toDouble(-1.0);
+                    QStringLiteral("coulombFriction")).toDouble(-1.0);
             const double restitution = surface.value(
                     QStringLiteral("restitution")).toDouble(-1.0);
-            if (!surface.value(QStringLiteral("friction")).isDouble()
-                    || !surface.value(QStringLiteral("rollingResistance")).isDouble()
+            if (!surface.value(QStringLiteral("coulombFriction")).isDouble()
                     || !surface.value(QStringLiteral("restitution")).isDouble()
                     || !std::isfinite(friction) || friction < 0.0 || friction > 2.0
-                    || !std::isfinite(rolling) || rolling < 0.0 || rolling > 0.1
                     || !std::isfinite(restitution)
                     || restitution < 0.0 || restitution > 0.25) {
                 throw BuildError(QStringLiteral("invalid physics surface values: %1")
                         .arg(assetId));
+            }
+        }
+        if (physics.contains(QStringLiteral("routeProfiles"))) {
+            if (visualOnly
+                    || !physics.value(QStringLiteral("routeProfiles")).isArray()) {
+                throw BuildError(QStringLiteral("invalid physics route profiles: %1")
+                        .arg(assetId));
+            }
+            const QJsonArray profiles = physics.value(
+                    QStringLiteral("routeProfiles")).toArray();
+            if (profiles.size() > 5) {
+                throw BuildError(QStringLiteral("too many physics route profiles: %1")
+                        .arg(assetId));
+            }
+            const auto exactInteger = [](const QJsonValue &value,
+                                          double minimum, double maximum) {
+                const double number = value.toDouble(
+                        std::numeric_limits<double>::quiet_NaN());
+                return value.isDouble() && std::isfinite(number)
+                        && std::floor(number) == number
+                        && number >= minimum && number <= maximum;
+            };
+            const QRegularExpression routePattern(
+                    QStringLiteral("^[a-z0-9-]{1,32}$"));
+            const QRegularExpression profilePattern(
+                    QStringLiteral("^[A-Za-z0-9-]{1,128}$"));
+            QSet<QString> routeKeys;
+            QSet<QString> profileIds;
+            for (const QJsonValue &profileValue : profiles) {
+                if (!profileValue.isObject()) {
+                    throw BuildError(QStringLiteral("invalid physics route profile: %1")
+                            .arg(assetId));
+                }
+                const QJsonObject profile = profileValue.toObject();
+                requireObjectShape(profile,
+                        {QStringLiteral("routeKey"), QStringLiteral("profileId"),
+                         QStringLiteral("profileVersion"), QStringLiteral("kind"),
+                         QStringLiteral("operation"), QStringLiteral("renderFit"),
+                         QStringLiteral("chains")},
+                        {QStringLiteral("routeKey"), QStringLiteral("profileId"),
+                         QStringLiteral("profileVersion"), QStringLiteral("kind"),
+                         QStringLiteral("operation"), QStringLiteral("renderFit"),
+                         QStringLiteral("chains"), QStringLiteral("difficultyScale")},
+                        QStringLiteral("physics route profile"));
+                const QString routeKey = profile.value(
+                        QStringLiteral("routeKey")).toString();
+                const QString profileId = profile.value(
+                        QStringLiteral("profileId")).toString();
+                if (!routePattern.match(routeKey).hasMatch()
+                        || !profilePattern.match(profileId).hasMatch()
+                        || routeKeys.contains(routeKey)
+                        || profileIds.contains(profileId)
+                        || !exactInteger(profile.value(
+                            QStringLiteral("profileVersion")), 1.0, 4294967295.0)
+                        || profile.value(QStringLiteral("kind")).toString()
+                            != QStringLiteral("height-offset-polyline")
+                        || (profile.value(QStringLiteral("operation")).toString()
+                                != QStringLiteral("add-obstacle")
+                            && profile.value(QStringLiteral("operation")).toString()
+                                != QStringLiteral("replace-surface"))
+                        || !profile.value(QStringLiteral("renderFit")).isObject()
+                        || !profile.value(QStringLiteral("chains")).isArray()) {
+                    throw BuildError(QStringLiteral("invalid physics route profile: %1")
+                            .arg(assetId));
+                }
+                routeKeys.insert(routeKey);
+                profileIds.insert(profileId);
+                const QJsonObject renderFit = profile.value(
+                        QStringLiteral("renderFit")).toObject();
+                requireObjectShape(renderFit,
+                        {QStringLiteral("variantKey"),
+                         QStringLiteral("nativeForwardOriginMm"),
+                         QStringLiteral("nativeForwardExtentMm"),
+                         QStringLiteral("nativeUpExtentMm")},
+                        {QStringLiteral("variantKey"),
+                         QStringLiteral("nativeForwardOriginMm"),
+                         QStringLiteral("nativeForwardExtentMm"),
+                         QStringLiteral("nativeUpExtentMm")},
+                        QStringLiteral("physics render fit"));
+                const QString variantKey = renderFit.value(
+                        QStringLiteral("variantKey")).toString();
+                const QRegularExpression variantPattern(
+                        QStringLiteral("^[A-Za-z0-9_-]{0,32}$"));
+                if (!renderFit.value(QStringLiteral("variantKey")).isString()
+                        || !variantPattern.match(variantKey).hasMatch()
+                        || (!variantKey.isEmpty()
+                            && !declaredVariantKeys.contains(variantKey))
+                        || !exactInteger(renderFit.value(
+                            QStringLiteral("nativeForwardOriginMm")),
+                            -64000.0, 64000.0)
+                        || !exactInteger(renderFit.value(
+                            QStringLiteral("nativeForwardExtentMm")),
+                            1.0, 128000.0)
+                        || !exactInteger(renderFit.value(
+                            QStringLiteral("nativeUpExtentMm")),
+                            1.0, 16000.0)) {
+                    throw BuildError(QStringLiteral("invalid physics render fit: %1")
+                            .arg(assetId));
+                }
+                const QJsonArray chains = profile.value(
+                        QStringLiteral("chains")).toArray();
+                if (chains.isEmpty() || chains.size() > 8) {
+                    throw BuildError(QStringLiteral("invalid physics profile chains: %1")
+                            .arg(assetId));
+                }
+                int pointCount = 0;
+                double previousChainEnd = -std::numeric_limits<double>::infinity();
+                for (const QJsonValue &chainValue : chains) {
+                    if (!chainValue.isObject()) {
+                        throw BuildError(QStringLiteral("invalid physics profile chain: %1")
+                                .arg(assetId));
+                    }
+                    const QJsonObject chain = chainValue.toObject();
+                    requireObjectShape(chain, {QStringLiteral("points")},
+                            {QStringLiteral("points")},
+                            QStringLiteral("physics profile chain"));
+                    if (!chain.value(QStringLiteral("points")).isArray()) {
+                        throw BuildError(QStringLiteral("invalid physics profile points: %1")
+                                .arg(assetId));
+                    }
+                    const QJsonArray points = chain.value(
+                            QStringLiteral("points")).toArray();
+                    pointCount += points.size();
+                    if (points.size() < 2 || pointCount > 256) {
+                        throw BuildError(QStringLiteral("invalid physics profile points: %1")
+                                .arg(assetId));
+                    }
+                    double previousForward = previousChainEnd;
+                    for (const QJsonValue &pointValue : points) {
+                        if (!pointValue.isObject()) {
+                            throw BuildError(QStringLiteral("invalid physics profile point: %1")
+                                    .arg(assetId));
+                        }
+                        const QJsonObject point = pointValue.toObject();
+                        requireObjectShape(point,
+                                {QStringLiteral("forwardMm"), QStringLiteral("heightMm")},
+                                {QStringLiteral("forwardMm"), QStringLiteral("heightMm")},
+                                QStringLiteral("physics profile point"));
+                        const double forward = point.value(
+                                QStringLiteral("forwardMm")).toDouble();
+                        if (!exactInteger(point.value(QStringLiteral("forwardMm")),
+                                    -64000.0, 64000.0)
+                                || !exactInteger(point.value(QStringLiteral("heightMm")),
+                                    -16000.0, 16000.0)
+                                || forward <= previousForward) {
+                            throw BuildError(QStringLiteral("invalid physics profile point: %1")
+                                    .arg(assetId));
+                        }
+                        previousForward = forward;
+                    }
+                    previousChainEnd = previousForward;
+                }
+                if (profile.contains(QStringLiteral("difficultyScale"))) {
+                    if (!profile.value(QStringLiteral("difficultyScale")).isObject()) {
+                        throw BuildError(QStringLiteral("invalid physics difficulty scale: %1")
+                                .arg(assetId));
+                    }
+                    const QJsonObject scale = profile.value(
+                            QStringLiteral("difficultyScale")).toObject();
+                    requireObjectShape(scale,
+                            {QStringLiteral("nativeExtentMm"),
+                             QStringLiteral("baseExtentMm"),
+                             QStringLiteral("difficultyExtentMm")},
+                            {QStringLiteral("nativeExtentMm"),
+                             QStringLiteral("baseExtentMm"),
+                             QStringLiteral("difficultyExtentMm")},
+                            QStringLiteral("physics difficulty scale"));
+                    const double base = scale.value(
+                            QStringLiteral("baseExtentMm")).toDouble();
+                    const double delta = scale.value(
+                            QStringLiteral("difficultyExtentMm")).toDouble();
+                    if (!exactInteger(scale.value(QStringLiteral("nativeExtentMm")),
+                                1.0, 64000.0)
+                            || !exactInteger(scale.value(QStringLiteral("baseExtentMm")),
+                                1.0, 64000.0)
+                            || !exactInteger(scale.value(QStringLiteral("difficultyExtentMm")),
+                                -64000.0, 64000.0)
+                            || base + std::min(0.0, delta) <= 0.0
+                            || base + std::max(0.0, delta) > 64000.0) {
+                        throw BuildError(QStringLiteral("invalid physics difficulty scale: %1")
+                                .arg(assetId));
+                    }
+                }
             }
         }
     }

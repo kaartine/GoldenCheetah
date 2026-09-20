@@ -8,6 +8,8 @@
  */
 
 #include "WorkoutGameWorld.h"
+#include "WorkoutGameAssetPhysicsSampler.h"
+#include "WorkoutGameWorldGroundProfile.h"
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
@@ -23,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -40,6 +43,16 @@ constexpr std::int64_t MaximumCatchupMicroseconds = 1000000;
 constexpr std::int64_t WalkDecisionMicroseconds = 1500000;
 constexpr float BunnyHopLaunchSpeedMetersPerSecond = 3.5f;
 constexpr float TechnicalFeatureLaunchSpeedMetersPerSecond = 4.8f;
+constexpr float Box2DMinimumSegmentMeters = 0.005f;
+
+bool validBox2DSegment(const b2Segment &segment)
+{
+    const float forward = segment.point2.x - segment.point1.x;
+    const float height = segment.point2.y - segment.point1.y;
+    return std::isfinite(forward) && std::isfinite(height)
+            && forward * forward + height * height
+                > Box2DMinimumSegmentMeters * Box2DMinimumSegmentMeters;
+}
 
 double gapJumpArc(double progress)
 {
@@ -197,6 +210,14 @@ double physicalSurfaceElevation(
 
 struct WorkoutGamePhysics::Impl
 {
+    struct AssetObstacleShapes
+    {
+        std::size_t pieceIndex = 0;
+        double anchorDistanceMeters = 0.0;
+        bool active = true;
+        std::vector<b2ShapeId> shapes;
+    };
+
     std::uint32_t seed = 0;
     bool configured = false;
     bool initialized = false;
@@ -235,6 +256,7 @@ struct WorkoutGamePhysics::Impl
     b2ShapeId frontWheelShape = b2_nullShapeId;
     b2JointId rearJoint = b2_nullJointId;
     b2JointId frontJoint = b2_nullJointId;
+    std::vector<AssetObstacleShapes> assetObstacleShapes;
 
     ~Impl()
     {
@@ -252,6 +274,7 @@ struct WorkoutGamePhysics::Impl
         frontWheelShape = b2_nullShapeId;
         rearJoint = b2_nullJointId;
         frontJoint = b2_nullJointId;
+        assetObstacleShapes.clear();
         gapJumpFlightActive = false;
         gapJumpFlightMicroseconds = 0;
         gapJumpFlightDurationMicroseconds = 0;
@@ -297,25 +320,226 @@ struct WorkoutGamePhysics::Impl
         return b2CreateWheelJoint(world, &definition);
     }
 
-    double surfaceHeight(double localX) const
+    double assetObstacleOffset(
+            double courseDistanceMeters,
+            bool activeOnly) const
+    {
+        if (!roadCourse.assetPhysicsSnapshot || safeBypassActive) return 0.0;
+        const auto &snapshot = *roadCourse.assetPhysicsSnapshot;
+        double offset = 0.0;
+        for (std::size_t pieceIndex = 0;
+                pieceIndex < snapshot.pieceBindings.size(); ++pieceIndex) {
+            if (activeOnly) {
+                const auto group = std::find_if(
+                        assetObstacleShapes.begin(),
+                        assetObstacleShapes.end(),
+                        [pieceIndex](const AssetObstacleShapes &candidate) {
+                            return candidate.pieceIndex == pieceIndex;
+                        });
+                if (group == assetObstacleShapes.end() || !group->active) {
+                    continue;
+                }
+            }
+            const WorkoutGameAssetPhysicsSample sample =
+                    WorkoutGameAssetPhysicsSampler::sample(
+                        snapshot, pieceIndex, courseDistanceMeters);
+            if (sample.bound && sample.surfacePresent) {
+                offset += sample.offsetMeters;
+            }
+        }
+        return offset;
+    }
+
+    double surfaceHeight(double localX, bool includeActiveObstacles = true) const
     {
         if (roadCourse.ready) {
+            const double courseDistance =
+                    distanceBase + localX - RiderStartMeters;
             const WorkoutGameRoadSample sample =
                     WorkoutGameRoadCourseBuilder::sample(
-                        roadCourse,
-                        distanceBase + localX - RiderStartMeters);
+                        roadCourse, courseDistance);
             const WorkoutGameRoadSample origin =
                     WorkoutGameRoadCourseBuilder::sample(
                         roadCourse, distanceBase);
             if (sample.ready && origin.ready) {
-                return physicalSurfaceElevation(
-                            sample, safeBypassActive, roadCourse)
-                        - physicalSurfaceElevation(
-                            origin, safeBypassActive, roadCourse);
+                const auto resolvedElevation =
+                        [this, includeActiveObstacles](
+                                const WorkoutGameRoadSample &point) {
+                    const double allAssetOffsets = assetObstacleOffset(
+                            point.distanceMeters, false);
+                    const double activeAssetOffsets = includeActiveObstacles
+                            ? assetObstacleOffset(point.distanceMeters, true)
+                            : 0.0;
+                    return physicalSurfaceElevation(
+                                point, safeBypassActive, roadCourse)
+                            - allAssetOffsets + activeAssetOffsets;
+                };
+                return resolvedElevation(sample) - resolvedElevation(origin);
             }
         }
         return WorkoutGamePhysics::terrainHeight(
                 terrain, localX, gradePercent, difficulty, seed);
+    }
+
+    double baseSurfaceElevation(double courseDistanceMeters) const
+    {
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sample(
+                    roadCourse, courseDistanceMeters);
+        if (!sample.ready) return 0.0;
+        return physicalSurfaceElevation(sample, safeBypassActive, roadCourse)
+                - assetObstacleOffset(courseDistanceMeters, false);
+    }
+
+    bool assetObstacleSegment(
+            const WorkoutGameAssetPhysicsPieceBinding &pieceBinding,
+            const WorkoutGameAssetPhysicsDefinition &definition,
+            double coordinateBaseMeters,
+            std::size_t pointIndex,
+            b2Segment &segment) const
+    {
+        if (definition.chains.size() != 1 || pointIndex == 0
+                || pointIndex >= definition.chains.front().points.size()) {
+            return false;
+        }
+        const auto &points = definition.chains.front().points;
+        const double priorCourseDistance =
+                pieceBinding.obstacleAnchorMeters()
+                + double(points[pointIndex - 1].forwardMm) / 1000.0;
+        const double currentCourseDistance =
+                pieceBinding.obstacleAnchorMeters()
+                + double(points[pointIndex].forwardMm) / 1000.0;
+        const double priorX = priorCourseDistance - coordinateBaseMeters
+                + RiderStartMeters;
+        const double currentX = currentCourseDistance - coordinateBaseMeters
+                + RiderStartMeters;
+        const double baseElevation = baseSurfaceElevation(coordinateBaseMeters);
+        segment = {
+            {float(priorX),
+             float(baseSurfaceElevation(priorCourseDistance) - baseElevation
+                   + double(points[pointIndex - 1].heightMm) / 1000.0)},
+            {float(currentX),
+             float(baseSurfaceElevation(currentCourseDistance) - baseElevation
+                   + double(points[pointIndex].heightMm) / 1000.0)}
+        };
+        return validBox2DSegment(segment);
+    }
+
+    bool assetObstacleSegmentsValid() const
+    {
+        if (!roadCourse.assetPhysicsSnapshot) return true;
+        const auto &snapshot = *roadCourse.assetPhysicsSnapshot;
+        for (const auto &pieceBinding : snapshot.pieceBindings) {
+            if (pieceBinding.definitionIndex
+                        == WorkoutGameCourseAssetPhysicsSnapshot::NoIndex) {
+                continue;
+            }
+            if (pieceBinding.definitionIndex
+                    >= snapshot.physicsDefinitions.size()) {
+                return false;
+            }
+            const auto &definition = snapshot.physicsDefinitions[
+                    pieceBinding.definitionIndex];
+            if (definition.operation
+                    != WorkoutGameAssetPhysicsOperation::AddObstacle) {
+                continue;
+            }
+            if (definition.chains.size() != 1) return false;
+            const auto &points = definition.chains.front().points;
+            for (std::size_t pointIndex = 1;
+                    pointIndex < points.size(); ++pointIndex) {
+                b2Segment segment;
+                if (!assetObstacleSegment(
+                        pieceBinding, definition,
+                        pieceBinding.obstacleAnchorMeters(),
+                        pointIndex, segment)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool createAssetObstacleShapes(b2BodyId ground)
+    {
+        if (!roadCourse.assetPhysicsSnapshot || safeBypassActive) return true;
+        const auto &snapshot = *roadCourse.assetPhysicsSnapshot;
+        for (std::size_t pieceIndex = 0;
+                pieceIndex < snapshot.pieceBindings.size(); ++pieceIndex) {
+            const auto &pieceBinding = snapshot.pieceBindings[pieceIndex];
+            if (pieceBinding.definitionIndex
+                        == WorkoutGameCourseAssetPhysicsSnapshot::NoIndex
+                    || pieceBinding.definitionIndex
+                        >= snapshot.physicsDefinitions.size()) {
+                continue;
+            }
+            const auto &definition = snapshot.physicsDefinitions[
+                    pieceBinding.definitionIndex];
+            if (definition.operation
+                        != WorkoutGameAssetPhysicsOperation::AddObstacle
+                    || definition.chains.size() != 1) {
+                continue;
+            }
+
+            AssetObstacleShapes group;
+            group.pieceIndex = pieceIndex;
+            group.anchorDistanceMeters =
+                    pieceBinding.obstacleAnchorMeters();
+            const auto &points = definition.chains.front().points;
+            for (std::size_t pointIndex = 1;
+                    pointIndex < points.size(); ++pointIndex) {
+                const double priorX = pieceBinding.obstacleAnchorMeters()
+                        + double(points[pointIndex - 1].forwardMm) / 1000.0
+                        - distanceBase + RiderStartMeters;
+                const double currentX = pieceBinding.obstacleAnchorMeters()
+                        + double(points[pointIndex].forwardMm) / 1000.0
+                        - distanceBase + RiderStartMeters;
+                if (currentX < TerrainStartMeters
+                        || priorX > TerrainEndMeters) {
+                    continue;
+                }
+                b2Segment segment;
+                if (!assetObstacleSegment(
+                        pieceBinding, definition, distanceBase,
+                        pointIndex, segment)) {
+                    return false;
+                }
+                b2ShapeDef shapeDefinition = b2DefaultShapeDef();
+                shapeDefinition.material.friction =
+                        float(definition.coulombFrictionMilli) / 1000.0f;
+                shapeDefinition.material.restitution =
+                        float(definition.restitutionMilli) / 1000.0f;
+                const b2ShapeId shape = b2CreateSegmentShape(
+                        ground, &shapeDefinition, &segment);
+                if (B2_IS_NULL(shape)) return false;
+                group.shapes.push_back(shape);
+            }
+            if (!group.shapes.empty()) {
+                assetObstacleShapes.push_back(std::move(group));
+            }
+        }
+        return true;
+    }
+
+    void clearCurrentAssetObstacle(double courseDistanceMeters)
+    {
+        AssetObstacleShapes *nearest = nullptr;
+        double nearestDistance = 3.0;
+        for (AssetObstacleShapes &group : assetObstacleShapes) {
+            if (!group.active) continue;
+            const double distance = std::abs(
+                    group.anchorDistanceMeters - courseDistanceMeters);
+            if (distance < nearestDistance) {
+                nearest = &group;
+                nearestDistance = distance;
+            }
+        }
+        if (!nearest) return;
+        for (b2ShapeId shape : nearest->shapes) {
+            if (B2_IS_NON_NULL(shape)) b2DestroyShape(shape, false);
+        }
+        nearest->shapes.clear();
+        nearest->active = false;
     }
 
     bool surfacePresent(double localX) const
@@ -383,7 +607,7 @@ struct WorkoutGamePhysics::Impl
         return TerrainSampleMeters;
     }
 
-    void createWorld()
+    bool createWorld()
     {
         destroyWorld();
 
@@ -394,18 +618,32 @@ struct WorkoutGamePhysics::Impl
 
         b2BodyDef groundDefinition = b2DefaultBodyDef();
         const b2BodyId ground = b2CreateBody(world, &groundDefinition);
-        b2ShapeDef terrainShape = b2DefaultShapeDef();
-        terrainShape.material.friction = 1.1f;
-        double priorX = TerrainStartMeters;
-        double priorY = surfaceHeight(priorX);
-        bool priorSurfacePresent = surfacePresent(priorX);
+        std::vector<double> samplePoints = {TerrainStartMeters};
         double x = TerrainStartMeters;
         while (x < TerrainEndMeters - 0.001) {
             x = std::min(TerrainEndMeters,
                          x + terrainSampleSpacing(x));
-            const double y = surfaceHeight(x);
+            samplePoints.push_back(x);
+        }
+        double priorX = samplePoints.front();
+        double priorY = surfaceHeight(priorX, false);
+        bool priorSurfacePresent = surfacePresent(priorX);
+        for (std::size_t pointIndex = 1;
+                pointIndex < samplePoints.size(); ++pointIndex) {
+            x = samplePoints[pointIndex];
+            const double y = surfaceHeight(x, false);
             const bool currentSurfacePresent = surfacePresent(x);
             if (priorSurfacePresent && currentSurfacePresent) {
+                b2ShapeDef terrainShape = b2DefaultShapeDef();
+                const double midpointCourseDistance = distanceBase
+                        + 0.5 * (priorX + x) - RiderStartMeters;
+                const WorkoutGameWorldGroundMaterial material =
+                        WorkoutGameWorldGroundProfile::baseMaterialAt(
+                            roadCourse, midpointCourseDistance);
+                terrainShape.material.friction =
+                        float(material.coulombFriction);
+                terrainShape.material.restitution =
+                        float(material.restitution);
                 const b2Segment segment = {
                     {float(priorX), float(priorY)},
                     {float(x), float(y)}
@@ -415,6 +653,11 @@ struct WorkoutGamePhysics::Impl
             priorX = x;
             priorY = y;
             priorSurfacePresent = currentSurfacePresent;
+        }
+
+        if (!createAssetObstacleShapes(ground)) {
+            destroyWorld();
+            return false;
         }
 
         const double groundY = surfaceHeight(RiderStartMeters);
@@ -444,6 +687,7 @@ struct WorkoutGamePhysics::Impl
             b2World_Step(world, 1.0f / 120.0f, 4);
         }
         wasGrounded = grounded();
+        return true;
     }
 
     bool shapeGrounded(b2ShapeId shape) const
@@ -608,14 +852,14 @@ struct WorkoutGamePhysics::Impl
         }
     }
 
-    void synchronizeDistance(
+    bool synchronizeDistance(
             double distanceMeters,
             bool forceGroundFollowing,
             bool followCourseSurface)
     {
         if (!std::isfinite(distanceMeters) || distanceMeters < 0.0
                 || B2_IS_NULL(world)) {
-            return;
+            return B2_IS_NON_NULL(world);
         }
         authoritativeDistanceMeters = distanceMeters;
         const double targetLocalX = RiderStartMeters
@@ -625,13 +869,18 @@ struct WorkoutGamePhysics::Impl
             distanceBase = authoritativeDistanceMeters;
             elevationBase = before.ready
                     ? before.rider.elevationMeters : elevationBase;
-            createWorld();
-            return;
+            if (!createWorld()) {
+                configured = false;
+                initialized = false;
+                latest = {};
+                return false;
+            }
+            return true;
         }
 
         const b2Vec2 chassisPosition = b2Body_GetPosition(chassis);
         const double delta = targetLocalX - chassisPosition.x;
-        if (std::abs(delta) <= 1e-6 && !followCourseSurface) return;
+        if (std::abs(delta) <= 1e-6 && !followCourseSurface) return true;
         double verticalDelta = 0.0;
         // Distance playback translates the vehicle horizontally. Follow the
         // same ground delta so synchronization cannot manufacture air time.
@@ -651,6 +900,7 @@ struct WorkoutGamePhysics::Impl
                         float(delta), float(verticalDelta)},
                     b2Body_GetRotation(body));
         }
+        return true;
     }
 
     WorkoutGameWorldSnapshot snapshot() const
@@ -744,15 +994,22 @@ struct WorkoutGamePhysics::Impl
         return result;
     }
 
-    void rebaseIfNeeded()
+    bool rebaseIfNeeded()
     {
-        if (gapJumpFlightActive) return;
-        if (b2Body_GetPosition(chassis).x < RebaseAtMeters) return;
+        if (B2_IS_NULL(world)) return false;
+        if (gapJumpFlightActive) return true;
+        if (b2Body_GetPosition(chassis).x < RebaseAtMeters) return true;
         const WorkoutGameWorldSnapshot before = captureSnapshot();
         distanceBase = before.rider.distanceMeters;
         elevationBase = before.rider.elevationMeters;
-        createWorld();
+        if (!createWorld()) {
+            configured = false;
+            initialized = false;
+            latest = {};
+            return false;
+        }
         latest = captureSnapshot();
+        return latest.ready;
     }
 
     void step(const WorkoutGamePhysicsInput &input)
@@ -781,6 +1038,15 @@ struct WorkoutGamePhysics::Impl
                             != WorkoutGameTerrainKind::Tabletop
                         || tabletop.supportsJumpAtForwardSpeed(courseSpeed);
                 if (supportedTabletopJump) {
+                    if (terrain == WorkoutGameTerrainKind::LogOver) {
+                        const double courseDistance =
+                                authoritativeDistanceMeters >= 0.0
+                            ? authoritativeDistanceMeters
+                            : distanceBase
+                                + double(b2Body_GetPosition(chassis).x)
+                                - RiderStartMeters;
+                        clearCurrentAssetObstacle(courseDistance);
+                    }
                     if (terrain == WorkoutGameTerrainKind::GapJump) {
                         const WorkoutGameGapJumpGeometryProfile profile =
                                 WorkoutGameGapJumpGeometry::profile(difficulty);
@@ -897,6 +1163,11 @@ bool WorkoutGamePhysics::configure(const WorkoutGameRoadCourse &course)
     impl->configured = true;
     impl->generation = 0;
     reset();
+    if (!impl->assetObstacleSegmentsValid()) {
+        impl->configured = false;
+        impl->roadCourse = WorkoutGameRoadCourse();
+        return false;
+    }
     return true;
 }
 
@@ -1059,7 +1330,10 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
         impl->safeBypassActive = requestedSafeBypass;
         impl->gradePercent = input.gradePercent;
         impl->difficulty = input.difficulty;
-        impl->createWorld();
+        if (!impl->createWorld()) {
+            impl->configured = false;
+            return WorkoutGameWorldSnapshot();
+        }
     } else {
         impl->gradePercent = input.gradePercent;
         impl->difficulty = input.difficulty;
@@ -1072,10 +1346,18 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
         return impl->latest;
     }
 
-    impl->synchronizeDistance(
+    if (input.featureMainLineCommitted
+            && input.featureActionId != 0
+            && input.terrain == WorkoutGameTerrainKind::LogOver) {
+        impl->clearCurrentAssetObstacle(input.courseDistanceMeters);
+    }
+
+    if (!impl->synchronizeDistance(
             input.courseDistanceMeters,
             input.forceGroundFollowing,
-            input.followCourseSurface);
+            input.followCourseSurface)) {
+        return WorkoutGameWorldSnapshot();
+    }
 
     const std::int64_t elapsedMs = input.workoutTimeMs - impl->lastWorkoutTimeMs;
     impl->lastWorkoutTimeMs = input.workoutTimeMs;
@@ -1101,12 +1383,14 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
         available -= PhysicsStepMicroseconds;
     }
     if (input.followCourseSurface) {
-        impl->synchronizeDistance(
-                input.courseDistanceMeters, false, true);
+        if (!impl->synchronizeDistance(
+                input.courseDistanceMeters, false, true)) {
+            return WorkoutGameWorldSnapshot();
+        }
     }
     impl->remainderMicroseconds = available;
     impl->latest = impl->captureSnapshot();
-    impl->rebaseIfNeeded();
+    if (!impl->rebaseIfNeeded()) return WorkoutGameWorldSnapshot();
     return impl->latest;
 }
 

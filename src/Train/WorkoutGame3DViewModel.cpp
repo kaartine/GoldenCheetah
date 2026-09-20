@@ -1702,7 +1702,9 @@ void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
             courseEnd,
             distanceMeters + FeatureAheadMeters);
     featureCoverage = {minimumDistance, maximumDistance};
-    for (const WorkoutGameRoadPiece &piece : roadCourse.pieces) {
+    for (std::size_t pieceIndex = 0;
+            pieceIndex < roadCourse.pieces.size(); ++pieceIndex) {
+        const WorkoutGameRoadPiece &piece = roadCourse.pieces[pieceIndex];
         if (!piece.challenge.enabled) continue;
         if (piece.challenge.obstacleDistanceMeters < minimumDistance
                 || piece.challenge.obstacleDistanceMeters > maximumDistance) {
@@ -1721,7 +1723,7 @@ void WorkoutGame3DViewModel::rebuildFeatures(double distanceMeters)
                        sample.center.headingRadians * 180.0 / Pi);
         feature.insert(QStringLiteral("difficulty"), piece.difficulty);
         const WorkoutGame3DFeatureAssetSnapshot asset =
-                WorkoutGame3DFeatureAsset::place(roadCourse, piece);
+                WorkoutGame3DFeatureAsset::placeAt(roadCourse, pieceIndex);
         if (asset.ready) {
             feature.insert(QStringLiteral("assetX"), asset.xMeters);
             feature.insert(QStringLiteral("assetY"), asset.yMeters);

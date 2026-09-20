@@ -258,8 +258,7 @@ def _sync_editor_controls(
             _set_material_preview(scene, selected, color, roughness, metallic)
         physics = document.physics
         scene.workout_game_gallery_interaction = physics.interaction
-        scene.workout_game_gallery_friction = physics.friction
-        scene.workout_game_gallery_rolling_resistance = physics.rolling_resistance
+        scene.workout_game_gallery_coulomb_friction = physics.coulomb_friction
         scene.workout_game_gallery_restitution = physics.restitution
         scene.workout_game_gallery_collision_node = physics.collision_node or "NONE"
     finally:
@@ -310,8 +309,7 @@ def _stage_physics_controls(scene: bpy.types.Scene) -> None:
         return
     document.set_physics(
         interaction=scene.workout_game_gallery_interaction,
-        friction=scene.workout_game_gallery_friction,
-        rolling_resistance=scene.workout_game_gallery_rolling_resistance,
+        coulomb_friction=scene.workout_game_gallery_coulomb_friction,
         restitution=scene.workout_game_gallery_restitution,
         collision_node=(
             "" if scene.workout_game_gallery_collision_node == "NONE"
@@ -637,11 +635,10 @@ class WG_GALLERY_PT_models(bpy.types.Panel):
             editor.label(text="External physics metadata", icon="PHYSICS")
             editor.prop(scene, "workout_game_gallery_interaction", text="Interaction")
             if scene.workout_game_gallery_interaction != "visual-only":
-                editor.prop(scene, "workout_game_gallery_friction", text="Friction")
                 editor.prop(
                     scene,
-                    "workout_game_gallery_rolling_resistance",
-                    text="Rolling resistance",
+                    "workout_game_gallery_coulomb_friction",
+                    text="Coulomb friction",
                 )
                 editor.prop(scene, "workout_game_gallery_restitution", text="Restitution")
             editor.prop(scene, "workout_game_gallery_collision_node", text="Proxy")
@@ -721,12 +718,8 @@ def _configure_ui(initial_index: int) -> None:
         default="visual-only",
         update=_physics_changed,
     )
-    bpy.types.Scene.workout_game_gallery_friction = bpy.props.FloatProperty(
-        name="Friction", min=0.0, max=2.0, default=1.0,
-        update=_physics_changed,
-    )
-    bpy.types.Scene.workout_game_gallery_rolling_resistance = bpy.props.FloatProperty(
-        name="Rolling resistance", min=0.0, max=0.1, default=0.0, precision=3,
+    bpy.types.Scene.workout_game_gallery_coulomb_friction = bpy.props.FloatProperty(
+        name="Coulomb friction", min=0.0, max=2.0, default=1.0,
         update=_physics_changed,
     )
     bpy.types.Scene.workout_game_gallery_restitution = bpy.props.FloatProperty(

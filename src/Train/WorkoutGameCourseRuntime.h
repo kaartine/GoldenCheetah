@@ -52,6 +52,7 @@ public:
     double generatedTargetWattsAt(
             double positionMeters, double relativeGearRatio) const;
     double generatedProgressTargetWatts(double relativeGearRatio) const;
+    double relativeGearRatio(int currentGear) const;
     double updateProgressSpeedKph(
             double cadenceRpm,
             double powerWatts,
@@ -65,6 +66,7 @@ private:
     double configuredFtpWatts = 0.0;
     WorkoutGameCoursePreset configuredPreset =
             WorkoutGameCoursePreset::Balanced;
+    int configuredReferenceGear = 6;
     WorkoutGameCourse configuredVisualCourse;
     WorkoutGameDistancePlayback playback;
     WorkoutGameDistancePlaybackSnapshot latestProgress;

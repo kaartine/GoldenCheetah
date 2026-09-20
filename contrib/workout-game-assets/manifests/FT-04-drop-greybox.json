@@ -1,4 +1,5 @@
 {
+  "manifestVersion": 1,
   "assetId": "FT-04-drop-greybox",
   "displayName": "Workout Game Drop Greybox",
   "role": "feature",
@@ -121,6 +122,15 @@
       "maxMaterials": 2,
       "maxTextureBytes": 0
     }
+  },
+  "physics": {
+    "authority": "external",
+    "interaction": "rideable-feature",
+    "surface": {
+      "coulombFriction": 1.1,
+      "restitution": 0.0
+    },
+    "collisionProxy": { "kind": "none" }
   },
   "review": {
     "status": "approved",

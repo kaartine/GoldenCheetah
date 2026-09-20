@@ -1,4 +1,5 @@
 {
+  "manifestVersion": 1,
   "assetId": "FT-03-bunny-hop-greybox",
   "displayName": "Workout Game Bunny Hop Greybox",
   "role": "feature",
@@ -121,6 +122,15 @@
       "maxMaterials": 2,
       "maxTextureBytes": 0
     }
+  },
+  "physics": {
+    "authority": "external",
+    "interaction": "obstacle",
+    "surface": {
+      "coulombFriction": 1.1,
+      "restitution": 0.0
+    },
+    "collisionProxy": { "kind": "none" }
   },
   "review": {
     "status": "approved",

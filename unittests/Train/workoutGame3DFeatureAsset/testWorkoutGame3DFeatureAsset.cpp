@@ -8,7 +8,9 @@
  */
 
 #include "Train/WorkoutGame3DFeatureAsset.h"
+#include "Train/WorkoutGameAssetPhysicsSampler.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
+#include "Train/WorkoutGameMesh.h"
 
 #include <QTest>
 
@@ -56,6 +58,11 @@ const WorkoutGameRoadPiece &challengePiece(const WorkoutGameRoadCourse &course)
     return *result;
 }
 
+std::size_t challengePieceIndex(const WorkoutGameRoadCourse &course)
+{
+    return std::size_t(&challengePiece(course) - course.pieces.data());
+}
+
 }
 
 class TestWorkoutGame3DFeatureAsset : public QObject
@@ -63,6 +70,129 @@ class TestWorkoutGame3DFeatureAsset : public QObject
     Q_OBJECT
 
 private slots:
+    void placesResolvedLogAssetFromPersistedRenderFit()
+    {
+        WorkoutGameRoadCourse course = courseWith(
+                WorkoutGameTerrainKind::LogOver, 0.6);
+        const std::size_t pieceIndex = challengePieceIndex(course);
+        const WorkoutGameRoadPiece &piece = course.pieces[pieceIndex];
+
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        snapshot->catalogSchemaVersion = 1;
+        snapshot->physicsDefinitions.resize(1);
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log-over-greybox");
+        binding.definitionIndex = 0;
+        binding.nativeForwardOriginMm = -1020;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 700;
+        snapshot->bindings.push_back(binding);
+        snapshot->pieceBindings.resize(course.pieces.size());
+        auto &pieceBinding = snapshot->pieceBindings[pieceIndex];
+        pieceBinding.definitionIndex = 0;
+        pieceBinding.bindingIndex = 0;
+        pieceBinding.obstacleAnchorMm = std::int32_t(std::llround(
+                piece.challenge.obstacleDistanceMeters * 1000.0));
+        pieceBinding.obstacleAnchorMicrometerRemainder = 490;
+        course.assetPhysicsSnapshot = snapshot;
+
+        const WorkoutGame3DFeatureAssetSnapshot asset =
+                WorkoutGame3DFeatureAsset::placeAt(course, pieceIndex);
+        QVERIFY(asset.ready);
+        QCOMPARE(asset.terrain, WorkoutGameTerrainKind::LogOver);
+        QCOMPARE(asset.scaleZ, 700.0 / 540.0);
+        QCOMPARE(asset.scaleY, 700.0 / 540.0);
+
+        const double expectedDistance =
+                pieceBinding.obstacleAnchorMeters()
+                - 1.02 * asset.scaleZ;
+        const WorkoutGameRoadSample road =
+                WorkoutGameRoadCourseBuilder::sample(course, expectedDistance);
+        QVERIFY(road.ready);
+        QVERIFY(std::abs(asset.xMeters - road.center.xMeters) < 1e-12);
+        QVERIFY(std::abs(asset.yMeters
+                         - road.visualGroundElevationMeters()) < 1e-12);
+        QVERIFY(std::abs(asset.zMeters - road.center.zMeters) < 1e-12);
+
+        snapshot->pieceBindings[pieceIndex].bindingIndex = 99;
+        QVERIFY(!WorkoutGame3DFeatureAsset::placeAt(course, pieceIndex).ready);
+    }
+
+    void packagedAndFallbackLogMeshesShareThePhysicalObstacleBounds()
+    {
+        WorkoutGameRoadCourse course = courseWith(
+                WorkoutGameTerrainKind::LogOver, 0.6);
+        const std::size_t pieceIndex = challengePieceIndex(course);
+        const WorkoutGameRoadPiece &piece = course.pieces[pieceIndex];
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        snapshot->catalogSchemaVersion = 1;
+        snapshot->physicsDefinitions.resize(1);
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log-over-greybox");
+        binding.definitionIndex = 0;
+        binding.nativeForwardOriginMm = -1020;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 700;
+        snapshot->bindings.push_back(binding);
+        snapshot->pieceBindings.resize(course.pieces.size());
+        auto &pieceBinding = snapshot->pieceBindings[pieceIndex];
+        pieceBinding.definitionIndex = 0;
+        pieceBinding.bindingIndex = 0;
+        pieceBinding.obstacleAnchorMm = std::int32_t(std::llround(
+                piece.challenge.obstacleDistanceMeters * 1000.0));
+        course.assetPhysicsSnapshot = snapshot;
+
+        const WorkoutGameAssetRenderTransform transform =
+                WorkoutGameAssetPhysicsSampler::renderTransform(
+                    *snapshot, pieceIndex);
+        QCOMPARE(transform.status, WorkoutGameAssetRenderFitStatus::Ready);
+        constexpr double packagedObstacleStartMeters = 0.75;
+        constexpr double packagedObstacleEndMeters = 1.29;
+        const double packagedStart = transform.assetStartDistanceMeters
+                + packagedObstacleStartMeters * transform.forwardScale;
+        const double packagedEnd = transform.assetStartDistanceMeters
+                + packagedObstacleEndMeters * transform.forwardScale;
+
+        const WorkoutGameMesh fallback = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::LogOver, piece.difficulty);
+        QVERIFY(WorkoutGameMeshLibrary::valid(fallback));
+        const double fallbackScale = transform.forwardExtentMeters
+                / (fallback.exit.forwardMeters
+                   - fallback.entry.forwardMeters);
+        const double fallbackStart = transform.obstacleAnchorMeters
+                + fallback.entry.forwardMeters * fallbackScale;
+        const double fallbackEnd = transform.obstacleAnchorMeters
+                + fallback.exit.forwardMeters * fallbackScale;
+        QVERIFY(std::abs(packagedStart - fallbackStart) < 1e-12);
+        QVERIFY(std::abs(packagedEnd - fallbackEnd) < 1e-12);
+        double fallbackMinimum = fallback.vertices.front().forwardMeters;
+        double fallbackMaximum = fallbackMinimum;
+        double fallbackHeight = fallback.vertices.front().upMeters;
+        for (const WorkoutGameMeshVertex &vertex : fallback.vertices) {
+            fallbackMinimum = std::min(
+                    fallbackMinimum, vertex.forwardMeters);
+            fallbackMaximum = std::max(
+                    fallbackMaximum, vertex.forwardMeters);
+            fallbackHeight = std::max(fallbackHeight, vertex.upMeters);
+        }
+        QVERIFY(std::abs(packagedStart
+                         - (transform.obstacleAnchorMeters
+                            + fallbackMinimum * fallbackScale)) < 1e-12);
+        QVERIFY(std::abs(packagedEnd
+                         - (transform.obstacleAnchorMeters
+                            + fallbackMaximum * fallbackScale)) < 1e-12);
+        QVERIFY(fallbackHeight > 0.0);
+        const double fallbackUpScale = transform.upExtentMeters
+                / fallbackHeight;
+        QVERIFY(std::abs(0.54 * transform.upScale
+                         - fallbackHeight * fallbackUpScale)
+                < 1e-12);
+    }
+
     void rejectsUnsupportedOrUnavailableFeatures()
     {
         QVERIFY(!WorkoutGame3DFeatureAsset::place({}, {}).ready);

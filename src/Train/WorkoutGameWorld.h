@@ -102,6 +102,7 @@ struct WorkoutGamePhysicsInput
     double effortRatio = 0.0;
     bool paused = false;
     bool jumpRequested = false;
+    bool featureMainLineCommitted = false;
     bool forceGroundFollowing = false;
     bool followCourseSurface = false;
     WorkoutGameGapJumpLine gapJumpLine = WorkoutGameGapJumpLine::None;

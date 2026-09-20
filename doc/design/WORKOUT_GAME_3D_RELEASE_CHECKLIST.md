@@ -1523,7 +1523,19 @@ predominantly downhill generated course. All generated MTB presets now require
 and use trainer target-power control. Ride First keeps its downhill and technical
 visual character, but the physical trainer follows the original prescribed watts.
 Generated MTB courses also bypass Workout Ride cadence and virtual-gear scaling;
-virtual gears continue to affect game speed and riding feel only.
+virtual gears continue to affect game speed and riding feel only. This paragraph
+records the 2026-09-16 state and is superseded by the correction below.
+
+**Distance-terrain and virtual-gear correction (2026-09-19):** generated MTB
+courses now advance workout targets, cues, feature boundaries and finish state
+only from ridden distance. Elapsed time integrates physics and recording but
+cannot advance or skip the course. The source effort profile is subdivided at a
+user-selected distance wavelength and receives deterministic bounded variation;
+the generated reference-effort curve drives elevation and effort-semantic
+feature placement. Reference virtual gear 6 follows that curve, while lower or
+higher virtual gears scale the physical ERG resistance around it. New schema-6
+documents omit the redundant source-content SHA-256; schemas 1--5 remain
+readable and explicit save migrates them without retaining the hash.
 
 **Live-ride feedback hardening (2026-09-09):** Qt Quick 3D is now the default
 on supported desktop OpenGL platforms; the explicit painter and Scene Graph

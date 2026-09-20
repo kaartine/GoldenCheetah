@@ -21,6 +21,7 @@
 #include <QRect>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSlider>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
@@ -240,10 +241,10 @@ private slots:
                     const WorkoutGameDistanceCourseSection &section =
                             results[index].document.course.sections[generatedIndex];
                     generatedDurationMs += section.nominalDurationMs;
-                    QCOMPARE(section.minimumDurationMs,
-                             section.nominalDurationMs);
-                    QCOMPARE(section.maximumDurationMs,
-                             section.nominalDurationMs);
+                    QVERIFY(section.minimumDurationMs
+                            <= section.nominalDurationMs);
+                    QVERIFY(section.maximumDurationMs
+                            >= section.nominalDurationMs);
                 }
                 QCOMPARE(generatedDurationMs, source.durationMs);
             }
@@ -277,7 +278,7 @@ private slots:
         QVERIFY(requiredChild<QToolButton>(dialog, "balancedPresetButton")
                         ->isChecked());
         QVERIFY(requiredChild<QLabel>(dialog, "prescriptionGuaranteeLabel")
-                        ->text().contains("preserve", Qt::CaseInsensitive));
+                        ->text().contains("fixed-distance", Qt::CaseInsensitive));
         QVERIFY(!requiredChild<QLabel>(dialog, "durationValue")->text().isEmpty());
         QVERIFY(requiredChild<QLabel>(dialog, "etaValue")->text().contains("-"));
         QVERIFY(requiredChild<QLabel>(dialog, "distanceValue")->text().contains("km"));
@@ -301,7 +302,8 @@ private slots:
         QVERIFY(requiredChild<QLabel>(dialog, "featureDensityValue")
                         ->text().contains("/10 sections"));
         QCOMPARE(requiredChild<QLabel>(dialog, "runtimeExposureValue")->text(),
-                 QStringLiteral("100% of prescribed interval time"));
+                 QStringLiteral(
+                     "Distance-driven; elapsed time alone does not advance the course"));
         QVERIFY(!requiredChild<QLabel>(dialog, "prescriptionChangesValue")
                         ->text().isEmpty());
         QVERIFY(!requiredChild<QLabel>(dialog, "workoutFirstComparisonValue")
@@ -350,6 +352,46 @@ private slots:
         verifyResponsiveGeometry(1.0);
     }
 
+    void terrainControlsRegenerateTheDistanceProfileImmediately()
+    {
+        QTemporaryDir directory;
+        WorkoutGameCourseConversionDialog dialog(
+                sampleRequest(), directory.filePath("terrain-controls.crs"));
+        QSlider *variation = requiredChild<QSlider>(
+                dialog, "terrainVariationSlider");
+        QSlider *length = requiredChild<QSlider>(
+                dialog, "variationLengthSlider");
+        QCOMPARE(variation->value(), 15);
+        QCOMPARE(length->value(), 60);
+
+        variation->setValue(0);
+        const WorkoutGameCourseSourceResult flat = dialog.currentResult();
+        QCOMPARE(flat.document.generationParameters.terrainVariationPercent,
+                 0.0);
+        for (const WorkoutGameDistanceCourseSection &section :
+                flat.document.course.sections) {
+            QCOMPARE(section.referenceEffortStartWatts,
+                     section.targetStartWatts);
+            QCOMPARE(section.referenceEffortEndWatts,
+                     section.targetEndWatts);
+        }
+
+        variation->setValue(24);
+        length->setValue(30);
+        const WorkoutGameCourseSourceResult varied = dialog.currentResult();
+        QCOMPARE(varied.status, WorkoutGameCourseSourceStatus::Ready);
+        QCOMPARE(varied.document.generationParameters.terrainVariationPercent,
+                 24.0);
+        QCOMPARE(varied.document.generationParameters.variationLengthMeters,
+                 30.0);
+        QVERIFY(varied.document.course.sections.size()
+                > flat.document.course.sections.size());
+        QVERIFY(requiredChild<QLabel>(dialog, "terrainVariationValue")
+                        ->text().contains("24"));
+        QVERIFY(requiredChild<QLabel>(dialog, "variationLengthValue")
+                        ->text().contains("30"));
+    }
+
     void largeFontDialogDoesNotOverlapOrClip()
     {
         verifyResponsiveGeometry(1.5);
@@ -379,7 +421,8 @@ private slots:
         QVERIFY(requiredChild<QLabel>(dialog, "presetMetricsLabel")
                         ->text().contains("total turn", Qt::CaseInsensitive));
         QCOMPARE(requiredChild<QLabel>(dialog, "runtimeExposureValue")->text(),
-                 QStringLiteral("100% of prescribed interval time"));
+                 QStringLiteral(
+                     "Distance-driven; elapsed time alone does not advance the course"));
         QCOMPARE(rideFirst.status, WorkoutGameCourseSourceStatus::Ready);
         QVERIFY(rideFirst.summary.elevationGainMeters
                 > balanced.summary.elevationGainMeters);
@@ -394,17 +437,41 @@ private slots:
         QVERIFY(rideFirst.summary.technicalFeatureDensityPerTenSections
                 >= balanced.summary.technicalFeatureDensityPerTenSections);
         QVERIFY(totalAbsoluteTurn(rideFirst) > totalAbsoluteTurn(balanced));
-        QCOMPARE(rideFirst.document.course.sections.size(),
-                 balanced.document.course.sections.size());
-        for (std::size_t index = 0;
-                index < balanced.document.course.sections.size();
-                ++index) {
-            QCOMPARE(rideFirst.document.course.sections[index].targetStartWatts,
-                     balanced.document.course.sections[index].targetStartWatts);
-            QCOMPARE(rideFirst.document.course.sections[index].targetEndWatts,
-                     balanced.document.course.sections[index].targetEndWatts);
-            QCOMPARE(rideFirst.document.course.sections[index].nominalDurationMs,
-                     balanced.document.course.sections[index].nominalDurationMs);
+        for (std::size_t sourceIndex = 0;
+                sourceIndex < balanced.document.sourceIntervals.size();
+                ++sourceIndex) {
+            const WorkoutGameInterval &source =
+                    balanced.document.sourceIntervals[sourceIndex];
+            const std::vector<std::size_t> balancedIndexes =
+                    generatedSectionIndexes(balanced.document.course, source);
+            const std::vector<std::size_t> rideIndexes =
+                    generatedSectionIndexes(rideFirst.document.course, source);
+            QVERIFY(!balancedIndexes.empty());
+            QVERIFY(!rideIndexes.empty());
+            QCOMPARE(balanced.document.course.sections[
+                        balancedIndexes.front()].targetStartWatts,
+                     source.startWatts);
+            QCOMPARE(rideFirst.document.course.sections[
+                        rideIndexes.front()].targetStartWatts,
+                     source.startWatts);
+            QCOMPARE(balanced.document.course.sections[
+                        balancedIndexes.back()].targetEndWatts,
+                     source.endWatts);
+            QCOMPARE(rideFirst.document.course.sections[
+                        rideIndexes.back()].targetEndWatts,
+                     source.endWatts);
+            std::int64_t balancedDurationMs = 0;
+            std::int64_t rideDurationMs = 0;
+            for (std::size_t index : balancedIndexes) {
+                balancedDurationMs += balanced.document.course.sections[
+                        index].nominalDurationMs;
+            }
+            for (std::size_t index : rideIndexes) {
+                rideDurationMs += rideFirst.document.course.sections[
+                        index].nominalDurationMs;
+            }
+            QCOMPARE(balancedDurationMs, source.durationMs);
+            QCOMPARE(rideDurationMs, source.durationMs);
         }
         QVERIFY(!QFileInfo::exists(coursePath));
         QVERIFY(!QFileInfo::exists(
@@ -435,12 +502,11 @@ private slots:
         const QString guarantee = requiredChild<QLabel>(
                 dialog, "prescriptionGuaranteeLabel")->text();
         QVERIFY(guarantee.contains("all presets", Qt::CaseInsensitive));
-        QVERIFY(guarantee.contains("target", Qt::CaseInsensitive));
-        QVERIFY(guarantee.contains("timing", Qt::CaseInsensitive));
-        QVERIFY(guarantee.contains("ERG", Qt::CaseInsensitive));
-        QVERIFY(guarantee.contains("terrain variation", Qt::CaseInsensitive));
-        QVERIFY(guarantee.contains("course slope", Qt::CaseInsensitive));
-        QVERIFY(guarantee.contains("game physics", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("fixed-distance", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("reference gear 6", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("virtual gears", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("resistance", Qt::CaseInsensitive));
+        QVERIFY(guarantee.contains("elapsed time", Qt::CaseInsensitive));
 
         struct ExpectedPreset {
             const char *button;
@@ -461,9 +527,9 @@ private slots:
                              QLatin1String(preset.character),
                              Qt::CaseInsensitive),
                      qPrintable(description));
-            QVERIFY2(description.contains("prescribed", Qt::CaseInsensitive),
+            QVERIFY2(description.contains("effort", Qt::CaseInsensitive),
                      qPrintable(description));
-            QVERIFY(description.contains("interval times", Qt::CaseInsensitive));
+            QVERIFY(description.contains("distance", Qt::CaseInsensitive));
             const QString metrics = requiredChild<QLabel>(
                     dialog, "presetMetricsLabel")->text();
             QVERIFY(metrics.contains("grade", Qt::CaseInsensitive));

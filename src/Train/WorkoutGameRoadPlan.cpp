@@ -10,7 +10,6 @@
 #include "WorkoutGameRoadPlan.h"
 #include "WorkoutGameChallengeGeometry.h"
 
-#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -23,7 +22,6 @@ constexpr double MaximumLegacyBermTurnRadians = 1.7453292519943295; // 100 degre
 constexpr double MaximumReliefGradePercent = 120.0;
 constexpr std::uint64_t MaximumExactJsonInteger = 9007199254740991ULL;
 constexpr double Pi = 3.14159265358979323846;
-
 bool finiteValue(double value)
 {
     return std::isfinite(value);
@@ -378,11 +376,51 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
     if (plan.generationVersion
                 != WorkoutGameRoadPlan::LegacyGenerationVersion
             && plan.generationVersion
+                != WorkoutGameRoadPlan::BankAndReliefGenerationVersion
+            && plan.generationVersion
                 != WorkoutGameRoadPlan::CurrentGenerationVersion) {
         return WorkoutGameRoadPlanValidationStatus::UnsupportedVersion;
     }
     if (plan.pieces.size() > WorkoutGameRoadPlan::MaximumPieces) {
         return WorkoutGameRoadPlanValidationStatus::ResourceLimit;
+    }
+    if (plan.assetPhysicsSnapshot) {
+        const auto snapshotStatus =
+                WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    *plan.assetPhysicsSnapshot, plan.pieces.size());
+        if (snapshotStatus
+                == WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::UnsupportedVersion) {
+            return WorkoutGameRoadPlanValidationStatus::UnsupportedVersion;
+        }
+        if (snapshotStatus
+                == WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::ResourceLimit) {
+            return WorkoutGameRoadPlanValidationStatus::ResourceLimit;
+        }
+        if (snapshotStatus
+                != WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready) {
+            return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+        }
+        for (std::size_t index = 0; index < plan.pieces.size(); ++index) {
+            const double anchor = plan.pieces[index].geometryAnchorDistanceMeters;
+            if (!finiteValue(anchor) || anchor < 0.0
+                    || anchor > MaximumCourseDistanceMeters) {
+                return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+            }
+            const std::int32_t anchorMm = std::int32_t(std::llround(
+                    anchor * 1000.0));
+            const std::int16_t anchorRemainder = std::int16_t(std::llround(
+                    anchor * 1000000.0)
+                    - std::int64_t(anchorMm) * 1000);
+            if (plan.assetPhysicsSnapshot->pieceBindings[index].obstacleAnchorMm
+                        != anchorMm
+                    || plan.assetPhysicsSnapshot->pieceBindings[index]
+                            .obstacleAnchorMicrometerRemainder
+                        != anchorRemainder) {
+                return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+            }
+        }
     }
     if (plan.pieces.empty() || sourceSectionCount == 0) {
         return WorkoutGameRoadPlanValidationStatus::InvalidPlan;

@@ -45,12 +45,14 @@ struct WorkoutGameCourseSourceText
 struct WorkoutGameCourseDocument
 {
     static constexpr int LegacyConversionAlgorithmVersion = 1;
-    static constexpr int CurrentConversionAlgorithmVersion = 5;
+    static constexpr int CurrentConversionAlgorithmVersion = 6;
 
-    int schemaVersion = 4;
+    int schemaVersion = 6;
     int conversionAlgorithmVersion = CurrentConversionAlgorithmVersion;
     QString title;
     QString sourceFileName;
+    // Kept only for reading and canonically re-encoding legacy schemas 1-5.
+    // Current documents rely on their stored normalized source intervals.
     QString sourceSha256;
     std::vector<WorkoutGameInterval> sourceIntervals;
     std::vector<WorkoutGameCourseSourceLap> sourceLaps;
@@ -65,7 +67,10 @@ struct WorkoutGameCourseDocument
 class WorkoutGameCourseDocumentCodec
 {
 public:
-    static constexpr int CurrentSchemaVersion = 4;
+    // The production writer remains at 6 until resolver/legacy runtime parity
+    // is established. Schema 7 is explicitly available for codec preparation.
+    static constexpr int CurrentSchemaVersion = 6;
+    static constexpr int AssetPhysicsSchemaVersion = 7;
     static constexpr qsizetype MaximumDocumentBytes = 8 * 1024 * 1024;
     static constexpr std::size_t MaximumSourceAnnotations = 4096;
 

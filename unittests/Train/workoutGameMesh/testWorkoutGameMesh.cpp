@@ -530,6 +530,69 @@ private slots:
                  "bypass does not clear the feature and rider envelope");
     }
 
+    void snapshotRenderFitScalesFallbackLogGeometry()
+    {
+        WorkoutGameRoadCourse course = featureCourse(
+                WorkoutGameTerrainKind::LogOver, 0.6);
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const std::size_t pieceIndex = std::size_t(
+                std::distance(course.pieces.begin(), piece));
+
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        snapshot->catalogSchemaVersion = 1;
+        snapshot->physicsDefinitions.resize(1);
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log-over-greybox");
+        binding.definitionIndex = 0;
+        binding.nativeForwardOriginMm = -1020;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 700;
+        snapshot->bindings.push_back(binding);
+        snapshot->pieceBindings.resize(course.pieces.size());
+        auto &pieceBinding = snapshot->pieceBindings[pieceIndex];
+        pieceBinding.definitionIndex = 0;
+        pieceBinding.bindingIndex = 0;
+        pieceBinding.obstacleAnchorMm = std::int32_t(std::llround(
+                piece->challenge.obstacleDistanceMeters * 1000.0));
+        pieceBinding.obstacleAnchorMicrometerRemainder = 490;
+        course.assetPhysicsSnapshot = snapshot;
+
+        const WorkoutGameTrailTile tile =
+                WorkoutGameTrailTileAssembler::challenge(course, *piece);
+        QVERIFY(tile.ready);
+        const auto feature = std::find_if(
+                tile.mainLine.begin(), tile.mainLine.end(),
+                [](const WorkoutGameMeshInstance &instance) {
+                    return instance.renderLayer
+                            == WorkoutGameMeshRenderLayer::RaisedProp;
+                });
+        QVERIFY(feature != tile.mainLine.end());
+        QCOMPARE(feature->anchorDistanceMeters,
+                 pieceBinding.obstacleAnchorMeters());
+        const double renderedLength =
+                (feature->mesh.exit.forwardMeters
+                    - feature->mesh.entry.forwardMeters)
+                * feature->forwardScale;
+        double renderedHeight = 0.0;
+        for (const WorkoutGameMeshVertex &vertex : feature->mesh.vertices) {
+            renderedHeight = std::max(
+                    renderedHeight, vertex.upMeters * feature->upScale);
+        }
+        QVERIFY(std::abs(renderedLength - 0.7) <= 0.001);
+        QVERIFY(std::abs(renderedHeight - 0.7) <= 0.001);
+
+        snapshot->pieceBindings[pieceIndex].bindingIndex = 99;
+        QVERIFY(!WorkoutGameTrailTileAssembler::challenge(
+                     course, *piece).ready);
+    }
+
     void challengeTileKeepsAContinuousTrailSurfaceUnderAnObstacle()
     {
         const WorkoutGameRoadCourse course = featureCourse(

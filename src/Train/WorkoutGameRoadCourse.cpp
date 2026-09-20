@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameRoadCourse.h"
+#include "WorkoutGameAssetPhysicsSampler.h"
 #include "WorkoutGameRoadPlan.h"
 #include "WorkoutGameRoadQuality.h"
 
@@ -111,6 +112,20 @@ double featureSurfaceOffset(
         break;
     }
     return 0.0;
+}
+
+double featureSurfaceOffsetAt(
+        const WorkoutGameRoadCourse &course,
+        std::size_t pieceIndex,
+        double distanceMeters)
+{
+    if (course.assetPhysicsSnapshot) {
+        const WorkoutGameAssetPhysicsSample sample =
+                WorkoutGameAssetPhysicsSampler::sample(
+                    *course.assetPhysicsSnapshot, pieceIndex, distanceMeters);
+        if (sample.bound) return sample.offsetMeters;
+    }
+    return featureSurfaceOffset(course.pieces[pieceIndex], distanceMeters);
 }
 
 double legacyTrailReliefOffset(
@@ -250,13 +265,15 @@ double surfaceOffsetAt(
             course.pieces[index], distanceMeters);
     if (course.challengePieceIndexReady) {
         for (std::size_t candidate : course.challengePieceIndices) {
-            offset += featureSurfaceOffset(
-                    course.pieces[candidate], distanceMeters);
+            offset += featureSurfaceOffsetAt(
+                    course, candidate, distanceMeters);
         }
     } else {
-        for (const WorkoutGameRoadPiece &piece : course.pieces) {
-            if (piece.challenge.enabled) {
-                offset += featureSurfaceOffset(piece, distanceMeters);
+        for (std::size_t candidate = 0;
+                candidate < course.pieces.size(); ++candidate) {
+            if (course.pieces[candidate].challenge.enabled) {
+                offset += featureSurfaceOffsetAt(
+                        course, candidate, distanceMeters);
             }
         }
     }
@@ -268,19 +285,31 @@ double nonPhysicalFeatureOffsetAt(
         double distanceMeters)
 {
     double offset = 0.0;
-    const auto accumulate = [&](const WorkoutGameRoadPiece &piece) {
+    const auto accumulate = [&](std::size_t pieceIndex) {
+        const WorkoutGameRoadPiece &piece = course.pieces[pieceIndex];
         if (piece.terrain == WorkoutGameTerrainKind::BunnyHop
                 || piece.terrain == WorkoutGameTerrainKind::LogOver) {
-            offset += featureSurfaceOffset(piece, distanceMeters);
+            if (piece.terrain == WorkoutGameTerrainKind::LogOver
+                    && course.assetPhysicsSnapshot
+                    && WorkoutGameAssetPhysicsSampler::sample(
+                        *course.assetPhysicsSnapshot,
+                        pieceIndex, distanceMeters).bound) {
+                return;
+            }
+            offset += featureSurfaceOffsetAt(
+                    course, pieceIndex, distanceMeters);
         }
     };
     if (course.challengePieceIndexReady) {
         for (std::size_t candidate : course.challengePieceIndices) {
-            accumulate(course.pieces[candidate]);
+            accumulate(candidate);
         }
     } else {
-        for (const WorkoutGameRoadPiece &piece : course.pieces) {
-            if (piece.challenge.enabled) accumulate(piece);
+        for (std::size_t candidate = 0;
+                candidate < course.pieces.size(); ++candidate) {
+            if (course.pieces[candidate].challenge.enabled) {
+                accumulate(candidate);
+            }
         }
     }
     return offset;
@@ -489,8 +518,8 @@ double presetTurnScale(WorkoutGameCoursePreset preset)
     // the other modes add deterministic curvature without changing distance.
     switch (preset) {
     case WorkoutGameCoursePreset::WorkoutFirst: return 1.0;
-    case WorkoutGameCoursePreset::Balanced: return 1.30;
-    case WorkoutGameCoursePreset::RideFirst: return 2.60;
+    case WorkoutGameCoursePreset::Balanced: return 1.60;
+    case WorkoutGameCoursePreset::RideFirst: return 3.20;
     }
     return 1.0;
 }
@@ -1082,6 +1111,15 @@ WorkoutGameRoadCourse generateRoadCourse(
                                  challengeDistance
                                     - featureGeometry.startMeters + 1.5),
                         minimumObstacle, maximumObstacle);
+                if (section.terrain == WorkoutGameTerrainKind::Drop) {
+                    // A short section can pull the drop backwards to leave
+                    // landing clearance. Keep the rider's decision gate on
+                    // the approach side of the relocated obstacle.
+                    challengeDistance = std::min(
+                            challengeDistance, obstacleDistance);
+                }
+            } else {
+                featureFitsSection = false;
             }
         } else if (challenge.enabled
                 && section.terrain == WorkoutGameTerrainKind::Berm) {
@@ -1460,6 +1498,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::materialize(
 
     result.seed = course.seed;
     result.pieces = plan.pieces;
+    result.assetPhysicsSnapshot = plan.assetPhysicsSnapshot;
     result.challengePieceIndexReady = true;
     result.challengePieceIndices.reserve(result.pieces.size());
     for (std::size_t index = 0; index < result.pieces.size(); ++index) {

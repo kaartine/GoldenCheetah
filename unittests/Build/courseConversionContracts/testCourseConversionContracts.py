@@ -140,23 +140,13 @@ class CourseConversionContractTest(unittest.TestCase):
             self.assertTrue(all(
                 earlier[0] < later[0] and earlier[1] < later[1]
                 for earlier, later in zip(bands, bands[1:])))
+        self.assertEqual(self.fixture["runtimeProgression"], "distance-only")
+        self.assertEqual(self.fixture["referenceVirtualGear"], 6)
         self.assertEqual(
-            [contracts[mode]["minimumRuntimeWorkExposurePercent"]
-             for mode in modes],
-            [100.0, 100.0, 100.0])
-        self.assertEqual(
-            [contracts[mode]["minimumRuntimeRecoveryExposurePercent"]
-             for mode in modes],
-            [100.0, 100.0, 100.0])
-        self.assertEqual(
-            [contracts[mode]["minimumRuntimeKeyEffortExposurePercent"]
-             for mode in modes],
-            [100.0, 100.0, 100.0])
-        self.assertEqual(
-            contracts["WorkoutFirst"]["allowedTechnicalTerrain"],
+            contracts["WorkoutFirst"]["paletteTerrain"],
             ["roots", "rollers"])
         self.assertNotIn(
-            "gap-jump", contracts["WorkoutFirst"]["allowedTechnicalTerrain"])
+            "gap-jump", contracts["WorkoutFirst"]["paletteTerrain"])
         for mode in modes:
             with self.subTest(mode=mode):
                 self.assertTrue(contracts[mode]["scoredChallengeOnWorkAllowed"])
@@ -166,8 +156,8 @@ class CourseConversionContractTest(unittest.TestCase):
     def test_design_records_preview_metadata_and_legacy_rules(self):
         normalized_design = " ".join(self.design.split())
         required = (
-            "No conversion mode may shorten the nominal duration of any such interval",
-            "Runtime progression may reach a section boundary only after",
+            "No current conversion mode may change the nominal duration",
+            "Runtime section boundaries are reached only by ridden distance",
             "ordinary 5:00",
             "technical terrain exposure",
             "Calm training trail is not a no-game mode",
@@ -180,9 +170,9 @@ class CourseConversionContractTest(unittest.TestCase):
             "nested technical sets",
             "SmoothTrail in every mode",
             "original workout power profile on a time axis",
-            "schema version 4",
-            "original workout's ordered lap markers and timed text instructions",
-            "Schema 1 through 3 documents remain readable and canonical",
+            "schema version 6",
+            "does not calculate or persist a source-content hash",
+            "Schemas 1 through 5 remain readable",
         )
         for phrase in required:
             with self.subTest(phrase=phrase):
@@ -217,8 +207,10 @@ class CourseConversionContractTest(unittest.TestCase):
         preview = PREVIEW_SOURCE.read_text(encoding="utf-8")
         terrain = TERRAIN_SOURCE.read_text(encoding="utf-8")
         dialog = DIALOG_SOURCE.read_text(encoding="utf-8")
-        self.assertIn("workoutPowerProfile", preview)
-        self.assertIn("Original workout power - time", preview)
+        self.assertIn("sourcePower", preview)
+        self.assertIn("terrainEffort", preview)
+        self.assertIn(
+            "Workout baseline and generated terrain effort - distance", preview)
         self.assertIn("Generated terrain - distance", preview)
         self.assertIn("selectTechnicalTerrain", terrain)
         self.assertIn("WorkoutGameTerrainKind::SmoothTrail", terrain)

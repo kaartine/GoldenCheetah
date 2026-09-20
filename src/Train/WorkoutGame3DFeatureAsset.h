@@ -12,6 +12,8 @@
 
 #include "WorkoutGameRoadCourse.h"
 
+#include <cstddef>
+
 struct WorkoutGame3DFeatureAssetSnapshot
 {
     bool ready = false;
@@ -31,6 +33,9 @@ public:
     static WorkoutGame3DFeatureAssetSnapshot place(
             const WorkoutGameRoadCourse &course,
             const WorkoutGameRoadPiece &piece);
+    static WorkoutGame3DFeatureAssetSnapshot placeAt(
+            const WorkoutGameRoadCourse &course,
+            std::size_t pieceIndex);
 };
 
 #endif

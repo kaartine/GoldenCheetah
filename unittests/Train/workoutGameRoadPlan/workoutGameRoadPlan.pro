@@ -4,6 +4,7 @@ CONFIG += c++17
 TARGET = testWorkoutGameRoadPlan
 
 SOURCES = testWorkoutGameRoadPlan.cpp \
+          ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \
           ../../../src/Train/WorkoutGameRoadQuality.cpp
 

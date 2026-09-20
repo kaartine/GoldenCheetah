@@ -631,6 +631,11 @@ Context::~Context()
     validContexts.remove(this);
 }
 
+bool Context::prepareErgFileSelection()
+{
+    return true;
+}
+
 void Context::notifyErgFileSelected(ErgFile *workout)
 {
     emit ergFileSelected(workout);

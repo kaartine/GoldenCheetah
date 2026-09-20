@@ -49,6 +49,19 @@ WorkoutGameRoadPlan planWithTurns(
     return plan;
 }
 
+WorkoutGameAssetPhysicsDefinition triangularDefinition(
+        std::int32_t heightMm = 540)
+{
+    WorkoutGameAssetPhysicsDefinition definition;
+    definition.operation = WorkoutGameAssetPhysicsOperation::AddObstacle;
+    definition.coulombFrictionMilli = 1100;
+    definition.restitutionMilli = 0;
+    definition.chains = {{
+        {{-270, 0}, {0, heightMm}, {270, 0}}
+    }};
+    return definition;
+}
+
 }
 
 class TestWorkoutGameRoadPlan : public QObject
@@ -230,6 +243,366 @@ private slots:
         plan.pieces.resize(WorkoutGameRoadPlan::MaximumPieces + 1);
         QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
                  WorkoutGameRoadPlanValidationStatus::ResourceLimit);
+    }
+
+    void snapshotBuilderDeduplicatesCanonicalDefinitionsAndBindings()
+    {
+        WorkoutGameAssetPhysicsSnapshotBuilder builder;
+        std::uint32_t firstDefinition = 99;
+        std::uint32_t duplicateDefinition = 99;
+        std::uint32_t secondDefinition = 99;
+        QVERIFY(builder.internDefinition(
+                    triangularDefinition(), firstDefinition));
+        QVERIFY(builder.internDefinition(
+                    triangularDefinition(), duplicateDefinition));
+        QVERIFY(builder.internDefinition(
+                    triangularDefinition(640), secondDefinition));
+        QCOMPARE(firstDefinition, std::uint32_t(0));
+        QCOMPARE(duplicateDefinition, firstDefinition);
+        QCOMPARE(secondDefinition, std::uint32_t(1));
+
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log-over-greybox");
+        binding.variantKey = QStringLiteral("default");
+        binding.definitionIndex = firstDefinition;
+        binding.nativeForwardOriginMm = -1020;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 540;
+        std::uint32_t firstBinding = 99;
+        std::uint32_t duplicateBinding = 99;
+        QVERIFY(builder.internBinding(binding, firstBinding));
+        QVERIFY(builder.internBinding(binding, duplicateBinding));
+        QCOMPARE(firstBinding, std::uint32_t(0));
+        QCOMPARE(duplicateBinding, firstBinding);
+
+        WorkoutGameAssetPhysicsPieceBinding pieceBinding;
+        pieceBinding.bindingIndex = firstBinding;
+        pieceBinding.definitionIndex = firstDefinition;
+        pieceBinding.obstacleAnchorMm = 25000;
+        QVERIFY(builder.appendPieceBinding(pieceBinding));
+        binding.definitionIndex = secondDefinition;
+        std::uint32_t secondBinding = 99;
+        QVERIFY(builder.internBinding(binding, secondBinding));
+        pieceBinding.bindingIndex = secondBinding;
+        pieceBinding.definitionIndex = secondDefinition;
+        QVERIFY(builder.appendPieceBinding(pieceBinding));
+        const std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+                snapshot = builder.finish();
+        QVERIFY(snapshot);
+        QCOMPARE(snapshot->physicsDefinitions.size(), std::size_t(2));
+        QCOMPARE(snapshot->bindings.size(), std::size_t(2));
+        QCOMPARE(snapshot->pieceBindings.size(), std::size_t(2));
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    *snapshot, 2),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready);
+    }
+
+    void snapshotCanonicalArraysRejectDuplicateUnusedAndOutOfOrderEntries()
+    {
+        WorkoutGameCourseAssetPhysicsSnapshot snapshot;
+        snapshot.physicsDefinitions = {triangularDefinition(), triangularDefinition(640)};
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log");
+        binding.definitionIndex = 0;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 540;
+        snapshot.bindings.push_back(binding);
+        binding.definitionIndex = 1;
+        snapshot.bindings.push_back(binding);
+        WorkoutGameAssetPhysicsPieceBinding piece;
+        piece.bindingIndex = 0;
+        piece.definitionIndex = 0;
+        snapshot.pieceBindings.push_back(piece);
+        piece.bindingIndex = 1;
+        piece.definitionIndex = 1;
+        snapshot.pieceBindings.push_back(piece);
+        using Validator = WorkoutGameAssetPhysicsSnapshotValidator;
+        using Status = WorkoutGameAssetPhysicsSnapshotValidationStatus;
+        QCOMPARE(Validator::validate(snapshot, 2), Status::Ready);
+
+        auto bad = snapshot;
+        bad.physicsDefinitions[1] = bad.physicsDefinitions[0];
+        QCOMPARE(Validator::validate(bad, 2), Status::InvalidSnapshot);
+        bad = snapshot;
+        bad.bindings[1] = bad.bindings[0];
+        QCOMPARE(Validator::validate(bad, 2), Status::InvalidSnapshot);
+        bad = snapshot;
+        bad.pieceBindings[1].bindingIndex = 0;
+        bad.pieceBindings[1].definitionIndex = 0;
+        QCOMPARE(Validator::validate(bad, 2), Status::InvalidSnapshot);
+        bad = snapshot;
+        bad.bindings[1].definitionIndex = 0;
+        bad.pieceBindings[1].definitionIndex = 0;
+        bad.bindings[1].variantKey = QStringLiteral("second");
+        QCOMPARE(Validator::validate(bad, 2), Status::InvalidSnapshot);
+        bad = snapshot;
+        std::swap(bad.pieceBindings[0], bad.pieceBindings[1]);
+        QCOMPARE(Validator::validate(bad, 2), Status::InvalidSnapshot);
+        bad = snapshot;
+        bad.bindings[0].definitionIndex = 1;
+        bad.bindings[1].definitionIndex = 0;
+        bad.pieceBindings[0].definitionIndex = 1;
+        bad.pieceBindings[1].definitionIndex = 0;
+        QCOMPARE(Validator::validate(bad, 2), Status::InvalidSnapshot);
+    }
+
+    void snapshotSupportsIndependentPhysicsAndVisualBindings()
+    {
+        using Snapshot = WorkoutGameCourseAssetPhysicsSnapshot;
+        using Status = WorkoutGameAssetPhysicsSnapshotValidationStatus;
+        WorkoutGameAssetPhysicsSnapshotBuilder builder(1);
+        std::uint32_t definition = Snapshot::NoIndex;
+        QVERIFY(builder.internDefinition(triangularDefinition(), definition));
+        WorkoutGameAssetPhysicsPieceBinding physicsOnly;
+        physicsOnly.definitionIndex = definition;
+        QVERIFY(builder.appendPieceBinding(physicsOnly));
+
+        WorkoutGameAssetPhysicsBinding visual;
+        visual.assetId = QStringLiteral("EN-03-visual");
+        visual.definitionIndex = Snapshot::NoIndex;
+        visual.nativeForwardExtentMm = 540;
+        visual.nativeUpExtentMm = 540;
+        visual.resolvedExtentMm = 540;
+        std::uint32_t binding = Snapshot::NoIndex;
+        QVERIFY(builder.internBinding(visual, binding));
+        WorkoutGameAssetPhysicsPieceBinding visualOnly;
+        visualOnly.bindingIndex = binding;
+        QVERIFY(builder.appendPieceBinding(visualOnly));
+        QVERIFY(builder.appendPieceBinding({})); // Explicit no asset/no profile.
+        const auto snapshot = builder.finish();
+        QVERIFY(snapshot);
+        QCOMPARE(snapshot->catalogSchemaVersion, std::uint32_t(1));
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(*snapshot, 3), Status::Ready);
+        auto invalid = *snapshot;
+        invalid.catalogSchemaVersion = 2;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(invalid, 3), Status::UnsupportedVersion);
+        invalid = *snapshot;
+        invalid.bindings[0].definitionIndex = 0; // Visual piece still says no physics.
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(invalid, 3), Status::InvalidSnapshot);
+        invalid = *snapshot;
+        invalid.pieceBindings[0].flags = Snapshot::LegacyProcedural;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(invalid, 3), Status::InvalidSnapshot);
+    }
+
+    void snapshotDefaultVariantAndCapacityDeduplication()
+    {
+        WorkoutGameAssetPhysicsSnapshotBuilder builder;
+        std::uint32_t definitionIndex = 0;
+        QVERIFY(builder.internDefinition(triangularDefinition(), definitionIndex));
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log");
+        binding.definitionIndex = definitionIndex;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 540;
+        std::uint32_t index = 999;
+        QVERIFY(builder.internBinding(binding, index)); // Empty means default.
+        QCOMPARE(index, std::uint32_t(0));
+        binding.variantKey = QStringLiteral("invalid variant");
+        index = 999;
+        QVERIFY(!builder.internBinding(binding, index));
+        QCOMPARE(index, std::uint32_t(999));
+        for (std::size_t i = 1;
+             i < WorkoutGameCourseAssetPhysicsSnapshot::MaximumBindings; ++i) {
+            binding.variantKey = QString::number(i);
+            QVERIFY(builder.internBinding(binding, index));
+            QCOMPARE(index, std::uint32_t(i));
+        }
+        binding.variantKey.clear();
+        QVERIFY(builder.internBinding(binding, index));
+        QCOMPARE(index, std::uint32_t(0));
+        binding.variantKey = QStringLiteral("one-too-many");
+        index = 999;
+        QVERIFY(!builder.internBinding(binding, index));
+        QCOMPARE(index, std::uint32_t(999));
+    }
+
+    void snapshotBindingDeduplicatesAtCapacity()
+    {
+        WorkoutGameAssetPhysicsSnapshotBuilder builder;
+        std::uint32_t definitionIndex = 0;
+        QVERIFY(builder.internDefinition(triangularDefinition(), definitionIndex));
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log");
+        binding.definitionIndex = definitionIndex;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 540;
+        std::uint32_t index = 999;
+        for (std::size_t i = 0;
+             i < WorkoutGameCourseAssetPhysicsSnapshot::MaximumBindings; ++i) {
+            binding.variantKey = QString::number(i);
+            QVERIFY(builder.internBinding(binding, index));
+            WorkoutGameAssetPhysicsPieceBinding piece;
+            piece.bindingIndex = index;
+            piece.definitionIndex = definitionIndex;
+            QVERIFY(builder.appendPieceBinding(piece));
+        }
+        binding.variantKey = QStringLiteral("0");
+        QVERIFY(builder.internBinding(binding, index));
+        QCOMPARE(index, std::uint32_t(0));
+        const auto snapshot = builder.finish();
+        QVERIFY(snapshot);
+        QCOMPARE(snapshot->bindings.size(), WorkoutGameCourseAssetPhysicsSnapshot::MaximumBindings);
+        QCOMPARE(snapshot->physicsDefinitions.size(), std::size_t(1));
+    }
+
+    void legacyAnchorsRejectNonFiniteAndOutOfRangeBeforeRounding()
+    {
+        for (double invalid : {std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity(),
+                               -0.1, 250000.001}) {
+            auto plan = planWithTurns({15.0});
+            plan.pieces[0].geometryAnchorDistanceMeters = invalid;
+            QVERIFY(!WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan));
+        }
+        for (const auto &example : std::vector<std::pair<double, std::int32_t>>{
+                 {10.00049, 10000}, {10.0005, 10001}, {10.00051, 10001}}) {
+            auto plan = planWithTurns({15.0});
+            plan.pieces[0].geometryAnchorDistanceMeters = example.first;
+            plan.assetPhysicsSnapshot = WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan);
+            QVERIFY(plan.assetPhysicsSnapshot);
+            QCOMPARE(plan.assetPhysicsSnapshot->pieceBindings[0].obstacleAnchorMm, example.second);
+            const std::int16_t remainder = std::int16_t(std::llround(
+                    example.first * 1000000.0)
+                    - std::int64_t(example.second) * 1000);
+            QCOMPARE(plan.assetPhysicsSnapshot->pieceBindings[0]
+                        .obstacleAnchorMicrometerRemainder,
+                     remainder);
+            QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
+                     WorkoutGameRoadPlanValidationStatus::Ready);
+        }
+    }
+
+    void snapshotAnchorsMustMatchRoadPieces()
+    {
+        auto plan = planWithTurns({15.0, -15.0, 15.0});
+        plan.assetPhysicsSnapshot = WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan);
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
+                 WorkoutGameRoadPlanValidationStatus::Ready);
+        auto changed = std::make_shared<WorkoutGameCourseAssetPhysicsSnapshot>(
+                *plan.assetPhysicsSnapshot);
+        changed->pieceBindings[1].obstacleAnchorMm += 1;
+        plan.assetPhysicsSnapshot = changed;
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
+                 WorkoutGameRoadPlanValidationStatus::InvalidPlan);
+    }
+
+    void legacySnapshotMarksEveryPieceForVersionOneAdapter()
+    {
+        const WorkoutGameRoadPlan plan = planWithTurns(
+                {15.0, -15.0, 15.0});
+        const std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+                snapshot =
+                    WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan);
+        QVERIFY(snapshot);
+        QVERIFY(snapshot->physicsDefinitions.empty());
+        QVERIFY(snapshot->bindings.empty());
+        QCOMPARE(snapshot->pieceBindings.size(), plan.pieces.size());
+        for (std::size_t index = 0;
+                index < snapshot->pieceBindings.size(); ++index) {
+            const WorkoutGameAssetPhysicsPieceBinding &binding =
+                    snapshot->pieceBindings[index];
+            QCOMPARE(binding.bindingIndex,
+                     WorkoutGameCourseAssetPhysicsSnapshot::NoIndex);
+            QCOMPARE(binding.flags,
+                     WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural);
+            QCOMPARE(binding.obstacleAnchorMm,
+                     std::int32_t(std::llround(
+                         plan.pieces[index].geometryAnchorDistanceMeters
+                             * 1000.0)));
+            QVERIFY(std::abs(binding.obstacleAnchorMeters()
+                        - plan.pieces[index].geometryAnchorDistanceMeters)
+                    <= 0.0000005);
+        }
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    *snapshot, plan.pieces.size()),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready);
+    }
+
+    void snapshotValidationRejectsBadGeometryIndicesAndLimits()
+    {
+        WorkoutGameAssetPhysicsSnapshotBuilder builder;
+        std::uint32_t definitionIndex = 0;
+        QVERIFY(builder.internDefinition(
+                    triangularDefinition(), definitionIndex));
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log-over-greybox");
+        binding.variantKey = QStringLiteral("default");
+        binding.definitionIndex = definitionIndex;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 540;
+        std::uint32_t bindingIndex = 0;
+        QVERIFY(builder.internBinding(binding, bindingIndex));
+        WorkoutGameAssetPhysicsPieceBinding pieceBinding;
+        pieceBinding.bindingIndex = bindingIndex;
+        pieceBinding.definitionIndex = definitionIndex;
+        QVERIFY(builder.appendPieceBinding(pieceBinding));
+        const auto valid = builder.finish();
+        QVERIFY(valid);
+
+        WorkoutGameCourseAssetPhysicsSnapshot invalid = *valid;
+        invalid.bindings[0].definitionIndex = 42;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        invalid = *valid;
+        invalid.physicsDefinitions[0].chains[0].points[1].forwardMm = -270;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        invalid = *valid;
+        invalid.physicsDefinitions[0].chains[0].points[1] = {-265, 0};
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        invalid = *valid;
+        invalid.physicsDefinitions[0].operation =
+                WorkoutGameAssetPhysicsOperation::ReplaceSurface;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        for (const int remainder : {-501, 501}) {
+            invalid = *valid;
+            invalid.pieceBindings[0].obstacleAnchorMicrometerRemainder =
+                    std::int16_t(remainder);
+            QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                        invalid, 1),
+                     WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+        }
+
+        invalid = *valid;
+        invalid.physicsDefinitions[0].chains.push_back(
+                {{{300, 0}, {320, 0}}});
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        invalid = *valid;
+        invalid.physicsDefinitions.resize(
+                WorkoutGameCourseAssetPhysicsSnapshot::MaximumDefinitions + 1);
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::ResourceLimit);
+
+        invalid = *valid;
+        invalid.snapshotVersion =
+                WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion + 1;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::UnsupportedVersion);
+
+        invalid = *valid;
+        invalid.physicsDefinitions[0].profileVersion = 99;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::UnsupportedVersion);
     }
 
     void sourceSectionsAndInactiveFieldsAreStrictlyValidated()

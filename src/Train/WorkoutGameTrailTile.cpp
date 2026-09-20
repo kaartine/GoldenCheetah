@@ -9,6 +9,8 @@
 
 #include "WorkoutGameTrailTile.h"
 
+#include "WorkoutGameAssetPhysicsSampler.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -64,10 +66,46 @@ WorkoutGameTrailTile WorkoutGameTrailTileAssembler::challenge(
             piece.terrain, piece.difficulty);
     if (!WorkoutGameMeshLibrary::valid(feature)) return result;
 
-    const double featureStart = piece.challenge.obstacleDistanceMeters
-            + feature.entry.forwardMeters;
-    const double featureEnd = piece.challenge.obstacleDistanceMeters
-            + feature.exit.forwardMeters;
+    double forwardScale = 1.0;
+    double upScale = 1.0;
+    double obstacleAnchorMeters = piece.challenge.obstacleDistanceMeters;
+    if (course.assetPhysicsSnapshot) {
+        const auto location = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [&piece](const WorkoutGameRoadPiece &candidate) {
+                    return &candidate == &piece;
+                });
+        const std::size_t pieceIndex = std::size_t(
+                std::distance(course.pieces.begin(), location));
+        const WorkoutGameAssetRenderTransform transform =
+                WorkoutGameAssetPhysicsSampler::renderTransform(
+                    *course.assetPhysicsSnapshot, pieceIndex);
+        if (transform.status == WorkoutGameAssetRenderFitStatus::Invalid) {
+            return {};
+        }
+        if (transform.status == WorkoutGameAssetRenderFitStatus::Ready) {
+            if (piece.terrain != WorkoutGameTerrainKind::LogOver
+                    || transform.assetId
+                        != QStringLiteral("FT-02-log-over-greybox")) {
+                return {};
+            }
+            const double nativeLength =
+                    feature.exit.forwardMeters - feature.entry.forwardMeters;
+            double nativeHeight = 0.0;
+            for (const WorkoutGameMeshVertex &vertex : feature.vertices) {
+                nativeHeight = std::max(nativeHeight, vertex.upMeters);
+            }
+            if (nativeLength <= 0.0 || nativeHeight <= 0.0) return {};
+            forwardScale = transform.forwardExtentMeters / nativeLength;
+            upScale = transform.upExtentMeters / nativeHeight;
+            obstacleAnchorMeters = transform.obstacleAnchorMeters;
+        }
+    }
+
+    const double featureStart = obstacleAnchorMeters
+            + feature.entry.forwardMeters * forwardScale;
+    const double featureEnd = obstacleAnchorMeters
+            + feature.exit.forwardMeters * forwardScale;
     result.entryDistanceMeters = std::clamp(
             piece.challenge.bypassStartDistanceMeters,
             0.0, featureStart);
@@ -90,7 +128,9 @@ WorkoutGameTrailTile WorkoutGameTrailTileAssembler::challenge(
     WorkoutGameMeshInstance featureInstance;
     featureInstance.mesh = std::move(feature);
     featureInstance.anchorDistanceMeters =
-            piece.challenge.obstacleDistanceMeters;
+            obstacleAnchorMeters;
+    featureInstance.forwardScale = forwardScale;
+    featureInstance.upScale = upScale;
     featureInstance.entryRightScale = halfWidthAt(course, featureStart)
             / featureInstance.mesh.entry.halfWidthMeters;
     featureInstance.exitRightScale = halfWidthAt(course, featureEnd)

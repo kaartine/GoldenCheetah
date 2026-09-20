@@ -163,12 +163,14 @@ Renderer selection is capability-based. Runtime rendering errors permanently
 fall back for the current session instead of repeatedly recreating a GPU
 context.
 
-Distance courses publish an integer workout position from Train view.
-`WorkoutGamePositionRate` converts those quantized anchors into a continuous
-presentation rate: repeated positions retain the latest moving rate, explicit
-stationary telemetry stops presentation, and a moving sample resumes it before
-the next whole distance unit arrives. The source position remains authoritative;
-the estimator only removes stop-and-burst motion between source updates.
+Distance courses consume the precise route distance carried by each Train
+telemetry update. The route-to-nominal-time mapping is an authoritative
+zero-rate clock anchor: fixed presentation ticks may publish another frame, but
+wall-clock time cannot advance terrain, effort, feature, or score boundaries.
+The older integer `Context::setNow` update remains a compatibility anchor and
+cannot move a live precise distance backwards. Pause, hidden-window suspension,
+and resume retain the last precise distance instead of rereading a quantized
+position.
 
 Only the selected renderer receives frames. Hiding the chart drains its newest
 frame, stops the GUI drain and scene graph request loops, and suspends that
@@ -926,9 +928,11 @@ The normal HUD should prioritize the next action, target band, interval
 countdown, flow/streak, gear, and route position. Renderer and frame-time
 diagnostics belong in an optional debug overlay.
 
-## Future Distance Course Mode
+## Distance Course Mode
 
-Distance Course is a separate mode from the time-authored ERG Workout Game.
+Generated MTB courses use distance progression rather than the time progression
+of an ordinary ERG workout. The source ERG timeline is conversion input and
+nominal metadata; it is not a runtime clock gate.
 Elapsed time is still recorded and used to integrate physics, but it no longer
 determines course progress. The finish condition is a configured route distance,
 and the rider advances only through simulated road speed. On level ground the
@@ -944,15 +948,19 @@ The initial course format is distance-authored and offline:
 
 ### Unified MTB Course Generator
 
-GoldenCheetah should expose one `Generate MTB Course` workflow from both the
-workout library and activity history. It always creates a new editable private
-course workout and never modifies the source workout or activity.
+GoldenCheetah exposes `Create MTB Course...` for a compatible workout. It always
+creates a new editable private course workout and never modifies the source
+workout. Activity-history and combined workout-plus-activity generation remain
+planned extensions; they are not part of the current generator contract.
 
-The generator supports three source combinations:
+The current implementation supports:
 
 - `Workout`: convert an ERG workout into a procedural MTB route. Interval
   duration, target power, ramps, and recoveries determine climbs, descents,
   connectors, and game features.
+
+Planned source combinations are:
+
 - `Past activity`: convert a previously synchronized activity into a compressed
   MTB course and derive an optional editable target-power profile from its
   recorded effort.
@@ -962,17 +970,18 @@ The generator supports three source combinations:
   connectors, synthesizing or resizing terrain only where the source activity
   cannot accommodate the workout safely.
 
-All variants produce the same course data model and open in the same editor.
-The generated draft records source identifiers, conversion parameters, and a
-deterministic seed for reproducibility, but keeps athlete and activity data in
-the private athlete directory.
+The implemented workout conversion stores the source file name, normalized
+intervals and annotations, conversion parameters, and a deterministic seed.
+It deliberately does not duplicate a source-content hash: the normalized
+intervals are the persisted regeneration input, and project source history is
+owned by Git. Athlete and activity data stays in the private athlete directory.
 
-The command is available as `Generate MTB Course...` in the context menu of a
-compatible ERG workout or activity. The wizard then allows an optional second
-source, terrain style, connector compression, target duration, trainer
-difficulty, and generation seed. Its final preview compares source and output
-duration, distance, elevation gain, target load, and any sections that were
-trimmed, synthesized, or assigned a safe bypass.
+The command is available as `Create MTB Course...` for a compatible ERG workout.
+The dialog selects trail character (`Workout first`, `Balanced`, or `Ride
+first`), terrain-effort variation, and the variation wavelength in metres. Its
+preview compares distance, elevation gain, target load, technical exposure,
+features, and a physics-derived completion-time range. Changing either terrain
+control regenerates the preview immediately.
 
 An ERG-only source remains fully useful without GPS or Strava: the procedural
 generator creates all terrain. An activity without power remains useful as a
@@ -985,24 +994,33 @@ The conversion UI must show that completion time becomes variable.
 
 ### Generating A Course From A Timed Workout
 
-A timed workout can be converted explicitly into a distance course whose
-nominal completion time matches the original workout duration. FTP classifies
-the training intensity, but FTP alone cannot determine gradient or speed. The
-generator also needs rider-plus-bike mass, available virtual gearing, trainer
-capabilities, and a selected terrain style.
+A timed workout can be converted explicitly into a fixed-distance course. The
+original duration remains nominal metadata and is used to solve the initial
+section distances, but actual completion time depends on measured power,
+terrain, coasting, and stops. FTP classifies training intensity; road physics
+and the selected trail character determine distance and grade.
 
 For each workout interval the generator:
 
 1. Classifies its physiological role from duration, target power relative to
    FTP, ramp direction, and surrounding recovery.
-2. Selects a suitable feature and bounded grade range. Short sprints favor a
-   fast, shallow approach; 30-second to two-minute efforts favor punchy climbs;
-   sustained threshold efforts favor longer moderate climbs; and recovery
-   favors descents or low-resistance flow trail.
-3. Runs the longitudinal model at the prescribed power and solves the segment
-   distance that produces the requested nominal duration.
-4. Adds grade transitions and approach/exit terrain, then simulates the complete
-   course again to correct accumulated timing error.
+2. Runs the longitudinal model at the source target and solves the nominal
+   distance covered during that interval.
+3. Subdivides ordinary route spans to at least three samples per selected
+   variation wavelength and applies a deterministic, bounded, zero-mean effort
+   variation at shared section boundaries. Sections reserved for long climb or
+   jump geometry may remain longer so the physical feature still fits. The
+   percentage control sets amplitude. Shared endpoints prevent resistance
+   steps; rises develop more gradually than easing terrain, so resistance can
+   drop faster than it builds. Mean correction uses the prescribed endpoint
+   watts and nominal duration, preserving total planned effort without an
+   artificial stored-effort clamp.
+4. Converts the resulting reference-effort profile to an uphill-biased bounded
+   grade profile. Source recovery remains smooth and unscored.
+5. Places technical features by the effort needed to cross them: falling effort
+   can produce drops or jump landings, rising effort can produce acceleration
+   approaches, slabs, tabletops, or gap jumps, and sustained high effort can
+   produce climbs, slabs, or rock gardens.
 
 For example, a `4 x 30 s @ 250 W` workout at an FTP of `190 W` is classified as
 four short anaerobic efforts. Rider mass and the speed model determine whether
@@ -1010,29 +1028,17 @@ each effort becomes, for example, an 80- or 130-meter climb; the ratio to FTP
 selects the challenge class but does not alone fix the gradient. Recovery
 intervals become descents and connectors sized by their nominal recovery time.
 
-The generated course stores both nominal duration and acceptable time bounds
-for every prescribed effort. Course movement remains distance based, but the
-training target is protected from extreme pacing errors:
+The generated course stores source nominal durations only for reconstruction,
+preview, and legacy compatibility. Current documents serialize legacy minimum
+and maximum duration fields equal to nominal duration, and runtime progression
+ignores all three: no elapsed-time minimum can hold the rider back, and no
+elapsed-time maximum can skip route distance. Stopping on an uphill therefore
+stops progress; coasting can continue only as permitted by road physics.
 
-- arriving early can extend a neutral crest or exit line until the minimum
-  useful exposure is reached;
-- falling substantially behind opens a visible safe bypass at the maximum
-  exposure time; and
-- automatic adjustment never raises target power or silently extends a hard
-  interval beyond its configured bound.
-
-Two completion policies are useful:
-
-- `Fixed Course` never changes generated distances and reports a continuously
-  updated finish-time estimate.
-- `Time Budget` targets a requested session duration by choosing shorter or
-  longer recovery, warm-up, cool-down, and scenic connector branches at
-  checkpoints. It does not shorten prescribed work or change its target power.
-
-Thus a one-hour source workout should take approximately one hour when targets
-are followed. A confidence range is shown before starting and a live ETA during
-the ride. When a strict end time matters more than distance, the existing timed
-ERG mode remains the correct choice.
+The current policy is always a fixed course. A one-hour source workout should
+be near one hour at the reference configuration, but the preview is explicitly
+a range rather than a promise. When a strict end time matters more than route
+completion, the ordinary timed ERG mode remains the correct choice.
 
 ### Activity And Route Templates
 
@@ -1141,15 +1147,18 @@ power feels like a slow/high-torque or fast/low-torque effort.
 `TrainSidebar` remains the only component allowed to send trainer commands.
 Generated MTB courses keep distance-based progression and road physics separate
 from physical trainer control. All three presets use ERG commands when the
-trainer supports target power. `Workout first` and `Ride first` send the
-original prescribed power. `Balanced` adds short, deterministic
-technical-feature efforts bounded to 8 percent and 20 W. Each effort uses a
-smooth compensating offset whose mean over the source section is zero, keeping
-the prescribed average workload. Course grade affects game speed and road
-physics, not trainer power. Generated MTB courses also bypass Workout Ride
-cadence and virtual-gear scaling, so the original prescription remains
-authoritative; the Workout Ride selector is unavailable for these courses.
-Starting a generated MTB course requires trainer target-power
+trainer supports target power. At reference gear 6, `Workout first` and `Ride
+first` send the generated terrain-effort profile, which is the original workout
+profile plus the selected bounded variation. `Balanced` can additionally add a
+short deterministic technical-feature pulse bounded to 8 percent and 20 W; its
+compensating offset keeps the section-average feature pulse at zero. Course
+grade affects game speed and road physics, not the ERG calculation directly.
+
+Virtual gears deliberately change physical resistance around reference gear 6:
+the current gear's relative drivetrain ratio scales the ERG command, with a
+hard trainer-target clamp. This gives the rider a usable easier or harder gear
+while the course and all workout/feature boundaries remain anchored to ridden
+distance. Starting a generated MTB course requires trainer target-power
 support; the planner's slope fallback remains defensive only. Power and slope
 commands are never sent concurrently.
 

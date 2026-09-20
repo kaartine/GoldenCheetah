@@ -8,12 +8,15 @@ SOURCES = testWorkoutGameMesh.cpp \
           ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
           ../../../src/Train/WorkoutGameMesh.cpp \
           ../../../src/Train/WorkoutGameTrailTile.cpp \
+          ../../../src/Train/WorkoutGameAssetPhysicsSampler.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
+          ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \
           ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameRoadProjection.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameMesh.h \
+          ../../../src/Train/WorkoutGameAssetPhysicsSampler.h \
           ../../../src/Train/WorkoutGameClimbGeometry.h \
           ../../../src/Train/WorkoutGameTabletopGeometry.h \
           ../../../src/Train/WorkoutGameForestFloor.h \

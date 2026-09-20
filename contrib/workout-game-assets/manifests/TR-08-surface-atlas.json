@@ -1,4 +1,5 @@
 {
+  "manifestVersion": 1,
   "assetId": "TR-08-surface-atlas",
   "displayName": "Workout Game Pixel Surface Atlas",
   "role": "texture",
@@ -82,6 +83,11 @@
       "maxMaterials": 5,
       "maxTextureBytes": 16384
     }
+  },
+  "physics": {
+    "authority": "external",
+    "interaction": "visual-only",
+    "collisionProxy": { "kind": "none" }
   },
   "review": {
     "status": "approved",

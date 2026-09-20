@@ -23,6 +23,8 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
+#include <QSlider>
 #include <QStringList>
 #include <QStyle>
 #include <QToolButton>
@@ -112,20 +114,20 @@ QString presetDescriptionText(WorkoutGameCoursePreset preset)
     case WorkoutGameCoursePreset::WorkoutFirst:
         return QObject::tr(
             "Workout first assigns only roots or rollers to about 2 of 10 "
-            "eligible trail sections. The trainer follows the original prescribed "
-            "power targets exactly and interval times stay unchanged.");
+            "eligible trail sections. The original effort profile shapes a calm, "
+            "distance-based route whose targets advance with distance.");
     case WorkoutGameCoursePreset::Balanced:
         return QObject::tr(
             "Balanced uses roots, rollers, rock gardens, logs, and skinnies on "
-            "about 6 of 10 eligible sections. The trainer follows the prescribed "
-            "power profile with small, bounded technical efforts while interval "
-            "times stay unchanged.");
+            "about 6 of 10 eligible sections. Adjustable terrain variation adds "
+            "bounded MTB effort around the original workout profile, and targets "
+            "advance with distance.");
     case WorkoutGameCoursePreset::RideFirst:
         return QObject::tr(
             "Ride first uses technical terrain on about 9 of 10 eligible sections "
-            "and can add rock slabs, tabletops, and gap jumps. The trainer follows "
-            "the original prescribed power profile while course slope remains in "
-            "the game physics and interval times stay unchanged.");
+            "and can add rock slabs, tabletops, and gap jumps. The effort profile "
+            "is converted into a more technical, uphill-biased route whose targets "
+            "advance with distance.");
     }
     return {};
 }
@@ -146,7 +148,8 @@ QString presetMetricsText(const WorkoutGameCourseSourceResult &result)
 QString runtimeExposureText(const WorkoutGameCourseSourceResult &result)
 {
     if (result.status != WorkoutGameCourseSourceStatus::Ready) return {};
-    return QObject::tr("100% of prescribed interval time");
+    return QObject::tr(
+            "Distance-driven; elapsed time alone does not advance the course");
 }
 
 QString prescriptionChangesText(
@@ -224,9 +227,10 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     layout->addWidget(heading);
 
     QLabel *prescriptionGuarantee = new QLabel(tr(
-            "All presets preserve the workout structure and interval timing and use "
-            "prescribed ERG targets when the trainer supports them. Terrain variation "
-            "and course slope shape the visual road and game physics."), this);
+            "All presets create a fixed-distance route from the workout effort "
+            "profile. Reference gear 6 follows the generated terrain effort; virtual "
+            "gears change resistance, and elapsed time alone never advances the route."),
+            this);
     prescriptionGuarantee->setObjectName(
             QStringLiteral("prescriptionGuaranteeLabel"));
     prescriptionGuarantee->setWordWrap(true);
@@ -316,6 +320,44 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     comparison->setColumnStretch(1, 1);
     detailsLayout->addWidget(modeComparison);
 
+    QGridLayout *terrainSettings = new QGridLayout;
+    terrainSettings->setHorizontalSpacing(12);
+    terrainSettings->setVerticalSpacing(6);
+    terrainVariationSlider = new QSlider(Qt::Horizontal, details);
+    terrainVariationSlider->setObjectName(
+            QStringLiteral("terrainVariationSlider"));
+    terrainVariationSlider->setRange(0, 30);
+    terrainVariationSlider->setValue(std::clamp(
+            int(std::lround(sourceRequest.terrainVariationPercent)), 0, 30));
+    terrainVariationSlider->setAccessibleName(tr("Terrain variation"));
+    terrainVariationValue = summaryValue(
+            "terrainVariationValue", details);
+    variationLengthSlider = new QSlider(Qt::Horizontal, details);
+    variationLengthSlider->setObjectName(
+            QStringLiteral("variationLengthSlider"));
+    variationLengthSlider->setRange(20, 200);
+    variationLengthSlider->setSingleStep(5);
+    variationLengthSlider->setPageStep(20);
+    variationLengthSlider->setValue(std::clamp(
+            int(std::lround(sourceRequest.variationLengthMeters)), 20, 200));
+    variationLengthSlider->setAccessibleName(tr("Variation length"));
+    variationLengthValue = summaryValue("variationLengthValue", details);
+    terrainSettings->addWidget(new QLabel(tr("Terrain variation"), details),
+                               0, 0);
+    terrainSettings->addWidget(terrainVariationSlider, 0, 1);
+    terrainSettings->addWidget(terrainVariationValue, 0, 2);
+    terrainSettings->addWidget(new QLabel(tr("Variation length"), details),
+                               1, 0);
+    terrainSettings->addWidget(variationLengthSlider, 1, 1);
+    terrainSettings->addWidget(variationLengthValue, 1, 2);
+    terrainSettings->setColumnStretch(1, 1);
+    detailsLayout->addLayout(terrainSettings);
+    connect(terrainVariationSlider, &QSlider::valueChanged,
+            this, &WorkoutGameCourseConversionDialog::terrainSettingsChanged);
+    connect(variationLengthSlider, &QSlider::valueChanged,
+            this, &WorkoutGameCourseConversionDialog::terrainSettingsChanged);
+    terrainSettingsChanged();
+
     preview = new WorkoutGameCoursePreviewWidget(details);
     detailsLayout->addWidget(preview);
 
@@ -362,7 +404,7 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     addSummaryRow(tr("Terrain signature"), terrainSignatureValue);
     addSummaryRow(tr("Technical exposure"), technicalExposureValue);
     addSummaryRow(tr("Feature density"), featureDensityValue);
-    addSummaryRow(tr("Minimum section time"), runtimeExposureValue);
+    addSummaryRow(tr("Course progression"), runtimeExposureValue);
     addSummaryRow(tr("Prescription changes"), prescriptionChangesValue);
     summary->setColumnStretch(1, 1);
     detailsLayout->addLayout(summary);
@@ -429,6 +471,15 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
 {
     editMode = true;
     editSourceDocument = document;
+    {
+        const QSignalBlocker variationBlocker(terrainVariationSlider);
+        const QSignalBlocker lengthBlocker(variationLengthSlider);
+        terrainVariationSlider->setValue(int(std::lround(
+                document.generationParameters.terrainVariationPercent)));
+        variationLengthSlider->setValue(int(std::lround(
+                document.generationParameters.variationLengthMeters)));
+    }
+    terrainSettingsChanged();
     setWindowTitle(tr("Edit MTB Course"));
     if (QLabel *heading = findChild<QLabel *>(
                 QStringLiteral("courseDialogHeading"))) {
@@ -501,14 +552,29 @@ void WorkoutGameCourseConversionDialog::generatePreviews()
         if (editMode) {
             modePreviews[presetIndex(mode)] =
                     WorkoutGameCourseSourceAdapter::regenerate(
-                        editSourceDocument, mode, editSourceDocument.title);
+                        editSourceDocument, mode, editSourceDocument.title,
+                        terrainVariationSlider->value(),
+                        variationLengthSlider->value());
         } else {
             WorkoutGameCourseSourceRequest request = sourceRequest;
             request.preset = mode;
+            request.terrainVariationPercent = terrainVariationSlider->value();
+            request.variationLengthMeters = variationLengthSlider->value();
             modePreviews[presetIndex(mode)] =
                     WorkoutGameCourseSourceAdapter::convert(request);
         }
     }
+}
+
+void WorkoutGameCourseConversionDialog::terrainSettingsChanged()
+{
+    terrainVariationValue->setText(QStringLiteral("±%1%").arg(
+            terrainVariationSlider->value()));
+    variationLengthValue->setText(QStringLiteral("%1 m").arg(
+            variationLengthSlider->value()));
+    if (!preview) return;
+    generatePreviews();
+    selectPreset(preset);
 }
 
 void WorkoutGameCourseConversionDialog::refreshSummary()

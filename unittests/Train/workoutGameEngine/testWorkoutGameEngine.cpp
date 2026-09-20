@@ -8,17 +8,25 @@
  */
 
 #include "Train/WorkoutGameEngine.h"
+#include "Train/WorkoutGameAssetCatalog.h"
+#include "Train/WorkoutGameAssetPhysicsResolver.h"
 #include "Train/WorkoutGameFeatureLab.h"
+#include "Train/WorkoutGameRoadPlan.h"
 #include "Train/WorkoutGameRiderVisual.h"
 #include "Train/WorkoutGameTabletopGeometry.h"
 #include "Train/TrainingDataGenerator.h"
 
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTest>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <tuple>
 
 namespace {
 
@@ -130,6 +138,21 @@ WorkoutGameCourse gapJumpCourse()
     return course;
 }
 
+auto worldValues(const WorkoutGameWorldSnapshot &world)
+{
+    const auto &rider = world.rider;
+    return std::make_tuple(
+            world.ready, world.generation, world.terrain, world.seed,
+            world.gradePercent, world.difficulty, world.terrainOffsetMeters,
+            world.surfaceElevationMeters, world.speedMetersPerSecond,
+            world.landingImpact, rider.distanceMeters, rider.elevationMeters,
+            rider.pitchDegrees, rider.rollDegrees, rider.rearSuspension,
+            rider.frontSuspension, rider.rearWheelRadians,
+            rider.frontWheelRadians, rider.clearanceMeters,
+            rider.rearWheelGrounded, rider.frontWheelGrounded,
+            rider.airborne, rider.walking);
+}
+
 }
 
 class TestWorkoutGameEngine : public QObject
@@ -137,6 +160,153 @@ class TestWorkoutGameEngine : public QObject
     Q_OBJECT
 
 private slots:
+    void configuredEngineOwnsSnapshotAfterCatalogReplacement()
+    {
+        constexpr std::int64_t DurationMs = 30000;
+        constexpr std::size_t InitialFrames = 25;
+        WorkoutGameCourse course = gapJumpCourse();
+        course.sections[0].terrain = WorkoutGameTerrainKind::LogOver;
+        auto plan = std::make_shared<WorkoutGameRoadPlan>(
+                WorkoutGameRoadCourseBuilder::generatePlan(course, 200.0));
+        QString error;
+        auto catalog = WorkoutGameAssetCatalog::load(&error);
+        QVERIFY2(catalog, qPrintable(error));
+        auto resolution = WorkoutGameAssetPhysicsResolver::resolve(
+                *catalog, plan->pieces);
+        QCOMPARE(resolution.status, WorkoutGameAssetPhysicsResolveStatus::Ready);
+        QVERIFY(resolution.snapshot);
+        QCOMPARE(resolution.snapshot->bindings.size(), std::size_t(1));
+        QCOMPARE(resolution.snapshot->bindings[0].assetId,
+                 QStringLiteral("FT-02-log-over-greybox"));
+        QCOMPARE(resolution.snapshot->bindings[0].resolvedExtentMm,
+                 std::uint32_t(540));
+        plan->assetPhysicsSnapshot = resolution.snapshot;
+        course.roadPlan = plan;
+        auto road = WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+        QCOMPARE(road.assetPhysicsSnapshot, resolution.snapshot);
+        const auto *challenge = challengePieceFor(road, 0);
+        QVERIFY(challenge);
+        const double obstacle = challenge->challenge.obstacleDistanceMeters;
+        const auto oldSample = WorkoutGameRoadCourseBuilder::sample(road, obstacle);
+        QVERIFY(oldSample.ready);
+        QVERIFY(std::abs(oldSample.surfaceOffsetMeters - 0.54) < 1e-12);
+        std::weak_ptr<const WorkoutGameCourseAssetPhysicsSnapshot> snapshotOwner =
+                resolution.snapshot;
+        std::weak_ptr<const WorkoutGameRoadPlan> planOwner = plan;
+
+        std::vector<WorkoutGameEngineInput> inputs;
+        std::vector<WorkoutGameEngineFrame> expected;
+        {
+            WorkoutGameEngine baseline;
+            QVERIFY(baseline.configure(course, 200.0, true));
+            for (std::int64_t timeMs = 0; timeMs < DurationMs; timeMs += 20) {
+                WorkoutGameEngineInput input;
+                input.simulation = WorkoutGameFeatureLab::input(
+                        course, timeMs, WorkoutGameFeatureLabScenario::Pass);
+                inputs.push_back(input);
+                expected.push_back(baseline.update(input, 100000 + timeMs));
+            }
+        }
+        auto engine = std::make_unique<WorkoutGameEngine>();
+        QVERIFY(engine->configure(course, 200.0, true));
+        for (std::size_t index = 0; index < InitialFrames; ++index) {
+            const auto frame = engine->update(inputs[index], 100000 + index * 20);
+            QVERIFY(frame.visual.world.ready);
+            QVERIFY(worldValues(frame.visual.world)
+                    == worldValues(expected[index].visual.world));
+        }
+
+        // The process owns a catalog candidate; only future resolutions see it.
+        QFile file(QStringLiteral(":/json/workout-game-asset-catalog.json"));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        auto document = QJsonDocument::fromJson(file.readAll());
+        QVERIFY(document.isObject());
+        auto root = document.object();
+        auto profiles = root.value(QStringLiteral("profiles")).toArray();
+        bool changedProfile = false;
+        for (qsizetype index = 0; index < profiles.size(); ++index) {
+            auto profile = profiles[index].toObject();
+            if (profile.value(QStringLiteral("profileId")).toString()
+                    != QStringLiteral("FT-02-log-over-v1")) continue;
+            auto scale = profile.value(QStringLiteral("difficultyScale")).toObject();
+            QCOMPARE(scale.value(QStringLiteral("baseExtentMm")).toInt(), 440);
+            scale.insert(QStringLiteral("baseExtentMm"), 540);
+            profile.insert(QStringLiteral("difficultyScale"), scale);
+            profiles[index] = profile;
+            changedProfile = true;
+        }
+        QVERIFY(changedProfile);
+        root.insert(QStringLiteral("profiles"), profiles);
+        catalog.reset();
+        catalog = WorkoutGameAssetCatalog::fromJson(
+                QJsonDocument(root).toJson(QJsonDocument::Compact), &error);
+        QVERIFY2(catalog, qPrintable(error));
+        {
+            const auto replacement = WorkoutGameAssetPhysicsResolver::resolve(
+                    *catalog, plan->pieces);
+            QCOMPARE(replacement.status, WorkoutGameAssetPhysicsResolveStatus::Ready);
+            QVERIFY(replacement.snapshot);
+            QCOMPARE(replacement.snapshot->bindings.size(), std::size_t(1));
+            QCOMPARE(replacement.snapshot->bindings[0].resolvedExtentMm,
+                     std::uint32_t(640));
+            auto newPlan = std::make_shared<WorkoutGameRoadPlan>(*plan);
+            newPlan->assetPhysicsSnapshot = replacement.snapshot;
+            auto newCourse = course;
+            newCourse.roadPlan = newPlan;
+            const auto newRoad = WorkoutGameRoadCourseBuilder::build(newCourse, 200.0);
+            QVERIFY(newRoad.ready);
+            const auto newSample = WorkoutGameRoadCourseBuilder::sample(newRoad, obstacle);
+            QVERIFY(newSample.ready);
+            QVERIFY(std::abs(newSample.surfaceOffsetMeters
+                             - oldSample.surfaceOffsetMeters - 0.1) < 1e-12);
+            WorkoutGameEngine newEngine;
+            QVERIFY(newEngine.configure(newCourse, 200.0, true));
+            bool changedWorld = false;
+            for (std::size_t index = 0; index < inputs.size(); ++index) {
+                const auto frame = newEngine.update(inputs[index], 100000 + index * 20);
+                QVERIFY(frame.visual.world.ready);
+                changedWorld |= frame.visual.world.surfaceElevationMeters
+                        != expected[index].visual.world.surfaceElevationMeters;
+            }
+            QVERIFY(changedWorld);
+        }
+        catalog.reset();
+        road = {};
+        course = {};
+        plan.reset();
+        resolution.snapshot.reset();
+        QVERIFY(!snapshotOwner.expired());
+        QVERIFY(!planOwner.expired());
+
+        bool traversedObstacle = false;
+        for (std::size_t index = InitialFrames; index < inputs.size(); ++index) {
+            const auto frame = engine->update(inputs[index], 100000 + index * 20);
+            const auto &reference = expected[index];
+            QVERIFY(frame.visual.simulation.ready);
+            QVERIFY(frame.visual.world.ready);
+            QVERIFY2(worldValues(frame.visual.world) == worldValues(reference.visual.world),
+                     qPrintable(QStringLiteral("world differs at frame %1").arg(index)));
+            QCOMPARE(frame.visual.world.generation, expected[0].visual.world.generation);
+            QCOMPARE(frame.sequence, reference.sequence);
+            QCOMPARE(frame.visual.simulation.workoutTimeMs,
+                     reference.visual.simulation.workoutTimeMs);
+            QCOMPARE(frame.visual.simulation.score, reference.visual.simulation.score);
+            QCOMPARE(frame.visual.simulation.featureOutcome,
+                     reference.visual.simulation.featureOutcome);
+            QCOMPARE(frame.visual.feature.phase, reference.visual.feature.phase);
+            QCOMPARE(frame.visual.camera.centerElevationMeters,
+                     reference.visual.camera.centerElevationMeters);
+            traversedObstacle |= frame.visual.world.rider.distanceMeters > obstacle + 1.0;
+        }
+        QVERIFY(expected[InitialFrames - 1].visual.world.rider.distanceMeters < obstacle);
+        QVERIFY(traversedObstacle);
+        QVERIFY(!snapshotOwner.expired());
+        engine.reset();
+        QVERIFY(snapshotOwner.expired());
+        QVERIFY(planOwner.expired());
+    }
+
     void featureLabGapScenariosExerciseEveryLineAndPowerGate()
     {
         constexpr double FtpWatts = 200.0;

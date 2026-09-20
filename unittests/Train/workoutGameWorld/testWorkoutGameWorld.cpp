@@ -9,9 +9,13 @@
 
 #include "Train/WorkoutGameWorld.h"
 #include "Train/WorkoutGame3DTerrainProfile.h"
+#include "Train/WorkoutGameAssetCatalog.h"
+#include "Train/WorkoutGameAssetPhysicsResolver.h"
 #include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameClimbGeometry.h"
+#include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameGapJumpGeometry.h"
+#include "Train/WorkoutGameWorldGroundProfile.h"
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
@@ -19,18 +23,425 @@
 #include "Train/WorkoutGameTabletopGeometry.h"
 #include "Train/WorkoutGameTrailBranch.h"
 #include "Train/WorkoutGameRoadCourse.h"
+#include "Train/WorkoutGameRoadPlan.h"
 
 #include <QTest>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
+
+namespace {
+
+WorkoutGameRoadCourse roadWithAssetObstacle(
+        double totalLengthMeters,
+        double obstacleAnchorMeters,
+        std::shared_ptr<WorkoutGameCourseAssetPhysicsSnapshot> &snapshot)
+{
+    WorkoutGameRoadCourse road;
+    road.ready = true;
+    road.seed = 0x51f2u;
+    road.totalLengthMeters = totalLengthMeters;
+    road.visualLengthMeters = totalLengthMeters;
+    WorkoutGameRoadPiece piece;
+    piece.terrain = WorkoutGameTerrainKind::SmoothTrail;
+    piece.lengthMeters = totalLengthMeters;
+    piece.relief.enabled = true;
+    piece.exit.halfWidthMeters = piece.entry.halfWidthMeters;
+    road.pieces.push_back(piece);
+
+    snapshot = std::make_shared<WorkoutGameCourseAssetPhysicsSnapshot>();
+    snapshot->catalogSchemaVersion = 1;
+    WorkoutGameAssetPhysicsDefinition definition;
+    definition.coulombFrictionMilli = 1100;
+    definition.chains = {{{{-276, 0}, {-270, 0},
+                            {270, 540}, {276, 540}}}};
+    snapshot->physicsDefinitions.push_back(definition);
+    WorkoutGameAssetPhysicsBinding asset;
+    asset.assetId = QStringLiteral("FT-02-log-over-greybox");
+    asset.definitionIndex = 0;
+    asset.nativeForwardOriginMm = -1020;
+    asset.nativeForwardExtentMm = 540;
+    asset.nativeUpExtentMm = 540;
+    asset.resolvedExtentMm = 540;
+    snapshot->bindings.push_back(asset);
+    WorkoutGameAssetPhysicsPieceBinding binding;
+    binding.definitionIndex = 0;
+    binding.bindingIndex = 0;
+    binding.obstacleAnchorMm = std::int32_t(std::llround(
+            obstacleAnchorMeters * 1000.0));
+    snapshot->pieceBindings.push_back(binding);
+    road.assetPhysicsSnapshot = snapshot;
+    return road;
+}
+
+}
 
 class TestWorkoutGameWorld : public QObject
 {
     Q_OBJECT
 
 private slots:
+    void resolvedLogWorldMatchesPinnedLegacyDynamics()
+    {
+        QString catalogError;
+        auto catalog = WorkoutGameAssetCatalog::load(&catalogError);
+        QVERIFY2(catalog, qPrintable(catalogError));
+        for (double difficulty : {0.0, 0.5, 1.0}) {
+            WorkoutGameCourse source;
+            source.status = WorkoutGameCourseStatus::Ready;
+            source.seed = 0x8f12u;
+            source.durationMs = 30000;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = WorkoutGameTerrainKind::LogOver;
+            section.durationMs = source.durationMs;
+            section.targetWatts = 260.0;
+            section.difficulty = difficulty;
+            section.challengeCount = 1;
+            source.sections = {section};
+
+            WorkoutGameRoadPlan legacyPlan =
+                    WorkoutGameRoadCourseBuilder::generatePlan(source, 200.0);
+            const auto challenge = std::find_if(
+                    legacyPlan.pieces.begin(), legacyPlan.pieces.end(),
+                    [](const WorkoutGameRoadPiece &piece) {
+                        return piece.terrain == WorkoutGameTerrainKind::LogOver
+                                && piece.challenge.enabled;
+                    });
+            QVERIFY(challenge != legacyPlan.pieces.end());
+            legacyPlan.assetPhysicsSnapshot.reset();
+
+            const WorkoutGameAssetPhysicsResolution resolution =
+                    WorkoutGameAssetPhysicsResolver::resolve(
+                        *catalog, legacyPlan.pieces);
+            QCOMPARE(resolution.status,
+                     WorkoutGameAssetPhysicsResolveStatus::Ready);
+            QVERIFY(resolution.snapshot);
+
+            const WorkoutGameFeatureGeometryProfile profile =
+                    WorkoutGameFeatureGeometry::profile(
+                        WorkoutGameTerrainKind::LogOver, difficulty);
+            WorkoutGameRoadPlan resolvedPlan = legacyPlan;
+            resolvedPlan.assetPhysicsSnapshot = resolution.snapshot;
+
+            const WorkoutGameRoadCourse legacyRoad =
+                    WorkoutGameRoadCourseBuilder::materialize(
+                        source, legacyPlan);
+            const WorkoutGameRoadCourse resolvedRoad =
+                    WorkoutGameRoadCourseBuilder::materialize(
+                        source, resolvedPlan);
+            QVERIFY(legacyRoad.ready);
+            QVERIFY(resolvedRoad.ready);
+
+            if (difficulty == 1.0) catalog.reset();
+
+            for (double speed : {3.33, 5.0, 7.0}) {
+                WorkoutGamePhysics legacy;
+                WorkoutGamePhysics resolved;
+                QVERIFY(legacy.configure(legacyRoad));
+                QVERIFY(resolved.configure(resolvedRoad));
+                WorkoutGamePhysicsInput input;
+                input.terrain = WorkoutGameTerrainKind::LogOver;
+                input.difficulty = difficulty;
+                input.desiredSpeedMetersPerSecond = speed;
+                input.courseSpeedMetersPerSecond = speed;
+                input.effortRatio = 1.0;
+                input.featureMainLineCommitted = true;
+                input.featureActionId = 1;
+                input.courseDistanceMeters =
+                        challenge->challenge.obstacleDistanceMeters - 2.0;
+                const double actionStart =
+                        challenge->challenge.obstacleDistanceMeters
+                            + profile.startMeters;
+                int legacyTakeoff = -1;
+                int resolvedTakeoff = -1;
+                int legacyLanding = -1;
+                int resolvedLanding = -1;
+                double maximumElevationDifference = 0.0;
+                int maximumDifferenceTick = -1;
+                double legacyElevationAtMaximum = 0.0;
+                double resolvedElevationAtMaximum = 0.0;
+                for (int tick = 0; tick <= 4000; ++tick) {
+                    input.workoutTimeMs = tick;
+                    input.courseDistanceMeters += speed * 0.001;
+                    if (input.courseDistanceMeters >= actionStart) {
+                        input.jumpRequested = true;
+                    }
+                    const WorkoutGameWorldSnapshot oldFrame =
+                            legacy.update(input);
+                    const WorkoutGameWorldSnapshot newFrame =
+                            resolved.update(input);
+                    QVERIFY(oldFrame.ready);
+                    QVERIFY(newFrame.ready);
+                    const double elevationDifference = std::abs(
+                            oldFrame.rider.elevationMeters
+                                - newFrame.rider.elevationMeters);
+                    if (elevationDifference > maximumElevationDifference) {
+                        maximumElevationDifference = elevationDifference;
+                        maximumDifferenceTick = tick;
+                        legacyElevationAtMaximum =
+                                oldFrame.rider.elevationMeters;
+                        resolvedElevationAtMaximum =
+                                newFrame.rider.elevationMeters;
+                    }
+                    if (oldFrame.rider.airborne && legacyTakeoff < 0) {
+                        legacyTakeoff = tick;
+                    }
+                    if (newFrame.rider.airborne && resolvedTakeoff < 0) {
+                        resolvedTakeoff = tick;
+                    }
+                    if (legacyTakeoff >= 0 && legacyLanding < 0
+                            && !oldFrame.rider.airborne) {
+                        legacyLanding = tick;
+                    }
+                    if (resolvedTakeoff >= 0 && resolvedLanding < 0
+                            && !newFrame.rider.airborne) {
+                        resolvedLanding = tick;
+                    }
+                }
+                QCOMPARE(legacyTakeoff >= 0, resolvedTakeoff >= 0);
+                QCOMPARE(legacyLanding >= 0, resolvedLanding >= 0);
+                if (legacyTakeoff >= 0) {
+                    const QByteArray transitions = QStringLiteral(
+                            "difficulty=%1 speed=%2 takeoff=%3/%4 "
+                            "landing=%5/%6")
+                            .arg(difficulty).arg(speed)
+                            .arg(legacyTakeoff).arg(resolvedTakeoff)
+                            .arg(legacyLanding).arg(resolvedLanding)
+                            .toLatin1();
+                    QVERIFY2(std::abs(legacyTakeoff - resolvedTakeoff) <= 9,
+                             transitions.constData());
+                    QVERIFY2(std::abs(legacyLanding - resolvedLanding) <= 9,
+                             transitions.constData());
+                }
+                QVERIFY2(maximumElevationDifference <= 0.005,
+                         qPrintable(QStringLiteral(
+                             "difficulty=%1 speed=%2 delta=%3 tick=%4 "
+                             "legacy=%5 resolved=%6 takeoff=%7/%8 "
+                             "landing=%9/%10")
+                             .arg(difficulty).arg(speed)
+                             .arg(maximumElevationDifference, 0, 'f', 9)
+                             .arg(maximumDifferenceTick)
+                             .arg(legacyElevationAtMaximum, 0, 'f', 9)
+                             .arg(resolvedElevationAtMaximum, 0, 'f', 9)
+                             .arg(legacyTakeoff).arg(resolvedTakeoff)
+                             .arg(legacyLanding).arg(resolvedLanding)));
+            }
+
+            if (difficulty == 0.5) {
+                WorkoutGamePhysics legacy;
+                WorkoutGamePhysics resolved;
+                QVERIFY(legacy.configure(legacyRoad));
+                QVERIFY(resolved.configure(resolvedRoad));
+                WorkoutGamePhysicsInput input;
+                input.terrain = WorkoutGameTerrainKind::LogOver;
+                input.difficulty = difficulty;
+                input.desiredSpeedMetersPerSecond = 4.0;
+                input.courseSpeedMetersPerSecond = 4.0;
+                input.effortRatio = 1.0;
+                input.courseDistanceMeters =
+                        challenge->challenge.obstacleDistanceMeters - 1.5;
+                double maximumElevationDifference = 0.0;
+                for (int tick = 0; tick <= 750; ++tick) {
+                    input.workoutTimeMs = tick * 2;
+                    input.courseDistanceMeters += 0.008;
+                    const WorkoutGameWorldSnapshot oldFrame =
+                            legacy.update(input);
+                    const WorkoutGameWorldSnapshot newFrame =
+                            resolved.update(input);
+                    QVERIFY(oldFrame.ready);
+                    QVERIFY(newFrame.ready);
+                    maximumElevationDifference = std::max(
+                            maximumElevationDifference,
+                            std::abs(oldFrame.rider.elevationMeters
+                                - newFrame.rider.elevationMeters));
+                }
+                QVERIFY2(maximumElevationDifference > 0.05,
+                         "uncommitted FT-02 must remain a physical obstacle");
+            }
+        }
+    }
+
+    void assetGroundProfileMergesExactFacetsAndMaterial()
+    {
+        WorkoutGameRoadCourse road;
+        road.ready = true;
+        road.totalLengthMeters = 40.0;
+        road.pieces.resize(1);
+        road.pieces[0].lengthMeters = road.totalLengthMeters;
+
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        snapshot->catalogSchemaVersion = 1;
+        WorkoutGameAssetPhysicsDefinition definition;
+        definition.coulombFrictionMilli = 725;
+        definition.restitutionMilli = 80;
+        definition.chains = {{{{-270, 0}, {0, 540}, {270, 0}}}};
+        snapshot->physicsDefinitions.push_back(definition);
+        WorkoutGameAssetPhysicsBinding asset;
+        asset.assetId = QStringLiteral("FT-02-log-over-greybox");
+        asset.definitionIndex = 0;
+        asset.nativeForwardExtentMm = 540;
+        asset.nativeUpExtentMm = 540;
+        asset.resolvedExtentMm = 540;
+        snapshot->bindings.push_back(asset);
+        WorkoutGameAssetPhysicsPieceBinding piece;
+        piece.definitionIndex = 0;
+        piece.bindingIndex = 0;
+        piece.obstacleAnchorMm = 20000;
+        snapshot->pieceBindings.push_back(piece);
+        road.assetPhysicsSnapshot = snapshot;
+
+        const double distanceBase = 10.0;
+        const double riderStart = 4.0;
+        std::vector<double> basePoints = {
+            13.5, 13.7299999999, 13.75, 13.9, 13.995, 14.0, 14.004,
+            14.25, 14.27, 14.5
+        };
+        const auto points = WorkoutGameWorldGroundProfile::mergeBreakpoints(
+                road, distanceBase, riderStart, 13.5, 14.5,
+                std::move(basePoints));
+        QCOMPARE(points.size(), std::size_t(8));
+        QVERIFY(std::is_sorted(points.begin(), points.end()));
+        QCOMPARE(points[1], 13.73);
+        QCOMPARE(points[4], 14.0);
+        QCOMPARE(points[6], 14.27);
+
+        const auto material = WorkoutGameWorldGroundProfile::materialAt(
+                road, 20.1);
+        QVERIFY(material.assetDefined);
+        QCOMPARE(material.coulombFriction, 0.725);
+        QCOMPARE(material.restitution, 0.08);
+
+        const auto baseMaterial =
+                WorkoutGameWorldGroundProfile::baseMaterialAt(road, 20.1);
+        QVERIFY(!baseMaterial.assetDefined);
+        QCOMPARE(baseMaterial.coulombFriction, 1.1);
+        QCOMPARE(baseMaterial.restitution, 0.0);
+
+        const auto ordinary = WorkoutGameWorldGroundProfile::materialAt(
+                road, 19.0);
+        QVERIFY(!ordinary.assetDefined);
+        QCOMPARE(ordinary.coulombFriction, 1.1);
+        QCOMPARE(ordinary.restitution, 0.0);
+    }
+
+    void resolvedLogCreatesValidWorldSegmentsOnSteepGrades()
+    {
+        QString catalogError;
+        const auto catalog = WorkoutGameAssetCatalog::load(&catalogError);
+        QVERIFY2(catalog, qPrintable(catalogError));
+
+        for (double grade : {-30.0, -20.0, 20.0, 30.0}) {
+            WorkoutGameCourse source;
+            source.status = WorkoutGameCourseStatus::Ready;
+            source.seed = 0x52f1u;
+            source.durationMs = 30000;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = WorkoutGameTerrainKind::LogOver;
+            section.durationMs = source.durationMs;
+            section.targetWatts = 260.0;
+            section.gradePercent = grade;
+            section.difficulty = 1.0;
+            section.challengeCount = 1;
+            source.sections = {section};
+
+            WorkoutGameRoadPlan plan =
+                    WorkoutGameRoadCourseBuilder::generatePlan(source, 200.0);
+            const auto resolution = WorkoutGameAssetPhysicsResolver::resolve(
+                    *catalog, plan.pieces);
+            QCOMPARE(resolution.status,
+                     WorkoutGameAssetPhysicsResolveStatus::Ready);
+            plan.assetPhysicsSnapshot = resolution.snapshot;
+            const WorkoutGameRoadCourse road =
+                    WorkoutGameRoadCourseBuilder::materialize(source, plan);
+            QVERIFY(road.ready);
+            const auto challenge = std::find_if(
+                    road.pieces.begin(), road.pieces.end(),
+                    [](const WorkoutGameRoadPiece &piece) {
+                        return piece.terrain == WorkoutGameTerrainKind::LogOver
+                                && piece.challenge.enabled;
+                    });
+            QVERIFY(challenge != road.pieces.end());
+            const WorkoutGameRoadSample obstacle =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, challenge->challenge.obstacleDistanceMeters);
+            QVERIFY(obstacle.ready);
+            QCOMPARE(obstacle.baseGradePercent, grade);
+
+            WorkoutGamePhysics physics;
+            QVERIFY2(physics.configure(road),
+                     qPrintable(QStringLiteral("grade=%1").arg(grade)));
+            WorkoutGamePhysicsInput input;
+            input.terrain = WorkoutGameTerrainKind::LogOver;
+            input.difficulty = 1.0;
+            input.gradePercent = grade;
+            input.courseDistanceMeters = 1.0;
+            QVERIFY2(physics.update(input).ready,
+                     qPrintable(QStringLiteral("grade=%1").arg(grade)));
+        }
+    }
+
+    void distantAssetObstacleDoesNotLosePrecisionBeforeWindowClipping()
+    {
+        std::shared_ptr<WorkoutGameCourseAssetPhysicsSnapshot> snapshot;
+        const WorkoutGameRoadCourse road = roadWithAssetObstacle(
+                66000.0, 10.0, snapshot);
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+
+        WorkoutGamePhysicsInput input;
+        input.courseDistanceMeters = 65536.0;
+        const WorkoutGameWorldSnapshot frame = physics.update(input);
+        QVERIFY(frame.ready);
+        QCOMPARE(frame.rider.distanceMeters, 65536.0);
+    }
+
+    void longCourseAssetObstacleUsesRebasedMillimeterCoordinates()
+    {
+        std::shared_ptr<WorkoutGameCourseAssetPhysicsSnapshot> snapshot;
+        const WorkoutGameRoadCourse road = roadWithAssetObstacle(
+                66000.0, 65536.0, snapshot);
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+
+        WorkoutGamePhysicsInput input;
+        input.courseDistanceMeters = 65534.0;
+        QVERIFY(physics.update(input).ready);
+        input.workoutTimeMs = 20;
+        input.courseDistanceMeters = 65536.0;
+        QVERIFY(physics.update(input).ready);
+    }
+
+    void failedRebaseDisablesPhysicsWithoutUsingDestroyedBox2DState()
+    {
+        std::shared_ptr<WorkoutGameCourseAssetPhysicsSnapshot> snapshot;
+        const WorkoutGameRoadCourse road = roadWithAssetObstacle(
+                1000.0, 500.0, snapshot);
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+
+        WorkoutGamePhysicsInput input;
+        input.courseDistanceMeters = 0.0;
+        QVERIFY(physics.update(input).ready);
+
+        const WorkoutGameAssetPhysicsDefinition validDefinition =
+                snapshot->physicsDefinitions.front();
+        snapshot->physicsDefinitions.front().chains = {{{{0, 0}, {1, 0}}}};
+        input.workoutTimeMs = 20;
+        input.courseDistanceMeters = 500.0;
+        input.paused = true;
+        QVERIFY(!physics.update(input).ready);
+
+        snapshot->physicsDefinitions.front() = validDefinition;
+        input.workoutTimeMs = 40;
+        input.terrain = WorkoutGameTerrainKind::Roots;
+        QVERIFY(!physics.update(input).ready);
+    }
+
     void authoritativeDistanceKeepsTerrainOffsetLocalToTheVehicle()
     {
         WorkoutGameCourse course;

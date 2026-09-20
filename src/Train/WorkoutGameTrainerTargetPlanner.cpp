@@ -100,22 +100,27 @@ double WorkoutGameTrainerTargetPlanner::workoutPowerWatts(
         double prescribedWatts,
         WorkoutGameTerrainKind terrain,
         double sectionProgress,
-        std::int64_t sectionDurationMs)
+        std::int64_t sectionDurationMs,
+        double relativeGearRatio)
 {
-    if (!std::isfinite(prescribedWatts) || prescribedWatts < 0.0) return -1.0;
+    if (!std::isfinite(prescribedWatts) || prescribedWatts < 0.0
+            || !std::isfinite(relativeGearRatio)
+            || relativeGearRatio <= 0.0) {
+        return -1.0;
+    }
 
     const double base = std::clamp(
             prescribedWatts, 0.0, MaximumTrainerWatts);
-    if (preset != WorkoutGameCoursePreset::Balanced || base == 0.0) {
-        return base;
+    double terrainAdjusted = base;
+    if (preset == WorkoutGameCoursePreset::Balanced && base > 0.0) {
+        const double maximumVariation = std::min(
+                base * BalancedMaximumRelativeVariation,
+                BalancedMaximumAbsoluteVariationWatts);
+        terrainAdjusted = base + maximumVariation * terrainEffortSignal(
+                terrain, sectionProgress, sectionDurationMs);
     }
-
-    const double maximumVariation = std::min(
-            base * BalancedMaximumRelativeVariation,
-            BalancedMaximumAbsoluteVariationWatts);
     return std::clamp(
-            base + maximumVariation * terrainEffortSignal(
-                terrain, sectionProgress, sectionDurationMs),
+            terrainAdjusted * relativeGearRatio,
             0.0, MaximumTrainerWatts);
 }
 
@@ -154,8 +159,11 @@ TrainerTarget WorkoutGameTrainerTargetPlanner::plan(
     if (usesTargetPower(input.preset, input.targetPowerSupported)) {
         const double watts = workoutPowerWatts(
                 input.preset, input.prescribedWatts, input.terrain,
-                input.sectionProgress, input.sectionDurationMs);
-        if (watts >= 0.0) return TrainerTarget::erg(watts, position);
+                input.sectionProgress, input.sectionDurationMs,
+                input.relativeGearRatio);
+        if (watts >= 0.0) {
+            return TrainerTarget::erg(watts, position);
+        }
     }
 
     return TrainerTarget::slope(

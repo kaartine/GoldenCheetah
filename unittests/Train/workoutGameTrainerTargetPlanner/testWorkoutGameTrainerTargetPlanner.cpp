@@ -180,6 +180,41 @@ private slots:
         QVERIFY(trainer.windValues.empty());
     }
 
+    void virtualGearsChangeGeneratedCourseResistanceAroundReferenceGear()
+    {
+        WorkoutGameTrainerTargetInput low =
+                sampleInput(WorkoutGameCoursePreset::RideFirst);
+        WorkoutGameTrainerTargetInput reference = low;
+        WorkoutGameTrainerTargetInput high = low;
+        low.relativeGearRatio = 0.86;
+        reference.relativeGearRatio = 1.0;
+        high.relativeGearRatio = 1.17;
+
+        const TrainerTarget lowTarget =
+                WorkoutGameTrainerTargetPlanner::plan(low);
+        const TrainerTarget referenceTarget =
+                WorkoutGameTrainerTargetPlanner::plan(reference);
+        const TrainerTarget highTarget =
+                WorkoutGameTrainerTargetPlanner::plan(high);
+
+        QCOMPARE(lowTarget.mode, TrainerTargetMode::Erg);
+        QCOMPARE(referenceTarget.mode, TrainerTargetMode::Erg);
+        QCOMPARE(highTarget.mode, TrainerTargetMode::Erg);
+        QVERIFY(lowTarget.value < referenceTarget.value);
+        QCOMPARE(referenceTarget.value, 112.0);
+        QVERIFY(highTarget.value > referenceTarget.value);
+        QCOMPARE(WorkoutGameTrainerTargetPlanner::workoutPowerWatts(
+                     low.preset, low.prescribedWatts, low.terrain,
+                     low.sectionProgress, low.sectionDurationMs,
+                     low.relativeGearRatio),
+                 lowTarget.value);
+        QCOMPARE(WorkoutGameTrainerTargetPlanner::workoutPowerWatts(
+                     high.preset, high.prescribedWatts, high.terrain,
+                     high.sectionProgress, high.sectionDurationMs,
+                     high.relativeGearRatio),
+                 highTarget.value);
+    }
+
     void missingPowerCapabilityFallsBackToSlope()
     {
         WorkoutGameTrainerTargetInput input =

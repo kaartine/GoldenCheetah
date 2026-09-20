@@ -10,6 +10,7 @@ SOURCES = testWorkoutGameCourseConversion.cpp \
           ../../../src/Train/WorkoutGameCourseSummary.cpp \
           ../../../src/Train/WorkoutGameCourseTerrain.cpp \
           ../../../src/Train/WorkoutGameDistanceCourse.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
           ../../../src/Train/WorkoutGameRoadPhysics.cpp \
           ../../../src/Train/WorkoutGameWorkoutAdapter.cpp
 
@@ -19,6 +20,7 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameCourseSummary.h \
           ../../../src/Train/WorkoutGameCourseTerrain.h \
           ../../../src/Train/WorkoutGameDistanceCourse.h \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.h \
           ../../../src/Train/WorkoutGameRoadPhysics.h \
           ../../../src/Train/WorkoutGameWorkoutAdapter.h
 
