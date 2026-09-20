@@ -22,7 +22,7 @@ from validate_assets import (
 
 
 CATALOG_SCHEMA_VERSION = 1
-GENERATOR_VERSION = 1
+GENERATOR_VERSION = 2
 MAXIMUM_CATALOG_BYTES = 1024 * 1024
 MAXIMUM_ASSETS = 256
 QRC_PATH = Path("src/Resources/workout-game-assets.qrc")
@@ -136,7 +136,35 @@ def _catalog_physics(manifest: dict[str, Any]) -> dict[str, Any]:
                 "restitution", surface["restitution"], 1000, 250
             ),
         }
+    route_profiles = source.get("routeProfiles", [])
+    if route_profiles:
+        result["routeProfiles"] = sorted(
+            ({"profileId": profile["profileId"],
+              "routeKey": profile["routeKey"]}
+             for profile in route_profiles),
+            key=lambda item: (item["routeKey"], item["profileId"]),
+        )
     return result
+
+
+def _catalog_profiles(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    surface = _catalog_physics(manifest).get("surface")
+    profiles = []
+    for source in manifest["physics"].get("routeProfiles", []):
+        profile = {
+            "chains": [
+                {"points": [dict(point) for point in chain["points"]]}
+                for chain in source["chains"]
+            ],
+            "kind": source["kind"],
+            "profileId": source["profileId"],
+            "profileVersion": source["profileVersion"],
+            "surface": dict(surface),
+        }
+        if "difficultyScale" in source:
+            profile["difficultyScale"] = dict(source["difficultyScale"])
+        profiles.append(profile)
+    return profiles
 
 
 def _admitted_asset(
@@ -228,9 +256,31 @@ def generate_catalog_bytes(root: Path) -> bytes:
     if not assets or len(assets) > MAXIMUM_ASSETS:
         raise AssetValidationError("runtime asset catalog size is invalid")
 
+    profiles_by_id: dict[str, dict[str, Any]] = {}
+    total_profile_points = 0
+    for manifest in manifests:
+        if manifest["review"]["status"] != "approved":
+            continue
+        for profile in _catalog_profiles(manifest):
+            profile_id = profile["profileId"]
+            previous = profiles_by_id.get(profile_id)
+            if previous is not None and previous != profile:
+                raise AssetValidationError(
+                    f"conflicting runtime profile ID: {profile_id}"
+                )
+            if previous is None:
+                profiles_by_id[profile_id] = profile
+                total_profile_points += sum(
+                    len(chain["points"]) for chain in profile["chains"]
+                )
+    if len(profiles_by_id) > 512 or total_profile_points > 32768:
+        raise AssetValidationError("runtime profile catalog size is invalid")
+    profiles = [profiles_by_id[key] for key in sorted(profiles_by_id)]
+
     payload = {
         "assets": assets,
         "generatorVersion": GENERATOR_VERSION,
+        "profiles": profiles,
         "schemaVersion": CATALOG_SCHEMA_VERSION,
     }
     document = dict(payload)

@@ -612,6 +612,13 @@ class AssetDocument:
             if self._physics.collision_node else {"kind": "none"}
         )
 
+        if self._physics.interaction != "visual-only":
+            route_profiles = self._document.get("physics", {}).get(
+                "routeProfiles"
+            )
+            if route_profiles:
+                physics["routeProfiles"] = route_profiles
+
         result: dict[str, Any] = {}
         for key, value in self._document.items():
             if key in {"materialOverrides", "physics"}:

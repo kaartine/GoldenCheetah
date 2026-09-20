@@ -300,6 +300,36 @@ class WorkoutGameAssetDocumentTest(unittest.TestCase):
         self.assertNotIn("surface", saved["physics"])
         self.assertEqual(saved["physics"]["collisionProxy"], {"kind": "none"})
 
+    def test_save_preserves_authored_route_profiles(self) -> None:
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        route_profiles = [{
+            "routeKey": "main",
+            "profileId": "FT-01-main-v1",
+            "profileVersion": 1,
+            "kind": "height-offset-polyline",
+            "chains": [{
+                "points": [
+                    {"forwardMm": -100, "heightMm": 0},
+                    {"forwardMm": 0, "heightMm": 200},
+                    {"forwardMm": 100, "heightMm": 0},
+                ],
+            }],
+        }]
+        manifest["physics"]["routeProfiles"] = route_profiles
+        self.manifest.write_text(
+            json.dumps(manifest, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        document = AssetDocument.open(
+            self.repository,
+            "FT-01-tabletop-greybox",
+        )
+        document.set_material("MAT_TabletopTrail_Grey", roughness=0.42)
+
+        self.assertTrue(document.save())
+        saved = json.loads(self.manifest.read_text(encoding="utf-8"))
+        self.assertEqual(saved["physics"]["routeProfiles"], route_profiles)
+
     @unittest.skipIf(os.name == "nt", "POSIX advisory-lock behavior")
     def test_save_waits_for_cross_process_manifest_lock(self) -> None:
         marker = self.repository / "child-finished"

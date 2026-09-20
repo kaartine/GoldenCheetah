@@ -115,7 +115,35 @@
     "collisionProxy": {
       "kind": "node",
       "node": "GEO_LogOverObstacle_LOD0"
-    }
+    },
+    "routeProfiles": [
+      {
+        "routeKey": "main",
+        "profileId": "FT-02-log-over-v1",
+        "profileVersion": 1,
+        "kind": "height-offset-polyline",
+        "chains": [
+          {
+            "points": [
+              { "forwardMm": -270, "heightMm": 0 },
+              { "forwardMm": -249, "heightMm": 207 },
+              { "forwardMm": -191, "heightMm": 382 },
+              { "forwardMm": -103, "heightMm": 499 },
+              { "forwardMm": 0, "heightMm": 540 },
+              { "forwardMm": 103, "heightMm": 499 },
+              { "forwardMm": 191, "heightMm": 382 },
+              { "forwardMm": 249, "heightMm": 207 },
+              { "forwardMm": 270, "heightMm": 0 }
+            ]
+          }
+        ],
+        "difficultyScale": {
+          "nativeExtentMm": 540,
+          "baseExtentMm": 440,
+          "difficultyExtentMm": 200
+        }
+      }
+    ]
   },
   "review": {
     "status": "approved",

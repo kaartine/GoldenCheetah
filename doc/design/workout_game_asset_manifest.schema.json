@@ -312,6 +312,79 @@
               "pattern": "^[ -~]+$"
             }
           }
+        },
+        "routeProfiles": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["routeKey", "profileId", "profileVersion", "kind", "chains"],
+            "properties": {
+              "routeKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "pattern": "^[a-z0-9-]+$"
+              },
+              "profileId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9-]+$"
+              },
+              "profileVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295
+              },
+              "kind": { "const": "height-offset-polyline" },
+              "chains": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["points"],
+                  "properties": {
+                    "points": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 256,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["forwardMm", "heightMm"],
+                        "properties": {
+                          "forwardMm": {
+                            "type": "integer",
+                            "minimum": -64000,
+                            "maximum": 64000
+                          },
+                          "heightMm": {
+                            "type": "integer",
+                            "minimum": -16000,
+                            "maximum": 16000
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "difficultyScale": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["nativeExtentMm", "baseExtentMm", "difficultyExtentMm"],
+                "properties": {
+                  "nativeExtentMm": { "type": "integer", "minimum": 1, "maximum": 64000 },
+                  "baseExtentMm": { "type": "integer", "minimum": 1, "maximum": 64000 },
+                  "difficultyExtentMm": { "type": "integer", "minimum": -64000, "maximum": 64000 }
+                }
+              }
+            }
+          }
         }
       }
     },

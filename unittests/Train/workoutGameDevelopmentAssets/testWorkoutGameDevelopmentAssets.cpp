@@ -511,6 +511,44 @@ private slots:
         QCOMPARE(assets.revision(), qulonglong(2));
     }
 
+    void runtimeRejectsNonIncreasingRouteProfile()
+    {
+        Fixture fixture;
+        const QString name = QStringLiteral("FT-02-log-over-greybox.json");
+        fixture.addAsset(name);
+        qputenv("GC_WORKOUT_GAME_ASSET_WORKSPACE",
+                fixture.root->path().toLocal8Bit());
+        WorkoutGameDevelopmentAssets assets;
+        QTRY_COMPARE_WITH_TIMEOUT(assets.revision(), qulonglong(1), 5000);
+
+        const QString path = fixture.manifestPath(name);
+        QJsonObject manifest = readJson(path);
+        QJsonObject physics = manifest.value(
+                QStringLiteral("physics")).toObject();
+        QJsonArray profiles = physics.value(
+                QStringLiteral("routeProfiles")).toArray();
+        QJsonObject profile = profiles.at(0).toObject();
+        QJsonArray chains = profile.value(QStringLiteral("chains")).toArray();
+        QJsonObject chain = chains.at(0).toObject();
+        QJsonArray points = chain.value(QStringLiteral("points")).toArray();
+        QJsonObject second = points.at(1).toObject();
+        second.insert(QStringLiteral("forwardMm"),
+                points.at(0).toObject().value(QStringLiteral("forwardMm")));
+        points.replace(1, second);
+        chain.insert(QStringLiteral("points"), points);
+        chains.replace(0, chain);
+        profile.insert(QStringLiteral("chains"), chains);
+        profiles.replace(0, profile);
+        physics.insert(QStringLiteral("routeProfiles"), profiles);
+        manifest.insert(QStringLiteral("physics"), physics);
+
+        QVERIFY(writeJsonAtomically(path, manifest));
+        QTRY_VERIFY_WITH_TIMEOUT(
+                assets.lastError().contains(
+                    QStringLiteral("physics profile point")), 5000);
+        QCOMPARE(assets.revision(), qulonglong(1));
+    }
+
     void runtimeRejectsWrongTypedGlbCollections()
     {
         Fixture fixture;

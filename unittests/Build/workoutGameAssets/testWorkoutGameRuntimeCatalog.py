@@ -32,7 +32,7 @@ class WorkoutGameRuntimeCatalogTest(unittest.TestCase):
     def test_catalog_admits_only_approved_assets(self) -> None:
         document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
         self.assertEqual(document["schemaVersion"], 1)
-        self.assertEqual(document["generatorVersion"], 1)
+        self.assertEqual(document["generatorVersion"], 2)
         self.assertEqual(
             [asset["assetId"] for asset in document["assets"]],
             [
@@ -67,6 +67,25 @@ class WorkoutGameRuntimeCatalogTest(unittest.TestCase):
         document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
         digest = document.pop("catalogSha256")
         self.assertEqual(digest, catalog.catalog_digest(document))
+
+    def test_log_over_profile_is_canonical_and_bound_to_main_route(self) -> None:
+        document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
+        log_asset = next(
+            asset for asset in document["assets"]
+            if asset["assetId"] == "FT-02-log-over-greybox"
+        )
+        self.assertEqual(
+            log_asset["physics"]["routeProfiles"],
+            [{"profileId": "FT-02-log-over-v1", "routeKey": "main"}],
+        )
+        self.assertEqual(len(document["profiles"]), 1)
+        profile = document["profiles"][0]
+        self.assertEqual(profile["profileId"], "FT-02-log-over-v1")
+        self.assertEqual(profile["chains"][0]["points"][4], {
+            "forwardMm": 0,
+            "heightMm": 540,
+        })
+        self.assertNotIn("rollingResistanceMicros", profile["surface"])
 
 
 def first_ids(document: dict) -> set[str]:

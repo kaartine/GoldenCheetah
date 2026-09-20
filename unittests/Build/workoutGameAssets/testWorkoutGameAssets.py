@@ -372,6 +372,70 @@ class TestWorkoutGameAssets(unittest.TestCase):
         finally:
             fixture.close()
 
+    def test_route_profile_points_are_strictly_ordered_and_unique(self) -> None:
+        fixture = AssetFixture()
+        try:
+            fixture.manifest["physics"]["routeProfiles"] = [{
+                "routeKey": "main",
+                "profileId": "FT-01-main-v1",
+                "profileVersion": 1,
+                "kind": "height-offset-polyline",
+                "chains": [{
+                    "points": [
+                        {"forwardMm": -100, "heightMm": 0},
+                        {"forwardMm": 0, "heightMm": 200},
+                        {"forwardMm": 0, "heightMm": 0},
+                    ],
+                }],
+            }]
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "strictly increasing"
+            ):
+                assets.validate_repository(fixture.root)
+
+            fixture.manifest["physics"]["routeProfiles"][0]["chains"][0][
+                "points"
+            ][2]["forwardMm"] = 100
+            fixture.manifest["physics"]["routeProfiles"].append(
+                copy.deepcopy(fixture.manifest["physics"]["routeProfiles"][0])
+            )
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "duplicate route profile"
+            ):
+                assets.validate_repository(fixture.root)
+        finally:
+            fixture.close()
+
+    def test_log_over_has_versioned_integer_route_profile(self) -> None:
+        manifest = assets.load_json_file(LOG_MANIFEST_PATH)
+        profile = manifest["physics"]["routeProfiles"][0]
+
+        self.assertEqual(profile["routeKey"], "main")
+        self.assertEqual(profile["profileId"], "FT-02-log-over-v1")
+        self.assertEqual(profile["profileVersion"], 1)
+        self.assertEqual(profile["kind"], "height-offset-polyline")
+        self.assertEqual(profile["difficultyScale"], {
+            "nativeExtentMm": 540,
+            "baseExtentMm": 440,
+            "difficultyExtentMm": 200,
+        })
+        self.assertEqual(
+            profile["chains"][0]["points"],
+            [
+                {"forwardMm": -270, "heightMm": 0},
+                {"forwardMm": -249, "heightMm": 207},
+                {"forwardMm": -191, "heightMm": 382},
+                {"forwardMm": -103, "heightMm": 499},
+                {"forwardMm": 0, "heightMm": 540},
+                {"forwardMm": 103, "heightMm": 499},
+                {"forwardMm": 191, "heightMm": 382},
+                {"forwardMm": 249, "heightMm": 207},
+                {"forwardMm": 270, "heightMm": 0},
+            ],
+        )
+
     def test_runtime_variants_must_name_unique_glb_nodes(self) -> None:
         fixture = AssetFixture()
         try:
