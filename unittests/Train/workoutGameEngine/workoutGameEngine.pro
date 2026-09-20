@@ -4,6 +4,8 @@ CONFIG += c++17
 TARGET = testWorkoutGameEngine
 
 SOURCES = testWorkoutGameEngine.cpp \
+          ../../../src/Train/WorkoutGameAssetCatalog.cpp \
+          ../../../src/Train/WorkoutGameAssetPhysicsResolver.cpp \
           ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
           ../../../src/Train/WorkoutGameAudioEvents.cpp \
           ../../../src/Train/WorkoutGameCompetition.cpp \
@@ -35,6 +37,8 @@ HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
           ../../../src/Train/WorkoutGameGapJumpSelector.h \
           ../../../src/Train/TrainingDataGenerator.h \
           ../../../src/Train/WorkoutGameRiderVisual.h
+
+RESOURCES += ../../../src/Resources/workout-game-assets.qrc
 
 BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)
 include($$BOX2D_ROOT/box2d.pri)

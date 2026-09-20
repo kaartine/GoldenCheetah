@@ -4,6 +4,8 @@ CONFIG += c++17
 TARGET = testWorkoutGameReplay
 
 SOURCES = testWorkoutGameReplay.cpp \
+          ../../../src/Train/WorkoutGameAssetCatalog.cpp \
+          ../../../src/Train/WorkoutGameAssetPhysicsResolver.cpp \
           ../../../src/Train/WorkoutGameAudioEvents.cpp \
           ../../../src/Train/WorkoutGame3DTerrainProfile.cpp \
           ../../../src/Train/WorkoutGameCompetition.cpp \
@@ -27,12 +29,16 @@ SOURCES = testWorkoutGameReplay.cpp \
           ../../../src/Train/WorkoutGameWorldGroundProfile.cpp
 
 HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
+          ../../../src/Train/WorkoutGameAssetCatalog.h \
+          ../../../src/Train/WorkoutGameAssetPhysicsResolver.h \
+          ../../../src/Train/WorkoutGameFt02PhysicsV1.h \
           ../../../src/Train/WorkoutGameGapJumpGeometry.h \
           ../../../src/Train/WorkoutGameGapJumpLaunchWindow.h \
           ../../../src/Train/WorkoutGameGapJumpSelector.h \
           ../../../src/Train/WorkoutGameReplay.h
 
 BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)
+RESOURCES += ../../../src/Resources/workout-game-assets.qrc
 include($$BOX2D_ROOT/box2d.pri)
 
 include(../../unittests.pri)
