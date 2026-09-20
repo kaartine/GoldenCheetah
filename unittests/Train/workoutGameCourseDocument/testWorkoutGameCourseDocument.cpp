@@ -168,14 +168,14 @@ class TestWorkoutGameCourseDocument : public QObject
     Q_OBJECT
 
 private slots:
-    void defaultWriterStaysAtSchemaSixUntilRuntimeIsReady()
+    void defaultWriterPersistsAssetPhysicsForReadyRuntime()
     {
-        QCOMPARE(WorkoutGameCourseDocumentCodec::CurrentSchemaVersion, 6);
-        QCOMPARE(WorkoutGameCourseDocument().schemaVersion, 6);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::CurrentSchemaVersion, 7);
+        QCOMPARE(WorkoutGameCourseDocument().schemaVersion, 7);
         const auto encoded = WorkoutGameCourseDocumentCodec::encode(sampleDocument());
         QVERIFY(!encoded.isEmpty());
-        QCOMPARE(QJsonDocument::fromJson(encoded).object().value("schemaVersion").toInt(), 6);
-        QVERIFY(!encoded.contains("assetPhysicsSnapshot"));
+        QCOMPARE(QJsonDocument::fromJson(encoded).object().value("schemaVersion").toInt(), 7);
+        QVERIFY(encoded.contains("assetPhysicsSnapshot"));
     }
 
     void canonicalJsonRoundTrips()
@@ -197,7 +197,7 @@ private slots:
         QVERIFY(encoded.contains("\"variationLengthMeters\":60"));
         QVERIFY(encoded.contains("\"referenceGear\":6"));
         QVERIFY(encoded.contains("\"referenceEffortStartWatts\""));
-        QVERIFY(!encoded.contains("\"assetPhysicsSnapshot\""));
+        QVERIFY(encoded.contains("\"assetPhysicsSnapshot\""));
         QVERIFY(!encoded.contains("\"sha256\""));
         QCOMPARE(decoded.title, source.title);
         QCOMPARE(decoded.sourceFileName, source.sourceFileName);
@@ -210,7 +210,7 @@ private slots:
         QCOMPARE(decoded.course.sections[1].adjustableConnector, true);
         QVERIFY(decoded.course.roadPlan);
         QCOMPARE(decoded.course.roadPlan->generationVersion,
-                 WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
         QVERIFY(decoded.course.roadPlan->assetPhysicsSnapshot);
         QCOMPARE(decoded.course.roadPlan->assetPhysicsSnapshot
                     ->pieceBindings.size(),
@@ -306,7 +306,7 @@ private slots:
                  WorkoutGameCourseDocumentStatus::UnsupportedVersion);
     }
 
-    void legacyWriterCannotDiscardResolvedPhysics()
+    void resolvedPhysicsLoadsWithoutBeingDiscarded()
     {
         auto source = samplePhysicsDocument();
         auto plan = std::make_shared<WorkoutGameRoadPlan>(*source.course.roadPlan);
@@ -346,9 +346,11 @@ private slots:
         WorkoutGameCourseDocument playable;
         QString error;
         QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(coursePath, playable, error),
-                 WorkoutGameCourseDocumentStatus::UnsupportedVersion);
-        QVERIFY(!playable.course.roadPlan);
-        QVERIFY(!error.isEmpty());
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QVERIFY(playable.course.roadPlan);
+        QVERIFY(playable.course.roadPlan->assetPhysicsSnapshot);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(playable), encoded);
+        QVERIFY(error.isEmpty());
         source.schemaVersion = 6;
         QVERIFY(WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
     }
@@ -618,11 +620,11 @@ private slots:
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QCOMPARE(upgraded.conversionAlgorithmVersion, 6);
         QCOMPARE(upgraded.course.roadPlan->generationVersion,
-                 WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
         QVERIFY(upgraded.course.roadPlan->assetPhysicsSnapshot);
         const QByteArray upgradedJson =
                 WorkoutGameCourseDocumentCodec::encode(upgraded);
-        QVERIFY(!upgradedJson.contains("assetPhysicsSnapshot"));
+        QVERIFY(upgradedJson.contains("assetPhysicsSnapshot"));
         QVERIFY(!upgradedJson.contains("sha256"));
         QVERIFY(!upgradedJson.contains("digest"));
     }
@@ -964,7 +966,7 @@ private slots:
                  WorkoutGameCourseDocumentStatus::Ready);
         QVERIFY(loaded.course.roadPlan);
         QCOMPARE(loaded.course.roadPlan->generationVersion,
-                 WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
         QVERIFY(std::all_of(
                 loaded.course.roadPlan->pieces.begin(),
                 loaded.course.roadPlan->pieces.end(),
