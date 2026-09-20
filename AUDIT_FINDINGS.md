@@ -9186,6 +9186,19 @@ commit before the next finding begins.
   determine whether hardened destination-root prerequisites made these
   fixtures stale, and correct tests or production behavior only under a
   separately reviewed work item.
+- ARCH-003F2c3e3d resolution: no production or test correction was required.
+  The same four named cases fail under this workspace's filesystem sandbox on
+  both predecessor `4b3fd6b` and current `5e45a60`, while the complete suite
+  passes 46/46 for both revisions when run outside that sandbox with
+  `QT_QPA_PLATFORM=offscreen`. This A/B matrix rejects both a current-change
+  regression and stale-fixture explanation and classifies the observation as
+  an environment-specific false negative. Independent review returned GO for
+  the documentation-only resolution with no blocker, major, or minor finding.
+- ARCH-003F2c3e3d residual: the precise sandbox policy or denied filesystem
+  operation was not isolated; ptrace-based tracing is itself prohibited in
+  the sandbox and therefore supplied no syscall-level cause. The sandboxed
+  archive-security run must not be used as this suite's release gate; the
+  equivalent unsandboxed 46/46 run remains required.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -10565,7 +10578,8 @@ commit before the next finding begins.
   `savedRideRebindsAndPersistsAtomically` cache-directory prerequisite. The
   RideFile ownership suite passes 29/29 normally and under ASan/UBSan. Real
   single-activity gzip/zip and their safety-limit cases pass in the supporting
-  archive suite; its four unrelated failures are queued as ARCH-003F2c3e3d.
+  archive suite; the four sandbox-only failures have been resolved as the
+  environment false negative documented by ARCH-003F2c3e3d.
   Production `RideFile.cpp` and `RideFileTemporaryWorkspace.cpp` compile with
   warnings as errors, source dependencies pass 14/14, the linker policy and
   `git diff --check` pass, and independent review returned GO with no blocker,
