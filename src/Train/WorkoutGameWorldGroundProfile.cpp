@@ -18,6 +18,10 @@
 namespace {
 
 constexpr double CoincidentPointToleranceMeters = 1.0e-8;
+// Box2D rejects segments whose length is at most its 5 mm linear slop.
+// Asset breakpoints are authoritative, so discard nearby generated samples
+// instead of perturbing the authored profile.
+constexpr double MinimumGeneratedPointSeparationMeters = 0.006;
 
 }
 
@@ -38,6 +42,7 @@ std::vector<double> WorkoutGameWorldGroundProfile::mergeBreakpoints(
         return samplePoints;
     }
 
+    std::vector<double> authoredPoints;
     const auto &snapshot = *course.assetPhysicsSnapshot;
     for (std::size_t pieceIndex = 0;
             pieceIndex < snapshot.pieceBindings.size(); ++pieceIndex) {
@@ -48,17 +53,36 @@ std::vector<double> WorkoutGameWorldGroundProfile::mergeBreakpoints(
             const double local = courseDistance - distanceBaseMeters
                     + riderStartMeters;
             if (local < localStartMeters || local > localEndMeters) continue;
-            samplePoints.erase(
-                    std::remove_if(
-                        samplePoints.begin(), samplePoints.end(),
-                        [local](double point) {
-                            return std::abs(point - local)
-                                    <= CoincidentPointToleranceMeters;
-                        }),
-                    samplePoints.end());
-            samplePoints.push_back(local);
+            authoredPoints.push_back(local);
         }
     }
+    std::sort(authoredPoints.begin(), authoredPoints.end());
+    authoredPoints.erase(
+            std::unique(
+                authoredPoints.begin(), authoredPoints.end(),
+                [](double left, double right) {
+                    return std::abs(left - right)
+                            <= CoincidentPointToleranceMeters;
+                }),
+            authoredPoints.end());
+    samplePoints.erase(
+            std::remove_if(
+                samplePoints.begin(), samplePoints.end(),
+                [&authoredPoints](double point) {
+                    const auto right = std::lower_bound(
+                            authoredPoints.begin(), authoredPoints.end(), point);
+                    if (right != authoredPoints.end()
+                            && std::abs(point - *right)
+                                < MinimumGeneratedPointSeparationMeters) {
+                        return true;
+                    }
+                    return right != authoredPoints.begin()
+                            && std::abs(point - *(right - 1))
+                                < MinimumGeneratedPointSeparationMeters;
+                }),
+            samplePoints.end());
+    samplePoints.insert(samplePoints.end(),
+                        authoredPoints.begin(), authoredPoints.end());
 
     std::sort(samplePoints.begin(), samplePoints.end());
     samplePoints.erase(

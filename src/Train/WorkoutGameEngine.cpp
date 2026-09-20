@@ -158,6 +158,10 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
         physicsInput.effortRatio = std::max(0.0, input.actualWatts) / target;
         physicsInput.paused = input.paused;
         physicsInput.jumpRequested = feature.triggerJump;
+        physicsInput.featureMainLineCommitted =
+                feature.outcome == WorkoutGameFeatureOutcome::Completed
+                && feature.route == WorkoutGameRoute::MainLine
+                && feature.motion == WorkoutGameFeatureMotion::Jump;
         physicsInput.gapJumpLine = feature.lockedGapLine;
         physicsInput.gapJumpLaunchSpeedMetersPerSecond =
                 feature.launchBestSpeedMetersPerSecond > 0.0

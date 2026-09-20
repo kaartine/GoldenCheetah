@@ -130,7 +130,11 @@ DifficultyScaleV1 {
 }
 ```
 
-The contract is interpreted as follows:
+The catalog contract is interpreted as follows. The first persisted snapshot
+implementation deliberately accepts only one `add-obstacle` chain. Catalog
+profiles using `replace-surface` or multiple chains remain reserved for a
+later snapshot version and are rejected before playback until gap-aware road
+sampling and Box2D segment emission are implemented end to end.
 
 - `forwardMm` is course-forward distance relative to the feature's obstacle
   anchor. `heightMm` is vertical offset from the authoritative road surface.
@@ -139,7 +143,9 @@ The contract is interpreted as follows:
 - Each chain has at least two points. `forwardMm` is strictly increasing within
   a chain. Adjacent points are joined linearly. Chains do not join each other;
   their gaps represent absent rideable surface. Overlapping forward ranges are
-  invalid in version 1.
+  invalid in version 1. The Euclidean distance between adjacent points must be
+  greater than 5 mm so the frozen profile cannot create a segment at or below
+  Box2D's linear slop.
 - The profile is a height function. Loops, vertical segments, overhangs,
   backtracking, dynamic bodies, and multiple heights at one forward coordinate
   are not representable and must be rejected rather than approximated.
@@ -156,10 +162,17 @@ The contract is interpreted as follows:
   `difficultyPermille = round(clamp(difficulty, 0, 1) * 1000)`. If a difficulty
   scale is present, the resolved extent is
   `baseExtentMm + round(difficultyExtentMm * difficultyPermille / 1000)`.
-  Every native point is scaled by the exact rational
+  Except for the frozen FT-02 v1 adapter described below, every native point is
+  scaled by the exact rational
   `resolvedExtentMm / nativeExtentMm` and rounded to the nearest millimetre,
   with half values away from zero. Scaling is complete before validation,
   canonical comparison, or deduplication.
+- FT-02 v1 uses its separately versioned faceted-log evaluator to emit the
+  resolved integer polyline directly. It brackets steep facet changes only
+  when the resulting Euclidean segment exceeds Box2D's 5 mm linear slop. This
+  evaluator is covered at difficulty 0, 0.5, and 1 by the 2 mm parity gate.
+  Production writing remains on schema 6 until legacy migration calls this
+  frozen evaluator and stores its complete resolved definition.
 - Runtime conversion is exactly `meters = millimeters / 1000.0`. Interpolation
   occurs between converted adjacent integer points. No consumer may refit,
   smooth, resample, or infer collision from the render mesh.
@@ -201,6 +214,15 @@ integer polyline and checked against a visual proxy. General 3D mesh collision
 is outside this ADR. Box2D continues to receive 2D segments; the adapter emits
 the frozen chain vertices and may subdivide a segment for numeric stability,
 but subdivision must remain exactly collinear.
+
+`add-obstacle` profiles are emitted as separate static Box2D segments above
+the ordinary road surface; they are not baked into the base terrain chain.
+When feature runtime commits a successful main-line jump, it removes only the
+current piece's obstacle shapes before the front wheel reaches them. The
+ordinary road remains continuous underneath. An uncommitted main line retains
+physical obstacle contact. This split prevents a successful jump from
+receiving a pre-launch wheel impulse and keeps the pinned legacy airborne
+transitions deterministic.
 
 ### Frozen deduplicated course snapshot
 
@@ -323,12 +345,14 @@ course decoder before allocation proportional to input:
 | Generated catalog bytes | 1 MiB |
 | Assets / profiles in catalog | 256 / 512 |
 | UTF-8 ID length | 128 bytes |
-| Chains per profile | 8 |
+| Chains per catalog profile | 8 |
+| Chains per persisted snapshot v1 definition | 1 |
 | Points per profile | 256 |
 | Total catalog profile points | 32,768 |
 | Absolute local forward coordinate | 64,000 mm |
 | Absolute local height coordinate | 16,000 mm |
 | Minimum adjacent forward delta | 1 mm |
+| Minimum adjacent snapshot segment length | greater than 5 mm |
 | Course piece bindings | 4,096 (existing road-plan limit) |
 | Unique resolved profiles per snapshot | 64 |
 | Total resolved snapshot points | 4,096 |
@@ -462,8 +486,11 @@ release. Its generated native profile is the upper half of the existing
 16-segment faceted log:
 
 - native extent: 540 mm;
-- nine ordered upper-boundary points from forward -270 mm through the apex to
-  +270 mm, generated with the current 16 radial segments and quantized once;
+- eleven ordered upper-boundary points from forward -270 mm through the apex
+  to +270 mm. The frozen v1 quantizer brackets the two steep outer facet
+  changes with integer points and emits one point for each remaining facet,
+  keeping every Box2D segment above linear slop while preserving the legacy
+  16-segment surface within the parity gate;
 - native render origin: -1,020 mm relative to the obstacle anchor, preserving
   the current 0.75 m dead zone plus 0.27 m half core;
 - native visual/core height and forward extent: 540 mm;

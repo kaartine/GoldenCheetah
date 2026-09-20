@@ -289,6 +289,13 @@ double nonPhysicalFeatureOffsetAt(
         const WorkoutGameRoadPiece &piece = course.pieces[pieceIndex];
         if (piece.terrain == WorkoutGameTerrainKind::BunnyHop
                 || piece.terrain == WorkoutGameTerrainKind::LogOver) {
+            if (piece.terrain == WorkoutGameTerrainKind::LogOver
+                    && course.assetPhysicsSnapshot
+                    && WorkoutGameAssetPhysicsSampler::sample(
+                        *course.assetPhysicsSnapshot,
+                        pieceIndex, distanceMeters).bound) {
+                return;
+            }
             offset += featureSurfaceOffsetAt(
                     course, pieceIndex, distanceMeters);
         }
