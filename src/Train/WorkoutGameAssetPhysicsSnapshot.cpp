@@ -18,6 +18,7 @@ namespace {
 constexpr double MaximumCourseDistanceMeters = 250000.0;
 constexpr std::int32_t MaximumForwardCoordinateMm = 64000;
 constexpr std::int32_t MaximumHeightCoordinateMm = 16000;
+constexpr std::int64_t MinimumBox2DSegmentLengthSquaredMm = 25;
 
 bool samePoint(
         const WorkoutGameAssetPhysicsPoint &left,
@@ -137,13 +138,11 @@ WorkoutGameAssetPhysicsSnapshotValidationStatus validateDefinition(
             != WorkoutGameAssetPhysicsDefinition::CurrentProfileVersion) {
         return Status::UnsupportedVersion;
     }
-    if ((definition.operation
+    if (definition.operation
                     != WorkoutGameAssetPhysicsOperation::AddObstacle
-                && definition.operation
-                    != WorkoutGameAssetPhysicsOperation::ReplaceSurface)
             || definition.coulombFrictionMilli > 2000
             || definition.restitutionMilli > 250
-            || definition.chains.empty()) {
+            || definition.chains.size() != 1) {
         return Status::InvalidSnapshot;
     }
 
@@ -174,6 +173,18 @@ WorkoutGameAssetPhysicsSnapshotValidationStatus validateDefinition(
                         && point.forwardMm
                             <= chain.points[pointIndex - 1].forwardMm)) {
                 return Status::InvalidSnapshot;
+            }
+            if (pointIndex > 0) {
+                const WorkoutGameAssetPhysicsPoint &previous =
+                        chain.points[pointIndex - 1];
+                const std::int64_t forward =
+                        std::int64_t(point.forwardMm) - previous.forwardMm;
+                const std::int64_t height =
+                        std::int64_t(point.heightMm) - previous.heightMm;
+                if (forward * forward + height * height
+                        <= MinimumBox2DSegmentLengthSquaredMm) {
+                    return Status::InvalidSnapshot;
+                }
             }
         }
         if (definition.operation

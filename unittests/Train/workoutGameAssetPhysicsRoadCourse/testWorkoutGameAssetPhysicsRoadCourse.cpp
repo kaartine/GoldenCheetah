@@ -10,6 +10,7 @@
 #include "Train/WorkoutGameAssetCatalog.h"
 #include "Train/WorkoutGameAssetPhysicsResolver.h"
 #include "Train/WorkoutGameAssetPhysicsSampler.h"
+#include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameRoadPlan.h"
 
 #include <QTest>
@@ -19,7 +20,7 @@
 
 namespace {
 
-WorkoutGameCourse logOverCourse()
+WorkoutGameCourse logOverCourse(double difficulty = 0.5)
 {
     WorkoutGameCourse course;
     course.status = WorkoutGameCourseStatus::Ready;
@@ -30,7 +31,7 @@ WorkoutGameCourse logOverCourse()
     section.terrain = WorkoutGameTerrainKind::LogOver;
     section.durationMs = course.durationMs;
     section.targetWatts = 260.0;
-    section.difficulty = 0.5;
+    section.difficulty = difficulty;
     section.challengeCount = 1;
     course.sections.push_back(section);
     return course;
@@ -119,53 +120,66 @@ private slots:
 
     void catalogProfileMatchesLegacyAtFacetEdges()
     {
-        const WorkoutGameCourse course = logOverCourse();
-        WorkoutGameRoadPlan plan =
-                WorkoutGameRoadCourseBuilder::generatePlan(course, 200.0);
-        const std::size_t pieceIndex = challengeIndex(plan);
-        QVERIFY(pieceIndex < plan.pieces.size());
-
-        WorkoutGameRoadPlan legacyPlan = plan;
-        legacyPlan.assetPhysicsSnapshot =
-                WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(legacyPlan);
         QString error;
         const auto catalog = WorkoutGameAssetCatalog::load(&error);
         QVERIFY2(catalog, qPrintable(error));
-        const auto resolution = WorkoutGameAssetPhysicsResolver::resolve(
-                *catalog, plan.pieces);
-        QCOMPARE(resolution.status,
-                 WorkoutGameAssetPhysicsResolveStatus::Ready);
-        plan.assetPhysicsSnapshot = resolution.snapshot;
+        constexpr double Pi = 3.14159265358979323846;
+        for (double difficulty : {0.0, 0.5, 1.0}) {
+            const WorkoutGameCourse course = logOverCourse(difficulty);
+            WorkoutGameRoadPlan plan =
+                    WorkoutGameRoadCourseBuilder::generatePlan(course, 200.0);
+            const std::size_t pieceIndex = challengeIndex(plan);
+            QVERIFY(pieceIndex < plan.pieces.size());
 
-        const auto legacy = WorkoutGameRoadCourseBuilder::materialize(
-                course, legacyPlan);
-        const auto resolved = WorkoutGameRoadCourseBuilder::materialize(
-                course, plan);
-        QVERIFY(legacy.ready);
-        QVERIFY(resolved.ready);
-        const auto breakpoints =
-                WorkoutGameAssetPhysicsSampler::breakpointsMeters(
-                    *resolution.snapshot, pieceIndex);
-        QCOMPARE(breakpoints.size(), std::size_t(9));
-        for (double breakpoint : breakpoints) {
-            for (double delta : {-0.001, 0.0, 0.001}) {
-                const auto oldSample = WorkoutGameRoadCourseBuilder::sample(
-                        legacy, breakpoint + delta);
-                const auto newSample = WorkoutGameRoadCourseBuilder::sample(
-                        resolved, breakpoint + delta);
-                QVERIFY(oldSample.ready);
-                QVERIFY(newSample.ready);
-                const double difference = std::abs(
-                        oldSample.surfaceOffsetMeters
-                            - newSample.surfaceOffsetMeters);
-                const double tolerance = delta == 0.0 ? 0.002 : 0.005;
-                QVERIFY2(difference <= tolerance,
-                         qPrintable(QStringLiteral(
-                             "distance=%1 legacy=%2 resolved=%3 delta=%4")
-                             .arg(breakpoint + delta, 0, 'f', 6)
-                             .arg(oldSample.surfaceOffsetMeters, 0, 'f', 9)
-                             .arg(newSample.surfaceOffsetMeters, 0, 'f', 9)
-                             .arg(difference, 0, 'f', 9)));
+            WorkoutGameRoadPlan legacyPlan = plan;
+            legacyPlan.assetPhysicsSnapshot =
+                    WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(
+                        legacyPlan);
+            const auto resolution = WorkoutGameAssetPhysicsResolver::resolve(
+                    *catalog, plan.pieces);
+            QCOMPARE(resolution.status,
+                     WorkoutGameAssetPhysicsResolveStatus::Ready);
+            plan.assetPhysicsSnapshot = resolution.snapshot;
+
+            const auto legacy = WorkoutGameRoadCourseBuilder::materialize(
+                    course, legacyPlan);
+            const auto resolved = WorkoutGameRoadCourseBuilder::materialize(
+                    course, plan);
+            QVERIFY(legacy.ready);
+            QVERIFY(resolved.ready);
+            const double obstacle = plan.pieces[pieceIndex]
+                    .challenge.obstacleDistanceMeters;
+            const double radius = WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::LogOver, difficulty)
+                    .heightMeters * 0.5;
+            for (int facet = 0;
+                    facet <= WorkoutGameLogRadialSegments / 2; ++facet) {
+                const double local = std::cos(
+                        Pi - double(facet) * 2.0 * Pi
+                            / double(WorkoutGameLogRadialSegments)) * radius;
+                for (double delta : {-0.001, 0.0, 0.001}) {
+                    const double distance = obstacle + local + delta;
+                    const auto oldSample =
+                            WorkoutGameRoadCourseBuilder::sample(
+                                legacy, distance);
+                    const auto newSample =
+                            WorkoutGameRoadCourseBuilder::sample(
+                                resolved, distance);
+                    QVERIFY(oldSample.ready);
+                    QVERIFY(newSample.ready);
+                    const double difference = std::abs(
+                            oldSample.surfaceOffsetMeters
+                                - newSample.surfaceOffsetMeters);
+                    QVERIFY2(difference <= 0.002,
+                             qPrintable(QStringLiteral(
+                                 "difficulty=%1 facet=%2 distance=%3 "
+                                 "legacy=%4 resolved=%5 delta=%6")
+                                 .arg(difficulty).arg(facet)
+                                 .arg(distance, 0, 'f', 9)
+                                 .arg(oldSample.surfaceOffsetMeters, 0, 'f', 9)
+                                 .arg(newSample.surfaceOffsetMeters, 0, 'f', 9)
+                                 .arg(difference, 0, 'f', 9)));
+                }
             }
         }
     }

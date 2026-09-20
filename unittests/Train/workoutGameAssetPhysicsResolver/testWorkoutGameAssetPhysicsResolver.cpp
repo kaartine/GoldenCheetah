@@ -83,19 +83,25 @@ private slots:
         struct Expected {
             double difficulty;
             std::uint32_t extent;
-            std::array<std::int32_t, 9> forward;
-            std::array<std::int32_t, 9> height;
+            std::array<std::int32_t, 11> forward;
+            std::array<std::int32_t, 11> height;
         };
         const std::array<Expected, 3> cases {{
             {0.0, 440,
-             {-220, -203, -156, -84, 0, 84, 156, 203, 220},
-             {0, 169, 311, 407, 440, 407, 311, 169, 0}},
+             {-220, -204, -203, -156, -84, 0,
+                 84, 156, 203, 204, 220},
+             {0, 162, 169, 310, 407, 440,
+                 407, 310, 169, 162, 0}},
             {0.5, 540,
-             {-270, -249, -191, -103, 0, 103, 191, 249, 270},
-             {0, 207, 382, 499, 540, 499, 382, 207, 0}},
+             {-270, -250, -249, -191, -103, 0,
+                 103, 191, 249, 250, 270},
+             {0, 202, 208, 382, 499, 540,
+                 499, 382, 208, 202, 0}},
             {1.0, 640,
-             {-320, -295, -226, -122, 0, 122, 226, 295, 320},
-             {0, 245, 453, 591, 640, 591, 453, 245, 0}},
+             {-320, -296, -295, -226, -122, 0,
+                 122, 226, 295, 296, 320},
+             {0, 242, 247, 453, 591, 640,
+                 591, 453, 247, 242, 0}},
         }};
 
         for (const Expected &expected : cases) {
@@ -115,8 +121,8 @@ private slots:
             QCOMPARE(definition.coulombFrictionMilli, std::uint16_t(1100));
             QCOMPARE(definition.restitutionMilli, std::uint16_t(0));
             QCOMPARE(definition.chains.size(), std::size_t(1));
-            QCOMPARE(definition.chains[0].points.size(), std::size_t(9));
-            for (std::size_t index = 0; index < 9; ++index) {
+            QCOMPARE(definition.chains[0].points.size(), std::size_t(11));
+            for (std::size_t index = 0; index < 11; ++index) {
                 QCOMPARE(definition.chains[0].points[index].forwardMm,
                          expected.forward[index]);
                 QCOMPARE(definition.chains[0].points[index].heightMm,

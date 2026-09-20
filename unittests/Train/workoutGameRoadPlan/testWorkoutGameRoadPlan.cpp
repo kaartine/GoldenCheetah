@@ -548,6 +548,26 @@ private slots:
                  WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
 
         invalid = *valid;
+        invalid.physicsDefinitions[0].chains[0].points[1] = {-265, 0};
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        invalid = *valid;
+        invalid.physicsDefinitions[0].operation =
+                WorkoutGameAssetPhysicsOperation::ReplaceSurface;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        invalid = *valid;
+        invalid.physicsDefinitions[0].chains.push_back(
+                {{{300, 0}, {320, 0}}});
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        invalid = *valid;
         invalid.physicsDefinitions.resize(
                 WorkoutGameCourseAssetPhysicsSnapshot::MaximumDefinitions + 1);
         QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(

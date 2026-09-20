@@ -20,6 +20,7 @@ HEADERS = ../../../src/Train/WorkoutGameAssetCatalog.h \
           ../../../src/Train/WorkoutGameAssetPhysicsResolver.h \
           ../../../src/Train/WorkoutGameAssetPhysicsSampler.h \
           ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.h \
+          ../../../src/Train/WorkoutGameFt02PhysicsV1.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameRoadPlan.h
 

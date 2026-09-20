@@ -10,6 +10,7 @@
 #include "WorkoutGameAssetPhysicsResolver.h"
 
 #include "WorkoutGameAssetCatalog.h"
+#include "WorkoutGameFt02PhysicsV1.h"
 #include "WorkoutGameRoadCourse.h"
 
 #include <cmath>
@@ -100,13 +101,18 @@ WorkoutGameAssetPhysicsDefinition definitionFor(
         const Catalog::Profile &profile,
         std::uint32_t extent)
 {
-    WorkoutGameAssetPhysicsDefinition definition;
+    WorkoutGameAssetPhysicsDefinition definition =
+            profile.profileId == QStringLiteral("FT-02-log-over-v1")
+                && profile.profileVersion == 1
+            ? WorkoutGameFt02PhysicsV1::definitionForExtent(extent)
+            : WorkoutGameAssetPhysicsDefinition();
     definition.profileVersion = profile.profileVersion;
     definition.operation = profile.operation == Catalog::ProfileOperation::AddObstacle
             ? WorkoutGameAssetPhysicsOperation::AddObstacle
             : WorkoutGameAssetPhysicsOperation::ReplaceSurface;
     definition.coulombFrictionMilli = profile.surface.coulombFrictionMilli;
     definition.restitutionMilli = profile.surface.restitutionMilli;
+    if (!definition.chains.empty()) return definition;
     definition.chains.reserve(std::size_t(profile.chains.size()));
 
     const std::int32_t nativeExtent =
