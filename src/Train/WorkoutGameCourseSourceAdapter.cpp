@@ -45,14 +45,17 @@ bool attachRoadPlan(
 {
     const WorkoutGameCourse visual =
             WorkoutGameDistancePlayback::visualCourse(course);
-    const WorkoutGameRoadPlan plan =
+    WorkoutGameRoadPlan plan =
             WorkoutGameRoadCourseBuilder::generatePlan(
                 visual, ftpWatts, {
                     WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
                     preset
                 });
+    plan.assetPhysicsSnapshot =
+            WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan);
     if (WorkoutGameRoadPlanValidator::validate(plan, course.sections.size())
             != WorkoutGameRoadPlanValidationStatus::Ready
+            || !plan.assetPhysicsSnapshot
             || !WorkoutGameRoadQuality::audit(plan).accepted()) {
         return false;
     }

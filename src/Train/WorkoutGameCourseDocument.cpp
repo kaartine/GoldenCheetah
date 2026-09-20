@@ -1118,6 +1118,321 @@ bool parseRelief(
                             relief.sineCoefficientMeters);
 }
 
+QString assetPhysicsOperationName(WorkoutGameAssetPhysicsOperation operation)
+{
+    switch (operation) {
+    case WorkoutGameAssetPhysicsOperation::AddObstacle:
+        return QStringLiteral("add-obstacle");
+    case WorkoutGameAssetPhysicsOperation::ReplaceSurface:
+        return QStringLiteral("replace-surface");
+    }
+    return {};
+}
+
+bool parseAssetPhysicsOperation(
+        const QString &name,
+        WorkoutGameAssetPhysicsOperation &operation)
+{
+    if (name == QStringLiteral("add-obstacle")) {
+        operation = WorkoutGameAssetPhysicsOperation::AddObstacle;
+        return true;
+    }
+    if (name == QStringLiteral("replace-surface")) {
+        operation = WorkoutGameAssetPhysicsOperation::ReplaceSurface;
+        return true;
+    }
+    return false;
+}
+
+bool signed32Number(
+        const QJsonObject &object,
+        const char *key,
+        std::int32_t &value)
+{
+    std::int64_t number = 0;
+    if (!integerNumber(object, key, number)
+            || number < std::numeric_limits<std::int32_t>::min()
+            || number > std::numeric_limits<std::int32_t>::max()) {
+        return false;
+    }
+    value = std::int32_t(number);
+    return true;
+}
+
+QJsonObject assetPhysicsSnapshotToJson(
+        const WorkoutGameCourseAssetPhysicsSnapshot &snapshot)
+{
+    QJsonArray definitions;
+    for (const WorkoutGameAssetPhysicsDefinition &definition :
+            snapshot.physicsDefinitions) {
+        QJsonArray chains;
+        for (const WorkoutGameAssetPhysicsChain &chain : definition.chains) {
+            QJsonArray points;
+            for (const WorkoutGameAssetPhysicsPoint &point : chain.points) {
+                points.append(QJsonObject {
+                    {QStringLiteral("forwardMm"), point.forwardMm},
+                    {QStringLiteral("heightMm"), point.heightMm}
+                });
+            }
+            chains.append(QJsonObject {
+                {QStringLiteral("points"), points}
+            });
+        }
+        definitions.append(QJsonObject {
+            {QStringLiteral("profileVersion"),
+             double(definition.profileVersion)},
+            {QStringLiteral("operation"),
+             assetPhysicsOperationName(definition.operation)},
+            {QStringLiteral("coulombFrictionMilli"),
+             int(definition.coulombFrictionMilli)},
+            {QStringLiteral("restitutionMilli"),
+             int(definition.restitutionMilli)},
+            {QStringLiteral("chains"), chains}
+        });
+    }
+    QJsonArray bindings;
+    for (const WorkoutGameAssetPhysicsBinding &binding : snapshot.bindings) {
+        bindings.append(QJsonObject {
+            {QStringLiteral("assetId"), binding.assetId},
+            {QStringLiteral("variantKey"), binding.variantKey},
+            {QStringLiteral("definitionIndex"),
+             double(binding.definitionIndex)},
+            {QStringLiteral("nativeForwardOriginMm"),
+             binding.nativeForwardOriginMm},
+            {QStringLiteral("nativeForwardExtentMm"),
+             double(binding.nativeForwardExtentMm)},
+            {QStringLiteral("nativeUpExtentMm"),
+             double(binding.nativeUpExtentMm)},
+            {QStringLiteral("resolvedExtentMm"),
+             double(binding.resolvedExtentMm)}
+        });
+    }
+    QJsonArray pieceBindings;
+    for (const WorkoutGameAssetPhysicsPieceBinding &binding :
+            snapshot.pieceBindings) {
+        pieceBindings.append(QJsonObject {
+            {QStringLiteral("definitionIndex"), double(binding.definitionIndex)},
+            {QStringLiteral("bindingIndex"), double(binding.bindingIndex)},
+            {QStringLiteral("obstacleAnchorMm"), binding.obstacleAnchorMm},
+            {QStringLiteral("flags"), double(binding.flags)}
+        });
+    }
+    return {
+        {QStringLiteral("snapshotVersion"), double(snapshot.snapshotVersion)},
+        {QStringLiteral("catalogSchemaVersion"), double(snapshot.catalogSchemaVersion)},
+        {QStringLiteral("physicsDefinitions"), definitions},
+        {QStringLiteral("bindings"), bindings},
+        {QStringLiteral("pieceBindings"), pieceBindings}
+    };
+}
+
+WorkoutGameCourseDocumentStatus snapshotStatusToDocumentStatus(
+        WorkoutGameAssetPhysicsSnapshotValidationStatus status)
+{
+    switch (status) {
+    case WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready:
+        return WorkoutGameCourseDocumentStatus::Ready;
+    case WorkoutGameAssetPhysicsSnapshotValidationStatus::UnsupportedVersion:
+        return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+    case WorkoutGameAssetPhysicsSnapshotValidationStatus::ResourceLimit:
+        return WorkoutGameCourseDocumentStatus::ResourceLimit;
+    case WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot:
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    return WorkoutGameCourseDocumentStatus::InvalidDocument;
+}
+
+WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
+        const QJsonValue &value,
+        std::size_t roadPieceCount,
+        std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+            &destination)
+{
+    if (!value.isObject()) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    const QJsonObject object = value.toObject();
+    auto snapshot = std::make_shared<WorkoutGameCourseAssetPhysicsSnapshot>();
+    if (!unsignedNumber(
+                object, "snapshotVersion", snapshot->snapshotVersion)) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    if (snapshot->snapshotVersion
+            != WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion) {
+        return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+    }
+    if (!unsignedNumber(object, "catalogSchemaVersion", snapshot->catalogSchemaVersion)) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    if (snapshot->catalogSchemaVersion > 1) {
+        return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+    }
+    if (object.size() != 5) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    const QJsonValue definitionsValue =
+            object.value(QStringLiteral("physicsDefinitions"));
+    const QJsonValue bindingsValue = object.value(QStringLiteral("bindings"));
+    const QJsonValue pieceBindingsValue =
+            object.value(QStringLiteral("pieceBindings"));
+    if (!definitionsValue.isArray() || !bindingsValue.isArray()
+            || !pieceBindingsValue.isArray()) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    const QJsonArray definitions = definitionsValue.toArray();
+    const QJsonArray bindings = bindingsValue.toArray();
+    const QJsonArray pieceBindings = pieceBindingsValue.toArray();
+    if (definitions.size()
+                > int(WorkoutGameCourseAssetPhysicsSnapshot
+                    ::MaximumDefinitions)
+            || bindings.size()
+                > int(WorkoutGameCourseAssetPhysicsSnapshot::MaximumBindings)
+            || pieceBindings.size()
+                > int(WorkoutGameCourseAssetPhysicsSnapshot
+                    ::MaximumPieceBindings)) {
+        return WorkoutGameCourseDocumentStatus::ResourceLimit;
+    }
+    std::size_t totalPoints = 0;
+    snapshot->physicsDefinitions.reserve(std::size_t(definitions.size()));
+    for (const QJsonValue &definitionValue : definitions) {
+        if (!definitionValue.isObject()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        const QJsonObject definitionObject = definitionValue.toObject();
+        const QJsonValue operation =
+                definitionObject.value(QStringLiteral("operation"));
+        const QJsonValue chainsValue =
+                definitionObject.value(QStringLiteral("chains"));
+        WorkoutGameAssetPhysicsDefinition definition;
+        std::uint32_t friction = 0;
+        std::uint32_t restitution = 0;
+        if (!unsignedNumber(definitionObject, "profileVersion",
+                            definition.profileVersion)) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        if (definition.profileVersion != WorkoutGameAssetPhysicsDefinition::CurrentProfileVersion) {
+            return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+        }
+        if (definitionObject.size() != 5 || !operation.isString()
+                || !parseAssetPhysicsOperation(
+                    operation.toString(), definition.operation)
+                || !unsignedNumber(definitionObject,
+                    "coulombFrictionMilli", friction)
+                || friction > std::numeric_limits<std::uint16_t>::max()
+                || !unsignedNumber(definitionObject,
+                    "restitutionMilli", restitution)
+                || restitution > std::numeric_limits<std::uint16_t>::max()
+                || !chainsValue.isArray()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        definition.coulombFrictionMilli = std::uint16_t(friction);
+        definition.restitutionMilli = std::uint16_t(restitution);
+        const QJsonArray chains = chainsValue.toArray();
+        if (chains.size() > int(WorkoutGameCourseAssetPhysicsSnapshot
+                    ::MaximumChainsPerDefinition)) {
+            return WorkoutGameCourseDocumentStatus::ResourceLimit;
+        }
+        definition.chains.reserve(std::size_t(chains.size()));
+        std::size_t definitionPoints = 0;
+        for (const QJsonValue &chainValue : chains) {
+            if (!chainValue.isObject() || chainValue.toObject().size() != 1) {
+                return WorkoutGameCourseDocumentStatus::InvalidDocument;
+            }
+            const QJsonValue pointsValue = chainValue.toObject().value(
+                    QStringLiteral("points"));
+            if (!pointsValue.isArray()) {
+                return WorkoutGameCourseDocumentStatus::InvalidDocument;
+            }
+            const QJsonArray points = pointsValue.toArray();
+            definitionPoints += std::size_t(points.size());
+            totalPoints += std::size_t(points.size());
+            if (definitionPoints > WorkoutGameCourseAssetPhysicsSnapshot
+                        ::MaximumPointsPerDefinition
+                    || totalPoints > WorkoutGameCourseAssetPhysicsSnapshot
+                        ::MaximumTotalPoints) {
+                return WorkoutGameCourseDocumentStatus::ResourceLimit;
+            }
+            WorkoutGameAssetPhysicsChain chain;
+            chain.points.reserve(std::size_t(points.size()));
+            for (const QJsonValue &pointValue : points) {
+                if (!pointValue.isObject()) {
+                    return WorkoutGameCourseDocumentStatus::InvalidDocument;
+                }
+                WorkoutGameAssetPhysicsPoint point;
+                const QJsonObject pointObject = pointValue.toObject();
+                if (pointObject.size() != 2 || !signed32Number(
+                            pointObject, "forwardMm", point.forwardMm)
+                        || !signed32Number(
+                            pointObject, "heightMm", point.heightMm)) {
+                    return WorkoutGameCourseDocumentStatus::InvalidDocument;
+                }
+                chain.points.push_back(point);
+            }
+            definition.chains.push_back(std::move(chain));
+        }
+        snapshot->physicsDefinitions.push_back(std::move(definition));
+    }
+    snapshot->bindings.reserve(std::size_t(bindings.size()));
+    for (const QJsonValue &bindingValue : bindings) {
+        if (!bindingValue.isObject()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        const QJsonObject bindingObject = bindingValue.toObject();
+        const QJsonValue assetId =
+                bindingObject.value(QStringLiteral("assetId"));
+        const QJsonValue variantKey =
+                bindingObject.value(QStringLiteral("variantKey"));
+        WorkoutGameAssetPhysicsBinding binding;
+        if (bindingObject.size() != 7 || !assetId.isString() || !variantKey.isString()
+                || !unsignedNumber(bindingObject, "definitionIndex",
+                    binding.definitionIndex)
+                || !signed32Number(bindingObject, "nativeForwardOriginMm",
+                    binding.nativeForwardOriginMm)
+                || !unsignedNumber(bindingObject, "nativeForwardExtentMm",
+                    binding.nativeForwardExtentMm)
+                || !unsignedNumber(bindingObject, "nativeUpExtentMm",
+                    binding.nativeUpExtentMm)
+                || !unsignedNumber(bindingObject, "resolvedExtentMm",
+                    binding.resolvedExtentMm)) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        binding.assetId = assetId.toString();
+        binding.variantKey = variantKey.toString();
+        snapshot->bindings.push_back(std::move(binding));
+    }
+    snapshot->pieceBindings.reserve(std::size_t(pieceBindings.size()));
+    for (const QJsonValue &pieceBindingValue : pieceBindings) {
+        if (!pieceBindingValue.isObject()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        WorkoutGameAssetPhysicsPieceBinding binding;
+        const QJsonObject bindingObject = pieceBindingValue.toObject();
+        if (bindingObject.size() != 4
+                || !unsignedNumber(bindingObject, "definitionIndex", binding.definitionIndex)
+                || !unsignedNumber(bindingObject, "bindingIndex",
+                            binding.bindingIndex)
+                || !signed32Number(bindingObject, "obstacleAnchorMm",
+                    binding.obstacleAnchorMm)
+                || !unsignedNumber(bindingObject, "flags", binding.flags)) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        snapshot->pieceBindings.push_back(binding);
+    }
+    const auto validation = WorkoutGameAssetPhysicsSnapshotValidator::validate(
+            *snapshot, roadPieceCount);
+    const auto status = snapshotStatusToDocumentStatus(validation);
+    if (status == WorkoutGameCourseDocumentStatus::Ready) {
+        // The shape, array bounds, strings and scalars have now been checked.
+        // Only a bounded known snapshot reaches the encoded-size calculation.
+        if (QJsonDocument(object).toJson(QJsonDocument::Compact).size()
+                > WorkoutGameCourseAssetPhysicsSnapshot::MaximumEncodedBytes) {
+            return WorkoutGameCourseDocumentStatus::ResourceLimit;
+        }
+        destination = std::move(snapshot);
+    }
+    return status;
+}
+
 QJsonObject roadPieceToJson(
         const WorkoutGameRoadPiece &piece,
         std::uint32_t generationVersion)
@@ -1150,7 +1465,8 @@ QJsonObject roadPieceToJson(
     if (piece.gapJump.enabled) {
         result.insert(QStringLiteral("gapJump"), gapJumpToJson(piece.gapJump));
     }
-    if (generationVersion == WorkoutGameRoadPlan::CurrentGenerationVersion) {
+    if (generationVersion
+            >= WorkoutGameRoadPlan::BankAndReliefGenerationVersion) {
         result.insert(QStringLiteral("bank"), bankToJson(piece.bank));
         result.insert(QStringLiteral("relief"), reliefToJson(piece.relief));
     }
@@ -1204,7 +1520,8 @@ bool parseRoadPiece(
     }
     const QJsonValue bank = object.value(QStringLiteral("bank"));
     const QJsonValue relief = object.value(QStringLiteral("relief"));
-    if (generationVersion == WorkoutGameRoadPlan::CurrentGenerationVersion) {
+    if (generationVersion
+            >= WorkoutGameRoadPlan::BankAndReliefGenerationVersion) {
         if (!parseBank(bank, piece.bank)
                 || !parseRelief(relief, piece.relief)) {
             return false;
@@ -1215,21 +1532,34 @@ bool parseRoadPiece(
     return true;
 }
 
-QJsonObject roadPlanToJson(const WorkoutGameRoadPlan &plan)
+QJsonObject roadPlanToJson(
+        const WorkoutGameRoadPlan &plan,
+        bool includeAssetPhysicsSnapshot)
 {
+    const std::uint32_t encodedGeneration = includeAssetPhysicsSnapshot
+            ? plan.generationVersion
+            : std::min(plan.generationVersion,
+                WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
     QJsonArray pieces;
     for (const WorkoutGameRoadPiece &piece : plan.pieces) {
-        pieces.append(roadPieceToJson(piece, plan.generationVersion));
+        pieces.append(roadPieceToJson(piece, encodedGeneration));
     }
-    return {
+    QJsonObject object {
         {QStringLiteral("generationVersion"),
-         double(plan.generationVersion)},
+         double(encodedGeneration)},
         {QStringLiteral("pieces"), pieces}
     };
+    if (includeAssetPhysicsSnapshot && plan.assetPhysicsSnapshot) {
+        object.insert(QStringLiteral("assetPhysicsSnapshot"),
+                      assetPhysicsSnapshotToJson(
+                          *plan.assetPhysicsSnapshot));
+    }
+    return object;
 }
 
 WorkoutGameCourseDocumentStatus parseRoadPlan(
         const QJsonValue &value,
+        int schemaVersion,
         std::size_t sourceSectionCount,
         std::shared_ptr<const WorkoutGameRoadPlan> &destination)
 {
@@ -1243,8 +1573,19 @@ WorkoutGameCourseDocumentStatus parseRoadPlan(
     }
     if (generationVersion != WorkoutGameRoadPlan::LegacyGenerationVersion
             && generationVersion
+                != WorkoutGameRoadPlan::BankAndReliefGenerationVersion
+            && generationVersion
                 != WorkoutGameRoadPlan::CurrentGenerationVersion) {
         return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+    }
+    if ((schemaVersion >= WorkoutGameCourseDocumentCodec::AssetPhysicsSchemaVersion
+                && generationVersion
+                    != WorkoutGameRoadPlan::CurrentGenerationVersion)
+            || (schemaVersion
+                    < WorkoutGameCourseDocumentCodec::AssetPhysicsSchemaVersion
+                && generationVersion
+                    == WorkoutGameRoadPlan::CurrentGenerationVersion)) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
     const QJsonValue piecesValue = object.value(QStringLiteral("pieces"));
     if (!piecesValue.isArray()) {
@@ -1265,6 +1606,26 @@ WorkoutGameCourseDocumentStatus parseRoadPlan(
             return WorkoutGameCourseDocumentStatus::InvalidDocument;
         }
         plan->pieces.push_back(piece);
+    }
+    const QJsonValue snapshotValue =
+            object.value(QStringLiteral("assetPhysicsSnapshot"));
+    if (schemaVersion >= WorkoutGameCourseDocumentCodec::AssetPhysicsSchemaVersion) {
+        const WorkoutGameCourseDocumentStatus snapshotStatus =
+                parseAssetPhysicsSnapshot(
+                    snapshotValue, plan->pieces.size(),
+                    plan->assetPhysicsSnapshot);
+        if (snapshotStatus != WorkoutGameCourseDocumentStatus::Ready) {
+            return snapshotStatus;
+        }
+    } else {
+        if (!snapshotValue.isUndefined()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        plan->assetPhysicsSnapshot =
+                WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(*plan);
+        if (!plan->assetPhysicsSnapshot) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
     }
     const WorkoutGameRoadPlanValidationStatus validation =
             WorkoutGameRoadPlanValidator::validate(
@@ -1317,25 +1678,36 @@ bool documentForPersistence(
         WorkoutGameCourseDocument &destination)
 {
     destination = source;
-    const auto hasCurrentRoadPlan = [&destination]() {
+    const auto hasBankAndReliefRoadPlan = [&destination]() {
         return destination.course.roadPlan
                 && destination.course.roadPlan->generationVersion
-                    == WorkoutGameRoadPlan::CurrentGenerationVersion;
+                    >= WorkoutGameRoadPlan::BankAndReliefGenerationVersion;
     };
     if (destination.schemaVersion
             == WorkoutGameCourseDocumentCodec::CurrentSchemaVersion) {
         if (!WorkoutGameCourseDocumentCodec::valid(destination)) return false;
-        if (hasCurrentRoadPlan()) return true;
+        return true;
     }
     else if ((destination.schemaVersion != 1
                 && destination.schemaVersion != 2
                 && destination.schemaVersion != 3
                 && destination.schemaVersion != 4
-                && destination.schemaVersion != 5)
+                && destination.schemaVersion != 5
+                && destination.schemaVersion != 6)
             || !WorkoutGameCourseDocumentCodec::valid(destination)) {
         return false;
     }
-    if (hasCurrentRoadPlan()) {
+    if (hasBankAndReliefRoadPlan()) {
+        auto upgradedPlan = std::make_shared<WorkoutGameRoadPlan>(
+                *destination.course.roadPlan);
+        upgradedPlan->generationVersion =
+                WorkoutGameRoadPlan::CurrentGenerationVersion;
+        if (!upgradedPlan->assetPhysicsSnapshot) {
+            upgradedPlan->assetPhysicsSnapshot =
+                    WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(
+                        *upgradedPlan);
+        }
+        destination.course.roadPlan = std::move(upgradedPlan);
         destination.schemaVersion =
                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
         destination.sourceSha256.clear();
@@ -1377,6 +1749,14 @@ bool documentForPersistence(
     }
     destination.course.roadPlan =
             std::make_shared<const WorkoutGameRoadPlan>(plan);
+    auto persistedPlan = std::make_shared<WorkoutGameRoadPlan>(
+            *destination.course.roadPlan);
+    persistedPlan->generationVersion =
+            WorkoutGameRoadPlan::CurrentGenerationVersion;
+    persistedPlan->assetPhysicsSnapshot =
+            WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(
+                *persistedPlan);
+    destination.course.roadPlan = std::move(persistedPlan);
     return WorkoutGameCourseDocumentCodec::valid(destination);
 }
 
@@ -1402,6 +1782,18 @@ bool writeAtomically(
 bool WorkoutGameCourseDocumentCodec::valid(
         const WorkoutGameCourseDocument &document)
 {
+    if (document.schemaVersion < AssetPhysicsSchemaVersion
+            && document.course.roadPlan && document.course.roadPlan->assetPhysicsSnapshot) {
+        const auto &snapshot = *document.course.roadPlan->assetPhysicsSnapshot;
+        // An older writer may omit only the adapter metadata reconstructed on
+        // legacy reads. Never silently discard explicitly resolved geometry.
+        if (snapshot.catalogSchemaVersion != 0 || !snapshot.physicsDefinitions.empty()
+                || !snapshot.bindings.empty()
+                || !std::all_of(snapshot.pieceBindings.begin(), snapshot.pieceBindings.end(),
+                    [](const auto &piece) {
+                        return piece.flags == WorkoutGameCourseAssetPhysicsSnapshot::LegacyProceduralV1;
+                    })) return false;
+    }
     static const QRegularExpression sha256Pattern(
             QStringLiteral("^[0-9a-f]{64}$"));
     const QFileInfo sourceInfo(document.sourceFileName);
@@ -1522,6 +1914,18 @@ bool WorkoutGameCourseDocumentCodec::valid(
     const int maximumAlgorithmVersion = document.schemaVersion == 3
             ? 2 : document.schemaVersion == 4
                 ? 5 : WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion;
+    const bool assetPhysicsRoadPlanValid = document.course.roadPlan
+            && document.course.roadPlan->generationVersion
+                == WorkoutGameRoadPlan::CurrentGenerationVersion
+            && document.course.roadPlan->assetPhysicsSnapshot
+            && WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    *document.course.roadPlan->assetPhysicsSnapshot,
+                    document.course.roadPlan->pieces.size())
+                == WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready
+            && QJsonDocument(assetPhysicsSnapshotToJson(
+                    *document.course.roadPlan->assetPhysicsSnapshot))
+                    .toJson(QJsonDocument::Compact).size()
+                <= WorkoutGameCourseAssetPhysicsSnapshot::MaximumEncodedBytes;
     const bool schemaValid = document.schemaVersion == 1
             ? !document.course.roadPlan
                 && !document.prescriptionMetadata.present()
@@ -1530,8 +1934,11 @@ bool WorkoutGameCourseDocumentCodec::valid(
                     || document.schemaVersion == 3
                     || document.schemaVersion == 4
                     || document.schemaVersion == 5
-                    || document.schemaVersion == CurrentSchemaVersion)
+                    || document.schemaVersion == 6
+                    || document.schemaVersion == AssetPhysicsSchemaVersion)
                 && roadPlanMatchesCourse(document.course)
+                && (document.schemaVersion != AssetPhysicsSchemaVersion
+                    || assetPhysicsRoadPlanValid)
                 && sourceAnnotationsAllowed
                 && (document.schemaVersion == 2
                     ? !document.prescriptionMetadata.present()
@@ -1609,7 +2016,9 @@ QByteArray WorkoutGameCourseDocumentCodec::encode(
     };
     if (document.schemaVersion >= 2) {
         root.insert(QStringLiteral("roadPlan"),
-                    roadPlanToJson(*document.course.roadPlan));
+                    roadPlanToJson(
+                        *document.course.roadPlan,
+                        document.schemaVersion >= AssetPhysicsSchemaVersion));
     }
     const QByteArray encoded =
             QJsonDocument(root).toJson(QJsonDocument::Compact) + '\n';
@@ -1636,7 +2045,8 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
     }
     if (schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3
             && schemaVersion != 4 && schemaVersion != 5
-            && schemaVersion != CurrentSchemaVersion) {
+            && schemaVersion != 6
+            && schemaVersion != AssetPhysicsSchemaVersion) {
         return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
     }
     const QJsonValue title = root.value(QStringLiteral("title"));
@@ -1730,7 +2140,8 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
         }
     } else {
         const WorkoutGameCourseDocumentStatus planStatus = parseRoadPlan(
-                roadPlan, document.course.sections.size(),
+                roadPlan, document.schemaVersion,
+                document.course.sections.size(),
                 document.course.roadPlan);
         if (planStatus != WorkoutGameCourseDocumentStatus::Ready) {
             return planStatus;
@@ -1840,6 +2251,13 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentStore::loadForCourse(
     if (status != WorkoutGameCourseDocumentStatus::Ready) {
         error = QStringLiteral("Invalid MTB course metadata");
         return status;
+    }
+    if (document.schemaVersion > WorkoutGameCourseDocumentCodec::CurrentSchemaVersion) {
+        // Codec preparation does not imply support by playback consumers.
+        // Enable this format only with the resolver and legacy parity work.
+        document = WorkoutGameCourseDocument();
+        error = QStringLiteral("Asset physics course playback is not supported by this build");
+        return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
     }
 
     const QByteArray expectedCourse =

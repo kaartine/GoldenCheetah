@@ -67,7 +67,10 @@ struct WorkoutGameCourseDocument
 class WorkoutGameCourseDocumentCodec
 {
 public:
+    // The production writer remains at 6 until resolver/legacy runtime parity
+    // is established. Schema 7 is explicitly available for codec preparation.
     static constexpr int CurrentSchemaVersion = 6;
+    static constexpr int AssetPhysicsSchemaVersion = 7;
     static constexpr qsizetype MaximumDocumentBytes = 8 * 1024 * 1024;
     static constexpr std::size_t MaximumSourceAnnotations = 4096;
 

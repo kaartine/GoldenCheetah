@@ -730,8 +730,10 @@ private slots:
         QCOMPARE(reopened.schemaVersion,
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QVERIFY(reopened.course.roadPlan);
+        // The production schema-6 writer persists generation 2 while
+        // generation 3/snapshot persistence is prepared behind the codec gate.
         QCOMPARE(reopened.course.roadPlan->generationVersion,
-                 WorkoutGameRoadPlan::CurrentGenerationVersion);
+                 WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(reopened),
                  WorkoutGameCourseDocumentCodec::encode(
                      regenerated.document));
