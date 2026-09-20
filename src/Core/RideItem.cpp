@@ -952,9 +952,22 @@ RideItem::refresh(const RideRefreshEnvironment &environment)
 bool
 RideItem::refreshImpl(const RideRefreshEnvironment *environment)
 {
+    RideItemRefreshPreparation preparation =
+        prepareRefreshSynchronously(environment);
+    if (!preparation.result) {
+        return rideItemRefreshSucceeded(preparation.outcome);
+    }
+    return rideItemRefreshSucceeded(
+        publishPreparedRefreshSynchronously(
+            std::move(*preparation.result)));
+}
+
+RideItemRefreshPreparation
+RideItem::prepareRefreshSynchronously(
+    const RideRefreshEnvironment *environment)
+{
     if (!isstale) {
-        return rideItemRefreshSucceeded(
-            RideItemRefreshOutcome::AlreadyCurrent);
+        return {RideItemRefreshOutcome::AlreadyCurrent, std::nullopt};
     }
 
     const bool targetWasOpen = isOpen();
@@ -968,8 +981,9 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
     RideFileCRC::ContentFingerprint sourceFingerprint;
     if (!RideFileCRC::computeFileFingerprint(
             sourcePath, sourceFingerprint)) {
-        return rideItemRefreshSucceeded(
-            RideItemRefreshOutcome::SourceFingerprintFailed);
+        return {
+            RideItemRefreshOutcome::SourceFingerprintFailed,
+            std::nullopt};
     }
 
     std::unique_ptr<RideFile> computationRide;
@@ -984,8 +998,7 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
     RideFile *const sourceRide = computationRide.get();
     if (!sourceRide) {
         qDebug()<<"** FILE READ ERROR: "<<fileName;
-        return rideItemRefreshSucceeded(
-            RideItemRefreshOutcome::SourceOpenFailed);
+        return {RideItemRefreshOutcome::SourceOpenFailed, std::nullopt};
     }
 
     // Compute against an unregistered item.  It borrows both collaborators;
@@ -1034,18 +1047,20 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
         boundBuildFingerprint = environment->rideItemFingerprint(
             expectedDateTime.date(), staging.sport, staging.isSwim);
         if (!boundBuildFingerprint) {
-            return rideItemRefreshSucceeded(
+            return {
                 RideItemRefreshOutcome::
-                    EnvironmentFingerprintUnavailable);
+                    EnvironmentFingerprintUnavailable,
+                std::nullopt};
         }
     }
     RideMetricRegistrySnapshot legacyMetricRegistry;
     const RideMetricRegistrySnapshot *metricRegistry =
         environment ? environment->metricRegistry() : nullptr;
     if (environment && !metricRegistry) {
-        return rideItemRefreshSucceeded(
+        return {
             RideItemRefreshOutcome::
-                EnvironmentMetricRegistryUnavailable);
+                EnvironmentMetricRegistryUnavailable,
+            std::nullopt};
     }
     if (!environment) {
         legacyMetricRegistry = RideMetricFactory::instance().snapshot();
@@ -1058,9 +1073,10 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
                 metricRegistry->rideMetric(field.metricSymbol);
             if (!metric || metric->index() < 0
                 || metric->index() >= metricRegistry->metricCount()) {
-                return rideItemRefreshSucceeded(
+                return {
                     RideItemRefreshOutcome::
-                        EnvironmentMetricRegistryUnavailable);
+                        EnvironmentMetricRegistryUnavailable,
+                    std::nullopt};
             }
         }
     }
@@ -1097,8 +1113,9 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
             sourceRide, !targetWasOpen || !isdirty);
     if (cachePreparation.outcome
         == RideFileCache::PreparedRefresh::Outcome::Invalid) {
-        return rideItemRefreshSucceeded(
-            RideItemRefreshOutcome::CachePreparationInvalid);
+        return {
+            RideItemRefreshOutcome::CachePreparationInvalid,
+            std::nullopt};
     }
 
     staging.metrics_.fill(0, metricRegistry->metricCount());
@@ -1196,6 +1213,15 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
     result.sourcePath = sourcePath;
     result.sourceFingerprint = sourceFingerprint;
 
+    return {
+        RideItemRefreshOutcome::ReadyForPublication,
+        std::move(result)};
+}
+
+RideItemRefreshOutcome
+RideItem::publishPreparedRefreshSynchronously(
+    RideItemRefreshResult &&result)
+{
     // The synchronous adapter still validates identity before crossing the
     // publication boundary.  F3c will put the generation gate here.
     const QString currentSourcePath =
@@ -1207,8 +1233,7 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
             {path, fileName, dateTime, planned, isOpen(), ride_},
             currentSourcePath,
             currentSourceFingerprint)) {
-        return rideItemRefreshSucceeded(
-            RideItemRefreshOutcome::IdentityRejected);
+        return RideItemRefreshOutcome::IdentityRejected;
     }
 
     // Complete every allocating/throwing part of item publication before
@@ -1225,8 +1250,7 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
                 &context->athleteSession().persistenceService());
         if (outcome
             == RideFileCache::PreparedCommitOutcome::SourceRejected) {
-            return rideItemRefreshSucceeded(
-                RideItemRefreshOutcome::CacheSourceRejected);
+            return RideItemRefreshOutcome::CacheSourceRejected;
         }
     } else if (result.cache.outcome
                == RideFileCache::PreparedRefresh::Outcome::
@@ -1248,8 +1272,7 @@ RideItem::refreshImpl(const RideRefreshEnvironment *environment)
         ride_->recalculateDerivedSeries(true);
     }
 
-    return rideItemRefreshSucceeded(
-        RideItemRefreshOutcome::Published);
+    return RideItemRefreshOutcome::Published;
 }
 
 double

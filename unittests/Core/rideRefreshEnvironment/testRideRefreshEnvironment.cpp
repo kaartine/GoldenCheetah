@@ -83,6 +83,7 @@ private slots:
     void sessionPublishesWholeGenerationsAtomically();
     void publicationIsOwnerThreadOnlyAndClosedByLifecycle();
     void productionRideItemMutationInventoryIsClosed();
+    void synchronousRefreshUsesExplicitPreparationBoundary();
     void productionWorkersRetainTheirPublishedGeneration();
 };
 
@@ -1448,6 +1449,100 @@ src/Core/RideDB.y:jc->interval.stdvariances().insert(m->index(), $10.toDouble())
     for (const QString &entry : expectedIntervalWriteList)
         expectedIntervalWrites[entry] += 1;
     QCOMPARE(intervalWrites, expectedIntervalWrites);
+}
+
+void TestRideRefreshEnvironment::
+synchronousRefreshUsesExplicitPreparationBoundary()
+{
+    const QDir root(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)));
+    QFile itemSourceFile(root.filePath(QStringLiteral("src/Core/RideItem.cpp")));
+    QVERIFY(itemSourceFile.open(QIODevice::ReadOnly));
+    const QByteArray source = itemSourceFile.readAll();
+
+    const qsizetype adapter = source.indexOf(
+        "RideItem::refreshImpl(const RideRefreshEnvironment *environment)");
+    const qsizetype preparation = source.indexOf(
+        "RideItem::prepareRefreshSynchronously(", adapter);
+    const qsizetype publication = source.indexOf(
+        "RideItem::publishPreparedRefreshSynchronously(", preparation);
+    const qsizetype nextMethod = source.indexOf(
+        "\ndouble\nRideItem::getWeight", publication);
+    QVERIFY(adapter >= 0);
+    QVERIFY(preparation > adapter);
+    QVERIFY(publication > preparation);
+    QVERIFY(nextMethod > publication);
+
+    const QByteArray adapterBody = source.mid(
+        adapter, preparation - adapter);
+    QCOMPARE(adapterBody.count("prepareRefreshSynchronously(environment)"), 1);
+    QCOMPARE(adapterBody.count("publishPreparedRefreshSynchronously("), 1);
+    QVERIFY(adapterBody.indexOf("prepareRefreshSynchronously(environment)")
+            < adapterBody.indexOf("publishPreparedRefreshSynchronously("));
+    QVERIFY(adapterBody.contains("if (!preparation.result)"));
+    QVERIFY(adapterBody.contains("std::move(*preparation.result)"));
+
+    const QByteArray preparationBody = source.mid(
+        preparation, publication - preparation);
+    QVERIFY(preparationBody.contains(
+        "RideItemRefreshOutcome::ReadyForPublication"));
+    QVERIFY(preparationBody.contains("std::move(result)"));
+    const QList<QByteArray> forbiddenPreparationEffects = {
+        "state.prepareFor", "publishPreparedCommit",
+        "reportCacheWriteFailure", "state.publishTo",
+        "notifyIntervalsUpdate", "userCache.clear",
+        "recalculateDerivedSeries"
+    };
+    for (const QByteArray &effect : forbiddenPreparationEffects)
+        QVERIFY2(!preparationBody.contains(effect), effect.constData());
+
+    const QByteArray publicationBody = source.mid(
+        publication, nextMethod - publication);
+    const qsizetype identityFingerprint = publicationBody.indexOf(
+        "RideFileCRC::computeFileFingerprint(");
+    const qsizetype identityGate = publicationBody.indexOf(
+        "result.accepts(", identityFingerprint);
+    const qsizetype prepareState = publicationBody.indexOf(
+        "result.state.prepareFor(*this)", identityGate);
+    const qsizetype cacheOutcome = publicationBody.indexOf(
+        "if (result.cache.outcome", prepareState);
+    const qsizetype cacheCommit = publicationBody.indexOf(
+        "RideFileCache::publishPreparedCommit(", cacheOutcome);
+    const qsizetype failureReport = publicationBody.indexOf(
+        "reportCacheWriteFailure(", cacheCommit);
+    const qsizetype publishState = publicationBody.indexOf(
+        "result.state.publishTo(*this", failureReport);
+    const qsizetype notifyIntervals = publicationBody.indexOf(
+        "notifyIntervalsUpdate(this)", publishState);
+    const qsizetype openPostActions = publicationBody.indexOf(
+        "if (result.expected.open)", notifyIntervals);
+    const qsizetype clearUserCache = publicationBody.indexOf(
+        "userCache.clear()", openPostActions);
+    const qsizetype markRideStale = publicationBody.indexOf(
+        "ride_->wstale = true", clearUserCache);
+    const qsizetype recalculate = publicationBody.indexOf(
+        "ride_->recalculateDerivedSeries(true)", markRideStale);
+    QVERIFY(identityFingerprint >= 0);
+    QVERIFY(identityGate > identityFingerprint);
+    QVERIFY(prepareState > identityGate);
+    QVERIFY(cacheOutcome > prepareState);
+    QVERIFY(cacheCommit > cacheOutcome);
+    QVERIFY(failureReport > cacheCommit);
+    QVERIFY(publishState > failureReport);
+    QVERIFY(notifyIntervals > publishState);
+    QVERIFY(openPostActions > notifyIntervals);
+    QVERIFY(clearUserCache > openPostActions);
+    QVERIFY(markRideStale > clearUserCache);
+    QVERIFY(recalculate > markRideStale);
+
+    QFile cacheSourceFile(root.filePath(QStringLiteral("src/Core/RideCache.cpp")));
+    QVERIFY(cacheSourceFile.open(QIODevice::ReadOnly));
+    const QByteArray cacheSource = cacheSourceFile.readAll();
+    const qsizetype worker = cacheSource.indexOf(
+        "void RideCacheRefreshThread::run()");
+    QVERIFY(worker >= 0);
+    QVERIFY(cacheSource.indexOf(
+        "const bool refreshed = item->refresh(*environment)", worker)
+        > worker);
 }
 
 void TestRideRefreshEnvironment::

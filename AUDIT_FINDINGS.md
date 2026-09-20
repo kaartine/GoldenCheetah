@@ -9461,6 +9461,46 @@ commit before the next finding begins.
   results drain. Use one bounded per-generation batch/dispatch owner, close it
   before joins, and make final generation settlement require both physical
   worker completion and owner-thread result drainage.
+- ARCH-003F3c0 (executable prepare/publish seam recorded before correction):
+  `RideItem::refreshImpl()` currently constructs its move-only detached result
+  and immediately publishes it inside one method, leaving no used boundary for
+  the later generation mailbox. Split it into a private synchronous
+  preparation result with an explicit outcome and optional
+  `RideItemRefreshResult`, plus a publication method immediately composed by
+  the legacy adapter. Preparation must not materialize target-bound intervals,
+  commit/report CPX state, mutate the target, notify observers, or perform
+  open-ride post-actions; publication must preserve the full identity/source
+  gate and exact side-effect order. Name the seam as synchronous-only: it still
+  dereferences the canonical item and live Context/Athlete inputs and is not a
+  worker-ready boundary until ARCH-003F2c3 supplies an immutable build seed.
+- ARCH-003F3c0 resolution: `refreshImpl()` is now a compatibility adapter that
+  immediately composes `prepareRefreshSynchronously()` with
+  `publishPreparedRefreshSynchronously()`. Preparation returns an explicit
+  terminal outcome or an optional move-only result marked
+  `ReadyForPublication`; that intermediate outcome is deliberately not a
+  public refresh success. Target-bound interval materialization, the complete
+  identity/source gate, CPX commit or failure reporting, the no-throw state
+  swap and single interval notification, and open-ride cache post-actions all
+  remain in publication in their prior order.
+- ARCH-003F3c0 verification: a source-contract regression proves the adapter
+  calls each boundary exactly once and in order, rejects every publication
+  side effect from the preparation body, locks the publication ordering, and
+  confirms the worker still uses the synchronous compatibility adapter. The
+  environment suite passes 23/23 and the computed-state/outcome suite 10/10,
+  each normally and under ASan/UBSan. The seven affected cache/publication
+  cases pass 9/9 normally and under ASan/UBSan; the complete cache suite passes
+  59/60 with only the already-recorded
+  `savedRideRebindsAndPersistsAtomically` missing-cache-directory baseline.
+  Production `RideItem` and its moc output compile with warnings as errors,
+  the source dependency suite passes 14/14, the linker-section policy passes,
+  and `git diff --check` is clean. Independent final review found no blocker,
+  major, or minor defect and returned GO.
+- ARCH-003F3c0 residual: this refactoring does not make preparation immutable,
+  target-independent, or safe to run on a worker. It still reads the canonical
+  `RideItem`, `Context`, and live Athlete services, and the worker still calls
+  `item->refresh(*environment)`. ARCH-003F2c3 and ARCH-003F3c/F3c1-F3c4 remain
+  the required build-seed, lifetime/generation, mailbox, cancellation, and
+  bounded owner-thread publication work.
 - ARCH-003F3c1 (target lifetime and identity gate recorded before correction):
   The current workset carries a raw `RideItem *`; a pre-computation liveness
   check does not pin that object through construction or prevent address reuse.

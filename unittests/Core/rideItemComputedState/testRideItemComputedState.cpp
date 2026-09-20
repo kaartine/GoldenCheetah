@@ -493,6 +493,8 @@ refreshOutcomeClassifiesOnlyPublishedStateAsSuccess()
     QVERIFY(rideItemRefreshSucceeded(
         RideItemRefreshOutcome::Published));
     QVERIFY(!rideItemRefreshSucceeded(
+        RideItemRefreshOutcome::ReadyForPublication));
+    QVERIFY(!rideItemRefreshSucceeded(
         RideItemRefreshOutcome::SourceFingerprintFailed));
     QVERIFY(!rideItemRefreshSucceeded(
         RideItemRefreshOutcome::SourceOpenFailed));

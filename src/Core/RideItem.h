@@ -42,6 +42,9 @@ class UserData;
 class ComparePane;
 class RideCacheItemSnapshot;
 class RideItemComputedState;
+class RideItemRefreshResult;
+struct RideItemRefreshPreparation;
+enum class RideItemRefreshOutcome;
 class RideRefreshEnvironment;
 #ifdef GC_RIDE_ITEM_REFRESH_TEST_HOOKS
 class RideItemRefreshTestAccess;
@@ -270,6 +273,10 @@ class RideItem : public QObject
         bool prepareForRefreshRelevantMutation();
         bool checkStaleImpl(const RideRefreshEnvironment *environment);
         bool refreshImpl(const RideRefreshEnvironment *environment);
+        RideItemRefreshPreparation prepareRefreshSynchronously(
+            const RideRefreshEnvironment *environment);
+        RideItemRefreshOutcome publishPreparedRefreshSynchronously(
+            RideItemRefreshResult &&result);
         void updateIntervals(bool notify = true);
         void borrowRideForRefresh(RideFile *ride);
         void borrowFileCacheForRefresh(RideFileCache *cache);

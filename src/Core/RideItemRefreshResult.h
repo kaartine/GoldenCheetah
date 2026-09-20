@@ -17,11 +17,14 @@
 #include <QDateTime>
 #include <QString>
 
+#include <optional>
+
 class RideFile;
 
 enum class RideItemRefreshOutcome
 {
     AlreadyCurrent,
+    ReadyForPublication,
     Published,
     SourceFingerprintFailed,
     SourceOpenFailed,
@@ -85,6 +88,13 @@ public:
 
     RideItemComputedState state;
     RideFileCache::PreparedRefresh cache;
+};
+
+struct RideItemRefreshPreparation
+{
+    RideItemRefreshOutcome outcome =
+        RideItemRefreshOutcome::CachePreparationInvalid;
+    std::optional<RideItemRefreshResult> result;
 };
 
 #endif
