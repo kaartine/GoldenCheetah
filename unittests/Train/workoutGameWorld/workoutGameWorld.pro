@@ -10,6 +10,7 @@ SOURCES = testWorkoutGameWorld.cpp \
           ../../../src/Train/WorkoutGameAssetPhysicsSampler.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.cpp \
+          ../../../src/Train/WorkoutGameWorldGroundProfile.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \
           ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
@@ -28,6 +29,7 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameRockSlabGeometry.h \
           ../../../src/Train/WorkoutGameSkinnyGeometry.h \
           ../../../src/Train/WorkoutGameWorld.h
+HEADERS += ../../../src/Train/WorkoutGameWorldGroundProfile.h
 
 BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)
 include($$BOX2D_ROOT/box2d.pri)

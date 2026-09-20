@@ -12,6 +12,7 @@
 #include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameClimbGeometry.h"
 #include "Train/WorkoutGameGapJumpGeometry.h"
+#include "Train/WorkoutGameWorldGroundProfile.h"
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
@@ -25,12 +26,70 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 class TestWorkoutGameWorld : public QObject
 {
     Q_OBJECT
 
 private slots:
+    void assetGroundProfileMergesExactFacetsAndMaterial()
+    {
+        WorkoutGameRoadCourse road;
+        road.ready = true;
+        road.totalLengthMeters = 40.0;
+        road.pieces.resize(1);
+        road.pieces[0].lengthMeters = road.totalLengthMeters;
+
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        snapshot->catalogSchemaVersion = 1;
+        WorkoutGameAssetPhysicsDefinition definition;
+        definition.coulombFrictionMilli = 725;
+        definition.restitutionMilli = 80;
+        definition.chains = {{{{-270, 0}, {0, 540}, {270, 0}}}};
+        snapshot->physicsDefinitions.push_back(definition);
+        WorkoutGameAssetPhysicsBinding asset;
+        asset.assetId = QStringLiteral("FT-02-log-over-greybox");
+        asset.definitionIndex = 0;
+        asset.nativeForwardExtentMm = 540;
+        asset.nativeUpExtentMm = 540;
+        asset.resolvedExtentMm = 540;
+        snapshot->bindings.push_back(asset);
+        WorkoutGameAssetPhysicsPieceBinding piece;
+        piece.definitionIndex = 0;
+        piece.bindingIndex = 0;
+        piece.obstacleAnchorMm = 20000;
+        snapshot->pieceBindings.push_back(piece);
+        road.assetPhysicsSnapshot = snapshot;
+
+        const double distanceBase = 10.0;
+        const double riderStart = 4.0;
+        std::vector<double> basePoints = {
+            13.5, 13.7299999999, 13.75, 13.9, 14.0, 14.25, 14.27, 14.5
+        };
+        const auto points = WorkoutGameWorldGroundProfile::mergeBreakpoints(
+                road, distanceBase, riderStart, 13.5, 14.5,
+                std::move(basePoints));
+        QCOMPARE(points.size(), std::size_t(8));
+        QVERIFY(std::is_sorted(points.begin(), points.end()));
+        QCOMPARE(points[1], 13.73);
+        QCOMPARE(points[4], 14.0);
+        QCOMPARE(points[6], 14.27);
+
+        const auto material = WorkoutGameWorldGroundProfile::materialAt(
+                road, 20.1);
+        QVERIFY(material.assetDefined);
+        QCOMPARE(material.coulombFriction, 0.725);
+        QCOMPARE(material.restitution, 0.08);
+
+        const auto ordinary = WorkoutGameWorldGroundProfile::materialAt(
+                road, 19.0);
+        QVERIFY(!ordinary.assetDefined);
+        QCOMPARE(ordinary.coulombFriction, 1.1);
+        QCOMPARE(ordinary.restitution, 0.0);
+    }
+
     void authoritativeDistanceKeepsTerrainOffsetLocalToTheVehicle()
     {
         WorkoutGameCourse course;

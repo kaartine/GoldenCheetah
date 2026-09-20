@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameWorld.h"
+#include "WorkoutGameWorldGroundProfile.h"
 #include "WorkoutGameFeatureCatalog.h"
 #include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
@@ -23,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -394,18 +396,37 @@ struct WorkoutGamePhysics::Impl
 
         b2BodyDef groundDefinition = b2DefaultBodyDef();
         const b2BodyId ground = b2CreateBody(world, &groundDefinition);
-        b2ShapeDef terrainShape = b2DefaultShapeDef();
-        terrainShape.material.friction = 1.1f;
-        double priorX = TerrainStartMeters;
-        double priorY = surfaceHeight(priorX);
-        bool priorSurfacePresent = surfacePresent(priorX);
+        std::vector<double> samplePoints = {TerrainStartMeters};
         double x = TerrainStartMeters;
         while (x < TerrainEndMeters - 0.001) {
             x = std::min(TerrainEndMeters,
                          x + terrainSampleSpacing(x));
+            samplePoints.push_back(x);
+        }
+        samplePoints = WorkoutGameWorldGroundProfile::mergeBreakpoints(
+                roadCourse, distanceBase, RiderStartMeters,
+                TerrainStartMeters, TerrainEndMeters,
+                std::move(samplePoints));
+
+        double priorX = samplePoints.front();
+        double priorY = surfaceHeight(priorX);
+        bool priorSurfacePresent = surfacePresent(priorX);
+        for (std::size_t pointIndex = 1;
+                pointIndex < samplePoints.size(); ++pointIndex) {
+            x = samplePoints[pointIndex];
             const double y = surfaceHeight(x);
             const bool currentSurfacePresent = surfacePresent(x);
             if (priorSurfacePresent && currentSurfacePresent) {
+                b2ShapeDef terrainShape = b2DefaultShapeDef();
+                const double midpointCourseDistance = distanceBase
+                        + 0.5 * (priorX + x) - RiderStartMeters;
+                const WorkoutGameWorldGroundMaterial material =
+                        WorkoutGameWorldGroundProfile::materialAt(
+                            roadCourse, midpointCourseDistance);
+                terrainShape.material.friction =
+                        float(material.coulombFriction);
+                terrainShape.material.restitution =
+                        float(material.restitution);
                 const b2Segment segment = {
                     {float(priorX), float(priorY)},
                     {float(x), float(y)}

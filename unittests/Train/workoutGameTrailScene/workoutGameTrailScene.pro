@@ -13,7 +13,8 @@ SOURCES = testWorkoutGameTrailScene.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \
           ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameTrailScene.cpp \
-          ../../../src/Train/WorkoutGameWorld.cpp
+          ../../../src/Train/WorkoutGameWorld.cpp \
+          ../../../src/Train/WorkoutGameWorldGroundProfile.cpp
 
 HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
           ../../../src/Train/WorkoutGameCourse.h \

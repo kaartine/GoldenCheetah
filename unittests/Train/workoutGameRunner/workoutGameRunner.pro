@@ -24,7 +24,8 @@ SOURCES = testWorkoutGameRunner.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp \
           ../../../src/Train/WorkoutGameTerrainTransition.cpp \
           ../../../src/Train/WorkoutGameVisualSmoother.cpp \
-          ../../../src/Train/WorkoutGameWorld.cpp
+          ../../../src/Train/WorkoutGameWorld.cpp \
+          ../../../src/Train/WorkoutGameWorldGroundProfile.cpp
 
 HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
           ../../../src/Train/WorkoutGameClock.h \
