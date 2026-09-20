@@ -169,7 +169,28 @@ private slots:
                 + fallback.exit.forwardMeters * fallbackScale;
         QVERIFY(std::abs(packagedStart - fallbackStart) < 1e-12);
         QVERIFY(std::abs(packagedEnd - fallbackEnd) < 1e-12);
-        QCOMPARE(0.54 * transform.upScale, transform.upExtentMeters);
+        double fallbackMinimum = fallback.vertices.front().forwardMeters;
+        double fallbackMaximum = fallbackMinimum;
+        double fallbackHeight = fallback.vertices.front().upMeters;
+        for (const WorkoutGameMeshVertex &vertex : fallback.vertices) {
+            fallbackMinimum = std::min(
+                    fallbackMinimum, vertex.forwardMeters);
+            fallbackMaximum = std::max(
+                    fallbackMaximum, vertex.forwardMeters);
+            fallbackHeight = std::max(fallbackHeight, vertex.upMeters);
+        }
+        QVERIFY(std::abs(packagedStart
+                         - (transform.obstacleAnchorMeters
+                            + fallbackMinimum * fallbackScale)) < 1e-12);
+        QVERIFY(std::abs(packagedEnd
+                         - (transform.obstacleAnchorMeters
+                            + fallbackMaximum * fallbackScale)) < 1e-12);
+        QVERIFY(fallbackHeight > 0.0);
+        const double fallbackUpScale = transform.upExtentMeters
+                / fallbackHeight;
+        QVERIFY(std::abs(0.54 * transform.upScale
+                         - fallbackHeight * fallbackUpScale)
+                < 1e-12);
     }
 
     void rejectsUnsupportedOrUnavailableFeatures()
