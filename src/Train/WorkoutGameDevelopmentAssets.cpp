@@ -368,7 +368,8 @@ void validateManifestContract(const QJsonObject &manifest)
              QStringLiteral("displayName"),
              QStringLiteral("role"), QStringLiteral("source"),
              QStringLiteral("license"), QStringLiteral("files"),
-             QStringLiteral("technical"), QStringLiteral("review")},
+             QStringLiteral("technical"), QStringLiteral("physics"),
+             QStringLiteral("review")},
             topLevel, QStringLiteral("manifest"));
     const QJsonValue manifestVersion = manifest.value(
             QStringLiteral("manifestVersion"));

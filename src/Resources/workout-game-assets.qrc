@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
+        <file alias="json/workout-game-asset-catalog.json">json/workout-game-asset-catalog.json</file>
         <file alias="images/workout-game-surface-atlas.png">images/workout-game-surface-atlas.png</file>
         <file alias="images/workout-game-surface-forest.png">images/workout-game-surface-forest.png</file>
         <file alias="images/workout-game-surface-dirt.png">images/workout-game-surface-dirt.png</file>

@@ -225,6 +225,11 @@
     { "key": "14", "rootNodes": ["GEO_PineSapling_LOD0"] },
     { "key": "15", "rootNodes": ["GEO_LeafySapling_LOD0"] }
   ],
+  "physics": {
+    "authority": "external",
+    "interaction": "visual-only",
+    "collisionProxy": { "kind": "none" }
+  },
   "review": {
     "status": "approved",
     "trademarkStatus": "not-applicable",

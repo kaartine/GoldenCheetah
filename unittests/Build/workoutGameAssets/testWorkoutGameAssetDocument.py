@@ -77,7 +77,7 @@ class WorkoutGameAssetDocumentTest(unittest.TestCase):
         )
         self.assertEqual(document.physics.authority, "external")
         self.assertEqual(document.physics.interaction, "rideable-feature")
-        self.assertEqual(document.physics.coulomb_friction, 1.0)
+        self.assertEqual(document.physics.coulomb_friction, 1.1)
         self.assertEqual(document.physics.restitution, 0.0)
         self.assertEqual(document.physics.collision_node, "")
         self.assertEqual(self.manifest.read_bytes(), before)

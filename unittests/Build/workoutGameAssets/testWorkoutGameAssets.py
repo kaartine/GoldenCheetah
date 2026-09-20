@@ -270,6 +270,13 @@ class TestWorkoutGameAssets(unittest.TestCase):
         with self.assertRaisesRegex(assets.AssetValidationError, "const"):
             assets.validate_against_schema(manifest, schema)
 
+    def test_schema_requires_explicit_physics(self) -> None:
+        manifest = assets.load_json_file(MANIFEST_PATH)
+        schema = assets.load_json_file(SCHEMA_PATH)
+        manifest.pop("physics")
+        with self.assertRaisesRegex(assets.AssetValidationError, "physics"):
+            assets.validate_against_schema(manifest, schema)
+
     def test_schema_requires_complete_coordinate_vectors(self) -> None:
         manifest = assets.load_json_file(MANIFEST_PATH)
         schema = assets.load_json_file(SCHEMA_PATH)

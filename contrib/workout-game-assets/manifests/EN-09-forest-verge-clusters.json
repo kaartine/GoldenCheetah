@@ -159,6 +159,11 @@
     { "key": "4", "rootNodes": ["GEO_VergeShrubFlowers_LOD0"] },
     { "key": "5", "rootNodes": ["GEO_VergeSaplingMushroom_LOD0"] }
   ],
+  "physics": {
+    "authority": "external",
+    "interaction": "visual-only",
+    "collisionProxy": { "kind": "none" }
+  },
   "review": {
     "status": "approved",
     "trademarkStatus": "not-applicable",

@@ -97,6 +97,11 @@
       "maxTextureBytes": 0
     }
   },
+  "physics": {
+    "authority": "external",
+    "interaction": "visual-only",
+    "collisionProxy": { "kind": "none" }
+  },
   "review": {
     "status": "approved",
     "trademarkStatus": "not-applicable",

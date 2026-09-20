@@ -123,6 +123,15 @@
       "maxTextureBytes": 0
     }
   },
+  "physics": {
+    "authority": "external",
+    "interaction": "obstacle",
+    "surface": {
+      "coulombFriction": 1.1,
+      "restitution": 0.0
+    },
+    "collisionProxy": { "kind": "none" }
+  },
   "review": {
     "status": "approved",
     "trademarkStatus": "not-applicable",

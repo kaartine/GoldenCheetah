@@ -106,6 +106,15 @@
       "maxTextureBytes": 0
     }
   },
+  "physics": {
+    "authority": "external",
+    "interaction": "rideable-feature",
+    "surface": {
+      "coulombFriction": 1.1,
+      "restitution": 0.0
+    },
+    "collisionProxy": { "kind": "none" }
+  },
   "review": {
     "status": "candidate",
     "trademarkStatus": "not-applicable",
