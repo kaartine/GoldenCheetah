@@ -2484,6 +2484,10 @@ prune_local_appimage_output_generations()
     find -P "$parent" -mindepth 1 -maxdepth 1 -print0 >"$candidate_list" ||
         return
 
+    # Validate every candidate's shallow inventory before inspecting any path
+    # as a mountpoint. Directory enumeration order must not let one valid
+    # candidate trigger deeper inspection before a later hostile candidate is
+    # rejected.
     while IFS= read -r -d '' entry; do
         name=$(basename -- "$entry") || return
         [[ "$name" =~ ^GoldenCheetah-output-[0-9a-f]{7,40}$ ]] || continue
@@ -2510,6 +2514,12 @@ prune_local_appimage_output_generations()
             continue
         fi
         local_appimage_output_inventory_valid "$entry" || return
+        entries+=("$entry")
+        identities+=("$identity")
+    done <"$candidate_list"
+
+    for index in "${!entries[@]}"; do
+        entry=${entries[$index]}
         local_appimage_output_mounts_absent "$entry" || return
         marker_info=$(read_local_appimage_output_marker \
             "$source_root" "$entry") || {
@@ -2536,13 +2546,11 @@ prune_local_appimage_output_generations()
                 "$manifest_hash" "$sbom_hash" "$build_manifest_hash"; then
             effective_state=failed
         fi
-        entries+=("$entry")
         states+=("$state")
         timestamps+=("$timestamp")
         revisions+=("$marker_revision")
         effective_states+=("$effective_state")
         marker_infos+=("$marker_info")
-        identities+=("$identity")
         if [ "$entry" = "$current_output" ]; then
             [ "$state" = valid ] && [ "$effective_state" = valid ] || {
                 echo "Current local AppImage output is not a valid completed build." >&2
@@ -2550,7 +2558,7 @@ prune_local_appimage_output_generations()
             }
             current_seen=true
         fi
-    done <"$candidate_list"
+    done
     [ "$current_seen" = true ] || {
         echo "Current local AppImage output is not tool-owned." >&2
         return 1
