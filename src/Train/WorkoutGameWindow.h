@@ -16,7 +16,6 @@
 #include "WorkoutGameAudio.h"
 #include "WorkoutGameCourseRuntime.h"
 #include "WorkoutGameFeatureLab.h"
-#include "WorkoutGamePositionRate.h"
 #include "WorkoutGameRunner.h"
 #include "WorkoutGameSessionState.h"
 
@@ -66,14 +65,12 @@ private:
     WorkoutGameGhostReplay loadGhost(const WorkoutGameCourse &course) const;
     void storeGhost();
     void updateAtWorkoutPosition(
-            std::int64_t workoutPosition,
+            double workoutPosition,
             bool discontinuity = false);
     void updateRunnerTelemetry();
     void drainRunnerFrame();
     void displayFrame(const WorkoutGameEngineFrame &frame);
-    double anchorRate(
-            std::int64_t workoutTimeMs,
-            std::int64_t monotonicTimeMs);
+    double anchorRate() const;
     QString workoutIdentity(ErgFile *workout) const;
 
     Context *context;
@@ -103,8 +100,8 @@ private:
     bool presentationSuspended = false;
     bool featureLabEnabled = false;
     std::optional<WorkoutGameFeatureLabGapScenario> featureLabGapScenario;
-    WorkoutGamePositionRate positionRate;
     std::int64_t currentWorkoutTimeMs = 0;
+    double currentWorkoutDistanceMeters = 0.0;
     std::int64_t lastTelemetryMonotonicTimeMs = -1;
     double currentAnchorRate = 1.0;
     double ftpWatts = 0.0;

@@ -32,6 +32,9 @@ struct WorkoutGameCourseConversionRequest
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
     WorkoutGameRoadPhysicsParameters roadPhysics;
     WorkoutGameCoursePrescriptionMetadata prescriptionMetadata;
+    double terrainVariationPercent = 15.0;
+    double variationLengthMeters = 60.0;
+    int referenceGear = 6;
     std::uint32_t seed = 0;
 };
 

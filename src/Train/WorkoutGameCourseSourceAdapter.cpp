@@ -13,7 +13,6 @@
 #include "WorkoutGameRoadPlan.h"
 #include "WorkoutGameRoadQuality.h"
 
-#include <QCryptographicHash>
 #include <QFileInfo>
 
 #include <cmath>
@@ -99,6 +98,10 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
     conversionRequest.preset = request.preset;
     conversionRequest.roadPhysics = request.roadPhysics;
     conversionRequest.prescriptionMetadata = request.prescriptionMetadata;
+    conversionRequest.terrainVariationPercent =
+            request.terrainVariationPercent;
+    conversionRequest.variationLengthMeters = request.variationLengthMeters;
+    conversionRequest.referenceGear = request.referenceGear;
     conversionRequest.seed = request.seed;
     WorkoutGameCourseConversionResult conversion =
             WorkoutGameCourseConverter::convert(conversionRequest);
@@ -116,9 +119,6 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
             WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
     result.document.title = title;
     result.document.sourceFileName = sourceName;
-    result.document.sourceSha256 = QString::fromLatin1(
-            QCryptographicHash::hash(
-                request.sourceContents, QCryptographicHash::Sha256).toHex());
     result.document.sourceIntervals = workout.intervals;
     result.document.sourceLaps = request.sourceLaps;
     result.document.sourceTexts = request.sourceTexts;
@@ -140,7 +140,9 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
 WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
         const WorkoutGameCourseDocument &source,
         WorkoutGameCoursePreset preset,
-        const QString &title)
+        const QString &title,
+        double terrainVariationPercent,
+        double variationLengthMeters)
 {
     WorkoutGameCourseSourceResult result;
     if (source.sourceIntervals.empty()
@@ -155,6 +157,13 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
     request.preset = preset;
     request.roadPhysics = source.generationParameters.roadPhysics;
     request.prescriptionMetadata = source.prescriptionMetadata;
+    request.terrainVariationPercent = terrainVariationPercent >= 0.0
+            ? terrainVariationPercent
+            : source.generationParameters.terrainVariationPercent;
+    request.variationLengthMeters = variationLengthMeters >= 0.0
+            ? variationLengthMeters
+            : source.generationParameters.variationLengthMeters;
+    request.referenceGear = source.generationParameters.referenceGear;
     request.seed = source.course.seed;
     WorkoutGameCourseConversionResult conversion =
             WorkoutGameCourseConverter::convert(request);
@@ -171,6 +180,7 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
     result.document = source;
     result.document.schemaVersion =
             WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
+    result.document.sourceSha256.clear();
     result.document.conversionAlgorithmVersion =
             WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion;
     result.document.title = title;

@@ -20,6 +20,7 @@ struct WorkoutGameTrainerTargetInput
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
     bool targetPowerSupported = false;
     double prescribedWatts = 0.0;
+    double relativeGearRatio = 1.0;
     double gradePercent = 0.0;
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
     double sectionProgress = 0.0;
@@ -39,7 +40,8 @@ public:
             double prescribedWatts,
             WorkoutGameTerrainKind terrain,
             double sectionProgress,
-            std::int64_t sectionDurationMs);
+            std::int64_t sectionDurationMs,
+            double relativeGearRatio = 1.0);
     static double terrainEffortSignal(
             WorkoutGameTerrainKind terrain,
             double sectionProgress,

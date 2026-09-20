@@ -53,6 +53,8 @@ WorkoutGameCourseDocument sampleDocument()
     climb.lengthMeters = 100.0;
     climb.targetStartWatts = 150.0;
     climb.targetEndWatts = 250.0;
+    climb.referenceEffortStartWatts = 150.0;
+    climb.referenceEffortEndWatts = 250.0;
     climb.gradePercent = 5.0;
     climb.endElevationMeters = 5.0;
     climb.difficulty = 0.7;
@@ -71,6 +73,8 @@ WorkoutGameCourseDocument sampleDocument()
     descent.endElevationMeters = -3.0;
     descent.targetStartWatts = 100.0;
     descent.targetEndWatts = 100.0;
+    descent.referenceEffortStartWatts = 100.0;
+    descent.referenceEffortEndWatts = 100.0;
     descent.gradePercent = -4.0;
     descent.difficulty = 0.2;
     descent.visualVariant = 5u;
@@ -169,10 +173,15 @@ private slots:
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QCOMPARE(decoded.conversionAlgorithmVersion,
                  WorkoutGameCourseDocument::CurrentConversionAlgorithmVersion);
-        QVERIFY(encoded.contains("\"algorithmVersion\":5"));
+        QVERIFY(encoded.contains("\"algorithmVersion\":6"));
+        QVERIFY(encoded.contains("\"terrainVariationPercent\":15"));
+        QVERIFY(encoded.contains("\"variationLengthMeters\":60"));
+        QVERIFY(encoded.contains("\"referenceGear\":6"));
+        QVERIFY(encoded.contains("\"referenceEffortStartWatts\""));
+        QVERIFY(!encoded.contains("\"sha256\""));
         QCOMPARE(decoded.title, source.title);
         QCOMPARE(decoded.sourceFileName, source.sourceFileName);
-        QCOMPARE(decoded.sourceSha256, source.sourceSha256);
+        QVERIFY(decoded.sourceSha256.isEmpty());
         QCOMPARE(decoded.ftpWatts, source.ftpWatts);
         QCOMPARE(decoded.preset, source.preset);
         QCOMPARE(decoded.course.seed, source.course.seed);
@@ -303,9 +312,11 @@ private slots:
         QVERIFY(directory.isValid());
         const QString path = directory.filePath(QStringLiteral("legacy.crs"));
         QString error;
-        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
-                    path, decoded, error),
-                 WorkoutGameCourseDocumentStatus::Ready);
+        const WorkoutGameCourseDocumentStatus saveStatus =
+                WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, decoded, error);
+        QVERIFY2(saveStatus == WorkoutGameCourseDocumentStatus::Ready,
+                 qPrintable(error));
         WorkoutGameCourseDocument upgraded;
         QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
                     path, upgraded, error),
@@ -325,6 +336,9 @@ private slots:
                 WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
                 .object();
         root.insert(QStringLiteral("schemaVersion"), 2);
+        QJsonObject source = root.value(QStringLiteral("source")).toObject();
+        source.insert(QStringLiteral("sha256"), QString(64, QLatin1Char('a')));
+        root.insert(QStringLiteral("source"), source);
         QJsonObject conversion =
                 root.value(QStringLiteral("conversion")).toObject();
         conversion.remove(QStringLiteral("algorithmVersion"));
@@ -341,12 +355,100 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), versionTwo);
     }
 
+    void versionFiveHashLoadsAndExplicitSaveUpgradesWithoutIt()
+    {
+        WorkoutGameCourseDocument legacy = sampleDocument();
+        legacy.schemaVersion = 5;
+        const QByteArray legacyJson =
+                WorkoutGameCourseDocumentCodec::encode(legacy);
+        QVERIFY(legacyJson.contains("\"sha256\""));
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    legacyJson, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.schemaVersion, 5);
+        QCOMPARE(decoded.sourceSha256, legacy.sourceSha256);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString coursePath = directory.filePath(
+                QStringLiteral("legacy-v5.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    coursePath, decoded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        WorkoutGameCourseDocument upgraded;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    coursePath, upgraded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(upgraded.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QVERIFY(upgraded.sourceSha256.isEmpty());
+
+        QFile sidecar(
+                WorkoutGameCourseDocumentStore::sidecarPathForCourse(
+                    coursePath));
+        QVERIFY(sidecar.open(QIODevice::ReadOnly));
+        QVERIFY(!sidecar.readAll().contains("\"sha256\""));
+    }
+
+    void versionFourHashLoadsAndReplacementUpgradesWithoutIt()
+    {
+        WorkoutGameCourseDocument legacy = sampleDocument();
+        legacy.schemaVersion = 4;
+        legacy.conversionAlgorithmVersion = 5;
+        const QByteArray legacyJson =
+                WorkoutGameCourseDocumentCodec::encode(legacy);
+        QVERIFY(legacyJson.contains("\"sha256\""));
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    legacyJson, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.schemaVersion, 4);
+        QCOMPARE(decoded.sourceSha256, legacy.sourceSha256);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString coursePath = directory.filePath(
+                QStringLiteral("legacy-v4.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    coursePath, decoded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        decoded.title = QStringLiteral("Replaced legacy v4");
+        QCOMPARE(WorkoutGameCourseDocumentStore::replaceArtifact(
+                    coursePath, decoded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseDocument upgraded;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    coursePath, upgraded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(upgraded.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QCOMPARE(upgraded.title, decoded.title);
+        QVERIFY(upgraded.sourceSha256.isEmpty());
+
+        QFile sidecar(
+                WorkoutGameCourseDocumentStore::sidecarPathForCourse(
+                    coursePath));
+        QVERIFY(sidecar.open(QIODevice::ReadOnly));
+        QVERIFY(!sidecar.readAll().contains("\"sha256\""));
+    }
+
     void versionThreeRemainsCanonicalAndRejectsVersionFourAnnotations()
     {
         QJsonObject root = QJsonDocument::fromJson(
                 WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
                 .object();
         root.insert(QStringLiteral("schemaVersion"), 3);
+        QJsonObject legacySource =
+                root.value(QStringLiteral("source")).toObject();
+        legacySource.insert(
+                QStringLiteral("sha256"), QString(64, QLatin1Char('a')));
+        root.insert(QStringLiteral("source"), legacySource);
         QJsonObject conversion =
                 root.value(QStringLiteral("conversion")).toObject();
         conversion.insert(QStringLiteral("algorithmVersion"), 2);
@@ -417,7 +519,7 @@ private slots:
         QVERIFY(encoded.isEmpty());
     }
 
-    void currentSchemaRejectsUnsafePrescribedRecoveryExposure()
+    void distanceDrivenSchemaIgnoresLegacyRecoveryExposureLimits()
     {
         WorkoutGameCourseDocument source = sampleDocument();
         source.sourceIntervals = {
@@ -427,6 +529,10 @@ private slots:
         QCOMPARE(source.course.sections[1].minimumDurationMs,
                  std::int64_t(14000));
 
+        QVERIFY(!WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
+
+        source.schemaVersion = 4;
+        source.conversionAlgorithmVersion = 5;
         QVERIFY(WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
     }
 
@@ -774,30 +880,37 @@ private slots:
                  WorkoutGameCourseDocumentStatus::ResourceLimit);
     }
 
-    void privateOrMalformedSourceIdentityIsRejected_data()
+    void privateSourcePathIsRejected_data()
     {
         QTest::addColumn<QString>("fileName");
-        QTest::addColumn<QString>("hash");
         QTest::newRow("absolute-path")
-                << QStringLiteral("/home/private/workout.erg")
-                << QString(64, QLatin1Char('a'));
+                << QStringLiteral("/home/private/workout.erg");
         QTest::newRow("relative-path")
-                << QStringLiteral("folder/workout.erg")
-                << QString(64, QLatin1Char('a'));
-        QTest::newRow("short-hash")
-                << QStringLiteral("workout.erg")
-                << QStringLiteral("abc");
-        QTest::newRow("non-hex-hash")
-                << QStringLiteral("workout.erg")
-                << QString(64, QLatin1Char('z'));
+                << QStringLiteral("folder/workout.erg");
     }
 
-    void privateOrMalformedSourceIdentityIsRejected()
+    void privateSourcePathIsRejected()
     {
         QFETCH(QString, fileName);
-        QFETCH(QString, hash);
         WorkoutGameCourseDocument document = sampleDocument();
         document.sourceFileName = fileName;
+
+        QVERIFY(WorkoutGameCourseDocumentCodec::encode(document).isEmpty());
+    }
+
+    void legacyMalformedSourceHashIsRejected_data()
+    {
+        QTest::addColumn<QString>("hash");
+        QTest::newRow("missing-hash") << QString();
+        QTest::newRow("short-hash") << QStringLiteral("abc");
+        QTest::newRow("non-hex-hash") << QString(64, QLatin1Char('z'));
+    }
+
+    void legacyMalformedSourceHashIsRejected()
+    {
+        QFETCH(QString, hash);
+        WorkoutGameCourseDocument document = sampleDocument();
+        document.schemaVersion = 5;
         document.sourceSha256 = hash;
 
         QVERIFY(WorkoutGameCourseDocumentCodec::encode(document).isEmpty());

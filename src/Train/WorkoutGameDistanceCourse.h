@@ -42,6 +42,10 @@ struct WorkoutGameDistanceCourseSection
     double endElevationMeters = 0.0;
     double targetStartWatts = 0.0;
     double targetEndWatts = 0.0;
+    // Terrain effort at the persisted reference gear/cadence. Legacy courses
+    // leave these at -1 and fall back to the original target fields above.
+    double referenceEffortStartWatts = -1.0;
+    double referenceEffortEndWatts = -1.0;
     double gradePercent = 0.0;
     double difficulty = 0.0;
     // -1 preserves legacy inference for documents written before algorithm 4.
@@ -70,6 +74,9 @@ struct WorkoutGameDistanceCourseGenerationParameters
     double shortClimbIntensity = 1.1;
     double gradeScale = 1.0;
     double technicality = 0.55;
+    double terrainVariationPercent = 15.0;
+    double variationLengthMeters = 60.0;
+    int referenceGear = 6;
     double workMinimumDurationScale = 0.9;
     double workMaximumDurationScale = 1.25;
     double recoveryMinimumDurationScale = 0.7;

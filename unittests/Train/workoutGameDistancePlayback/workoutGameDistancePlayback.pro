@@ -8,6 +8,7 @@ SOURCES = testWorkoutGameDistancePlayback.cpp \
           ../../../src/Train/WorkoutGameDistanceCourse.cpp \
           ../../../src/Train/WorkoutGameCourseTerrain.cpp \
           ../../../src/Train/WorkoutGameDistancePlayback.cpp \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
           ../../../src/Train/WorkoutGameRoadPhysics.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
@@ -15,6 +16,7 @@ HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameCourseTerrain.h \
           ../../../src/Train/WorkoutGameDistancePlayback.h \
           ../../../src/Train/WorkoutGameFeatureCatalog.h \
+          ../../../src/Train/WorkoutGameGapJumpGeometry.h \
           ../../../src/Train/WorkoutGameRoadPhysics.h
 
 include(../../unittests.pri)
