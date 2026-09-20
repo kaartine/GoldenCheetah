@@ -107,3 +107,46 @@ std::vector<double> WorkoutGameAssetPhysicsSampler::breakpointsMeters(
     result.erase(std::unique(result.begin(), result.end()), result.end());
     return result;
 }
+
+WorkoutGameAssetRenderFit WorkoutGameAssetPhysicsSampler::renderFit(
+        const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+        std::size_t pieceIndex)
+{
+    using Snapshot = WorkoutGameCourseAssetPhysicsSnapshot;
+    WorkoutGameAssetRenderFit result;
+    if (pieceIndex >= snapshot.pieceBindings.size()) {
+        result.status = WorkoutGameAssetRenderFitStatus::Invalid;
+        return result;
+    }
+    const WorkoutGameAssetPhysicsPieceBinding &piece =
+            snapshot.pieceBindings[pieceIndex];
+    if ((piece.flags & Snapshot::LegacyProceduralV1) != 0
+            || (piece.definitionIndex == Snapshot::NoIndex
+                && piece.bindingIndex == Snapshot::NoIndex)) {
+        return result;
+    }
+    if (piece.definitionIndex == Snapshot::NoIndex
+            || piece.bindingIndex == Snapshot::NoIndex
+            || piece.bindingIndex >= snapshot.bindings.size()) {
+        result.status = WorkoutGameAssetRenderFitStatus::Invalid;
+        return result;
+    }
+    const WorkoutGameAssetPhysicsBinding &binding =
+            snapshot.bindings[piece.bindingIndex];
+    if (binding.definitionIndex != piece.definitionIndex
+            || binding.nativeForwardExtentMm == 0
+            || binding.nativeUpExtentMm == 0
+            || binding.resolvedExtentMm == 0) {
+        result.status = WorkoutGameAssetRenderFitStatus::Invalid;
+        return result;
+    }
+    result.status = WorkoutGameAssetRenderFitStatus::Ready;
+    result.assetId = binding.assetId;
+    result.variantKey = binding.variantKey;
+    result.obstacleAnchorMm = piece.obstacleAnchorMm;
+    result.nativeForwardOriginMm = binding.nativeForwardOriginMm;
+    result.nativeForwardExtentMm = binding.nativeForwardExtentMm;
+    result.nativeUpExtentMm = binding.nativeUpExtentMm;
+    result.resolvedExtentMm = binding.resolvedExtentMm;
+    return result;
+}

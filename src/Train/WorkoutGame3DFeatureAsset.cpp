@@ -9,6 +9,7 @@
 
 #include "WorkoutGame3DFeatureAsset.h"
 
+#include "WorkoutGameAssetPhysicsSampler.h"
 #include "WorkoutGameFeatureGeometry.h"
 
 #include <algorithm>
@@ -26,21 +27,6 @@ struct AssetSpec
     double heightMeters = 0.0;
 };
 
-enum class RenderFitStatus
-{
-    Unbound,
-    Ready,
-    Invalid
-};
-
-struct RenderFit
-{
-    RenderFitStatus status = RenderFitStatus::Unbound;
-    double assetStartDistanceMeters = 0.0;
-    double scaleY = 1.0;
-    double scaleZ = 1.0;
-};
-
 AssetSpec specFor(WorkoutGameTerrainKind terrain)
 {
     switch (terrain) {
@@ -55,62 +41,21 @@ AssetSpec specFor(WorkoutGameTerrainKind terrain)
     }
 }
 
-RenderFit snapshotRenderFit(
+WorkoutGameAssetRenderFit snapshotRenderFit(
         const WorkoutGameRoadCourse &course,
         const WorkoutGameRoadPiece &piece,
         std::size_t pieceIndex)
 {
-    using Snapshot = WorkoutGameCourseAssetPhysicsSnapshot;
-    RenderFit result;
-    if (!course.assetPhysicsSnapshot) return result;
-    const Snapshot &snapshot = *course.assetPhysicsSnapshot;
-    if (pieceIndex >= snapshot.pieceBindings.size()) {
-        result.status = RenderFitStatus::Invalid;
-        return result;
+    if (!course.assetPhysicsSnapshot) return {};
+    WorkoutGameAssetRenderFit result =
+            WorkoutGameAssetPhysicsSampler::renderFit(
+                *course.assetPhysicsSnapshot, pieceIndex);
+    if (result.status == WorkoutGameAssetRenderFitStatus::Ready
+            && (piece.terrain != WorkoutGameTerrainKind::LogOver
+                || result.assetId
+                    != QStringLiteral("FT-02-log-over-greybox"))) {
+        result.status = WorkoutGameAssetRenderFitStatus::Invalid;
     }
-
-    const WorkoutGameAssetPhysicsPieceBinding &pieceBinding =
-            snapshot.pieceBindings[pieceIndex];
-    if ((pieceBinding.flags & Snapshot::LegacyProceduralV1) != 0
-            || (pieceBinding.definitionIndex == Snapshot::NoIndex
-                && pieceBinding.bindingIndex == Snapshot::NoIndex)) {
-        return result;
-    }
-    if (piece.terrain != WorkoutGameTerrainKind::LogOver
-            || pieceBinding.definitionIndex == Snapshot::NoIndex
-            || pieceBinding.bindingIndex == Snapshot::NoIndex
-            || pieceBinding.bindingIndex >= snapshot.bindings.size()) {
-        result.status = RenderFitStatus::Invalid;
-        return result;
-    }
-
-    const WorkoutGameAssetPhysicsBinding &binding =
-            snapshot.bindings[pieceBinding.bindingIndex];
-    if (binding.assetId != QStringLiteral("FT-02-log-over-greybox")
-            || binding.definitionIndex != pieceBinding.definitionIndex
-            || binding.nativeForwardExtentMm == 0
-            || binding.nativeUpExtentMm == 0
-            || binding.resolvedExtentMm == 0) {
-        result.status = RenderFitStatus::Invalid;
-        return result;
-    }
-
-    result.scaleZ = double(binding.resolvedExtentMm)
-            / double(binding.nativeForwardExtentMm);
-    result.scaleY = double(binding.resolvedExtentMm)
-            / double(binding.nativeUpExtentMm);
-    result.assetStartDistanceMeters =
-            double(pieceBinding.obstacleAnchorMm) / 1000.0
-            + double(binding.nativeForwardOriginMm) / 1000.0 * result.scaleZ;
-    if (!std::isfinite(result.scaleZ) || !std::isfinite(result.scaleY)
-            || !std::isfinite(result.assetStartDistanceMeters)
-            || result.scaleZ <= 0.0 || result.scaleY <= 0.0
-            || result.assetStartDistanceMeters < 0.0
-            || result.assetStartDistanceMeters > course.totalLengthMeters) {
-        result.status = RenderFitStatus::Invalid;
-        return result;
-    }
-    result.status = RenderFitStatus::Ready;
     return result;
 }
 
@@ -120,13 +65,30 @@ WorkoutGame3DFeatureAssetSnapshot placePiece(
         std::size_t pieceIndex)
 {
     WorkoutGame3DFeatureAssetSnapshot result;
-    const RenderFit renderFit = snapshotRenderFit(course, piece, pieceIndex);
-    if (renderFit.status == RenderFitStatus::Invalid) return result;
+    const WorkoutGameAssetRenderFit renderFit =
+            snapshotRenderFit(course, piece, pieceIndex);
+    if (renderFit.status == WorkoutGameAssetRenderFitStatus::Invalid) {
+        return result;
+    }
 
-    if (renderFit.status == RenderFitStatus::Ready) {
+    if (renderFit.status == WorkoutGameAssetRenderFitStatus::Ready) {
+        const double scaleZ = double(renderFit.resolvedExtentMm)
+                / double(renderFit.nativeForwardExtentMm);
+        const double scaleY = double(renderFit.resolvedExtentMm)
+                / double(renderFit.nativeUpExtentMm);
+        const double assetStartDistanceMeters =
+                double(renderFit.obstacleAnchorMm) / 1000.0
+                + double(renderFit.nativeForwardOriginMm) / 1000.0 * scaleZ;
+        if (!std::isfinite(scaleZ) || !std::isfinite(scaleY)
+                || !std::isfinite(assetStartDistanceMeters)
+                || scaleZ <= 0.0 || scaleY <= 0.0
+                || assetStartDistanceMeters < 0.0
+                || assetStartDistanceMeters > course.totalLengthMeters) {
+            return result;
+        }
         const WorkoutGameRoadSample sample =
                 WorkoutGameRoadCourseBuilder::sample(
-                    course, renderFit.assetStartDistanceMeters);
+                    course, assetStartDistanceMeters);
         if (!sample.ready) return result;
         result.ready = true;
         result.terrain = piece.terrain;
@@ -136,8 +98,8 @@ WorkoutGame3DFeatureAssetSnapshot placePiece(
         result.yawDegrees = sample.center.headingRadians * 180.0 / Pi;
         result.pitchDegrees = -std::atan(sample.baseGradePercent / 100.0)
                 * 180.0 / Pi;
-        result.scaleY = renderFit.scaleY;
-        result.scaleZ = renderFit.scaleZ;
+        result.scaleY = scaleY;
+        result.scaleZ = scaleZ;
         return result;
     }
 

@@ -14,6 +14,7 @@ SOURCES = testWorkoutGame3DFeatureAsset.cpp \
           ../../../src/Train/WorkoutGameGapJumpGeometry.cpp
 
 HEADERS = ../../../src/Train/WorkoutGame3DFeatureAsset.h \
+          ../../../src/Train/WorkoutGameAssetPhysicsSampler.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameFeatureGeometry.h \
           ../../../src/Train/WorkoutGameGapJumpGeometry.h \

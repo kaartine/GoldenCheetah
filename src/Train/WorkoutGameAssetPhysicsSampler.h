@@ -26,6 +26,26 @@ struct WorkoutGameAssetPhysicsSample
     double restitution = 0.0;
 };
 
+enum class WorkoutGameAssetRenderFitStatus
+{
+    Unbound,
+    Ready,
+    Invalid
+};
+
+struct WorkoutGameAssetRenderFit
+{
+    WorkoutGameAssetRenderFitStatus status =
+            WorkoutGameAssetRenderFitStatus::Unbound;
+    QString assetId;
+    QString variantKey;
+    std::int32_t obstacleAnchorMm = 0;
+    std::int32_t nativeForwardOriginMm = 0;
+    std::uint32_t nativeForwardExtentMm = 0;
+    std::uint32_t nativeUpExtentMm = 0;
+    std::uint32_t resolvedExtentMm = 0;
+};
+
 class WorkoutGameAssetPhysicsSampler
 {
 public:
@@ -35,6 +55,10 @@ public:
             double distanceMeters);
 
     static std::vector<double> breakpointsMeters(
+            const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+            std::size_t pieceIndex);
+
+    static WorkoutGameAssetRenderFit renderFit(
             const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
             std::size_t pieceIndex);
 };
