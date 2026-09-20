@@ -552,7 +552,7 @@ private slots:
         binding.definitionIndex = 0;
         binding.nativeForwardOriginMm = -1020;
         binding.nativeForwardExtentMm = 540;
-        binding.nativeUpExtentMm = 350;
+        binding.nativeUpExtentMm = 540;
         binding.resolvedExtentMm = 700;
         snapshot->bindings.push_back(binding);
         snapshot->pieceBindings.resize(course.pieces.size());
