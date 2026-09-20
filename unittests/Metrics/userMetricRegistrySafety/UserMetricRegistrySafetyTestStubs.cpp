@@ -215,6 +215,7 @@ void Context::notifyCompareIntervals(bool) {}
 void Context::notifyCompareIntervalsChanged() {}
 void Context::notifyCompareDateRanges(bool) {}
 void Context::notifyCompareDateRangesChanged() {}
+bool Context::prepareErgFileSelection() { return true; }
 void Context::notifyErgFileSelected(ErgFile *) {}
 void Context::notifyVideoSyncFileSelected(VideoSyncFile *) {}
 ErgFile *Context::currentErgFile() const { return nullptr; }

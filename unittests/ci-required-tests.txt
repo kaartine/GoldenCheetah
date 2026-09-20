@@ -130,6 +130,9 @@ all qt Train/trainerTargetCoordinator
 all qt Train/virtualDrivetrain
 all qt Train/virtualGearRuntime
 all qt Train/workoutGameAssetCatalog
+all qt Train/workoutGameAssetPhysicsResolver
+all qt Train/workoutGameAssetPhysicsRoadCourse
+all qt Train/workoutGameAssetPhysicsSampler
 all qt Train/workoutGameCanvas
 all qt Train/workoutGameClock
 all qt Train/workoutGameCompetition
@@ -178,4 +181,5 @@ all qt Train/workoutRideTargetPlanner
 all qt Train/ftmsTargetReadiness
 all qt Train/bluetoothTelemetryRouter
 linux aux Build/appImagePackaging
+nonwindows qt Train/workoutGameDevelopmentAssets
 nonwindows qt Train/usbXpressSafety

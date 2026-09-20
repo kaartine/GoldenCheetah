@@ -909,6 +909,11 @@ Context::Context(MainWindow *window)
 
 Context::~Context() = default;
 
+bool Context::prepareErgFileSelection()
+{
+    return true;
+}
+
 void Context::notifyErgFileSelected(ErgFile *workout)
 {
     emit ergFileSelected(workout);
