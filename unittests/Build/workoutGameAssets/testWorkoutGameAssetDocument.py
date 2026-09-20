@@ -307,6 +307,13 @@ class WorkoutGameAssetDocumentTest(unittest.TestCase):
             "profileId": "FT-01-main-v1",
             "profileVersion": 1,
             "kind": "height-offset-polyline",
+            "operation": "add-obstacle",
+            "renderFit": {
+                "variantKey": "",
+                "nativeForwardOriginMm": -100,
+                "nativeForwardExtentMm": 200,
+                "nativeUpExtentMm": 200,
+            },
             "chains": [{
                 "points": [
                     {"forwardMm": -100, "heightMm": 0},

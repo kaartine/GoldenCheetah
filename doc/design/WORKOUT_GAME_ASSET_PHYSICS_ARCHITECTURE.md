@@ -115,6 +115,7 @@ ProfileV1 {
     profileId: ASCII string
     profileVersion: uint32
     kind: "height-offset-polyline"
+    operation: "add-obstacle" | "replace-surface"
     chains: [ Chain { points: [ Point { forwardMm: int32,
                                        heightMm: int32 } ] } ]
     surface: Surface { coulombFrictionMilli: uint16,
@@ -163,12 +164,12 @@ The contract is interpreted as follows:
   occurs between converted adjacent integer points. No consumer may refit,
   smooth, resample, or infer collision from the render mesh.
 
-The asset entry stores integer render-fitting data separately from collision:
-native forward origin relative to the obstacle anchor, native up/forward
-extent, and native socket positions. Materialization resolves the same rational
-difficulty scale for render fitting and collision. Lateral placement, road
-heading, grade, and world elevation still come from the authoritative road
-sample.
+Each asset route binding stores integer render-fitting data separately from
+collision: optional variant key, native forward origin relative to the obstacle
+anchor, and native up/forward extent. Materialization resolves the same
+rational difficulty scale for render fitting and collision. Lateral placement,
+road heading, grade, and world elevation still come from the authoritative
+road sample.
 
 ### Collision-proxy conversion
 

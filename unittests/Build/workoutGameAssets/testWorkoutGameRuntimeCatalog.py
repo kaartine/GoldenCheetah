@@ -32,7 +32,7 @@ class WorkoutGameRuntimeCatalogTest(unittest.TestCase):
     def test_catalog_admits_only_approved_assets(self) -> None:
         document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
         self.assertEqual(document["schemaVersion"], 1)
-        self.assertEqual(document["generatorVersion"], 3)
+        self.assertEqual(document["generatorVersion"], 4)
         self.assertEqual(
             [asset["assetId"] for asset in document["assets"]],
             [
@@ -78,11 +78,19 @@ class WorkoutGameRuntimeCatalogTest(unittest.TestCase):
         )
         self.assertEqual(
             log_asset["physics"]["routeProfiles"],
-            [{"profileId": "FT-02-log-over-v1", "routeKey": "main"}],
+            [{
+                "nativeForwardExtentMm": 540,
+                "nativeForwardOriginMm": -1020,
+                "nativeUpExtentMm": 540,
+                "profileId": "FT-02-log-over-v1",
+                "routeKey": "main",
+                "variantKey": "",
+            }],
         )
         self.assertEqual(len(document["profiles"]), 1)
         profile = document["profiles"][0]
         self.assertEqual(profile["profileId"], "FT-02-log-over-v1")
+        self.assertEqual(profile["operation"], "add-obstacle")
         self.assertEqual(profile["chains"][0]["points"][4], {
             "forwardMm": 0,
             "heightMm": 540,

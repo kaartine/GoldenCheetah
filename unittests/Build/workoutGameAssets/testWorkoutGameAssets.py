@@ -380,6 +380,13 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "profileId": "FT-01-main-v1",
                 "profileVersion": 1,
                 "kind": "height-offset-polyline",
+                "operation": "add-obstacle",
+                "renderFit": {
+                    "variantKey": "",
+                    "nativeForwardOriginMm": -100,
+                    "nativeForwardExtentMm": 200,
+                    "nativeUpExtentMm": 200,
+                },
                 "chains": [{
                     "points": [
                         {"forwardMm": -100, "heightMm": 0},
@@ -416,6 +423,13 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertEqual(profile["profileId"], "FT-02-log-over-v1")
         self.assertEqual(profile["profileVersion"], 1)
         self.assertEqual(profile["kind"], "height-offset-polyline")
+        self.assertEqual(profile["operation"], "add-obstacle")
+        self.assertEqual(profile["renderFit"], {
+            "variantKey": "",
+            "nativeForwardOriginMm": -1020,
+            "nativeForwardExtentMm": 540,
+            "nativeUpExtentMm": 540,
+        })
         self.assertEqual(profile["difficultyScale"], {
             "nativeExtentMm": 540,
             "baseExtentMm": 440,

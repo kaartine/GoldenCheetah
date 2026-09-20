@@ -21,7 +21,7 @@ from validate_assets import (
 
 
 CATALOG_SCHEMA_VERSION = 1
-GENERATOR_VERSION = 3
+GENERATOR_VERSION = 4
 MAXIMUM_CATALOG_BYTES = 1024 * 1024
 MAXIMUM_ASSETS = 256
 QRC_PATH = Path("src/Resources/workout-game-assets.qrc")
@@ -134,8 +134,20 @@ def _catalog_physics(manifest: dict[str, Any]) -> dict[str, Any]:
     route_profiles = source.get("routeProfiles", [])
     if route_profiles:
         result["routeProfiles"] = sorted(
-            ({"profileId": profile["profileId"],
-              "routeKey": profile["routeKey"]}
+            ({
+                "nativeForwardExtentMm": profile["renderFit"][
+                    "nativeForwardExtentMm"
+                ],
+                "nativeForwardOriginMm": profile["renderFit"][
+                    "nativeForwardOriginMm"
+                ],
+                "nativeUpExtentMm": profile["renderFit"][
+                    "nativeUpExtentMm"
+                ],
+                "profileId": profile["profileId"],
+                "routeKey": profile["routeKey"],
+                "variantKey": profile["renderFit"]["variantKey"],
+            }
              for profile in route_profiles),
             key=lambda item: (item["routeKey"], item["profileId"]),
         )
@@ -152,6 +164,7 @@ def _catalog_profiles(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                 for chain in source["chains"]
             ],
             "kind": source["kind"],
+            "operation": source["operation"],
             "profileId": source["profileId"],
             "profileVersion": source["profileVersion"],
             "surface": dict(surface),

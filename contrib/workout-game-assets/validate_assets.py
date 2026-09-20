@@ -613,6 +613,11 @@ def _validate_glb_document(
                 raise AssetValidationError("duplicate route profile key or ID")
             route_keys.add(route_key)
             profile_ids.add(profile_id)
+            variant_key = profile["renderFit"]["variantKey"]
+            if variant_key and variant_key not in variant_keys:
+                raise AssetValidationError(
+                    f"route profile names unknown runtime variant: {variant_key}"
+                )
             point_count = 0
             previous_chain_end: int | None = None
             for chain in profile["chains"]:

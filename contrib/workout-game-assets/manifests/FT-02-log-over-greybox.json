@@ -122,6 +122,13 @@
         "profileId": "FT-02-log-over-v1",
         "profileVersion": 1,
         "kind": "height-offset-polyline",
+        "operation": "add-obstacle",
+        "renderFit": {
+          "variantKey": "",
+          "nativeForwardOriginMm": -1020,
+          "nativeForwardExtentMm": 540,
+          "nativeUpExtentMm": 540
+        },
         "chains": [
           {
             "points": [

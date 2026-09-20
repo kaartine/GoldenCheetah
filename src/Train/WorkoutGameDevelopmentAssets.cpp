@@ -1327,6 +1327,12 @@ void validateGlbDocument(
         }
     }
 
+    QSet<QString> declaredVariantKeys;
+    for (const QJsonValue &variantValue : manifest.value(
+            QStringLiteral("runtimeVariants")).toArray()) {
+        declaredVariantKeys.insert(variantValue.toObject().value(
+                QStringLiteral("key")).toString());
+    }
     if (manifest.contains(QStringLiteral("physics"))) {
         if (!manifest.value(QStringLiteral("physics")).isObject()) {
             throw BuildError(QStringLiteral("invalid physics contract: %1")
@@ -1437,9 +1443,11 @@ void validateGlbDocument(
                 requireObjectShape(profile,
                         {QStringLiteral("routeKey"), QStringLiteral("profileId"),
                          QStringLiteral("profileVersion"), QStringLiteral("kind"),
+                         QStringLiteral("operation"), QStringLiteral("renderFit"),
                          QStringLiteral("chains")},
                         {QStringLiteral("routeKey"), QStringLiteral("profileId"),
                          QStringLiteral("profileVersion"), QStringLiteral("kind"),
+                         QStringLiteral("operation"), QStringLiteral("renderFit"),
                          QStringLiteral("chains"), QStringLiteral("difficultyScale")},
                         QStringLiteral("physics route profile"));
                 const QString routeKey = profile.value(
@@ -1454,12 +1462,49 @@ void validateGlbDocument(
                             QStringLiteral("profileVersion")), 1.0, 4294967295.0)
                         || profile.value(QStringLiteral("kind")).toString()
                             != QStringLiteral("height-offset-polyline")
+                        || (profile.value(QStringLiteral("operation")).toString()
+                                != QStringLiteral("add-obstacle")
+                            && profile.value(QStringLiteral("operation")).toString()
+                                != QStringLiteral("replace-surface"))
+                        || !profile.value(QStringLiteral("renderFit")).isObject()
                         || !profile.value(QStringLiteral("chains")).isArray()) {
                     throw BuildError(QStringLiteral("invalid physics route profile: %1")
                             .arg(assetId));
                 }
                 routeKeys.insert(routeKey);
                 profileIds.insert(profileId);
+                const QJsonObject renderFit = profile.value(
+                        QStringLiteral("renderFit")).toObject();
+                requireObjectShape(renderFit,
+                        {QStringLiteral("variantKey"),
+                         QStringLiteral("nativeForwardOriginMm"),
+                         QStringLiteral("nativeForwardExtentMm"),
+                         QStringLiteral("nativeUpExtentMm")},
+                        {QStringLiteral("variantKey"),
+                         QStringLiteral("nativeForwardOriginMm"),
+                         QStringLiteral("nativeForwardExtentMm"),
+                         QStringLiteral("nativeUpExtentMm")},
+                        QStringLiteral("physics render fit"));
+                const QString variantKey = renderFit.value(
+                        QStringLiteral("variantKey")).toString();
+                const QRegularExpression variantPattern(
+                        QStringLiteral("^[A-Za-z0-9_-]{0,32}$"));
+                if (!renderFit.value(QStringLiteral("variantKey")).isString()
+                        || !variantPattern.match(variantKey).hasMatch()
+                        || (!variantKey.isEmpty()
+                            && !declaredVariantKeys.contains(variantKey))
+                        || !exactInteger(renderFit.value(
+                            QStringLiteral("nativeForwardOriginMm")),
+                            -64000.0, 64000.0)
+                        || !exactInteger(renderFit.value(
+                            QStringLiteral("nativeForwardExtentMm")),
+                            1.0, 128000.0)
+                        || !exactInteger(renderFit.value(
+                            QStringLiteral("nativeUpExtentMm")),
+                            1.0, 16000.0)) {
+                    throw BuildError(QStringLiteral("invalid physics render fit: %1")
+                            .arg(assetId));
+                }
                 const QJsonArray chains = profile.value(
                         QStringLiteral("chains")).toArray();
                 if (chains.isEmpty() || chains.size() > 8) {
