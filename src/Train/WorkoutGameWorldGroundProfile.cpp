@@ -120,3 +120,29 @@ WorkoutGameWorldGroundMaterial WorkoutGameWorldGroundProfile::materialAt(
     }
     return result;
 }
+
+WorkoutGameWorldGroundMaterial WorkoutGameWorldGroundProfile::baseMaterialAt(
+        const WorkoutGameRoadCourse &course,
+        double courseDistanceMeters)
+{
+    const WorkoutGameWorldGroundMaterial material =
+            materialAt(course, courseDistanceMeters);
+    if (!material.assetDefined || !course.assetPhysicsSnapshot) {
+        return material;
+    }
+
+    const auto &snapshot = *course.assetPhysicsSnapshot;
+    for (std::size_t pieceIndex = 0;
+            pieceIndex < snapshot.pieceBindings.size(); ++pieceIndex) {
+        const WorkoutGameAssetPhysicsSample sample =
+                WorkoutGameAssetPhysicsSampler::sample(
+                    snapshot, pieceIndex, courseDistanceMeters);
+        if (!sample.surfacePresent) continue;
+        if (sample.operation
+                == WorkoutGameAssetPhysicsOperation::AddObstacle) {
+            return {};
+        }
+        return material;
+    }
+    return material;
+}

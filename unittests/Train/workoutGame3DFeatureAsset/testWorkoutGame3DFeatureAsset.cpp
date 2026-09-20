@@ -93,6 +93,7 @@ private slots:
         pieceBinding.bindingIndex = 0;
         pieceBinding.obstacleAnchorMm = std::int32_t(std::llround(
                 piece.challenge.obstacleDistanceMeters * 1000.0));
+        pieceBinding.obstacleAnchorMicrometerRemainder = 490;
         course.assetPhysicsSnapshot = snapshot;
 
         const WorkoutGame3DFeatureAssetSnapshot asset =
@@ -103,7 +104,7 @@ private slots:
         QCOMPARE(asset.scaleY, 2.0);
 
         const double expectedDistance =
-                double(pieceBinding.obstacleAnchorMm) / 1000.0
+                pieceBinding.obstacleAnchorMeters()
                 - 1.02 * asset.scaleZ;
         const WorkoutGameRoadSample road =
                 WorkoutGameRoadCourseBuilder::sample(course, expectedDistance);

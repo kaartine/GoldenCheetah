@@ -6,12 +6,14 @@ TARGET = testWorkoutGameAssetPhysicsResolver
 SOURCES = testWorkoutGameAssetPhysicsResolver.cpp \
           ../../../src/Train/WorkoutGameAssetCatalog.cpp \
           ../../../src/Train/WorkoutGameAssetPhysicsResolver.cpp \
+          ../../../src/Train/WorkoutGameAssetPhysicsSampler.cpp \
           ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \
           ../../../src/Train/WorkoutGameRoadQuality.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameAssetCatalog.h \
           ../../../src/Train/WorkoutGameAssetPhysicsResolver.h \
+          ../../../src/Train/WorkoutGameAssetPhysicsSampler.h \
           ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.h \
           ../../../src/Train/WorkoutGameFt02PhysicsV1.h \
           ../../../src/Train/WorkoutGameRoadPlan.h \

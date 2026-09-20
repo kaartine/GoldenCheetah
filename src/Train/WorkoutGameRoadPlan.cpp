@@ -405,9 +405,19 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
         for (std::size_t index = 0; index < plan.pieces.size(); ++index) {
             const double anchor = plan.pieces[index].geometryAnchorDistanceMeters;
             if (!finiteValue(anchor) || anchor < 0.0
-                    || anchor > MaximumCourseDistanceMeters
-                    || plan.assetPhysicsSnapshot->pieceBindings[index].obstacleAnchorMm
-                        != std::int32_t(std::llround(anchor * 1000.0))) {
+                    || anchor > MaximumCourseDistanceMeters) {
+                return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+            }
+            const std::int32_t anchorMm = std::int32_t(std::llround(
+                    anchor * 1000.0));
+            const std::int16_t anchorRemainder = std::int16_t(std::llround(
+                    anchor * 1000000.0)
+                    - std::int64_t(anchorMm) * 1000);
+            if (plan.assetPhysicsSnapshot->pieceBindings[index].obstacleAnchorMm
+                        != anchorMm
+                    || plan.assetPhysicsSnapshot->pieceBindings[index]
+                            .obstacleAnchorMicrometerRemainder
+                        != anchorRemainder) {
                 return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
             }
         }

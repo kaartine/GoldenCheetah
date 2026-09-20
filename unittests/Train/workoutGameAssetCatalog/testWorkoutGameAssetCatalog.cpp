@@ -176,7 +176,11 @@ private slots:
         QVERIFY(profile);
         QCOMPARE(profile->operation,
                  WorkoutGameAssetCatalog::ProfileOperation::AddObstacle);
-        QCOMPARE(profile->chains.constFirst().points.size(), 11);
+        QCOMPARE(profile->chains.constFirst().points.size(), 13);
+        QCOMPARE(profile->chains.constFirst().points.constFirst().forwardMm,
+                 qint32(-276));
+        QCOMPARE(profile->chains.constFirst().points.constLast().forwardMm,
+                 qint32(276));
         QVERIFY(!catalog->findAsset(QStringLiteral("ZZ-99-missing")));
         QVERIFY(!catalog->findProfile(QStringLiteral("missing")));
     }

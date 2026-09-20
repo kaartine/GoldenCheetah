@@ -438,8 +438,9 @@ class TestWorkoutGameAssets(unittest.TestCase):
         self.assertEqual(
             profile["chains"][0]["points"],
             [
+                {"forwardMm": -276, "heightMm": 0},
                 {"forwardMm": -270, "heightMm": 0},
-                {"forwardMm": -250, "heightMm": 202},
+                {"forwardMm": -250, "heightMm": 201},
                 {"forwardMm": -249, "heightMm": 208},
                 {"forwardMm": -191, "heightMm": 382},
                 {"forwardMm": -103, "heightMm": 499},
@@ -447,8 +448,9 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 {"forwardMm": 103, "heightMm": 499},
                 {"forwardMm": 191, "heightMm": 382},
                 {"forwardMm": 249, "heightMm": 208},
-                {"forwardMm": 250, "heightMm": 202},
+                {"forwardMm": 250, "heightMm": 201},
                 {"forwardMm": 270, "heightMm": 0},
+                {"forwardMm": 276, "heightMm": 0},
             ],
         )
 

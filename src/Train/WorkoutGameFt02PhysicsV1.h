@@ -34,6 +34,8 @@ public:
 
         constexpr double Pi = 3.14159265358979323846;
         constexpr int RadialSegments = 16;
+        constexpr std::int64_t MaximumGradePermille = 300;
+        constexpr std::int32_t SupportPaddingMm = 6;
         const double radius = double(extentMm) * 0.5;
         std::vector<std::int32_t> forwardCoordinates = {
             std::int32_t(std::floor(-radius)),
@@ -51,7 +53,14 @@ public:
             const std::int64_t forward = std::int64_t(right) - left;
             const std::int64_t height =
                     std::int64_t(rightHeight) - leftHeight;
-            if (left != right && forward * forward + height * height > 25) {
+            const std::int64_t worstGradeHeight = std::max<std::int64_t>(
+                    0, std::abs(height) * 1000
+                        - std::abs(forward) * MaximumGradePermille);
+            const bool validAtSupportedGrades =
+                    forward * forward * 1000000
+                        + worstGradeHeight * worstGradeHeight
+                    > 25 * 1000000;
+            if (left != right && validAtSupportedGrades) {
                 forwardCoordinates.push_back(left);
                 forwardCoordinates.push_back(right);
             } else {
@@ -72,13 +81,15 @@ public:
         }
         chain.points.front().heightMm = 0;
         chain.points.back().heightMm = 0;
-        // Bias the outer support point inward by one millimetre of height.
-        // This leaves margin for the persisted millimetre anchor rounding at
-        // the steepest facet while staying within one millimetre at the point.
-        if (chain.points.size() >= 4) {
-            ++chain.points[1].heightMm;
-            ++chain.points[chain.points.size() - 2].heightMm;
-        }
+        // Preserve the zero-height socket across the worst half-millimetre
+        // anchor quantization error. Six millimetres also keeps these flat
+        // support segments above Box2D's five-millimetre linear slop.
+        chain.points.insert(chain.points.begin(), {
+            chain.points.front().forwardMm - SupportPaddingMm, 0
+        });
+        chain.points.push_back({
+            chain.points.back().forwardMm + SupportPaddingMm, 0
+        });
         definition.chains.push_back(std::move(chain));
         return definition;
     }

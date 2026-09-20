@@ -255,6 +255,11 @@ private slots:
             WorkoutGameAssetPhysicsPieceBinding pieceBinding;
             pieceBinding.obstacleAnchorMm = std::int32_t(std::llround(
                     plan->pieces[index].geometryAnchorDistanceMeters * 1000.0));
+            pieceBinding.obstacleAnchorMicrometerRemainder =
+                    std::int16_t(std::llround(
+                        plan->pieces[index].geometryAnchorDistanceMeters
+                            * 1000000.0)
+                        - std::int64_t(pieceBinding.obstacleAnchorMm) * 1000);
             if (index == 2) {
                 pieceBinding.bindingIndex = bindingIndex;
                 pieceBinding.definitionIndex = definitionIndex;
@@ -1160,6 +1165,26 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
                     QJsonDocument(mismatched).toJson(), decoded),
                  WorkoutGameCourseDocumentStatus::InvalidDocument);
+
+        for (const int remainder : {-501, 501}) {
+            QJsonObject invalidAnchor = canonical;
+            plan = invalidAnchor.value(QStringLiteral("roadPlan")).toObject();
+            snapshot = plan.value(
+                    QStringLiteral("assetPhysicsSnapshot")).toObject();
+            QJsonArray pieceBindings = snapshot.value(
+                    QStringLiteral("pieceBindings")).toArray();
+            QJsonObject pieceBinding = pieceBindings.at(0).toObject();
+            pieceBinding.insert(
+                    QStringLiteral("obstacleAnchorMicrometerRemainder"),
+                    remainder);
+            pieceBindings[0] = pieceBinding;
+            snapshot.insert(QStringLiteral("pieceBindings"), pieceBindings);
+            plan.insert(QStringLiteral("assetPhysicsSnapshot"), snapshot);
+            invalidAnchor.insert(QStringLiteral("roadPlan"), plan);
+            QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                        QJsonDocument(invalidAnchor).toJson(), decoded),
+                     WorkoutGameCourseDocumentStatus::InvalidDocument);
+        }
 
         QJsonObject oversized = canonical;
         plan = oversized.value(QStringLiteral("roadPlan")).toObject();

@@ -35,6 +35,10 @@ public:
     static WorkoutGameWorldGroundMaterial materialAt(
             const WorkoutGameRoadCourse &course,
             double courseDistanceMeters);
+
+    static WorkoutGameWorldGroundMaterial baseMaterialAt(
+            const WorkoutGameRoadCourse &course,
+            double courseDistanceMeters);
 };
 
 #endif

@@ -32,7 +32,10 @@ Resolution failure(Status status)
     return {status, {}};
 }
 
-bool millimeters(double meters, std::int32_t &result)
+bool anchorCoordinates(
+        double meters,
+        std::int32_t &millimeters,
+        std::int16_t &micrometerRemainder)
 {
     if (!std::isfinite(meters) || meters < 0.0
             || meters > MaximumCourseDistanceMeters) {
@@ -43,7 +46,11 @@ bool millimeters(double meters, std::int32_t &result)
             || rounded > std::numeric_limits<std::int32_t>::max()) {
         return false;
     }
-    result = std::int32_t(rounded);
+    const auto micrometers = std::llround(meters * 1000000.0);
+    const auto remainder = micrometers - rounded * 1000;
+    if (remainder < -500 || remainder > 500) return false;
+    millimeters = std::int32_t(rounded);
+    micrometerRemainder = std::int16_t(remainder);
     return true;
 }
 
@@ -87,8 +94,15 @@ bool resolvedExtent(
         return false;
     }
     const Catalog::DifficultyScale &scale = *profile.difficultyScale;
-    const std::int64_t result = std::int64_t(scale.baseExtentMm)
-            + std::llround(double(scale.difficultyExtentMm) * difficulty);
+    const std::int64_t difficultyPermille =
+            std::llround(difficulty * 1000.0);
+    const std::int64_t scaled =
+            std::int64_t(scale.difficultyExtentMm) * difficultyPermille;
+    const std::int64_t roundedScale = scaled >= 0
+            ? (scaled + 500) / 1000
+            : -((-scaled + 500) / 1000);
+    const std::int64_t result =
+            std::int64_t(scale.baseExtentMm) + roundedScale;
     if (scale.nativeExtentMm <= 0 || result <= 0
             || result > std::numeric_limits<std::uint32_t>::max()) {
         return false;
@@ -149,11 +163,15 @@ WorkoutGameAssetPhysicsResolution WorkoutGameAssetPhysicsResolver::resolve(
     for (const WorkoutGameRoadPiece &piece : pieces) {
         WorkoutGameAssetPhysicsPieceBinding pieceBinding;
         std::int32_t geometryAnchorMm = 0;
-        if (!millimeters(piece.geometryAnchorDistanceMeters,
-                         geometryAnchorMm)) {
+        std::int16_t geometryAnchorRemainder = 0;
+        if (!anchorCoordinates(piece.geometryAnchorDistanceMeters,
+                               geometryAnchorMm,
+                               geometryAnchorRemainder)) {
             return failure(Status::InvalidAnchor);
         }
         pieceBinding.obstacleAnchorMm = geometryAnchorMm;
+        pieceBinding.obstacleAnchorMicrometerRemainder =
+                geometryAnchorRemainder;
 
         if (!requiresFt02(piece)) {
             if (!builder.appendPieceBinding(pieceBinding)) {
@@ -163,12 +181,17 @@ WorkoutGameAssetPhysicsResolution WorkoutGameAssetPhysicsResolver::resolve(
         }
 
         std::int32_t challengeAnchorMm = 0;
-        if (!millimeters(piece.challenge.obstacleDistanceMeters,
-                         challengeAnchorMm)
-                || challengeAnchorMm != geometryAnchorMm) {
+        std::int16_t challengeAnchorRemainder = 0;
+        if (!anchorCoordinates(piece.challenge.obstacleDistanceMeters,
+                               challengeAnchorMm,
+                               challengeAnchorRemainder)
+                || challengeAnchorMm != geometryAnchorMm
+                || challengeAnchorRemainder != geometryAnchorRemainder) {
             return failure(Status::InvalidAnchor);
         }
         pieceBinding.obstacleAnchorMm = challengeAnchorMm;
+        pieceBinding.obstacleAnchorMicrometerRemainder =
+                challengeAnchorRemainder;
 
         if (!ft02Asset) {
             ft02Asset = catalog.findAsset(

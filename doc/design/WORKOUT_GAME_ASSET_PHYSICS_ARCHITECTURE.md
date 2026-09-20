@@ -169,8 +169,13 @@ sampling and Box2D segment emission are implemented end to end.
   canonical comparison, or deduplication.
 - FT-02 v1 uses its separately versioned faceted-log evaluator to emit the
   resolved integer polyline directly. It brackets steep facet changes only
-  when the resulting Euclidean segment exceeds Box2D's 5 mm linear slop. This
-  evaluator is covered at difficulty 0, 0.5, and 1 by the 2 mm parity gate.
+  when every final world-space segment, after the course grade is applied and
+  coordinates are converted to `float`, remains longer than Box2D's 5 mm
+  linear slop. The resolver adds a 6 mm flat support segment at each end and
+  the world preflights the final segments before creating any Box2D shape.
+  Failure is closed rather than delegated to a Box2D assertion. This evaluator
+  is checked at every difficulty permille for valid final segments and is
+  covered at difficulty 0, 0.5, and 1 by the 2 mm legacy parity gate.
   Production writing remains on schema 6 until legacy migration calls this
   frozen evaluator and stores its complete resolved definition.
 - Runtime conversion is exactly `meters = millimeters / 1000.0`. Interpolation
@@ -182,7 +187,13 @@ collision: optional variant key, native forward origin relative to the obstacle
 anchor, and native up/forward extent. Materialization resolves the same
 rational difficulty scale for render fitting and collision. Lateral placement,
 road heading, grade, and world elevation still come from the authoritative
-road sample.
+road sample. A piece stores its obstacle anchor canonically as the nearest
+millimetre plus a signed micrometre remainder in `[-500, 500]`. Consumers
+reconstruct it as
+`(obstacleAnchorMm * 1000 + obstacleAnchorMicrometerRemainder) / 1,000,000`
+metres. Profile coordinates remain integer millimetres; the remainder prevents
+the course anchor itself from moving by almost half a millimetre during
+snapshot materialization.
 
 ### Collision-proxy conversion
 
@@ -486,11 +497,12 @@ release. Its generated native profile is the upper half of the existing
 16-segment faceted log:
 
 - native extent: 540 mm;
-- eleven ordered upper-boundary points from forward -270 mm through the apex
-  to +270 mm. The frozen v1 quantizer brackets the two steep outer facet
-  changes with integer points and emits one point for each remaining facet,
-  keeping every Box2D segment above linear slop while preserving the legacy
-  16-segment surface within the parity gate;
+- thirteen ordered upper-boundary points from forward -276 mm through the apex
+  to +276 mm. The first and last 6 mm segments are flat supports around the
+  -270 mm through +270 mm legacy core. The frozen v1 quantizer brackets the two
+  steep outer facet changes with integer points and emits one point for each
+  remaining facet, keeping every final Box2D segment above linear slop while
+  preserving the legacy 16-segment surface within the parity gate;
 - native render origin: -1,020 mm relative to the obstacle anchor, preserving
   the current 0.75 m dead zone plus 0.27 m half core;
 - native visual/core height and forward extent: 540 mm;
@@ -505,8 +517,9 @@ The pilot parity gates are:
 
 1. At difficulty 0, 0.5, and 1, and at every native facet boundary plus 1 mm on
    either side, new surface offsets differ from the legacy faceted-log profile
-   by no more than 2 mm. Endpoints remain exactly zero and the midpoint extent
-   is exactly 540 mm.
+   by no more than 2 mm. The core endpoints at -270 mm and +270 mm remain
+   exactly zero, the outer support endpoints are -276 mm and +276 mm, and the
+   midpoint extent is exactly 540 mm.
 2. For deterministic FT-02 courses at the existing test speeds, legacy and new
    paths select the same piece, route, challenge outcome, jump request, and
    feature action ID. Box2D grounded/airborne transitions occur within one

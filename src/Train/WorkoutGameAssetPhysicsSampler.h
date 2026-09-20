@@ -40,10 +40,25 @@ struct WorkoutGameAssetRenderFit
     QString assetId;
     QString variantKey;
     std::int32_t obstacleAnchorMm = 0;
+    std::int16_t obstacleAnchorMicrometerRemainder = 0;
     std::int32_t nativeForwardOriginMm = 0;
     std::uint32_t nativeForwardExtentMm = 0;
     std::uint32_t nativeUpExtentMm = 0;
     std::uint32_t resolvedExtentMm = 0;
+};
+
+struct WorkoutGameAssetRenderTransform
+{
+    WorkoutGameAssetRenderFitStatus status =
+            WorkoutGameAssetRenderFitStatus::Unbound;
+    QString assetId;
+    QString variantKey;
+    double obstacleAnchorMeters = 0.0;
+    double assetStartDistanceMeters = 0.0;
+    double forwardScale = 1.0;
+    double upScale = 1.0;
+    double forwardExtentMeters = 0.0;
+    double upExtentMeters = 0.0;
 };
 
 class WorkoutGameAssetPhysicsSampler
@@ -59,6 +74,10 @@ public:
             std::size_t pieceIndex);
 
     static WorkoutGameAssetRenderFit renderFit(
+            const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+            std::size_t pieceIndex);
+
+    static WorkoutGameAssetRenderTransform renderTransform(
             const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
             std::size_t pieceIndex);
 };

@@ -51,7 +51,7 @@ WorkoutGameAssetPhysicsSample WorkoutGameAssetPhysicsSampler::sample(
             double(definition->coulombFrictionMilli) / 1000.0;
     result.restitution = double(definition->restitutionMilli) / 1000.0;
     double localMm = distanceMeters * 1000.0
-            - double(piece->obstacleAnchorMm);
+            - piece->obstacleAnchorMeters() * 1000.0;
     const double nearestMillimeter = std::round(localMm);
     if (std::abs(localMm - nearestMillimeter) < 1.0e-7) {
         localMm = nearestMillimeter;
@@ -99,8 +99,8 @@ std::vector<double> WorkoutGameAssetPhysicsSampler::breakpointsMeters(
 
     for (const WorkoutGameAssetPhysicsChain &chain : definition->chains) {
         for (const WorkoutGameAssetPhysicsPoint &point : chain.points) {
-            result.push_back((double(piece->obstacleAnchorMm)
-                    + point.forwardMm) / 1000.0);
+            result.push_back(piece->obstacleAnchorMeters()
+                    + double(point.forwardMm) / 1000.0);
         }
     }
     std::sort(result.begin(), result.end());
@@ -144,9 +144,53 @@ WorkoutGameAssetRenderFit WorkoutGameAssetPhysicsSampler::renderFit(
     result.assetId = binding.assetId;
     result.variantKey = binding.variantKey;
     result.obstacleAnchorMm = piece.obstacleAnchorMm;
+    result.obstacleAnchorMicrometerRemainder =
+            piece.obstacleAnchorMicrometerRemainder;
     result.nativeForwardOriginMm = binding.nativeForwardOriginMm;
     result.nativeForwardExtentMm = binding.nativeForwardExtentMm;
     result.nativeUpExtentMm = binding.nativeUpExtentMm;
     result.resolvedExtentMm = binding.resolvedExtentMm;
+    return result;
+}
+
+WorkoutGameAssetRenderTransform
+WorkoutGameAssetPhysicsSampler::renderTransform(
+        const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+        std::size_t pieceIndex)
+{
+    WorkoutGameAssetRenderTransform result;
+    const WorkoutGameAssetRenderFit fit = renderFit(snapshot, pieceIndex);
+    result.status = fit.status;
+    if (fit.status != WorkoutGameAssetRenderFitStatus::Ready) return result;
+
+    result.assetId = fit.assetId;
+    result.variantKey = fit.variantKey;
+    result.obstacleAnchorMeters =
+            (double(fit.obstacleAnchorMm) * 1000.0
+             + fit.obstacleAnchorMicrometerRemainder) / 1000000.0;
+    result.forwardScale = double(fit.resolvedExtentMm)
+            / double(fit.nativeForwardExtentMm);
+    result.upScale = double(fit.resolvedExtentMm)
+            / double(fit.nativeUpExtentMm);
+    result.assetStartDistanceMeters = result.obstacleAnchorMeters
+            + double(fit.nativeForwardOriginMm) / 1000.0
+                * result.forwardScale;
+    result.forwardExtentMeters =
+            double(fit.nativeForwardExtentMm) / 1000.0
+                * result.forwardScale;
+    result.upExtentMeters = double(fit.nativeUpExtentMm) / 1000.0
+            * result.upScale;
+    if (!std::isfinite(result.obstacleAnchorMeters)
+            || !std::isfinite(result.assetStartDistanceMeters)
+            || !std::isfinite(result.forwardScale)
+            || !std::isfinite(result.upScale)
+            || !std::isfinite(result.forwardExtentMeters)
+            || !std::isfinite(result.upExtentMeters)
+            || result.forwardScale <= 0.0 || result.upScale <= 0.0
+            || result.forwardExtentMeters <= 0.0
+            || result.upExtentMeters <= 0.0) {
+        result = {};
+        result.status = WorkoutGameAssetRenderFitStatus::Invalid;
+    }
     return result;
 }

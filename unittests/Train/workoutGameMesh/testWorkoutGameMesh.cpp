@@ -552,7 +552,7 @@ private slots:
         binding.definitionIndex = 0;
         binding.nativeForwardOriginMm = -1020;
         binding.nativeForwardExtentMm = 540;
-        binding.nativeUpExtentMm = 540;
+        binding.nativeUpExtentMm = 350;
         binding.resolvedExtentMm = 700;
         snapshot->bindings.push_back(binding);
         snapshot->pieceBindings.resize(course.pieces.size());
@@ -561,6 +561,7 @@ private slots:
         pieceBinding.bindingIndex = 0;
         pieceBinding.obstacleAnchorMm = std::int32_t(std::llround(
                 piece->challenge.obstacleDistanceMeters * 1000.0));
+        pieceBinding.obstacleAnchorMicrometerRemainder = 490;
         course.assetPhysicsSnapshot = snapshot;
 
         const WorkoutGameTrailTile tile =
@@ -573,6 +574,8 @@ private slots:
                             == WorkoutGameMeshRenderLayer::RaisedProp;
                 });
         QVERIFY(feature != tile.mainLine.end());
+        QCOMPARE(feature->anchorDistanceMeters,
+                 pieceBinding.obstacleAnchorMeters());
         const double renderedLength =
                 (feature->mesh.exit.forwardMeters
                     - feature->mesh.entry.forwardMeters)

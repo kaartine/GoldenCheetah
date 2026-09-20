@@ -43,6 +43,16 @@ constexpr std::int64_t MaximumCatchupMicroseconds = 1000000;
 constexpr std::int64_t WalkDecisionMicroseconds = 1500000;
 constexpr float BunnyHopLaunchSpeedMetersPerSecond = 3.5f;
 constexpr float TechnicalFeatureLaunchSpeedMetersPerSecond = 4.8f;
+constexpr float Box2DMinimumSegmentMeters = 0.005f;
+
+bool validBox2DSegment(const b2Segment &segment)
+{
+    const float forward = segment.point2.x - segment.point1.x;
+    const float height = segment.point2.y - segment.point1.y;
+    return std::isfinite(forward) && std::isfinite(height)
+            && forward * forward + height * height
+                > Box2DMinimumSegmentMeters * Box2DMinimumSegmentMeters;
+}
 
 double gapJumpArc(double progress)
 {
@@ -371,9 +381,74 @@ struct WorkoutGamePhysics::Impl
                 terrain, localX, gradePercent, difficulty, seed);
     }
 
-    void createAssetObstacleShapes(b2BodyId ground)
+    bool assetObstacleSegment(
+            const WorkoutGameAssetPhysicsPieceBinding &pieceBinding,
+            const WorkoutGameAssetPhysicsDefinition &definition,
+            std::size_t pointIndex,
+            b2Segment &segment) const
     {
-        if (!roadCourse.assetPhysicsSnapshot || safeBypassActive) return;
+        if (definition.chains.size() != 1 || pointIndex == 0
+                || pointIndex >= definition.chains.front().points.size()) {
+            return false;
+        }
+        const auto &points = definition.chains.front().points;
+        const double priorCourseDistance =
+                pieceBinding.obstacleAnchorMeters()
+                + double(points[pointIndex - 1].forwardMm) / 1000.0;
+        const double currentCourseDistance =
+                pieceBinding.obstacleAnchorMeters()
+                + double(points[pointIndex].forwardMm) / 1000.0;
+        const double priorX = priorCourseDistance - distanceBase
+                + RiderStartMeters;
+        const double currentX = currentCourseDistance - distanceBase
+                + RiderStartMeters;
+        segment = {
+            {float(priorX),
+             float(surfaceHeight(priorX, false)
+                   + double(points[pointIndex - 1].heightMm) / 1000.0)},
+            {float(currentX),
+             float(surfaceHeight(currentX, false)
+                   + double(points[pointIndex].heightMm) / 1000.0)}
+        };
+        return validBox2DSegment(segment);
+    }
+
+    bool assetObstacleSegmentsValid() const
+    {
+        if (!roadCourse.assetPhysicsSnapshot) return true;
+        const auto &snapshot = *roadCourse.assetPhysicsSnapshot;
+        for (const auto &pieceBinding : snapshot.pieceBindings) {
+            if (pieceBinding.definitionIndex
+                        == WorkoutGameCourseAssetPhysicsSnapshot::NoIndex) {
+                continue;
+            }
+            if (pieceBinding.definitionIndex
+                    >= snapshot.physicsDefinitions.size()) {
+                return false;
+            }
+            const auto &definition = snapshot.physicsDefinitions[
+                    pieceBinding.definitionIndex];
+            if (definition.operation
+                    != WorkoutGameAssetPhysicsOperation::AddObstacle) {
+                continue;
+            }
+            if (definition.chains.size() != 1) return false;
+            const auto &points = definition.chains.front().points;
+            for (std::size_t pointIndex = 1;
+                    pointIndex < points.size(); ++pointIndex) {
+                b2Segment segment;
+                if (!assetObstacleSegment(
+                        pieceBinding, definition, pointIndex, segment)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool createAssetObstacleShapes(b2BodyId ground)
+    {
+        if (!roadCourse.assetPhysicsSnapshot || safeBypassActive) return true;
         const auto &snapshot = *roadCourse.assetPhysicsSnapshot;
         for (std::size_t pieceIndex = 0;
                 pieceIndex < snapshot.pieceBindings.size(); ++pieceIndex) {
@@ -395,20 +470,17 @@ struct WorkoutGamePhysics::Impl
             AssetObstacleShapes group;
             group.pieceIndex = pieceIndex;
             group.anchorDistanceMeters =
-                    double(pieceBinding.obstacleAnchorMm) / 1000.0;
+                    pieceBinding.obstacleAnchorMeters();
             const auto &points = definition.chains.front().points;
             for (std::size_t pointIndex = 1;
                     pointIndex < points.size(); ++pointIndex) {
-                const double priorCourseDistance =
-                        (double(pieceBinding.obstacleAnchorMm)
-                         + points[pointIndex - 1].forwardMm) / 1000.0;
-                const double currentCourseDistance =
-                        (double(pieceBinding.obstacleAnchorMm)
-                         + points[pointIndex].forwardMm) / 1000.0;
-                const double priorX = priorCourseDistance - distanceBase
-                        + RiderStartMeters;
-                const double currentX = currentCourseDistance - distanceBase
-                        + RiderStartMeters;
+                b2Segment segment;
+                if (!assetObstacleSegment(
+                        pieceBinding, definition, pointIndex, segment)) {
+                    return false;
+                }
+                const double priorX = segment.point1.x;
+                const double currentX = segment.point2.x;
                 if (currentX < TerrainStartMeters
                         || priorX > TerrainEndMeters) {
                     continue;
@@ -418,21 +490,16 @@ struct WorkoutGamePhysics::Impl
                         float(definition.coulombFrictionMilli) / 1000.0f;
                 shapeDefinition.material.restitution =
                         float(definition.restitutionMilli) / 1000.0f;
-                const b2Segment segment = {
-                    {float(priorX),
-                     float(surfaceHeight(priorX, false)
-                           + double(points[pointIndex - 1].heightMm) / 1000.0)},
-                    {float(currentX),
-                     float(surfaceHeight(currentX, false)
-                           + double(points[pointIndex].heightMm) / 1000.0)}
-                };
-                group.shapes.push_back(b2CreateSegmentShape(
-                        ground, &shapeDefinition, &segment));
+                const b2ShapeId shape = b2CreateSegmentShape(
+                        ground, &shapeDefinition, &segment);
+                if (B2_IS_NULL(shape)) return false;
+                group.shapes.push_back(shape);
             }
             if (!group.shapes.empty()) {
                 assetObstacleShapes.push_back(std::move(group));
             }
         }
+        return true;
     }
 
     void clearCurrentAssetObstacle(double courseDistanceMeters)
@@ -521,7 +588,7 @@ struct WorkoutGamePhysics::Impl
         return TerrainSampleMeters;
     }
 
-    void createWorld()
+    bool createWorld()
     {
         destroyWorld();
 
@@ -552,7 +619,7 @@ struct WorkoutGamePhysics::Impl
                 const double midpointCourseDistance = distanceBase
                         + 0.5 * (priorX + x) - RiderStartMeters;
                 const WorkoutGameWorldGroundMaterial material =
-                        WorkoutGameWorldGroundProfile::materialAt(
+                        WorkoutGameWorldGroundProfile::baseMaterialAt(
                             roadCourse, midpointCourseDistance);
                 terrainShape.material.friction =
                         float(material.coulombFriction);
@@ -569,7 +636,10 @@ struct WorkoutGamePhysics::Impl
             priorSurfacePresent = currentSurfacePresent;
         }
 
-        createAssetObstacleShapes(ground);
+        if (!createAssetObstacleShapes(ground)) {
+            destroyWorld();
+            return false;
+        }
 
         const double groundY = surfaceHeight(RiderStartMeters);
         b2BodyDef chassisDefinition = b2DefaultBodyDef();
@@ -598,6 +668,7 @@ struct WorkoutGamePhysics::Impl
             b2World_Step(world, 1.0f / 120.0f, 4);
         }
         wasGrounded = grounded();
+        return true;
     }
 
     bool shapeGrounded(b2ShapeId shape) const
@@ -1060,6 +1131,11 @@ bool WorkoutGamePhysics::configure(const WorkoutGameRoadCourse &course)
     impl->configured = true;
     impl->generation = 0;
     reset();
+    if (!impl->assetObstacleSegmentsValid()) {
+        impl->configured = false;
+        impl->roadCourse = WorkoutGameRoadCourse();
+        return false;
+    }
     return true;
 }
 
@@ -1222,7 +1298,10 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
         impl->safeBypassActive = requestedSafeBypass;
         impl->gradePercent = input.gradePercent;
         impl->difficulty = input.difficulty;
-        impl->createWorld();
+        if (!impl->createWorld()) {
+            impl->configured = false;
+            return WorkoutGameWorldSnapshot();
+        }
     } else {
         impl->gradePercent = input.gradePercent;
         impl->difficulty = input.difficulty;

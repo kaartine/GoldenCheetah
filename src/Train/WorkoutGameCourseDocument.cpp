@@ -1214,6 +1214,8 @@ QJsonObject assetPhysicsSnapshotToJson(
             {QStringLiteral("definitionIndex"), double(binding.definitionIndex)},
             {QStringLiteral("bindingIndex"), double(binding.bindingIndex)},
             {QStringLiteral("obstacleAnchorMm"), binding.obstacleAnchorMm},
+            {QStringLiteral("obstacleAnchorMicrometerRemainder"),
+             binding.obstacleAnchorMicrometerRemainder},
             {QStringLiteral("flags"), double(binding.flags)}
         });
     }
@@ -1407,15 +1409,21 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
         }
         WorkoutGameAssetPhysicsPieceBinding binding;
         const QJsonObject bindingObject = pieceBindingValue.toObject();
-        if (bindingObject.size() != 4
+        std::int32_t anchorRemainder = 0;
+        if (bindingObject.size() != 5
                 || !unsignedNumber(bindingObject, "definitionIndex", binding.definitionIndex)
                 || !unsignedNumber(bindingObject, "bindingIndex",
                             binding.bindingIndex)
                 || !signed32Number(bindingObject, "obstacleAnchorMm",
                     binding.obstacleAnchorMm)
+                || !signed32Number(bindingObject,
+                    "obstacleAnchorMicrometerRemainder", anchorRemainder)
+                || anchorRemainder < -500 || anchorRemainder > 500
                 || !unsignedNumber(bindingObject, "flags", binding.flags)) {
             return WorkoutGameCourseDocumentStatus::InvalidDocument;
         }
+        binding.obstacleAnchorMicrometerRemainder =
+                std::int16_t(anchorRemainder);
         snapshot->pieceBindings.push_back(binding);
     }
     const auto validation = WorkoutGameAssetPhysicsSnapshotValidator::validate(

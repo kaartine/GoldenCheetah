@@ -65,7 +65,14 @@ struct WorkoutGameAssetPhysicsPieceBinding
     std::uint32_t definitionIndex = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t bindingIndex = std::numeric_limits<std::uint32_t>::max();
     std::int32_t obstacleAnchorMm = 0;
+    std::int16_t obstacleAnchorMicrometerRemainder = 0;
     std::uint32_t flags = 0;
+
+    double obstacleAnchorMeters() const
+    {
+        return (double(obstacleAnchorMm) * 1000.0
+                + obstacleAnchorMicrometerRemainder) / 1000000.0;
+    }
 };
 
 struct WorkoutGameCourseAssetPhysicsSnapshot

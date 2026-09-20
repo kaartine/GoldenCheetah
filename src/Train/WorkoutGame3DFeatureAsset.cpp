@@ -41,14 +41,14 @@ AssetSpec specFor(WorkoutGameTerrainKind terrain)
     }
 }
 
-WorkoutGameAssetRenderFit snapshotRenderFit(
+WorkoutGameAssetRenderTransform snapshotRenderTransform(
         const WorkoutGameRoadCourse &course,
         const WorkoutGameRoadPiece &piece,
         std::size_t pieceIndex)
 {
     if (!course.assetPhysicsSnapshot) return {};
-    WorkoutGameAssetRenderFit result =
-            WorkoutGameAssetPhysicsSampler::renderFit(
+    WorkoutGameAssetRenderTransform result =
+            WorkoutGameAssetPhysicsSampler::renderTransform(
                 *course.assetPhysicsSnapshot, pieceIndex);
     if (result.status == WorkoutGameAssetRenderFitStatus::Ready
             && (piece.terrain != WorkoutGameTerrainKind::LogOver
@@ -65,30 +65,21 @@ WorkoutGame3DFeatureAssetSnapshot placePiece(
         std::size_t pieceIndex)
 {
     WorkoutGame3DFeatureAssetSnapshot result;
-    const WorkoutGameAssetRenderFit renderFit =
-            snapshotRenderFit(course, piece, pieceIndex);
-    if (renderFit.status == WorkoutGameAssetRenderFitStatus::Invalid) {
+    const WorkoutGameAssetRenderTransform renderTransform =
+            snapshotRenderTransform(course, piece, pieceIndex);
+    if (renderTransform.status == WorkoutGameAssetRenderFitStatus::Invalid) {
         return result;
     }
 
-    if (renderFit.status == WorkoutGameAssetRenderFitStatus::Ready) {
-        const double scaleZ = double(renderFit.resolvedExtentMm)
-                / double(renderFit.nativeForwardExtentMm);
-        const double scaleY = double(renderFit.resolvedExtentMm)
-                / double(renderFit.nativeUpExtentMm);
-        const double assetStartDistanceMeters =
-                double(renderFit.obstacleAnchorMm) / 1000.0
-                + double(renderFit.nativeForwardOriginMm) / 1000.0 * scaleZ;
-        if (!std::isfinite(scaleZ) || !std::isfinite(scaleY)
-                || !std::isfinite(assetStartDistanceMeters)
-                || scaleZ <= 0.0 || scaleY <= 0.0
-                || assetStartDistanceMeters < 0.0
-                || assetStartDistanceMeters > course.totalLengthMeters) {
+    if (renderTransform.status == WorkoutGameAssetRenderFitStatus::Ready) {
+        if (renderTransform.assetStartDistanceMeters < 0.0
+                || renderTransform.assetStartDistanceMeters
+                    > course.totalLengthMeters) {
             return result;
         }
         const WorkoutGameRoadSample sample =
                 WorkoutGameRoadCourseBuilder::sample(
-                    course, assetStartDistanceMeters);
+                    course, renderTransform.assetStartDistanceMeters);
         if (!sample.ready) return result;
         result.ready = true;
         result.terrain = piece.terrain;
@@ -98,8 +89,8 @@ WorkoutGame3DFeatureAssetSnapshot placePiece(
         result.yawDegrees = sample.center.headingRadians * 180.0 / Pi;
         result.pitchDegrees = -std::atan(sample.baseGradePercent / 100.0)
                 * 180.0 / Pi;
-        result.scaleY = scaleY;
-        result.scaleZ = scaleZ;
+        result.scaleY = renderTransform.upScale;
+        result.scaleZ = renderTransform.forwardScale;
         return result;
     }
 

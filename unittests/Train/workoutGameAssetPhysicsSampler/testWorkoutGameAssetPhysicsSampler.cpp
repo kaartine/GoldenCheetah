@@ -84,6 +84,32 @@ private slots:
         QCOMPARE(points[2], 10.27);
     }
 
+    void resolvesOneCompleteRenderTransform()
+    {
+        auto snapshot = triangleSnapshot();
+        snapshot.bindings[0].nativeForwardOriginMm = -1020;
+        snapshot.bindings[0].nativeUpExtentMm = 350;
+        snapshot.bindings[0].resolvedExtentMm = 700;
+
+        const WorkoutGameAssetRenderTransform transform =
+                WorkoutGameAssetPhysicsSampler::renderTransform(snapshot, 0);
+        QCOMPARE(transform.status, WorkoutGameAssetRenderFitStatus::Ready);
+        QCOMPARE(transform.assetId,
+                 QStringLiteral("FT-02-log-over-greybox"));
+        QCOMPARE(transform.obstacleAnchorMeters, 10.0);
+        QCOMPARE(transform.forwardScale, 700.0 / 540.0);
+        QCOMPARE(transform.upScale, 2.0);
+        QCOMPARE(transform.forwardExtentMeters, 0.7);
+        QCOMPARE(transform.upExtentMeters, 0.7);
+        QCOMPARE(transform.assetStartDistanceMeters,
+                 10.0 - 1.02 * transform.forwardScale);
+
+        snapshot.bindings[0].nativeUpExtentMm = 0;
+        QCOMPARE(WorkoutGameAssetPhysicsSampler::renderTransform(snapshot, 0)
+                    .status,
+                 WorkoutGameAssetRenderFitStatus::Invalid);
+    }
+
     void handlesUnboundLegacyAndInvalidIndicesWithoutDereferencing()
     {
         auto snapshot = triangleSnapshot();

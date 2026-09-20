@@ -269,11 +269,74 @@ private slots:
         QCOMPARE(material.coulombFriction, 0.725);
         QCOMPARE(material.restitution, 0.08);
 
+        const auto baseMaterial =
+                WorkoutGameWorldGroundProfile::baseMaterialAt(road, 20.1);
+        QVERIFY(!baseMaterial.assetDefined);
+        QCOMPARE(baseMaterial.coulombFriction, 1.1);
+        QCOMPARE(baseMaterial.restitution, 0.0);
+
         const auto ordinary = WorkoutGameWorldGroundProfile::materialAt(
                 road, 19.0);
         QVERIFY(!ordinary.assetDefined);
         QCOMPARE(ordinary.coulombFriction, 1.1);
         QCOMPARE(ordinary.restitution, 0.0);
+    }
+
+    void resolvedLogCreatesValidWorldSegmentsOnSteepGrades()
+    {
+        QString catalogError;
+        const auto catalog = WorkoutGameAssetCatalog::load(&catalogError);
+        QVERIFY2(catalog, qPrintable(catalogError));
+
+        for (double grade : {-30.0, -20.0, 20.0, 30.0}) {
+            WorkoutGameCourse source;
+            source.status = WorkoutGameCourseStatus::Ready;
+            source.seed = 0x52f1u;
+            source.durationMs = 30000;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = WorkoutGameTerrainKind::LogOver;
+            section.durationMs = source.durationMs;
+            section.targetWatts = 260.0;
+            section.gradePercent = grade;
+            section.difficulty = 1.0;
+            section.challengeCount = 1;
+            source.sections = {section};
+
+            WorkoutGameRoadPlan plan =
+                    WorkoutGameRoadCourseBuilder::generatePlan(source, 200.0);
+            const auto resolution = WorkoutGameAssetPhysicsResolver::resolve(
+                    *catalog, plan.pieces);
+            QCOMPARE(resolution.status,
+                     WorkoutGameAssetPhysicsResolveStatus::Ready);
+            plan.assetPhysicsSnapshot = resolution.snapshot;
+            const WorkoutGameRoadCourse road =
+                    WorkoutGameRoadCourseBuilder::materialize(source, plan);
+            QVERIFY(road.ready);
+            const auto challenge = std::find_if(
+                    road.pieces.begin(), road.pieces.end(),
+                    [](const WorkoutGameRoadPiece &piece) {
+                        return piece.terrain == WorkoutGameTerrainKind::LogOver
+                                && piece.challenge.enabled;
+                    });
+            QVERIFY(challenge != road.pieces.end());
+            const WorkoutGameRoadSample obstacle =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, challenge->challenge.obstacleDistanceMeters);
+            QVERIFY(obstacle.ready);
+            QCOMPARE(obstacle.baseGradePercent, grade);
+
+            WorkoutGamePhysics physics;
+            QVERIFY2(physics.configure(road),
+                     qPrintable(QStringLiteral("grade=%1").arg(grade)));
+            WorkoutGamePhysicsInput input;
+            input.terrain = WorkoutGameTerrainKind::LogOver;
+            input.difficulty = 1.0;
+            input.gradePercent = grade;
+            input.courseDistanceMeters = 1.0;
+            QVERIFY2(physics.update(input).ready,
+                     qPrintable(QStringLiteral("grade=%1").arg(grade)));
+        }
     }
 
     void authoritativeDistanceKeepsTerrainOffsetLocalToTheVehicle()

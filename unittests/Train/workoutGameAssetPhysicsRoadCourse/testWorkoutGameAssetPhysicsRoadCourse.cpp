@@ -100,8 +100,8 @@ private slots:
         QCOMPARE(resolved.assetPhysicsSnapshot,
                  resolvedPlan.assetPhysicsSnapshot);
 
-        const double obstacle = double(
-                raised->pieceBindings[pieceIndex].obstacleAnchorMm) / 1000.0;
+        const double obstacle =
+                raised->pieceBindings[pieceIndex].obstacleAnchorMeters();
         const auto legacySample = WorkoutGameRoadCourseBuilder::sample(
                 legacy, obstacle);
         const auto resolvedSample = WorkoutGameRoadCourseBuilder::sample(

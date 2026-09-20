@@ -102,7 +102,13 @@ bool validPieceBinding(
         const WorkoutGameAssetPhysicsPieceBinding &piece)
 {
     using Snapshot = WorkoutGameCourseAssetPhysicsSnapshot;
-    if ((piece.flags & ~Snapshot::LegacyProceduralV1) != 0) return false;
+    if ((piece.flags & ~Snapshot::LegacyProceduralV1) != 0
+            || piece.obstacleAnchorMm < 0
+            || piece.obstacleAnchorMm > 250000000
+            || piece.obstacleAnchorMicrometerRemainder < -500
+            || piece.obstacleAnchorMicrometerRemainder > 500) {
+        return false;
+    }
     const bool hasPhysics = piece.definitionIndex != Snapshot::NoIndex;
     const bool hasAsset = piece.bindingIndex != Snapshot::NoIndex;
     if ((piece.flags & Snapshot::LegacyProceduralV1) != 0
@@ -380,6 +386,9 @@ WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(
         }
         binding.obstacleAnchorMm = std::int32_t(std::llround(
                 piece.geometryAnchorDistanceMeters * 1000.0));
+        binding.obstacleAnchorMicrometerRemainder = std::int16_t(std::llround(
+                piece.geometryAnchorDistanceMeters * 1000000.0)
+                - std::int64_t(binding.obstacleAnchorMm) * 1000);
         if (!builder.appendPieceBinding(binding)) return {};
     }
     return builder.finish();

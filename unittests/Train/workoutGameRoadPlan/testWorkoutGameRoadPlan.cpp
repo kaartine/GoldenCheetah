@@ -465,6 +465,12 @@ private slots:
             plan.assetPhysicsSnapshot = WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan);
             QVERIFY(plan.assetPhysicsSnapshot);
             QCOMPARE(plan.assetPhysicsSnapshot->pieceBindings[0].obstacleAnchorMm, example.second);
+            const std::int16_t remainder = std::int16_t(std::llround(
+                    example.first * 1000000.0)
+                    - std::int64_t(example.second) * 1000);
+            QCOMPARE(plan.assetPhysicsSnapshot->pieceBindings[0]
+                        .obstacleAnchorMicrometerRemainder,
+                     remainder);
             QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
                      WorkoutGameRoadPlanValidationStatus::Ready);
         }
@@ -507,6 +513,9 @@ private slots:
                      std::int32_t(std::llround(
                          plan.pieces[index].geometryAnchorDistanceMeters
                              * 1000.0)));
+            QVERIFY(std::abs(binding.obstacleAnchorMeters()
+                        - plan.pieces[index].geometryAnchorDistanceMeters)
+                    <= 0.0000005);
         }
         QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
                     *snapshot, plan.pieces.size()),
@@ -559,6 +568,15 @@ private slots:
         QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
                     invalid, 1),
                  WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        for (const int remainder : {-501, 501}) {
+            invalid = *valid;
+            invalid.pieceBindings[0].obstacleAnchorMicrometerRemainder =
+                    std::int16_t(remainder);
+            QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                        invalid, 1),
+                     WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+        }
 
         invalid = *valid;
         invalid.physicsDefinitions[0].chains.push_back(
