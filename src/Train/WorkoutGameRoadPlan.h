@@ -53,7 +53,7 @@ struct WorkoutGameAssetPhysicsBinding
 {
     QString assetId;
     QString variantKey;
-    std::uint32_t definitionIndex = 0;
+    std::uint32_t definitionIndex = std::numeric_limits<std::uint32_t>::max();
     std::int32_t nativeForwardOriginMm = 0;
     std::uint32_t nativeForwardExtentMm = 0;
     std::uint32_t nativeUpExtentMm = 0;
@@ -62,6 +62,7 @@ struct WorkoutGameAssetPhysicsBinding
 
 struct WorkoutGameAssetPhysicsPieceBinding
 {
+    std::uint32_t definitionIndex = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t bindingIndex = std::numeric_limits<std::uint32_t>::max();
     std::int32_t obstacleAnchorMm = 0;
     std::uint32_t flags = 0;
@@ -72,7 +73,10 @@ struct WorkoutGameCourseAssetPhysicsSnapshot
     static constexpr std::uint32_t CurrentVersion = 1;
     static constexpr std::uint32_t NoIndex =
             std::numeric_limits<std::uint32_t>::max();
-    static constexpr std::uint32_t LegacyProcedural = 1U << 0;
+    // Explicit legacy adapter tag; activation of frozen legacy evaluation is
+    // separate from this preparatory persistence model.
+    static constexpr std::uint32_t LegacyProceduralV1 = 1U << 0;
+    static constexpr std::uint32_t LegacyProcedural = LegacyProceduralV1;
     static constexpr std::size_t MaximumDefinitions = 64;
     static constexpr std::size_t MaximumBindings = 64;
     static constexpr std::size_t MaximumChainsPerDefinition = 8;
@@ -82,6 +86,7 @@ struct WorkoutGameCourseAssetPhysicsSnapshot
     static constexpr qsizetype MaximumEncodedBytes = 256 * 1024;
 
     std::uint32_t snapshotVersion = CurrentVersion;
+    std::uint32_t catalogSchemaVersion = 0; // 0 = no catalog/legacy, 1 = catalog v1.
     std::vector<WorkoutGameAssetPhysicsDefinition> physicsDefinitions;
     std::vector<WorkoutGameAssetPhysicsBinding> bindings;
     std::vector<WorkoutGameAssetPhysicsPieceBinding> pieceBindings;
@@ -106,6 +111,10 @@ public:
 class WorkoutGameAssetPhysicsSnapshotBuilder
 {
 public:
+    explicit WorkoutGameAssetPhysicsSnapshotBuilder(std::uint32_t catalogSchemaVersion = 0)
+    {
+        snapshot_.catalogSchemaVersion = catalogSchemaVersion;
+    }
     bool internDefinition(
             const WorkoutGameAssetPhysicsDefinition &definition,
             std::uint32_t &index);

@@ -86,6 +86,40 @@ bool portableKey(const QString &value)
     return true;
 }
 
+bool validBinding(const WorkoutGameAssetPhysicsBinding &binding,
+                  std::size_t definitionCount)
+{
+    return portableKey(binding.assetId)
+            && (binding.variantKey.isEmpty() || portableKey(binding.variantKey))
+            && (binding.definitionIndex == WorkoutGameCourseAssetPhysicsSnapshot::NoIndex
+                || binding.definitionIndex < definitionCount)
+            && std::abs(std::int64_t(binding.nativeForwardOriginMm))
+                <= MaximumForwardCoordinateMm
+            && binding.nativeForwardExtentMm > 0
+            && binding.nativeForwardExtentMm <= std::uint32_t(MaximumForwardCoordinateMm * 2)
+            && binding.nativeUpExtentMm > 0
+            && binding.nativeUpExtentMm <= std::uint32_t(MaximumHeightCoordinateMm)
+            && binding.resolvedExtentMm > 0
+            && binding.resolvedExtentMm <= std::uint32_t(MaximumForwardCoordinateMm * 2);
+}
+
+bool validPieceBinding(const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+                       const WorkoutGameAssetPhysicsPieceBinding &piece)
+{
+    using Snapshot = WorkoutGameCourseAssetPhysicsSnapshot;
+    if ((piece.flags & ~Snapshot::LegacyProceduralV1) != 0) return false;
+    const bool hasPhysics = piece.definitionIndex != Snapshot::NoIndex;
+    const bool hasAsset = piece.bindingIndex != Snapshot::NoIndex;
+    if ((piece.flags & Snapshot::LegacyProceduralV1) != 0 && (hasPhysics || hasAsset)) return false;
+    if (hasPhysics && piece.definitionIndex >= snapshot.physicsDefinitions.size()) return false;
+    if (hasAsset) {
+        if (piece.bindingIndex >= snapshot.bindings.size()) return false;
+        const auto definition = snapshot.bindings[piece.bindingIndex].definitionIndex;
+        if (definition != Snapshot::NoIndex && definition != piece.definitionIndex) return false;
+    }
+    return true;
+}
+
 WorkoutGameAssetPhysicsSnapshotValidationStatus validateDefinition(
         const WorkoutGameAssetPhysicsDefinition &definition,
         std::size_t &totalPoints)
@@ -96,8 +130,10 @@ WorkoutGameAssetPhysicsSnapshotValidationStatus validateDefinition(
         return WorkoutGameAssetPhysicsSnapshotValidationStatus::ResourceLimit;
     }
     if (definition.profileVersion
-                != WorkoutGameAssetPhysicsDefinition::CurrentProfileVersion
-            || (definition.operation
+            != WorkoutGameAssetPhysicsDefinition::CurrentProfileVersion) {
+        return WorkoutGameAssetPhysicsSnapshotValidationStatus::UnsupportedVersion;
+    }
+    if ((definition.operation
                     != WorkoutGameAssetPhysicsOperation::AddObstacle
                 && definition.operation
                     != WorkoutGameAssetPhysicsOperation::ReplaceSurface)
@@ -506,7 +542,8 @@ WorkoutGameAssetPhysicsSnapshotValidator::validate(
         std::size_t roadPieceCount)
 {
     if (snapshot.snapshotVersion
-            != WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion) {
+            != WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion
+            || snapshot.catalogSchemaVersion > 1) {
         return WorkoutGameAssetPhysicsSnapshotValidationStatus
                 ::UnsupportedVersion;
     }
@@ -530,38 +567,54 @@ WorkoutGameAssetPhysicsSnapshotValidator::validate(
         }
     }
     for (const WorkoutGameAssetPhysicsBinding &binding : snapshot.bindings) {
-        if (!portableKey(binding.assetId)
-                || !portableKey(binding.variantKey)
-                || binding.definitionIndex >= snapshot.physicsDefinitions.size()
-                || std::abs(std::int64_t(binding.nativeForwardOriginMm))
-                    > MaximumForwardCoordinateMm
-                || binding.nativeForwardExtentMm == 0
-                || binding.nativeForwardExtentMm
-                    > std::uint32_t(MaximumForwardCoordinateMm * 2)
-                || binding.nativeUpExtentMm == 0
-                || binding.nativeUpExtentMm
-                    > std::uint32_t(MaximumHeightCoordinateMm)
-                || binding.resolvedExtentMm == 0
-                || binding.resolvedExtentMm
-                    > std::uint32_t(MaximumForwardCoordinateMm * 2)) {
+        if (!validBinding(binding, snapshot.physicsDefinitions.size())) {
             return WorkoutGameAssetPhysicsSnapshotValidationStatus
                     ::InvalidSnapshot;
         }
     }
     for (const WorkoutGameAssetPhysicsPieceBinding &binding :
             snapshot.pieceBindings) {
-        const bool legacy = (binding.flags
-                & WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural) != 0;
-        if ((binding.flags
-                    & ~WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural)
-                != 0
-                || (binding.bindingIndex
-                        == WorkoutGameCourseAssetPhysicsSnapshot::NoIndex
-                    ? !legacy
-                    : legacy || binding.bindingIndex >= snapshot.bindings.size())) {
+        if (!validPieceBinding(snapshot, binding)) {
             return WorkoutGameAssetPhysicsSnapshotValidationStatus
                     ::InvalidSnapshot;
         }
+    }
+    // Canonical arrays are unique and ordered by their first use by a piece.
+    // Validation rejects alternative encodings; it must not silently rewrite
+    // a persisted snapshot and thereby conceal invalid indices or unused data.
+    for (std::size_t i = 0; i < snapshot.physicsDefinitions.size(); ++i) {
+        for (std::size_t j = 0; j < i; ++j) {
+            if (sameDefinition(snapshot.physicsDefinitions[i], snapshot.physicsDefinitions[j])) {
+                return WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot;
+            }
+        }
+    }
+    for (std::size_t i = 0; i < snapshot.bindings.size(); ++i) {
+        for (std::size_t j = 0; j < i; ++j) {
+            if (sameBinding(snapshot.bindings[i], snapshot.bindings[j])) {
+                return WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot;
+            }
+        }
+    }
+    std::size_t nextBinding = 0;
+    std::size_t nextDefinition = 0;
+    for (const auto &piece : snapshot.pieceBindings) {
+        if (piece.bindingIndex != WorkoutGameCourseAssetPhysicsSnapshot::NoIndex) {
+            if (piece.bindingIndex > nextBinding) {
+                return WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot;
+            }
+            if (piece.bindingIndex == nextBinding) ++nextBinding;
+        }
+        const auto definitionIndex = piece.definitionIndex;
+        if (definitionIndex == WorkoutGameCourseAssetPhysicsSnapshot::NoIndex) continue;
+        if (definitionIndex > nextDefinition) {
+            return WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot;
+        }
+        if (definitionIndex == nextDefinition) ++nextDefinition;
+    }
+    if (nextBinding != snapshot.bindings.size()
+            || nextDefinition != snapshot.physicsDefinitions.size()) {
+        return WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot;
     }
     return WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready;
 }
@@ -609,15 +662,6 @@ bool WorkoutGameAssetPhysicsSnapshotBuilder::internBinding(
         const WorkoutGameAssetPhysicsBinding &binding,
         std::uint32_t &index)
 {
-    WorkoutGameCourseAssetPhysicsSnapshot candidate = snapshot_;
-    candidate.bindings.push_back(binding);
-    if (candidate.bindings.size()
-                > WorkoutGameCourseAssetPhysicsSnapshot::MaximumBindings
-            || WorkoutGameAssetPhysicsSnapshotValidator::validate(
-                    candidate, candidate.pieceBindings.size())
-                != WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready) {
-        return false;
-    }
     const auto existing = std::find_if(
             snapshot_.bindings.begin(), snapshot_.bindings.end(),
             [&binding](const auto &candidateBinding) {
@@ -627,6 +671,13 @@ bool WorkoutGameAssetPhysicsSnapshotBuilder::internBinding(
         index = std::uint32_t(std::distance(
                 snapshot_.bindings.begin(), existing));
         return true;
+    }
+    if (snapshot_.bindings.size()
+            >= WorkoutGameCourseAssetPhysicsSnapshot::MaximumBindings) {
+        return false;
+    }
+    if (!validBinding(binding, snapshot_.physicsDefinitions.size())) {
+        return false;
     }
     index = std::uint32_t(snapshot_.bindings.size());
     snapshot_.bindings.push_back(binding);
@@ -640,14 +691,7 @@ bool WorkoutGameAssetPhysicsSnapshotBuilder::appendPieceBinding(
             >= WorkoutGameCourseAssetPhysicsSnapshot::MaximumPieceBindings) {
         return false;
     }
-    const bool legacy = (binding.flags
-            & WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural) != 0;
-    if ((binding.flags
-                & ~WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural) != 0
-            || (binding.bindingIndex
-                    == WorkoutGameCourseAssetPhysicsSnapshot::NoIndex
-                ? !legacy
-                : legacy || binding.bindingIndex >= snapshot_.bindings.size())) {
+    if (!validPieceBinding(snapshot_, binding)) {
         return false;
     }
     snapshot_.pieceBindings.push_back(binding);
@@ -674,6 +718,11 @@ WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(
     for (const WorkoutGameRoadPiece &piece : plan.pieces) {
         WorkoutGameAssetPhysicsPieceBinding binding;
         binding.flags = WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural;
+        if (!finiteValue(piece.geometryAnchorDistanceMeters)
+                || piece.geometryAnchorDistanceMeters < 0.0
+                || piece.geometryAnchorDistanceMeters > MaximumCourseDistanceMeters) {
+            return {};
+        }
         binding.obstacleAnchorMm = std::int32_t(std::llround(
                 piece.geometryAnchorDistanceMeters * 1000.0));
         if (!builder.appendPieceBinding(binding)) return {};
@@ -713,6 +762,15 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
         if (snapshotStatus
                 != WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready) {
             return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+        }
+        for (std::size_t index = 0; index < plan.pieces.size(); ++index) {
+            const double anchor = plan.pieces[index].geometryAnchorDistanceMeters;
+            if (!finiteValue(anchor) || anchor < 0.0
+                    || anchor > MaximumCourseDistanceMeters
+                    || plan.assetPhysicsSnapshot->pieceBindings[index].obstacleAnchorMm
+                        != std::int32_t(std::llround(anchor * 1000.0))) {
+                return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+            }
         }
     }
     if (plan.pieces.empty() || sourceSectionCount == 0) {
