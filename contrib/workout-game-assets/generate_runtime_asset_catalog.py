@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -22,7 +21,7 @@ from validate_assets import (
 
 
 CATALOG_SCHEMA_VERSION = 1
-GENERATOR_VERSION = 2
+GENERATOR_VERSION = 3
 MAXIMUM_CATALOG_BYTES = 1024 * 1024
 MAXIMUM_ASSETS = 256
 QRC_PATH = Path("src/Resources/workout-game-assets.qrc")
@@ -50,10 +49,6 @@ def _canonical_bytes(document: dict[str, Any]) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
-
-
-def catalog_digest(payload: dict[str, Any]) -> str:
-    return hashlib.sha256(_canonical_bytes(payload)).hexdigest()
 
 
 def _repository_path(root: Path, path: Path) -> str:
@@ -213,7 +208,6 @@ def _admitted_asset(
             "bytes": len(data),
             "purpose": entry["purpose"],
             "repositoryPath": repository_path,
-            "sha256": hashlib.sha256(data).hexdigest(),
             "url": aliases[repository_path],
         })
     if not resources:
@@ -298,9 +292,7 @@ def generate_catalog_bytes(root: Path) -> bytes:
         "profiles": profiles,
         "schemaVersion": CATALOG_SCHEMA_VERSION,
     }
-    document = dict(payload)
-    document["catalogSha256"] = catalog_digest(payload)
-    encoded = _canonical_bytes(document)
+    encoded = _canonical_bytes(payload)
     if len(encoded) > MAXIMUM_CATALOG_BYTES:
         raise AssetValidationError("runtime asset catalog is too large")
     return encoded

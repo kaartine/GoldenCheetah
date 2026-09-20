@@ -32,7 +32,7 @@ class WorkoutGameRuntimeCatalogTest(unittest.TestCase):
     def test_catalog_admits_only_approved_assets(self) -> None:
         document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
         self.assertEqual(document["schemaVersion"], 1)
-        self.assertEqual(document["generatorVersion"], 2)
+        self.assertEqual(document["generatorVersion"], 3)
         self.assertEqual(
             [asset["assetId"] for asset in document["assets"]],
             [
@@ -63,10 +63,12 @@ class WorkoutGameRuntimeCatalogTest(unittest.TestCase):
                     resource["url"],
                 )
 
-    def test_catalog_digest_covers_canonical_payload(self) -> None:
+    def test_catalog_does_not_persist_source_or_content_hashes(self) -> None:
         document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))
-        digest = document.pop("catalogSha256")
-        self.assertEqual(digest, catalog.catalog_digest(document))
+        self.assertNotIn("catalogSha256", document)
+        for asset in document["assets"]:
+            for resource in asset["resources"]:
+                self.assertNotIn("sha256", resource)
 
     def test_log_over_profile_is_canonical_and_bound_to_main_route(self) -> None:
         document = json.loads(catalog.generate_catalog_bytes(REPOSITORY))

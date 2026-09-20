@@ -94,8 +94,6 @@ The catalog root contains:
 
 - `schemaVersion`, initially `1`;
 - `generatorVersion`, an integer that changes when canonicalization changes;
-- `catalogSha256`, calculated over the canonical payload with that field
-  omitted;
 - sorted `assets` and sorted `profiles` arrays.
 
 An asset entry owns identity and presentation binding: `assetId`, role,
@@ -253,7 +251,7 @@ workout time, target power, trainer resistance, scoring rules, or recording.
 | Owner | Responsibility |
 | --- | --- |
 | Asset manifest and source GLB | Authoring intent, provenance, file inventory, sockets, visual proxy, and source physics declaration |
-| Asset validator/catalog generator | Full validation, collision conversion, integer canonicalization, sorting, hashing, and deterministic catalog output |
+| Asset validator/catalog generator | Full validation, collision conversion, integer canonicalization, sorting, and deterministic catalog output |
 | qrc catalog loader | Bounded parse and all-or-nothing publication of the immutable production catalog |
 | Course/road builder | Asset selection, difficulty resolution, anchor checks, and snapshot deduplication by canonical equality |
 | Course document codec | Persisted snapshot encoding, limits, version dispatch, and explicit migration |
@@ -271,7 +269,7 @@ versions.
 
 - Additive catalog fields that old readers can ignore require a generator
   version change. A changed meaning, required field, integer unit, rounding
-  rule, or hash encoding requires a catalog schema/profile contract version.
+  rule, or canonical encoding requires a catalog schema/profile contract version.
 - Any change to a profile's points, gaps, surface values, difficulty scaling,
   sockets, or render fit requires that profile's `profileVersion` to increase,
   even if its `profileId` is unchanged.
@@ -377,7 +375,7 @@ without unbounded duplication.
 ### Store canonical geometry as JSON floating point
 
 Float spelling, parser conversion, platform math, and tolerance-based equality
-make hashing, deduplication, and migration ambiguous. Millimetre integers are
+make canonical comparison, deduplication, and migration ambiguous. Millimetre integers are
 sufficient for the current authored geometry and produce exact canonical
 bytes.
 
@@ -397,8 +395,8 @@ collision would require a different physics and course representation. Version
 
 1. **Generator and contract.** Extend the manifest schema and both validators
    with versioned integer profile/render-fit source fields. Add deterministic
-   collision-proxy conversion, canonical JSON generation, qrc packaging, hash
-   verification, and limit tests. Keep production consumers unchanged.
+   collision-proxy conversion, canonical JSON generation, qrc packaging, and
+   limit tests. Keep production consumers unchanged.
 2. **Catalog loader.** Add a small read-only loader with typed values and
    all-or-nothing validation. Load it before course generation and expose no
    mutable Qt model to simulation code.
@@ -430,10 +428,10 @@ collision would require a different physics and course representation. Version
 
 The implementation is not complete without the following automated coverage:
 
-- Generator golden test: two clean generations produce identical bytes and
-  SHA-256; asset/profile/key ordering is stable; qrc contains the exact file.
+- Generator golden test: two clean generations produce identical bytes;
+  asset/profile/key ordering is stable; qrc contains the exact file.
 - Generator and loader negative tests for every collision constraint, unknown
-  versions/fields, duplicate IDs, bad hashes, integer overflow, invalid UTF-8,
+  versions/fields, duplicate IDs, integer overflow, invalid UTF-8,
   non-monotonic points, merged gaps, and every resource limit.
 - Integer contract tests for difficulty quantization, signed half-away-from-zero
   rounding, rational scaling, interpolation, chain gaps, and metre conversion.
