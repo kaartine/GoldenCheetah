@@ -139,6 +139,7 @@ exists(unittests.pri) {
 			   Train/workoutGameAssetPhysicsResolver \
 			   Train/workoutGameAssetPhysicsSampler \
 			   Train/workoutGameAssetPhysicsRoadCourse \
+			   Train/workoutGameLegacyFt02V1 \
 			   Train/workoutGameCanvas \
 			   Train/workoutGameClock \
 			   Train/workoutGameCompetition \

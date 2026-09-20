@@ -12,6 +12,7 @@
 
 #include "WorkoutGameWorld.h"
 #include "WorkoutGameTabletopGeometry.h"
+#include "WorkoutGameLegacyFt02V1.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,7 +27,7 @@ enum class WorkoutGameFeatureGeometryShape
     RoundedRollers
 };
 
-constexpr int WorkoutGameLogRadialSegments = 16;
+constexpr int WorkoutGameLogRadialSegments = WorkoutGameLegacyFt02V1::RadialSegments;
 
 struct WorkoutGameFeatureGeometryProfile
 {
@@ -89,34 +90,8 @@ struct WorkoutGameFeatureGeometryProfile
                     1.0 - std::cos(6.0 * Pi * coreProgress));
         }
         if (shape == WorkoutGameFeatureGeometryShape::FacetedLog) {
-            if (localDistanceMeters <= startMeters
-                    || localDistanceMeters >= endMeters) {
-                return 0.0;
-            }
-            const double radius = heightMeters * 0.5;
-            constexpr double Pi = 3.14159265358979323846;
-            for (int segment = 0;
-                 segment < WorkoutGameLogRadialSegments / 2; ++segment) {
-                const double fromAngle = Pi
-                        - double(segment) * 2.0 * Pi
-                            / double(WorkoutGameLogRadialSegments);
-                const double toAngle = Pi
-                        - double(segment + 1) * 2.0 * Pi
-                            / double(WorkoutGameLogRadialSegments);
-                const double fromX = std::cos(fromAngle) * radius;
-                const double toX = std::cos(toAngle) * radius;
-                if (localDistanceMeters <= toX + 1e-12) {
-                    const double amount = std::clamp(
-                            (localDistanceMeters - fromX) / (toX - fromX),
-                            0.0, 1.0);
-                    const double fromY =
-                            std::sin(fromAngle) * heightMeters;
-                    const double toY =
-                            std::sin(toAngle) * heightMeters;
-                    return fromY + (toY - fromY) * amount;
-                }
-            }
-            return radius;
+            return WorkoutGameLegacyFt02V1::surfaceOffsetMeters(
+                    localDistanceMeters, startMeters, endMeters, heightMeters);
         }
         if (shape == WorkoutGameFeatureGeometryShape::CurvedTabletop) {
             return WorkoutGameTabletopGeometry::profile(
@@ -165,7 +140,7 @@ public:
             break;
         }
         case WorkoutGameTerrainKind::LogOver: {
-            const double radius = 0.22 + 0.10 * difficulty;
+            const double radius = WorkoutGameLegacyFt02V1::radiusMeters(difficulty);
             result = {
                 true, -radius, 0.0, 0.0, radius, 2.0 * radius,
                 WorkoutGameFeatureGeometryShape::FacetedLog
