@@ -49,6 +49,19 @@ WorkoutGameRoadPlan planWithTurns(
     return plan;
 }
 
+WorkoutGameAssetPhysicsDefinition triangularDefinition(
+        std::int32_t heightMm = 540)
+{
+    WorkoutGameAssetPhysicsDefinition definition;
+    definition.operation = WorkoutGameAssetPhysicsOperation::AddObstacle;
+    definition.coulombFrictionMilli = 1100;
+    definition.restitutionMilli = 0;
+    definition.chains = {{
+        {{-270, 0}, {0, heightMm}, {270, 0}}
+    }};
+    return definition;
+}
+
 }
 
 class TestWorkoutGameRoadPlan : public QObject
@@ -230,6 +243,129 @@ private slots:
         plan.pieces.resize(WorkoutGameRoadPlan::MaximumPieces + 1);
         QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
                  WorkoutGameRoadPlanValidationStatus::ResourceLimit);
+    }
+
+    void snapshotBuilderDeduplicatesCanonicalDefinitionsAndBindings()
+    {
+        WorkoutGameAssetPhysicsSnapshotBuilder builder;
+        std::uint32_t firstDefinition = 99;
+        std::uint32_t duplicateDefinition = 99;
+        std::uint32_t secondDefinition = 99;
+        QVERIFY(builder.internDefinition(
+                    triangularDefinition(), firstDefinition));
+        QVERIFY(builder.internDefinition(
+                    triangularDefinition(), duplicateDefinition));
+        QVERIFY(builder.internDefinition(
+                    triangularDefinition(640), secondDefinition));
+        QCOMPARE(firstDefinition, std::uint32_t(0));
+        QCOMPARE(duplicateDefinition, firstDefinition);
+        QCOMPARE(secondDefinition, std::uint32_t(1));
+
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log-over-greybox");
+        binding.variantKey = QStringLiteral("default");
+        binding.definitionIndex = firstDefinition;
+        binding.nativeForwardOriginMm = -1020;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 540;
+        std::uint32_t firstBinding = 99;
+        std::uint32_t duplicateBinding = 99;
+        QVERIFY(builder.internBinding(binding, firstBinding));
+        QVERIFY(builder.internBinding(binding, duplicateBinding));
+        QCOMPARE(firstBinding, std::uint32_t(0));
+        QCOMPARE(duplicateBinding, firstBinding);
+
+        WorkoutGameAssetPhysicsPieceBinding pieceBinding;
+        pieceBinding.bindingIndex = firstBinding;
+        pieceBinding.obstacleAnchorMm = 25000;
+        QVERIFY(builder.appendPieceBinding(pieceBinding));
+        const std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+                snapshot = builder.finish();
+        QVERIFY(snapshot);
+        QCOMPARE(snapshot->physicsDefinitions.size(), std::size_t(2));
+        QCOMPARE(snapshot->bindings.size(), std::size_t(1));
+        QCOMPARE(snapshot->pieceBindings.size(), std::size_t(1));
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    *snapshot, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready);
+    }
+
+    void legacySnapshotPinsEveryPieceWithoutChangingRuntimePhysics()
+    {
+        const WorkoutGameRoadPlan plan = planWithTurns(
+                {15.0, -15.0, 15.0});
+        const std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+                snapshot =
+                    WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan);
+        QVERIFY(snapshot);
+        QVERIFY(snapshot->physicsDefinitions.empty());
+        QVERIFY(snapshot->bindings.empty());
+        QCOMPARE(snapshot->pieceBindings.size(), plan.pieces.size());
+        for (std::size_t index = 0;
+                index < snapshot->pieceBindings.size(); ++index) {
+            const WorkoutGameAssetPhysicsPieceBinding &binding =
+                    snapshot->pieceBindings[index];
+            QCOMPARE(binding.bindingIndex,
+                     WorkoutGameCourseAssetPhysicsSnapshot::NoIndex);
+            QCOMPARE(binding.flags,
+                     WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural);
+            QCOMPARE(binding.obstacleAnchorMm,
+                     std::int32_t(std::llround(
+                         plan.pieces[index].geometryAnchorDistanceMeters
+                             * 1000.0)));
+        }
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    *snapshot, plan.pieces.size()),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready);
+    }
+
+    void snapshotValidationRejectsBadGeometryIndicesAndLimits()
+    {
+        WorkoutGameAssetPhysicsSnapshotBuilder builder;
+        std::uint32_t definitionIndex = 0;
+        QVERIFY(builder.internDefinition(
+                    triangularDefinition(), definitionIndex));
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log-over-greybox");
+        binding.variantKey = QStringLiteral("default");
+        binding.definitionIndex = definitionIndex;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 540;
+        std::uint32_t bindingIndex = 0;
+        QVERIFY(builder.internBinding(binding, bindingIndex));
+        WorkoutGameAssetPhysicsPieceBinding pieceBinding;
+        pieceBinding.bindingIndex = bindingIndex;
+        QVERIFY(builder.appendPieceBinding(pieceBinding));
+        const auto valid = builder.finish();
+        QVERIFY(valid);
+
+        WorkoutGameCourseAssetPhysicsSnapshot invalid = *valid;
+        invalid.bindings[0].definitionIndex = 42;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        invalid = *valid;
+        invalid.physicsDefinitions[0].chains[0].points[1].forwardMm = -270;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot);
+
+        invalid = *valid;
+        invalid.physicsDefinitions.resize(
+                WorkoutGameCourseAssetPhysicsSnapshot::MaximumDefinitions + 1);
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::ResourceLimit);
+
+        invalid = *valid;
+        invalid.snapshotVersion =
+                WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion + 1;
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    invalid, 1),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::UnsupportedVersion);
     }
 
     void sourceSectionsAndInactiveFieldsAreStrictlyValidated()

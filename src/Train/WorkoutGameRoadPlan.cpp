@@ -23,10 +23,139 @@ constexpr double MaximumLegacyBermTurnRadians = 1.7453292519943295; // 100 degre
 constexpr double MaximumReliefGradePercent = 120.0;
 constexpr std::uint64_t MaximumExactJsonInteger = 9007199254740991ULL;
 constexpr double Pi = 3.14159265358979323846;
+constexpr std::int32_t MaximumForwardCoordinateMm = 64000;
+constexpr std::int32_t MaximumHeightCoordinateMm = 16000;
 
 bool finiteValue(double value)
 {
     return std::isfinite(value);
+}
+
+bool samePoint(
+        const WorkoutGameAssetPhysicsPoint &left,
+        const WorkoutGameAssetPhysicsPoint &right)
+{
+    return left.forwardMm == right.forwardMm
+            && left.heightMm == right.heightMm;
+}
+
+bool sameDefinition(
+        const WorkoutGameAssetPhysicsDefinition &left,
+        const WorkoutGameAssetPhysicsDefinition &right)
+{
+    if (left.profileVersion != right.profileVersion
+            || left.operation != right.operation
+            || left.coulombFrictionMilli != right.coulombFrictionMilli
+            || left.restitutionMilli != right.restitutionMilli
+            || left.chains.size() != right.chains.size()) {
+        return false;
+    }
+    for (std::size_t chainIndex = 0;
+            chainIndex < left.chains.size(); ++chainIndex) {
+        const auto &leftPoints = left.chains[chainIndex].points;
+        const auto &rightPoints = right.chains[chainIndex].points;
+        if (leftPoints.size() != rightPoints.size()
+                || !std::equal(leftPoints.begin(), leftPoints.end(),
+                    rightPoints.begin(), samePoint)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sameBinding(
+        const WorkoutGameAssetPhysicsBinding &left,
+        const WorkoutGameAssetPhysicsBinding &right)
+{
+    return left.assetId == right.assetId
+            && left.variantKey == right.variantKey
+            && left.definitionIndex == right.definitionIndex
+            && left.nativeForwardOriginMm == right.nativeForwardOriginMm
+            && left.nativeForwardExtentMm == right.nativeForwardExtentMm
+            && left.nativeUpExtentMm == right.nativeUpExtentMm
+            && left.resolvedExtentMm == right.resolvedExtentMm;
+}
+
+bool portableKey(const QString &value)
+{
+    if (value.isEmpty() || value.size() > 128) return false;
+    for (const QChar character : value) {
+        const ushort code = character.unicode();
+        if (code < 0x21 || code > 0x7e) return false;
+    }
+    return true;
+}
+
+WorkoutGameAssetPhysicsSnapshotValidationStatus validateDefinition(
+        const WorkoutGameAssetPhysicsDefinition &definition,
+        std::size_t &totalPoints)
+{
+    if (definition.chains.size()
+                > WorkoutGameCourseAssetPhysicsSnapshot
+                    ::MaximumChainsPerDefinition) {
+        return WorkoutGameAssetPhysicsSnapshotValidationStatus::ResourceLimit;
+    }
+    if (definition.profileVersion
+                != WorkoutGameAssetPhysicsDefinition::CurrentProfileVersion
+            || (definition.operation
+                    != WorkoutGameAssetPhysicsOperation::AddObstacle
+                && definition.operation
+                    != WorkoutGameAssetPhysicsOperation::ReplaceSurface)
+            || definition.coulombFrictionMilli > 2000
+            || definition.restitutionMilli > 250
+            || definition.chains.empty()) {
+        return WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot;
+    }
+    std::size_t definitionPoints = 0;
+    std::int32_t previousChainEnd = 0;
+    bool havePreviousChain = false;
+    for (const WorkoutGameAssetPhysicsChain &chain : definition.chains) {
+        if (chain.points.size() < 2) {
+            return WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::InvalidSnapshot;
+        }
+        definitionPoints += chain.points.size();
+        totalPoints += chain.points.size();
+        if (definitionPoints
+                    > WorkoutGameCourseAssetPhysicsSnapshot
+                        ::MaximumPointsPerDefinition
+                || totalPoints
+                    > WorkoutGameCourseAssetPhysicsSnapshot
+                        ::MaximumTotalPoints) {
+            return WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::ResourceLimit;
+        }
+        if (havePreviousChain
+                && chain.points.front().forwardMm <= previousChainEnd) {
+            return WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::InvalidSnapshot;
+        }
+        for (std::size_t pointIndex = 0;
+                pointIndex < chain.points.size(); ++pointIndex) {
+            const WorkoutGameAssetPhysicsPoint &point =
+                    chain.points[pointIndex];
+            if (std::abs(std::int64_t(point.forwardMm))
+                        > MaximumForwardCoordinateMm
+                    || std::abs(std::int64_t(point.heightMm))
+                        > MaximumHeightCoordinateMm
+                    || (pointIndex > 0
+                        && point.forwardMm
+                            <= chain.points[pointIndex - 1].forwardMm)) {
+                return WorkoutGameAssetPhysicsSnapshotValidationStatus
+                        ::InvalidSnapshot;
+            }
+        }
+        if (definition.operation
+                    == WorkoutGameAssetPhysicsOperation::AddObstacle
+                && (chain.points.front().heightMm != 0
+                    || chain.points.back().heightMm != 0)) {
+            return WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::InvalidSnapshot;
+        }
+        previousChainEnd = chain.points.back().forwardMm;
+        havePreviousChain = true;
+    }
+    return WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready;
 }
 
 bool validConnector(const WorkoutGameRoadConnector &connector)
@@ -371,6 +500,187 @@ bool validGapJump(
 
 }
 
+WorkoutGameAssetPhysicsSnapshotValidationStatus
+WorkoutGameAssetPhysicsSnapshotValidator::validate(
+        const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+        std::size_t roadPieceCount)
+{
+    if (snapshot.snapshotVersion
+            != WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion) {
+        return WorkoutGameAssetPhysicsSnapshotValidationStatus
+                ::UnsupportedVersion;
+    }
+    if (snapshot.physicsDefinitions.size()
+                > WorkoutGameCourseAssetPhysicsSnapshot::MaximumDefinitions
+            || snapshot.bindings.size()
+                > WorkoutGameCourseAssetPhysicsSnapshot::MaximumBindings
+            || snapshot.pieceBindings.size()
+                > WorkoutGameCourseAssetPhysicsSnapshot::MaximumPieceBindings) {
+        return WorkoutGameAssetPhysicsSnapshotValidationStatus::ResourceLimit;
+    }
+    if (snapshot.pieceBindings.size() != roadPieceCount) {
+        return WorkoutGameAssetPhysicsSnapshotValidationStatus::InvalidSnapshot;
+    }
+    std::size_t totalPoints = 0;
+    for (const WorkoutGameAssetPhysicsDefinition &definition :
+            snapshot.physicsDefinitions) {
+        const auto status = validateDefinition(definition, totalPoints);
+        if (status != WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready) {
+            return status;
+        }
+    }
+    for (const WorkoutGameAssetPhysicsBinding &binding : snapshot.bindings) {
+        if (!portableKey(binding.assetId)
+                || !portableKey(binding.variantKey)
+                || binding.definitionIndex >= snapshot.physicsDefinitions.size()
+                || std::abs(std::int64_t(binding.nativeForwardOriginMm))
+                    > MaximumForwardCoordinateMm
+                || binding.nativeForwardExtentMm == 0
+                || binding.nativeForwardExtentMm
+                    > std::uint32_t(MaximumForwardCoordinateMm * 2)
+                || binding.nativeUpExtentMm == 0
+                || binding.nativeUpExtentMm
+                    > std::uint32_t(MaximumHeightCoordinateMm)
+                || binding.resolvedExtentMm == 0
+                || binding.resolvedExtentMm
+                    > std::uint32_t(MaximumForwardCoordinateMm * 2)) {
+            return WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::InvalidSnapshot;
+        }
+    }
+    for (const WorkoutGameAssetPhysicsPieceBinding &binding :
+            snapshot.pieceBindings) {
+        const bool legacy = (binding.flags
+                & WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural) != 0;
+        if ((binding.flags
+                    & ~WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural)
+                != 0
+                || (binding.bindingIndex
+                        == WorkoutGameCourseAssetPhysicsSnapshot::NoIndex
+                    ? !legacy
+                    : legacy || binding.bindingIndex >= snapshot.bindings.size())) {
+            return WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::InvalidSnapshot;
+        }
+    }
+    return WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready;
+}
+
+bool WorkoutGameAssetPhysicsSnapshotBuilder::internDefinition(
+        const WorkoutGameAssetPhysicsDefinition &definition,
+        std::uint32_t &index)
+{
+    std::size_t totalPoints = 0;
+    if (validateDefinition(definition, totalPoints)
+            != WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready) {
+        return false;
+    }
+    const auto existing = std::find_if(
+            snapshot_.physicsDefinitions.begin(),
+            snapshot_.physicsDefinitions.end(),
+            [&definition](const auto &candidate) {
+                return sameDefinition(candidate, definition);
+            });
+    if (existing != snapshot_.physicsDefinitions.end()) {
+        index = std::uint32_t(std::distance(
+                snapshot_.physicsDefinitions.begin(), existing));
+        return true;
+    }
+    if (snapshot_.physicsDefinitions.size()
+            >= WorkoutGameCourseAssetPhysicsSnapshot::MaximumDefinitions) {
+        return false;
+    }
+    std::size_t existingPoints = 0;
+    for (const auto &candidate : snapshot_.physicsDefinitions) {
+        for (const auto &chain : candidate.chains) {
+            existingPoints += chain.points.size();
+        }
+    }
+    if (existingPoints + totalPoints
+            > WorkoutGameCourseAssetPhysicsSnapshot::MaximumTotalPoints) {
+        return false;
+    }
+    index = std::uint32_t(snapshot_.physicsDefinitions.size());
+    snapshot_.physicsDefinitions.push_back(definition);
+    return true;
+}
+
+bool WorkoutGameAssetPhysicsSnapshotBuilder::internBinding(
+        const WorkoutGameAssetPhysicsBinding &binding,
+        std::uint32_t &index)
+{
+    WorkoutGameCourseAssetPhysicsSnapshot candidate = snapshot_;
+    candidate.bindings.push_back(binding);
+    if (candidate.bindings.size()
+                > WorkoutGameCourseAssetPhysicsSnapshot::MaximumBindings
+            || WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    candidate, candidate.pieceBindings.size())
+                != WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready) {
+        return false;
+    }
+    const auto existing = std::find_if(
+            snapshot_.bindings.begin(), snapshot_.bindings.end(),
+            [&binding](const auto &candidateBinding) {
+                return sameBinding(candidateBinding, binding);
+            });
+    if (existing != snapshot_.bindings.end()) {
+        index = std::uint32_t(std::distance(
+                snapshot_.bindings.begin(), existing));
+        return true;
+    }
+    index = std::uint32_t(snapshot_.bindings.size());
+    snapshot_.bindings.push_back(binding);
+    return true;
+}
+
+bool WorkoutGameAssetPhysicsSnapshotBuilder::appendPieceBinding(
+        const WorkoutGameAssetPhysicsPieceBinding &binding)
+{
+    if (snapshot_.pieceBindings.size()
+            >= WorkoutGameCourseAssetPhysicsSnapshot::MaximumPieceBindings) {
+        return false;
+    }
+    const bool legacy = (binding.flags
+            & WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural) != 0;
+    if ((binding.flags
+                & ~WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural) != 0
+            || (binding.bindingIndex
+                    == WorkoutGameCourseAssetPhysicsSnapshot::NoIndex
+                ? !legacy
+                : legacy || binding.bindingIndex >= snapshot_.bindings.size())) {
+        return false;
+    }
+    snapshot_.pieceBindings.push_back(binding);
+    return true;
+}
+
+std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+WorkoutGameAssetPhysicsSnapshotBuilder::finish() const
+{
+    if (WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                snapshot_, snapshot_.pieceBindings.size())
+            != WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready) {
+        return {};
+    }
+    return std::make_shared<const WorkoutGameCourseAssetPhysicsSnapshot>(
+            snapshot_);
+}
+
+std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(
+        const WorkoutGameRoadPlan &plan)
+{
+    WorkoutGameAssetPhysicsSnapshotBuilder builder;
+    for (const WorkoutGameRoadPiece &piece : plan.pieces) {
+        WorkoutGameAssetPhysicsPieceBinding binding;
+        binding.flags = WorkoutGameCourseAssetPhysicsSnapshot::LegacyProcedural;
+        binding.obstacleAnchorMm = std::int32_t(std::llround(
+                piece.geometryAnchorDistanceMeters * 1000.0));
+        if (!builder.appendPieceBinding(binding)) return {};
+    }
+    return builder.finish();
+}
+
 WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
         const WorkoutGameRoadPlan &plan,
         std::size_t sourceSectionCount)
@@ -378,11 +688,32 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
     if (plan.generationVersion
                 != WorkoutGameRoadPlan::LegacyGenerationVersion
             && plan.generationVersion
+                != WorkoutGameRoadPlan::BankAndReliefGenerationVersion
+            && plan.generationVersion
                 != WorkoutGameRoadPlan::CurrentGenerationVersion) {
         return WorkoutGameRoadPlanValidationStatus::UnsupportedVersion;
     }
     if (plan.pieces.size() > WorkoutGameRoadPlan::MaximumPieces) {
         return WorkoutGameRoadPlanValidationStatus::ResourceLimit;
+    }
+    if (plan.assetPhysicsSnapshot) {
+        const auto snapshotStatus =
+                WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    *plan.assetPhysicsSnapshot, plan.pieces.size());
+        if (snapshotStatus
+                == WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::UnsupportedVersion) {
+            return WorkoutGameRoadPlanValidationStatus::UnsupportedVersion;
+        }
+        if (snapshotStatus
+                == WorkoutGameAssetPhysicsSnapshotValidationStatus
+                    ::ResourceLimit) {
+            return WorkoutGameRoadPlanValidationStatus::ResourceLimit;
+        }
+        if (snapshotStatus
+                != WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready) {
+            return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+        }
     }
     if (plan.pieces.empty() || sourceSectionCount == 0) {
         return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
