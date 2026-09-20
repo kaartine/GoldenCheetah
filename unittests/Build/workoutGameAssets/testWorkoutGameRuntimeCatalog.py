@@ -91,7 +91,9 @@ class WorkoutGameRuntimeCatalogTest(unittest.TestCase):
         profile = document["profiles"][0]
         self.assertEqual(profile["profileId"], "FT-02-log-over-v1")
         self.assertEqual(profile["operation"], "add-obstacle")
-        self.assertEqual(profile["chains"][0]["points"][4], {
+        points = profile["chains"][0]["points"]
+        self.assertEqual(len(points), 11)
+        self.assertEqual(points[len(points) // 2], {
             "forwardMm": 0,
             "heightMm": 540,
         })
