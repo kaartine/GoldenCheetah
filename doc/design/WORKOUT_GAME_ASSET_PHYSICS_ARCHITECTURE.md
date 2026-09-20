@@ -28,7 +28,8 @@ The current code has these relevant properties:
   challenge gates, but no resolved asset or collision-profile identity. A
   `WorkoutGameCourse` can hold an immutable `WorkoutGameRoadPlan`; the plan is
   currently generation version 2 and is limited to 4,096 pieces.
-- The course document is currently schema 4, conversion algorithm 5, and is
+- The coordinated integration base uses course schema 6 and conversion
+  algorithm 6, and is
   limited to 8 MiB. It persists the road plan, but not the exact feature
   profiles used to materialize it.
 - Asset manifests permit external physics metadata. The validator enforces
@@ -159,7 +160,7 @@ The contract is interpreted as follows:
   Every native point is scaled by the exact rational
   `resolvedExtentMm / nativeExtentMm` and rounded to the nearest millimetre,
   with half values away from zero. Scaling is complete before validation,
-  hashing, or deduplication.
+  canonical comparison, or deduplication.
 - Runtime conversion is exactly `meters = millimeters / 1000.0`. Interpolation
   occurs between converted adjacent integer points. No consumer may refit,
   smooth, resample, or infer collision from the render mesh.
@@ -216,11 +217,9 @@ The snapshot contains:
 CourseAssetPhysicsSnapshotV1 {
     snapshotVersion: uint32
     catalogSchemaVersion: uint32
-    catalogSha256: 32 bytes
     profiles: [ResolvedProfileV1]
     assets: [ResolvedAssetBindingV1]
     pieces: [PieceBindingV1]
-    snapshotSha256: 32 bytes
 }
 ```
 
@@ -256,7 +255,7 @@ workout time, target power, trainer resistance, scoring rules, or recording.
 | Asset manifest and source GLB | Authoring intent, provenance, file inventory, sockets, visual proxy, and source physics declaration |
 | Asset validator/catalog generator | Full validation, collision conversion, integer canonicalization, sorting, hashing, and deterministic catalog output |
 | qrc catalog loader | Bounded parse and all-or-nothing publication of the immutable production catalog |
-| Course/road builder | Asset selection, difficulty resolution, anchor checks, snapshot deduplication, and final snapshot hash |
+| Course/road builder | Asset selection, difficulty resolution, anchor checks, and snapshot deduplication by canonical equality |
 | Course document codec | Persisted snapshot encoding, limits, version dispatch, and explicit migration |
 | Road sampler | Base road plus frozen profile interpolation and rideable-surface gaps |
 | `WorkoutGamePhysics` | Conversion of frozen chains to static Box2D segments and vehicle contact only |
@@ -290,10 +289,11 @@ versions.
   catalog. Only an explicit save/conversion writes the new schema.
 - The new schema persists the complete deduplicated snapshot, not only catalog IDs.
   It therefore replays identically when a later application ships a changed
-  catalog. The catalog hash records provenance but is not a runtime lookup
-  requirement for a persisted snapshot.
+  catalog. Catalog, snapshot, and per-definition hashes are not persisted;
+  Git identifies the source revision and bounded canonical data is sufficient
+  for replay.
 - Unknown newer schemas or profile contracts return `UnsupportedVersion`.
-  Invalid hashes, indices, limits, or geometry return `InvalidDocument` or
+  Invalid indices, limits, or geometry return `InvalidDocument` or
   `ResourceLimit`. They never trigger best-effort regeneration.
 
 ### Hot reload boundary
@@ -337,8 +337,8 @@ course decoder before allocation proportional to input:
 | Encoded asset/physics snapshot | 256 KiB |
 
 Existing 1 MiB development-manifest, 64 MiB development-GLB, per-manifest
-technical budgets, and 8 MiB course-document limits remain in force. A schema
-5 encoder must fail rather than exceed the 8 MiB document limit. Generated
+technical budgets, and 8 MiB course-document limits remain in force. The new
+encoder must fail rather than exceed the 8 MiB document limit. Generated
 courses omit a catalog-backed feature when snapshot limits would be exceeded;
 persisted documents over a limit are rejected.
 
@@ -410,9 +410,10 @@ collision would require a different physics and course representation. Version
    render fit through the new path. Retain the legacy implementation behind a
    test-only A/B adapter. Do not migrate another feature until the parity gates
    below pass.
-5. **Persisted format.** Increment road-plan generation, conversion algorithm,
-   and course schema from their values at integration time; add snapshot
-   encoding/decoding, hashes, limits, and legacy adapters. Add explicit
+5. **Persisted format.** Increment road-plan generation and course schema from
+   their values at integration time; keep the conversion algorithm unchanged
+   for a persistence-only change. Add snapshot encoding/decoding, limits, and
+   legacy adapters. Add explicit
    conversion tests before making the new schema the writer default.
 6. **Consumer convergence.** Make road sampling, Box2D segment creation,
    feature placement, Quick 3D, and fallback renderers consume resolved
@@ -437,7 +438,7 @@ The implementation is not complete without the following automated coverage:
 - Integer contract tests for difficulty quantization, signed half-away-from-zero
   rounding, rational scaling, interpolation, chain gaps, and metre conversion.
 - Snapshot tests proving deterministic first-use ordering, collision and asset
-  deduplication, stable hashes, valid sentinel/index handling, immutable shared
+  deduplication, stable canonical encoding, valid sentinel/index handling, immutable shared
   ownership, and rejection before oversized allocation.
 - Course codec round trips for the new schema and golden decode/migration tests
   for every older supported schema. Unknown future versions and tampered snapshots must fail with
@@ -489,7 +490,7 @@ The pilot parity gates are:
    1 mm and packaged/development visual fallback behavior is unchanged.
 4. A repeated FT-02 course stores one resolved profile for each distinct
    quantized difficulty, references it by index from every matching piece, and
-   produces the same snapshot hash across repeated builds.
+   produces byte-identical canonical snapshot data across repeated builds.
 5. Loading a legacy course continues to use the pinned FT-02 adapter; loading
    a new-schema pilot course uses its embedded snapshot even when the installed
    catalog's FT-02 profile version is newer.
