@@ -355,7 +355,8 @@ QString requiredString(
 void validateManifestContract(const QJsonObject &manifest)
 {
     const QSet<QString> topLevel = {
-        QStringLiteral("assetId"), QStringLiteral("displayName"),
+        QStringLiteral("manifestVersion"), QStringLiteral("assetId"),
+        QStringLiteral("displayName"),
         QStringLiteral("role"), QStringLiteral("source"),
         QStringLiteral("license"), QStringLiteral("files"),
         QStringLiteral("processing"), QStringLiteral("technical"),
@@ -363,11 +364,17 @@ void validateManifestContract(const QJsonObject &manifest)
         QStringLiteral("runtimeVariants"), QStringLiteral("review"),
     };
     requireObjectShape(manifest,
-            {QStringLiteral("assetId"), QStringLiteral("displayName"),
+            {QStringLiteral("manifestVersion"), QStringLiteral("assetId"),
+             QStringLiteral("displayName"),
              QStringLiteral("role"), QStringLiteral("source"),
              QStringLiteral("license"), QStringLiteral("files"),
              QStringLiteral("technical"), QStringLiteral("review")},
             topLevel, QStringLiteral("manifest"));
+    const QJsonValue manifestVersion = manifest.value(
+            QStringLiteral("manifestVersion"));
+    if (!manifestVersion.isDouble() || manifestVersion.toDouble() != 1.0) {
+        throw BuildError(QStringLiteral("unsupported manifest version"));
+    }
     requiredString(manifest, QStringLiteral("assetId"), QStringLiteral("manifest"), 128);
     requiredString(manifest, QStringLiteral("displayName"), QStringLiteral("manifest"));
     const QSet<QString> roles = {
@@ -1375,24 +1382,18 @@ void validateGlbDocument(
             const QJsonObject surface = physics.value(
                     QStringLiteral("surface")).toObject();
             requireObjectShape(surface,
-                    {QStringLiteral("friction"),
-                     QStringLiteral("rollingResistance"),
+                    {QStringLiteral("coulombFriction"),
                      QStringLiteral("restitution")},
-                    {QStringLiteral("friction"),
-                     QStringLiteral("rollingResistance"),
+                    {QStringLiteral("coulombFriction"),
                      QStringLiteral("restitution")},
                     QStringLiteral("physics surface"));
             const double friction = surface.value(
-                    QStringLiteral("friction")).toDouble(-1.0);
-            const double rolling = surface.value(
-                    QStringLiteral("rollingResistance")).toDouble(-1.0);
+                    QStringLiteral("coulombFriction")).toDouble(-1.0);
             const double restitution = surface.value(
                     QStringLiteral("restitution")).toDouble(-1.0);
-            if (!surface.value(QStringLiteral("friction")).isDouble()
-                    || !surface.value(QStringLiteral("rollingResistance")).isDouble()
+            if (!surface.value(QStringLiteral("coulombFriction")).isDouble()
                     || !surface.value(QStringLiteral("restitution")).isDouble()
                     || !std::isfinite(friction) || friction < 0.0 || friction > 2.0
-                    || !std::isfinite(rolling) || rolling < 0.0 || rolling > 0.1
                     || !std::isfinite(restitution)
                     || restitution < 0.0 || restitution > 0.25) {
                 throw BuildError(QStringLiteral("invalid physics surface values: %1")

@@ -258,6 +258,18 @@ class TestWorkoutGameAssets(unittest.TestCase):
         with self.assertRaisesRegex(assets.AssetValidationError, "unknown property"):
             assets.validate_against_schema(manifest, schema)
 
+    def test_schema_requires_current_manifest_version(self) -> None:
+        manifest = assets.load_json_file(MANIFEST_PATH)
+        schema = assets.load_json_file(SCHEMA_PATH)
+
+        manifest.pop("manifestVersion", None)
+        with self.assertRaisesRegex(assets.AssetValidationError, "manifestVersion"):
+            assets.validate_against_schema(manifest, schema)
+
+        manifest["manifestVersion"] = 2
+        with self.assertRaisesRegex(assets.AssetValidationError, "const"):
+            assets.validate_against_schema(manifest, schema)
+
     def test_schema_requires_complete_coordinate_vectors(self) -> None:
         manifest = assets.load_json_file(MANIFEST_PATH)
         schema = assets.load_json_file(SCHEMA_PATH)
@@ -315,6 +327,21 @@ class TestWorkoutGameAssets(unittest.TestCase):
                 "surface": {
                     "friction": 1.0,
                     "rollingResistance": 0.02,
+                    "restitution": 0.0,
+                },
+                "collisionProxy": {"kind": "none"},
+            }
+            fixture.write_manifest()
+            with self.assertRaisesRegex(
+                assets.AssetValidationError, "coulombFriction|unknown property"
+            ):
+                assets.validate_repository(fixture.root)
+
+            fixture.manifest["physics"] = {
+                "authority": "external",
+                "interaction": "rideable-feature",
+                "surface": {
+                    "coulombFriction": 1.0,
                     "restitution": 0.0,
                 },
                 "collisionProxy": {"kind": "node", "node": "MISSING_NODE"},

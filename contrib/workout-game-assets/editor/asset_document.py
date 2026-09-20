@@ -57,8 +57,7 @@ class AssetDocumentConflict(AssetDocumentError):
 class AssetPhysics:
     authority: str = "external"
     interaction: str = "visual-only"
-    friction: float = 1.0
-    rolling_resistance: float = 0.0
+    coulomb_friction: float = 1.0
     restitution: float = 0.0
     collision_node: str = ""
 
@@ -417,8 +416,7 @@ class AssetDocument:
         self,
         *,
         interaction: str | None = None,
-        friction: float | None = None,
-        rolling_resistance: float | None = None,
+        coulomb_friction: float | None = None,
         restitution: float | None = None,
         collision_node: str | None = None,
     ) -> None:
@@ -433,14 +431,12 @@ class AssetDocument:
         updated = AssetPhysics(
             authority="external",
             interaction=selected_interaction,
-            friction=_finite_range(
-                "friction", self._physics.friction if friction is None else friction, 0.0, 2.0
-            ),
-            rolling_resistance=_finite_range(
-                "rolling resistance",
-                self._physics.rolling_resistance if rolling_resistance is None else rolling_resistance,
+            coulomb_friction=_finite_range(
+                "Coulomb friction",
+                self._physics.coulomb_friction
+                if coulomb_friction is None else coulomb_friction,
                 0.0,
-                0.1,
+                2.0,
             ),
             restitution=_finite_range(
                 "restitution",
@@ -608,8 +604,7 @@ class AssetDocument:
         }
         if self._physics.interaction != "visual-only":
             physics["surface"] = {
-                "friction": self._physics.friction,
-                "rollingResistance": self._physics.rolling_resistance,
+                "coulombFriction": self._physics.coulomb_friction,
                 "restitution": self._physics.restitution,
             }
         physics["collisionProxy"] = (
@@ -699,9 +694,8 @@ class AssetDocument:
         return AssetPhysics(
             authority=authority,
             interaction=interaction,
-            friction=_finite_range("friction", surface.get("friction", 1.0), 0.0, 2.0),
-            rolling_resistance=_finite_range(
-                "rolling resistance", surface.get("rollingResistance", 0.0), 0.0, 0.1
+            coulomb_friction=_finite_range(
+                "Coulomb friction", surface.get("coulombFriction", 1.0), 0.0, 2.0
             ),
             restitution=_finite_range(
                 "restitution", surface.get("restitution", 0.0), 0.0, 0.25

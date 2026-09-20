@@ -5,6 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "manifestVersion",
     "assetId",
     "displayName",
     "role",
@@ -15,6 +16,9 @@
     "review"
   ],
   "properties": {
+    "manifestVersion": {
+      "const": 1
+    },
     "assetId": {
       "type": "string",
       "pattern": "^[A-Z]{2}-[0-9]{2}(-[a-z0-9-]+)?$"
@@ -280,17 +284,12 @@
         "surface": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["friction", "rollingResistance", "restitution"],
+          "required": ["coulombFriction", "restitution"],
           "properties": {
-            "friction": {
+            "coulombFriction": {
               "type": "number",
               "minimum": 0.0,
               "maximum": 2.0
-            },
-            "rollingResistance": {
-              "type": "number",
-              "minimum": 0.0,
-              "maximum": 0.1
             },
             "restitution": {
               "type": "number",

@@ -441,7 +441,7 @@ selector, previous/next controls, fixed review views, framing and a wireframe
 toggle. Blender's normal viewport controls provide orbit, pan and zoom. The
 gallery imports the reviewed GLBs directly. In `--edit` mode it also exposes
 the selected material's color, roughness and metallic factors plus the
-manifest-backed interaction, friction, rolling resistance, restitution and
+manifest-backed interaction, Coulomb friction, restitution and
 collision-proxy settings. **Save** validates every dirty document before
 writing, then replaces each manifest atomically; a conflict with an external
 edit is rejected. A multi-asset save is not one filesystem transaction, so a
