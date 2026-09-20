@@ -137,6 +137,8 @@ exists(unittests.pri) {
 			   Train/virtualGearRuntime \
 			   Train/workoutGameAssetCatalog \
 			   Train/workoutGameAssetPhysicsResolver \
+			   Train/workoutGameAssetPhysicsSampler \
+			   Train/workoutGameAssetPhysicsRoadCourse \
 			   Train/workoutGameCanvas \
 			   Train/workoutGameClock \
 			   Train/workoutGameCompetition \

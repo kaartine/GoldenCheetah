@@ -5,6 +5,7 @@ TARGET = testWorkoutGame3DFeatureAsset
 
 SOURCES = testWorkoutGame3DFeatureAsset.cpp \
           ../../../src/Train/WorkoutGame3DFeatureAsset.cpp \
+          ../../../src/Train/WorkoutGameAssetPhysicsSampler.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \

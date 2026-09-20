@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameRoadCourse.h"
+#include "WorkoutGameAssetPhysicsSampler.h"
 #include "WorkoutGameRoadPlan.h"
 #include "WorkoutGameRoadQuality.h"
 
@@ -111,6 +112,20 @@ double featureSurfaceOffset(
         break;
     }
     return 0.0;
+}
+
+double featureSurfaceOffsetAt(
+        const WorkoutGameRoadCourse &course,
+        std::size_t pieceIndex,
+        double distanceMeters)
+{
+    if (course.assetPhysicsSnapshot) {
+        const WorkoutGameAssetPhysicsSample sample =
+                WorkoutGameAssetPhysicsSampler::sample(
+                    *course.assetPhysicsSnapshot, pieceIndex, distanceMeters);
+        if (sample.bound) return sample.offsetMeters;
+    }
+    return featureSurfaceOffset(course.pieces[pieceIndex], distanceMeters);
 }
 
 double legacyTrailReliefOffset(
@@ -250,13 +265,15 @@ double surfaceOffsetAt(
             course.pieces[index], distanceMeters);
     if (course.challengePieceIndexReady) {
         for (std::size_t candidate : course.challengePieceIndices) {
-            offset += featureSurfaceOffset(
-                    course.pieces[candidate], distanceMeters);
+            offset += featureSurfaceOffsetAt(
+                    course, candidate, distanceMeters);
         }
     } else {
-        for (const WorkoutGameRoadPiece &piece : course.pieces) {
-            if (piece.challenge.enabled) {
-                offset += featureSurfaceOffset(piece, distanceMeters);
+        for (std::size_t candidate = 0;
+                candidate < course.pieces.size(); ++candidate) {
+            if (course.pieces[candidate].challenge.enabled) {
+                offset += featureSurfaceOffsetAt(
+                        course, candidate, distanceMeters);
             }
         }
     }
@@ -268,19 +285,24 @@ double nonPhysicalFeatureOffsetAt(
         double distanceMeters)
 {
     double offset = 0.0;
-    const auto accumulate = [&](const WorkoutGameRoadPiece &piece) {
+    const auto accumulate = [&](std::size_t pieceIndex) {
+        const WorkoutGameRoadPiece &piece = course.pieces[pieceIndex];
         if (piece.terrain == WorkoutGameTerrainKind::BunnyHop
                 || piece.terrain == WorkoutGameTerrainKind::LogOver) {
-            offset += featureSurfaceOffset(piece, distanceMeters);
+            offset += featureSurfaceOffsetAt(
+                    course, pieceIndex, distanceMeters);
         }
     };
     if (course.challengePieceIndexReady) {
         for (std::size_t candidate : course.challengePieceIndices) {
-            accumulate(course.pieces[candidate]);
+            accumulate(candidate);
         }
     } else {
-        for (const WorkoutGameRoadPiece &piece : course.pieces) {
-            if (piece.challenge.enabled) accumulate(piece);
+        for (std::size_t candidate = 0;
+                candidate < course.pieces.size(); ++candidate) {
+            if (course.pieces[candidate].challenge.enabled) {
+                accumulate(candidate);
+            }
         }
     }
     return offset;
@@ -1469,6 +1491,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::materialize(
 
     result.seed = course.seed;
     result.pieces = plan.pieces;
+    result.assetPhysicsSnapshot = plan.assetPhysicsSnapshot;
     result.challengePieceIndexReady = true;
     result.challengePieceIndices.reserve(result.pieces.size());
     for (std::size_t index = 0; index < result.pieces.size(); ++index) {

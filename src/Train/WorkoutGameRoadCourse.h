@@ -12,12 +12,14 @@
 
 #include "WorkoutGameCourse.h"
 #include "WorkoutGameCoursePrescription.h"
+#include "WorkoutGameAssetPhysicsSnapshot.h"
 #include "WorkoutGameFeatureChallenge.h"
 #include "WorkoutGameGapJumpGeometry.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 enum class WorkoutGameRoadAnimation
@@ -141,6 +143,8 @@ struct WorkoutGameRoadCourse
     double totalLengthMeters = 0.0;
     double visualLengthMeters = 0.0;
     std::vector<WorkoutGameRoadPiece> pieces;
+    std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+            assetPhysicsSnapshot;
     bool challengePieceIndexReady = false;
     std::vector<std::size_t> challengePieceIndices;
     std::vector<WorkoutGameRoadTimelineSection> timeline;
