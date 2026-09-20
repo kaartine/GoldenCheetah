@@ -74,6 +74,31 @@ rideFileStartTimeOverride(
     const QFileInfo &source,
     QDateTime &startTime);
 
+class PreparedReaderOutput final
+{
+public:
+    ~PreparedReaderOutput()
+    {
+        if (!ownsRides) return;
+        for (qsizetype index = 0; index < rides.size(); ++index) {
+            RideFile *candidate = rides.at(index);
+            if (!candidate || candidate == primary) continue;
+            bool alreadyDeleted = false;
+            for (qsizetype prior = 0; prior < index; ++prior) {
+                if (rides.at(prior) == candidate) {
+                    alreadyDeleted = true;
+                    break;
+                }
+            }
+            if (!alreadyDeleted) delete candidate;
+        }
+    }
+
+    QList<RideFile *> rides;
+    RideFile *primary = nullptr;
+    bool ownsRides = true;
+};
+
 RideFile::RideFile(const QDateTime &startTime, double recIntSecs) :
             context(nullptr), wstale(true),
             startTime_(startTime), recIntSecs_(recIntSecs),
@@ -1001,6 +1026,80 @@ RideFile *RideFileFactory::openRideFile(
     const RideFileOpenInputs &inputs) const
 {
 
+    std::unique_ptr<RideFilePreparedOpen> prepared =
+        prepareRideFileOpen(file, errors, rideList != nullptr, inputs);
+    if (!prepared) return nullptr;
+
+    RideFile *result = &prepared->ride();
+    result->context = context;
+    const QFileInfo &fileInfo = prepared->source();
+    RideFilePostProcessInputs postInputs;
+    bool hasIntervalMetadataCandidate = false;
+    for (auto tag = result->tags().constBegin();
+         tag != result->tags().constEnd(); ++tag) {
+        if (tag.key().contains("##")) {
+            hasIntervalMetadataCandidate = true;
+            break;
+        }
+    }
+    if (hasIntervalMetadataCandidate) {
+        for (const FieldDefinition &field
+             : GlobalContext::context()->rideMetadata->getFields()) {
+            if (field.interval) {
+                postInputs.orderedIntervalMetadataNames.append(
+                    field.name);
+            }
+        }
+    }
+    if (result->getTag("Notes", "").isEmpty()) {
+        const QString notesFileName = fileInfo.canonicalPath() + '/'
+            + fileInfo.baseName() + ".notes";
+        QFile notesFile(notesFileName);
+        if (notesFile.exists()
+            && notesFile.open(QFile::ReadOnly | QFile::Text)) {
+            QTextStream in(&notesFile);
+            postInputs.notes.readable = true;
+            postInputs.notes.text = in.readAll();
+        }
+    }
+    if (context) {
+        postInputs.athleteTagAvailable = true;
+        postInputs.athleteName = context->athlete->cyclist;
+    }
+    XDataSeries *hrv = result->xdata("HRV");
+    if (hrv && !hrv->datapoints.isEmpty()) {
+        postInputs.hrv.maximum = appsettings->value(
+            nullptr, GC_RR_MAX, "2000.0").toDouble();
+        postInputs.hrv.minimum = appsettings->value(
+            nullptr, GC_RR_MIN, "270.0").toDouble();
+        postInputs.hrv.relativeFilter = appsettings->value(
+            nullptr, GC_RR_FILT, "0.2").toDouble();
+        postInputs.hrv.window = appsettings->value(
+            nullptr, GC_RR_WINDOW, "20").toInt();
+    }
+    if (context) {
+        postInputs.recalculateDerivedSeries = true;
+        QDateTime filenameStartTime;
+        const QDate effectiveDate = rideFileStartTimeOverride(
+            fileInfo, filenameStartTime)
+            ? filenameStartTime.date()
+            : result->startTime().date();
+        postInputs.derivedSeries =
+            rideFileDerivedSeriesInputs(*result, effectiveDate);
+    }
+
+    return finalizePreparedRideFile(
+        std::move(prepared), postInputs, rideList).release();
+}
+
+std::unique_ptr<RideFilePreparedOpen>
+RideFileFactory::prepareRideFileOpen(
+    QFile &file,
+    QStringList &errors,
+    bool collectRideList,
+    const RideFileOpenInputs &inputs) const
+{
+
     // since some file names contain "." as separator, not only for suffixes
     // find the file-type suffix and the compression type in a 2 step approach
     QStringList allNameParts = QFileInfo(file).fileName().split(".");
@@ -1051,7 +1150,10 @@ RideFile *RideFileFactory::openRideFile(
         }
     }
 
-    RideFile *result = nullptr;
+    PreparedReaderOutput readerOutput;
+    std::unique_ptr<RideFile> parsed;
+    QList<RideFile *> *const stagedRideList =
+        collectRideList ? &readerOutput.rides : nullptr;
     if (compression == "zip" || compression == "gz") {
         if (!inputs.compressedTemporaryFiles) {
             errors << QObject::tr("Activity storage is unavailable.");
@@ -1093,15 +1195,17 @@ RideFile *RideFileFactory::openRideFile(
                 "Cannot create a temporary activity file.");
             return nullptr;
         }
-        result = reader->openRideFile(
-            *readerFile, errors, rideList);
+        parsed.reset(reader->openRideFile(
+            *readerFile, errors, stagedRideList));
+        readerOutput.primary = parsed.get();
     } else {
         QFile *readerSource =
             sourceFingerprintAvailable
             ? stagedSource.fileForReading()
             : &file;
-        result = reader->openRideFile(
-            *readerSource, errors, rideList);
+        parsed.reset(reader->openRideFile(
+            *readerSource, errors, stagedRideList));
+        readerOutput.primary = parsed.get();
     }
 
     if (sourceFingerprintAvailable) {
@@ -1115,127 +1219,60 @@ RideFile *RideFileFactory::openRideFile(
         }
     }
 
-    // if it was successful, lets post process the file
-    if (result) {
+    if (!parsed) return nullptr;
 
-        result->context = context;
-        const QFileInfo fileInfo(file.fileName());
-        RideFilePostProcessInputs postInputs;
-        bool hasIntervalMetadataCandidate = false;
-        for (auto tag = result->tags().constBegin();
-             tag != result->tags().constEnd(); ++tag) {
-            if (tag.key().contains("##")) {
-                hasIntervalMetadataCandidate = true;
-                break;
-            }
-        }
-        if (hasIntervalMetadataCandidate) {
-            for (const FieldDefinition &field
-                 : GlobalContext::context()->rideMetadata->getFields()) {
-                if (field.interval) {
-                    postInputs.orderedIntervalMetadataNames.append(
-                        field.name);
-                }
-            }
-        }
-        if (result->getTag("Notes", "").isEmpty()) {
-            const QString notesFileName = fileInfo.canonicalPath() + '/'
-                + fileInfo.baseName() + ".notes";
-            QFile notesFile(notesFileName);
-            if (notesFile.exists()
-                && notesFile.open(QFile::ReadOnly | QFile::Text)) {
-                QTextStream in(&notesFile);
-                postInputs.notes.readable = true;
-                postInputs.notes.text = in.readAll();
-            }
-        }
-        if (context) {
-            postInputs.athleteTagAvailable = true;
-            postInputs.athleteName = context->athlete->cyclist;
-        }
-        XDataSeries *hrv = result->xdata("HRV");
-        if (hrv && !hrv->datapoints.isEmpty()) {
-            postInputs.hrv.maximum = appsettings->value(
-                nullptr, GC_RR_MAX, "2000.0").toDouble();
-            postInputs.hrv.minimum = appsettings->value(
-                nullptr, GC_RR_MIN, "270.0").toDouble();
-            postInputs.hrv.relativeFilter = appsettings->value(
-                nullptr, GC_RR_FILT, "0.2").toDouble();
-            postInputs.hrv.window = appsettings->value(
-                nullptr, GC_RR_WINDOW, "20").toInt();
-        }
-        if (context) {
-            postInputs.recalculateDerivedSeries = true;
-            QDateTime filenameStartTime;
-            const QDate effectiveDate = rideFileStartTimeOverride(
-                fileInfo, filenameStartTime)
-                ? filenameStartTime.date()
-                : result->startTime().date();
-            postInputs.derivedSeries =
-                rideFileDerivedSeriesInputs(*result, effectiveDate);
-        }
-
-        postProcessRideFile(*result, fileInfo, postInputs);
-
-        //foreach(RideFile::seriestype x, result->arePresent()) qDebug()<<"present="<<x;
-
-        // sample code for using XDATA, left here temporarily till we have an
-        // example of using it in a ride file reader
-#if 0
-
-        // ADD XDATA TO RIDEFILE
-
-        // For testing xdata, this code just adds an xdata series
-        // XDataSeries *xdata = new XDataSeries();
-        // xdata->name = "SPEED";
-        // xdata->valuename << "SPEED";
-        // for(int i=0; i<100; i++) {
-        // XDataPoint *p = new XDataPoint();
-        // p->km = i;
-        // p->secs = i;
-        // p->number[0] = i;
-        // xdata->datapoints.append(p);
-        // }
-        // result->addXData("SPEED", xdata);
-
-        // DEBUG OUTPUT TO SHOW XDATA LOADED FROM RIDEFILE
-        // for testing, print out what we loaded
-        if (result->xdata_.count()) {
-
-            // output the xdata series
-            qDebug()<<"XDATA";
-
-            QMapIterator<QString,XDataSeries*> xdata(result->xdata());
-            xdata.toFront();
-            while(xdata.hasNext()) {
-
-                // iterate
-                xdata.next();
-
-                XDataSeries *series = xdata.value();
-
-                // does it have values names?
-                if (series->valuename.isEmpty()) {
-                    qDebug()<<"empty xdata"<<series->name;
-                    continue;
-                } else {
-                    qDebug()<<"xdata" <<series->name<<series->valuename<<series->datapoints.count();
-                }
-
-                // samples
-                if (series->datapoints.count()) {
-                    foreach(XDataPoint *p, series->datapoints)
-                        qDebug()<<"sample:"<<p->secs<<p->km<<p->number[0]<<p->number[1];
-                }
-            }
-        }
-#endif
-
-        if (sourceFingerprintAvailable)
-            result->sourceProvenance_ = sourceFingerprint;
+    std::vector<std::unique_ptr<RideFile>> stagedRideOwners;
+    stagedRideOwners.reserve(
+        static_cast<std::size_t>(readerOutput.rides.size()));
+    for (RideFile *candidate : readerOutput.rides) {
+        if (!candidate || candidate == parsed.get()) continue;
+        const bool alreadyOwned = std::any_of(
+            stagedRideOwners.cbegin(),
+            stagedRideOwners.cend(),
+            [candidate](const std::unique_ptr<RideFile> &owner) {
+                return owner.get() == candidate;
+            });
+        if (!alreadyOwned)
+            stagedRideOwners.emplace_back(candidate);
     }
+    readerOutput.ownsRides = false;
 
-    return result;
+    return std::unique_ptr<RideFilePreparedOpen>(
+        new RideFilePreparedOpen(
+            std::move(parsed),
+            QFileInfo(file.fileName()),
+            std::move(sourceFingerprint),
+            sourceFingerprintAvailable,
+            std::move(readerOutput.rides),
+            std::move(stagedRideOwners)));
+}
+
+std::unique_ptr<RideFile>
+RideFileFactory::finalizePreparedRideFile(
+    std::unique_ptr<RideFilePreparedOpen> prepared,
+    const RideFilePostProcessInputs &inputs,
+    QList<RideFile*> *rideList) const
+{
+    if (!prepared) return nullptr;
+
+    postProcessRideFile(
+        *prepared->ride_, prepared->source_, inputs);
+    if (prepared->sourceFingerprintAvailable_) {
+        prepared->ride_->sourceProvenance_ =
+            prepared->sourceFingerprint_;
+    }
+    if (rideList && !prepared->stagedRideList_.isEmpty()) {
+        QList<RideFile *> published(*rideList);
+        published.append(prepared->stagedRideList_);
+        rideList->swap(published);
+        for (std::unique_ptr<RideFile> &owner
+             : prepared->stagedRideOwners_) {
+            owner.release();
+        }
+        prepared->stagedRideOwners_.clear();
+        prepared->stagedRideList_.clear();
+    }
+    return std::move(prepared->ride_);
 }
 
 static bool

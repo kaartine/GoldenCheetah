@@ -9199,6 +9199,47 @@ commit before the next finding begins.
   the sandbox and therefore supplied no syscall-level cause. The sandboxed
   archive-security run must not be used as this suite's release gate; the
   equivalent unsandboxed 46/46 run remains required.
+- ARCH-003F2c3e4 (prepared parser-finalization prerequisite recorded before
+  correction): The explicit `RideFileOpenInputs` path controls compressed
+  temporary storage but still performs postprocessing through live Context,
+  GlobalContext metadata, settings, sidecar-note, athlete, zone, and derived-
+  series lookups inside `openRideFile()`. Introduce a move-only prepared parse
+  that owns the parsed `RideFile` and authenticated source provenance without
+  publishing either postprocessing or provenance. A separate value-only
+  finalize operation must consume `RideFilePostProcessInputs`, preserve the
+  exact mutation/provenance order, and transfer ownership only on success;
+  the Context overload remains the compatibility adapter. This prerequisite
+  must not yet be called a worker-ready builder or partially switch weight,
+  zones, CPX, metrics, or interval discovery.
+- ARCH-003F2c3e4a (prepared parser ownership defect recorded before
+  correction): The first extraction adopts the reader's raw primary result
+  only after staged-source fingerprint revalidation. Any exception during
+  that intervening allocation/I/O work leaks the parsed RideFile. Adopt the
+  raw return into RAII ownership in the same full expression before doing any
+  subsequent work, and retain that ownership through every early return.
+- ARCH-003F2c3e4b (prepared list-publication defect recorded before
+  correction): Some multi-ride readers append the primary result to the
+  caller-provided `rideList` as well as returning it. A prepared transaction
+  that simultaneously owns that primary can therefore leave a dangling list
+  entry when preparation/finalization fails or is discarded. Stage reader
+  list output privately, identify and withhold every alias of the owned
+  primary until successful finalization, and preserve secondary-result order
+  and legacy publication behavior without introducing double ownership.
+- ARCH-003F2c3e4c (reader call-graph prerequisite recorded before correction):
+  Although the new factory prepare/finalize bodies contain no live Context,
+  GlobalContext, settings, or athlete lookup, reader implementations remain
+  plugin-style code and at least FIT and PWX readers read `appsettings`
+  internally. Do not describe the complete parse call graph as value-only or
+  worker-ready. Inventory and inject reader-specific immutable inputs before
+  any worker cutover; this is a separate prerequisite, not authority to
+  broaden the current ownership transaction into every format parser.
+- ARCH-003F2c3e4d (duplicate staged-result test gap recorded before
+  correction): Independent review found that prepared-list ownership tests
+  cover a primary alias and one unique secondary result but do not exercise a
+  reader appending the same secondary pointer more than once. Add an explicit
+  duplicate alias to the test reader and prove that discard destroys each
+  object exactly once while successful finalization preserves the reader's
+  ordered list output and transfers only one ownership obligation.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -10591,12 +10632,57 @@ commit before the next finding begins.
   ARCH-003F2c3. Concurrent compressed parses each retain one bounded archive
   workspace/file, so aggregate disk and descriptor pressure remains bounded by
   the caller's workset rather than a central queue.
+- ARCH-003F2c3e4 resolution: RideFileFactory now exposes a move-only prepared
+  parse transaction that owns the parsed RideFile, original source identity,
+  and authenticated source fingerprint without performing postprocessing or
+  publishing provenance. A separate value-only finalizer consumes explicit
+  `RideFilePostProcessInputs`, performs the existing mutation sequence, then
+  publishes provenance and transfers RideFile ownership. The raw parser return
+  is adopted in the same full expression before fingerprint revalidation or
+  any other subsequent work. Reader list output is staged privately; unique
+  secondary results are owned once even when the reader repeats pointers, and
+  every primary alias and the original list order are preserved. Finalization
+  copies and appends to the caller list off to the side, swaps only after
+  postprocessing and provenance succeed, and releases staged ownership only
+  after publication. Thus null, exception, failure, and discard paths leave
+  the caller list unchanged and destroy every staged object exactly once. The
+  Context overload is now only a compatibility adapter: it attaches Context,
+  lazily captures the same metadata, notes, athlete, RR-filter, effective-date,
+  and derived-series inputs in their original order, then delegates to the
+  finalizer.
+- ARCH-003F2c3e4 verification: the expanded RideFile ownership/value suite
+  passes 34/34 normally and under ASan/UBSan/LeakSanitizer. Its new cases pin
+  unpublished timestamp/tags/provenance before finalization, ordered interval
+  metadata, readable notes, an empty-but-present athlete tag, ownership on
+  discard and after transfer, duplicate secondary-pointer de-duplication,
+  ordered list publication, and the absence of live Context, GlobalContext,
+  settings, athlete, sidecar-file, or postprocess fallback in the explicit
+  factory stages. The compressed workspace/provenance regression and all
+  related failure contracts pass 8/8 normally; the complete cache suite passes
+  60/60 normally and under ASan/UBSan/LeakSanitizer outside the sandbox. Its
+  sandbox-only 59/60 result is the already recorded missing cache-directory
+  environment baseline, not a parser regression. Production `RideFile.cpp`,
+  its moc consumer, and `RideItem.cpp` compile with warnings as errors; source
+  dependencies pass 14/14, and the linker, CI-runner, header-path, and
+  `git diff --check` policies pass. Independent review first returned NO-GO
+  for the raw-primary exception leak and premature multi-ride list publication,
+  then returned GO after both fixes, with no blocker or major finding. Its
+  duplicate-secondary test observation was recorded as ARCH-003F2c3e4d and
+  closed by the passing ownership test above.
+- ARCH-003F2c3e4 residual: this is deliberately not a worker-ready builder.
+  Parser registry/reader execution remains shared; FIT and PWX reader call
+  graphs still read `appsettings` as tracked by ARCH-003F2c3e4c. Production
+  callers still use the compatibility adapter, and no retained postprocess
+  inputs are wired into the refresh builder. The bound cutover still requires
+  immutable reader-specific inputs plus resolved weight, concrete zone ranges,
+  CPX inputs, metric-execution inputs, and interval discovery inputs to move as
+  one generation-consistent transaction.
 - ARCH-003F2c3e residual: this is a prerequisite seam only. The parser and all
   existing production callers still use the compatibility adapter; the bound
   refresh must not supply retained postprocess/derived inputs until weight,
   concrete zone ranges, CPX, metric execution, and interval discovery can move
-  as one generation-consistent transaction. Compressed temporary-file
-  capability and the worker cutover remain separate work under ARCH-003F2c3.
+  as one generation-consistent transaction. The worker cutover remains
+  separate work under ARCH-003F2c3.
 - ARCH-003F2c3a residual: generation-bound `checkStale` still writes color,
   weight, CRC, and stale state in the worker, as tracked by ARCH-003F3c2. The
   builder's remaining live environment consumers are tracked by ARCH-003F2c3,

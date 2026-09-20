@@ -91,6 +91,61 @@ void compareDerivedSeries(const RideFile &actual, const RideFile &expected)
     QCOMPARE(left->slope, right->slope);
 }
 
+int preparedRideDestructions = 0;
+
+class PreparedTestRideFile final : public RideFile
+{
+public:
+    ~PreparedTestRideFile() override
+    {
+        ++preparedRideDestructions;
+    }
+};
+
+class PreparedTestReader final : public RideFileReader
+{
+public:
+    RideFile *openRideFile(
+        QFile &,
+        QStringList &,
+        QList<RideFile *> *rideList) const override
+    {
+        auto *ride = new PreparedTestRideFile;
+        ride->setStartTime(
+            QDateTime(QDate(2001, 2, 3), QTime(4, 5, 6)));
+        ride->setFileFormat(QStringLiteral("prepared test"));
+        ride->addInterval(
+            RideFileInterval::DEVICE,
+            10.0,
+            15.0,
+            QStringLiteral("lap"));
+        ride->setTag(
+            QStringLiteral("lap##Field"),
+            QStringLiteral("prepared"));
+        if (rideList) {
+            rideList->append(ride);
+            auto *secondary = new PreparedTestRideFile;
+            rideList->append(secondary);
+            rideList->append(secondary);
+        }
+        return ride;
+    }
+
+    bool requiresOriginalSourcePath() const override
+    {
+        return false;
+    }
+};
+
+void registerPreparedTestReader()
+{
+    static PreparedTestReader reader;
+    RideFileFactory::instance().registerReader(
+        QStringLiteral("prepared"),
+        QStringLiteral("prepared-open test"),
+        &reader);
+}
+
 } // namespace
 
 class TestableRideFile : public RideFile
@@ -132,7 +187,217 @@ private slots:
     void postProcessUsesExplicitDerivedInputs();
     void postProcessImplementationHasNoLiveFallback();
     void openRideFileCapturesEffectiveDateBeforePostProcess();
+    void preparedOpenDefersPublicationUntilFinalize();
+    void preparedOpenOwnsRideUntilDiscarded();
+    void preparedOpenStagesRideListUntilFinalize();
+    void preparedOpenDiscardsUnpublishedRideList();
+    void preparedOpenImplementationHasNoLiveFallback();
 };
+
+void TestRideFileOwnership::preparedOpenDefersPublicationUntilFinalize()
+{
+    registerPreparedTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("2026_09_20_12_34_56.prepared"));
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(QByteArrayLiteral("prepared source")), qint64(15));
+    source.close();
+
+    preparedRideDestructions = 0;
+    QStringList errors;
+    RideFileOpenInputs openInputs;
+    std::unique_ptr<RideFilePreparedOpen> prepared =
+        RideFileFactory::instance().prepareRideFileOpen(
+            source, errors, false, openInputs);
+
+    QVERIFY2(prepared, qPrintable(errors.join(QLatin1Char('\n'))));
+    QCOMPARE(preparedRideDestructions, 0);
+    QCOMPARE(prepared->ride().context, nullptr);
+    QCOMPARE(
+        prepared->ride().startTime(),
+        QDateTime(QDate(2001, 2, 3), QTime(4, 5, 6)));
+    QVERIFY(!prepared->ride().tags().contains(QStringLiteral("Filename")));
+    QVERIFY(!prepared->ride().sourceProvenanceMatchesForTest(sourcePath));
+
+    RideFilePostProcessInputs postInputs;
+    postInputs.orderedIntervalMetadataNames = {QStringLiteral("Field")};
+    postInputs.notes.readable = true;
+    postInputs.notes.text = QStringLiteral("explicit notes");
+    postInputs.athleteTagAvailable = true;
+    postInputs.athleteName = QString();
+    std::unique_ptr<RideFile> finalized =
+        RideFileFactory::instance().finalizePreparedRideFile(
+            std::move(prepared), postInputs);
+
+    QVERIFY(!prepared);
+    QVERIFY(finalized);
+    QCOMPARE(preparedRideDestructions, 0);
+    QCOMPARE(
+        finalized->startTime(),
+        QDateTime(QDate(2026, 9, 20), QTime(12, 34, 56)));
+    QCOMPARE(
+        finalized->getTag(QStringLiteral("Filename"), QString()),
+        QStringLiteral("2026_09_20_12_34_56.prepared"));
+    QCOMPARE(
+        finalized->getTag(QStringLiteral("Notes"), QString()),
+        QStringLiteral("explicit notes"));
+    QVERIFY(finalized->tags().contains(QStringLiteral("Athlete")));
+    QCOMPARE(
+        finalized->intervals().constFirst()->getTag(
+            QStringLiteral("Field"), QString()),
+        QStringLiteral("prepared"));
+    QVERIFY(finalized->sourceProvenanceMatchesForTest(sourcePath));
+
+    finalized.reset();
+    QCOMPARE(preparedRideDestructions, 1);
+}
+
+void TestRideFileOwnership::preparedOpenOwnsRideUntilDiscarded()
+{
+    registerPreparedTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("discarded.prepared"));
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(QByteArrayLiteral("discard")), qint64(7));
+    source.close();
+
+    preparedRideDestructions = 0;
+    QStringList errors;
+    std::unique_ptr<RideFilePreparedOpen> prepared =
+        RideFileFactory::instance().prepareRideFileOpen(
+            source, errors, false, RideFileOpenInputs {});
+    QVERIFY2(prepared, qPrintable(errors.join(QLatin1Char('\n'))));
+    QVERIFY(!prepared->ride().sourceProvenanceMatchesForTest(sourcePath));
+
+    prepared.reset();
+    QCOMPARE(preparedRideDestructions, 1);
+}
+
+void TestRideFileOwnership::preparedOpenStagesRideListUntilFinalize()
+{
+    registerPreparedTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("listed.prepared"));
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(QByteArrayLiteral("listed")), qint64(6));
+    source.close();
+
+    RideFile preexisting;
+    QList<RideFile *> rides {&preexisting};
+    preparedRideDestructions = 0;
+    QStringList errors;
+    std::unique_ptr<RideFilePreparedOpen> prepared =
+        RideFileFactory::instance().prepareRideFileOpen(
+            source, errors, true, RideFileOpenInputs {});
+    QVERIFY2(prepared, qPrintable(errors.join(QLatin1Char('\n'))));
+    QCOMPARE(rides, QList<RideFile *> {&preexisting});
+
+    std::unique_ptr<RideFile> finalized =
+        RideFileFactory::instance().finalizePreparedRideFile(
+            std::move(prepared), RideFilePostProcessInputs {}, &rides);
+    QVERIFY(finalized);
+    QCOMPARE(rides.size(), 4);
+    QCOMPARE(rides.at(0), &preexisting);
+    QCOMPARE(rides.at(1), finalized.get());
+    QVERIFY(rides.at(2));
+    QVERIFY(rides.at(2) != finalized.get());
+    QCOMPARE(rides.at(3), rides.at(2));
+
+    RideFile *secondary = rides.at(2);
+    rides.clear();
+    delete secondary;
+    finalized.reset();
+    QCOMPARE(preparedRideDestructions, 2);
+}
+
+void TestRideFileOwnership::preparedOpenDiscardsUnpublishedRideList()
+{
+    registerPreparedTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("discarded-list.prepared"));
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(QByteArrayLiteral("discard")), qint64(7));
+    source.close();
+
+    QList<RideFile *> rides;
+    preparedRideDestructions = 0;
+    QStringList errors;
+    std::unique_ptr<RideFilePreparedOpen> prepared =
+        RideFileFactory::instance().prepareRideFileOpen(
+            source, errors, true, RideFileOpenInputs {});
+    QVERIFY2(prepared, qPrintable(errors.join(QLatin1Char('\n'))));
+    QVERIFY(rides.isEmpty());
+
+    prepared.reset();
+    QVERIFY(rides.isEmpty());
+    QCOMPARE(preparedRideDestructions, 2);
+}
+
+void TestRideFileOwnership::preparedOpenImplementationHasNoLiveFallback()
+{
+    const QDir root(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)));
+    QFile source(root.filePath(QStringLiteral("src/FileIO/RideFile.cpp")));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QByteArray contents = source.readAll();
+    const qsizetype prepare = contents.indexOf(
+        "RideFileFactory::prepareRideFileOpen(");
+    const qsizetype finalize = contents.indexOf(
+        "RideFileFactory::finalizePreparedRideFile(", prepare + 1);
+    const qsizetype afterFinalize = contents.indexOf(
+        "\nstatic bool\nrideFileStartTimeOverride(", finalize + 1);
+    QVERIFY(prepare >= 0);
+    QVERIFY(finalize > prepare);
+    QVERIFY(afterFinalize > finalize);
+
+    const QByteArray prepareBody = contents.mid(
+        prepare, finalize - prepare);
+    QVERIFY(!prepareBody.contains("GlobalContext"));
+    QVERIFY(!prepareBody.contains("context"));
+    QVERIFY(!prepareBody.contains("appsettings"));
+    QVERIFY(!prepareBody.contains("athlete"));
+    QVERIFY(!prepareBody.contains("postProcessRideFile"));
+    QVERIFY(!prepareBody.contains("sourceProvenance_ ="));
+    const qsizetype adoptParsed = prepareBody.indexOf(
+        "parsed.reset(reader->openRideFile(");
+    const qsizetype validateFingerprint = prepareBody.indexOf(
+        "RideFileCRC::ContentFingerprint stagedAfterParse;");
+    QVERIFY(adoptParsed >= 0);
+    QVERIFY(validateFingerprint > adoptParsed);
+
+    const QByteArray finalizeBody = contents.mid(
+        finalize, afterFinalize - finalize);
+    QVERIFY(!finalizeBody.contains("GlobalContext"));
+    QVERIFY(!finalizeBody.contains("context"));
+    QVERIFY(!finalizeBody.contains("appsettings"));
+    QVERIFY(!finalizeBody.contains("athlete"));
+    QVERIFY(!finalizeBody.contains("QTextStream"));
+    QVERIFY(!finalizeBody.contains("notesFile"));
+    const qsizetype postProcess = finalizeBody.indexOf(
+        "postProcessRideFile(");
+    const qsizetype publishProvenance = finalizeBody.indexOf(
+        "sourceProvenance_ =");
+    const qsizetype transferOwnership = finalizeBody.indexOf(
+        "return std::move(prepared->ride_);");
+    const qsizetype publishRideList = finalizeBody.indexOf(
+        "rideList->swap(published);");
+    QVERIFY(postProcess >= 0);
+    QVERIFY(publishProvenance > postProcess);
+    QVERIFY(publishRideList > publishProvenance);
+    QVERIFY(transferOwnership > publishRideList);
+    QVERIFY(transferOwnership > publishProvenance);
+}
 
 void TestRideFileOwnership::postProcessPreservesValueInputsAndOrdering()
 {
@@ -310,10 +575,14 @@ void TestRideFileOwnership::openRideFileCapturesEffectiveDateBeforePostProcess()
     QFile source(root.filePath(QStringLiteral("src/FileIO/RideFile.cpp")));
     QVERIFY(source.open(QIODevice::ReadOnly));
     const QByteArray contents = source.readAll();
-    const qsizetype implementation = contents.indexOf(
+    const qsizetype firstOverload = contents.indexOf(
         "RideFile *RideFileFactory::openRideFile(");
+    const qsizetype implementation = contents.indexOf(
+        "RideFile *RideFileFactory::openRideFile(", firstOverload + 1);
     const qsizetype nextMethod = contents.indexOf(
-        "\nstatic bool\nrideFileStartTimeOverride(", implementation + 1);
+        "\nstd::unique_ptr<RideFilePreparedOpen>\n"
+        "RideFileFactory::prepareRideFileOpen(", implementation + 1);
+    QVERIFY(firstOverload >= 0);
     QVERIFY(implementation >= 0);
     QVERIFY(nextMethod > implementation);
     const QByteArray body = contents.mid(
@@ -325,12 +594,12 @@ void TestRideFileOwnership::openRideFileCapturesEffectiveDateBeforePostProcess()
         "const QDate effectiveDate = rideFileStartTimeOverride(");
     const qsizetype captureDerivedInputs = body.indexOf(
         "rideFileDerivedSeriesInputs(*result, effectiveDate);");
-    const qsizetype postProcess = body.indexOf(
-        "postProcessRideFile(*result, fileInfo, postInputs);");
+    const qsizetype finalize = body.indexOf(
+        "finalizePreparedRideFile(");
     QVERIFY(attachContext >= 0);
     QVERIFY(resolveEffectiveDate > attachContext);
     QVERIFY(captureDerivedInputs > resolveEffectiveDate);
-    QVERIFY(postProcess > captureDerivedInputs);
+    QVERIFY(finalize > captureDerivedInputs);
     const QByteArray effectiveDateSelection = body.mid(
         resolveEffectiveDate,
         captureDerivedInputs - resolveEffectiveDate);

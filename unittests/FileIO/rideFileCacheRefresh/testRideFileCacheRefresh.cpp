@@ -2228,11 +2228,11 @@ void TestRideFileCacheRefresh::compressedFactoryUsesNamedPrivateWorkspace()
 
     QFile source(sourcePath);
     QStringList errors;
-    std::unique_ptr<RideFile> ride(
-        RideFileFactory::instance().openRideFile(
-            nullptr, source, errors, nullptr, inputs));
+    std::unique_ptr<RideFilePreparedOpen> prepared =
+        RideFileFactory::instance().prepareRideFileOpen(
+            source, errors, false, inputs);
 
-    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+    QVERIFY2(prepared, qPrintable(errors.join(QLatin1Char('\n'))));
     QCOMPARE(CompressedActivityFile::rideFileTestExtractCalls, 1);
     const QString openedPath =
         provenanceTestReader().openedPathForTest();
@@ -2243,6 +2243,13 @@ void TestRideFileCacheRefresh::compressedFactoryUsesNamedPrivateWorkspace()
                 .absolutePath().startsWith(
         directory.path() + QStringLiteral("/gc-ride-")));
     QVERIFY(!QFileInfo::exists(openedPath));
+    QVERIFY(!prepared->ride().sourceProvenanceMatchesForTest(sourcePath));
+    QVERIFY(!prepared->ride().tags().contains(QStringLiteral("Filename")));
+
+    std::unique_ptr<RideFile> ride =
+        RideFileFactory::instance().finalizePreparedRideFile(
+            std::move(prepared), RideFilePostProcessInputs {});
+    QVERIFY(ride);
     QVERIFY(ride->sourceProvenanceMatchesForTest(sourcePath));
 #ifdef Q_OS_UNIX
     const QFileDevice::Permissions broadPermissions =

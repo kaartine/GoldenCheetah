@@ -35,6 +35,7 @@
 #include <QRegExp>
 
 #include <memory>
+#include <vector>
 
 class RideItem;
 class RideCache;
@@ -43,6 +44,7 @@ class Specification;
 class IntervalItem;
 class WPrime;
 class RideFile;
+class RideFilePreparedOpen;
 class XDataSeries;
 class XDataPoint;
 struct RideFilePoint;
@@ -219,6 +221,7 @@ class RideFile : public QObject // QObject to emit signals
 
         // file format writers have more access
         friend class RideFileFactory;
+        friend class RideFilePreparedOpen;
         friend struct FitlogFileReader;
         friend struct GcFileReader;
         friend class TcxFileReader;
@@ -736,6 +739,46 @@ struct RideFileReader {
     virtual bool writeRideFile(Context *, const RideFile *, QFile &) const { return false; }
 };
 
+class RideFilePreparedOpen final
+{
+public:
+    RideFilePreparedOpen(const RideFilePreparedOpen &) = delete;
+    RideFilePreparedOpen &operator=(const RideFilePreparedOpen &) = delete;
+    RideFilePreparedOpen(RideFilePreparedOpen &&) noexcept = default;
+    RideFilePreparedOpen &operator=(RideFilePreparedOpen &&) noexcept = default;
+    ~RideFilePreparedOpen() = default;
+
+    const RideFile &ride() const { return *ride_; }
+    RideFile &ride() { return *ride_; }
+    const QFileInfo &source() const { return source_; }
+
+private:
+    friend class RideFileFactory;
+
+    RideFilePreparedOpen(
+        std::unique_ptr<RideFile> ride,
+        QFileInfo source,
+        RideFile::SourceFingerprint sourceFingerprint,
+        bool sourceFingerprintAvailable,
+        QList<RideFile *> stagedRideList,
+        std::vector<std::unique_ptr<RideFile>> stagedRideOwners)
+        : ride_(std::move(ride))
+        , source_(std::move(source))
+        , sourceFingerprint_(std::move(sourceFingerprint))
+        , sourceFingerprintAvailable_(sourceFingerprintAvailable)
+        , stagedRideList_(std::move(stagedRideList))
+        , stagedRideOwners_(std::move(stagedRideOwners))
+    {
+    }
+
+    std::unique_ptr<RideFile> ride_;
+    QFileInfo source_;
+    RideFile::SourceFingerprint sourceFingerprint_;
+    bool sourceFingerprintAvailable_ = false;
+    QList<RideFile *> stagedRideList_;
+    std::vector<std::unique_ptr<RideFile>> stagedRideOwners_;
+};
+
 class MetricAggregator;
 class AthleteCard;
 class RideFileFactory {
@@ -774,6 +817,15 @@ class RideFileFactory {
             QStringList &errors,
             QList<RideFile*> *rideList,
             const RideFileOpenInputs &inputs) const;
+        std::unique_ptr<RideFilePreparedOpen> prepareRideFileOpen(
+            QFile &file,
+            QStringList &errors,
+            bool collectRideList,
+            const RideFileOpenInputs &inputs) const;
+        std::unique_ptr<RideFile> finalizePreparedRideFile(
+            std::unique_ptr<RideFilePreparedOpen> prepared,
+            const RideFilePostProcessInputs &inputs,
+            QList<RideFile*> *rideList = nullptr) const;
         void postProcessRideFile(
             RideFile &ride,
             const QFileInfo &source,

@@ -11,7 +11,8 @@ win32:LIBS += -ladvapi32
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
-DEFINES += GC_TEST_SOURCE_ROOT="$${GC_TEST_SOURCE_ROOT}"
+DEFINES += GC_TEST_SOURCE_ROOT="$${GC_TEST_SOURCE_ROOT}" \
+           GC_RIDE_FILE_SOURCE_PROVENANCE_TEST_HOOKS
 
 SOURCES = testRideFileOwnership.cpp \
           RideFileOwnershipTestStubs.cpp \
