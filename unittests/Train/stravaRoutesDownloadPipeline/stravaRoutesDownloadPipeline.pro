@@ -18,6 +18,7 @@ SOURCES = testStravaRoutesDownloadPipeline.cpp \
           ../../../src/FileIO/GpxParser.cpp \
           ../../../src/FileIO/LocationInterpolation.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileTemporaryWorkspace.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/Metrics/BlinnSolver.cpp \

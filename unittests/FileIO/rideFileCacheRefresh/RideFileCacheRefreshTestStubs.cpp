@@ -96,12 +96,21 @@ GlobalContext::context()
 
 namespace CompressedActivityFile {
 
+bool rideFileTestExtractCompressed = false;
+int rideFileTestExtractCalls = 0;
+
 bool extractSingleFile(
-    std::unique_ptr<QIODevice>,
+    std::unique_ptr<QIODevice> source,
     Format,
-    QIODevice *)
+    QIODevice *destination)
 {
-    return false;
+    ++rideFileTestExtractCalls;
+    if (!rideFileTestExtractCompressed
+        || !source || !destination) {
+        return false;
+    }
+    const QByteArray contents = source->readAll();
+    return destination->write(contents) == contents.size();
 }
 
 } // namespace CompressedActivityFile

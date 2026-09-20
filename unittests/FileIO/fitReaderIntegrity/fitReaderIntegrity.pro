@@ -6,6 +6,7 @@ TEMPLATE = app
 TARGET = tst_fitReaderIntegrity
 
 include(../../unittests.pri)
+win32:LIBS += -ladvapi32
 
 GC_TEST_SOURCE_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../..)
 DEFINES += GC_TEST_SOURCE_ROOT=\\\"$${GC_TEST_SOURCE_ROOT}\\\"
@@ -18,6 +19,8 @@ SOURCES = testFitReaderIntegrity.cpp \
           FitReaderIntegrityTestStubs.cpp \
           ../atomicActivitySave/RideFileTestStubs.cpp \
           $$PWD/../../../src/FileIO/RideFile.cpp \
+          $$PWD/../../../src/FileIO/RideFileTemporaryWorkspace.cpp \
+          $$PWD/../../../src/FileIO/AnchoredFileSystem.cpp \
           $$PWD/../../../src/FileIO/RideFileCRC.cpp \
           $$PWD/../../../src/FileIO/RideFileCommand.cpp \
           $$PWD/../../../src/FileIO/FitFileIntegrity.cpp \

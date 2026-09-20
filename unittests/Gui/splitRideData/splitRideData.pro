@@ -6,6 +6,7 @@ TEMPLATE = app
 TARGET = tst_splitRideData
 
 include(../../unittests.pri)
+win32:LIBS += -ladvapi32
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
@@ -16,6 +17,8 @@ SOURCES = testSplitRideData.cpp \
           ../../FileIO/RideFileSettingsTestStubs.cpp \
           ../../../src/Gui/SplitRideData.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileTemporaryWorkspace.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp
 

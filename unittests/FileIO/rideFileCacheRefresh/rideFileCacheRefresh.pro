@@ -6,6 +6,7 @@ TEMPLATE = app
 TARGET = tst_rideFileCacheRefresh
 
 include(../../unittests.pri)
+win32:LIBS += -ladvapi32
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
@@ -15,6 +16,8 @@ DEFINES += GC_RIDE_FILE_CACHE_TEST_HOOKS \
 SOURCES = testRideFileCacheRefresh.cpp \
           RideFileCacheRefreshTestStubs.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileTemporaryWorkspace.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           ../../../src/FileIO/RideFileCache.cpp \

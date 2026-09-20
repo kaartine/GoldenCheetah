@@ -6,6 +6,7 @@ TEMPLATE = app
 TARGET = tst_tcxPointBudget
 
 include(../../unittests.pri)
+win32:LIBS += -ladvapi32
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
@@ -15,6 +16,8 @@ SOURCES = testTcxPointBudget.cpp \
           TcxPointBudgetTestStubs.cpp \
           ../atomicActivitySave/RideFileTestStubs.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileTemporaryWorkspace.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           ../../../src/FileIO/TcxParser.cpp \

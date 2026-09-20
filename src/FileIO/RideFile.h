@@ -22,6 +22,7 @@
 #include "RideFileCRC.h"
 #include "RideFileDerivedSeriesInputs.h"
 #include "RideFilePostProcessInputs.h"
+#include "RideFileTemporaryWorkspace.h"
 
 #include <QDate>
 #include <QDir>
@@ -767,6 +768,12 @@ class RideFileFactory {
         int registerReader(const QString &suffix, const QString &description,
                            RideFileReader *reader);
         RideFile *openRideFile(Context *context, QFile &file, QStringList &errors, QList<RideFile*>* = 0) const;
+        RideFile *openRideFile(
+            Context *context,
+            QFile &file,
+            QStringList &errors,
+            QList<RideFile*> *rideList,
+            const RideFileOpenInputs &inputs) const;
         void postProcessRideFile(
             RideFile &ride,
             const QFileInfo &source,

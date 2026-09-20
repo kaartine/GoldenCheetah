@@ -9148,6 +9148,44 @@ commit before the next finding begins.
   consulted it after seeing a tag containing `##`. Preserve that lazy lookup
   before capturing the ordered interval fields; the cache-refresh harness
   deliberately has no GlobalContext and must keep parsing ordinary rides.
+- ARCH-003F2c3e3 (compressed temporary capability recorded before correction):
+  The compressed parser branch selects temporary storage through live
+  `Context -> Athlete -> home` state. Introduce a FileIO-owned creation
+  capability that owns one private named workspace/file pair through the
+  reader call, and let the compatibility overload capture the current athlete
+  temp root before delegating. Do not switch the bound worker in this commit.
+- ARCH-003F2c3e3a (unnamed temporary-file reopen risk found by planning review
+  and recorded before correction): The current `QTemporaryFile` is closed
+  before readers reopen it by path; platforms using an unnamed temporary file
+  can report a successful open without a reusable filename. Create a named
+  `activity.<exact inner suffix>` file inside a random owner-only directory,
+  retain both with RAII through the reader call, and test name, permissions,
+  cleanup, absence/failure errors, and non-use for unknown or uncompressed
+  inputs.
+- ARCH-003F2c3e3b (unanchored temporary-root replacement risk found by
+  independent review and recorded before correction): The first capability
+  draft retained only a root pathname and protected permissions with POSIX
+  mode bits. A replaced root/workspace name could therefore redirect the
+  close-before-reader-reopen path, while Windows inherited ACLs and macOS
+  extended ACLs were not proven private. Anchor and validate the current-user
+  controlled root, create the random private child with the cross-platform
+  anchored filesystem primitive, retain and revalidate its identity through
+  parsing, and test root symlink/replacement rejection and private cleanup.
+- ARCH-003F2c3e3c (Windows test-link dependency found by policy verification
+  and recorded before correction): Adding `AnchoredFileSystem.cpp` to the
+  direct `RideFile.cpp` unit-test targets also adds its Windows security API
+  dependency. Link `advapi32` in every affected qmake test project and keep the
+  repository linker-policy check green.
+- ARCH-003F2c3e3d (archive-security fixture drift found during supporting
+  verification and recorded before any correction): The independently built
+  archive-security suite passes its real gzip/zip single-activity and safety
+  cases but currently fails four unrelated directory/selective-extraction
+  cases (`preservesExistingDirectoryPermissions`,
+  `extractsOnlyRequestedArchiveMembers`, `returnsNormalizedRequestedMember`,
+  and `extractsValidNestedFiles`). Reproduce against the branch predecessor,
+  determine whether hardened destination-root prerequisites made these
+  fixtures stale, and correct tests or production behavior only under a
+  separately reviewed work item.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -10460,6 +10498,45 @@ commit before the next finding begins.
   the effective-date regression-test gap, then returned GO after that fix and
   the separately discovered lazy-metadata regression, with no blocker or
   major correctness finding remaining.
+- ARCH-003F2c3e3/F2c3e3a resolution: compressed parsing now receives a
+  FileIO-owned temporary-file creation capability. The compatibility overload
+  captures the athlete temporary root and delegates, while the explicit path
+  remains Context-free. Each compressed parse creates a named
+  `activity.<inner suffix>` in a random private child and retains its writer,
+  reader, workspace, and cleanup lifetime through the parser call; unknown and
+  uncompressed inputs do not invoke the capability. Existing storage,
+  creation, and invalid-archive error strings and original compressed-source
+  provenance semantics are preserved.
+- ARCH-003F2c3e3b resolution: the capability opens and validates the root with
+  `AnchoredFileSystem`, creates the child with the cross-platform private
+  directory primitive, revalidates its identity, pins the extracted file, and
+  resolves an anchored reader path before parsing. Linux uses the held
+  directory descriptor through `/proc/self/fd`; Windows protected DACL and
+  macOS ACL handling are supplied by the shared anchored primitive. Cleanup
+  removes only the pinned generation and anchored directory and fails closed
+  after path replacement.
+- ARCH-003F2c3e3c resolution: every direct RideFile test target that newly
+  compiles `AnchoredFileSystem.cpp` now links `advapi32` on Windows.
+- ARCH-003F2c3e3 verification: five focused capability cases pass 7/7 normally
+  and under ASan/UBSan with leak detection disabled, covering exact inner
+  suffixes, private permissions, distinct names, cleanup, lazy non-use, exact
+  errors, provenance, root symlink rejection, and workspace replacement. The
+  full cache suite passes 59/60; its sole failure is the previously recorded
+  `savedRideRebindsAndPersistsAtomically` cache-directory prerequisite. The
+  RideFile ownership suite passes 29/29 normally and under ASan/UBSan. Real
+  single-activity gzip/zip and their safety-limit cases pass in the supporting
+  archive suite; its four unrelated failures are queued as ARCH-003F2c3e3d.
+  Production `RideFile.cpp` and `RideFileTemporaryWorkspace.cpp` compile with
+  warnings as errors, source dependencies pass 14/14, the linker policy and
+  `git diff --check` pass, and independent review returned GO with no blocker,
+  major, or minor finding.
+- ARCH-003F2c3e3 residual: native Windows and macOS behavior relies on the
+  reviewed shared `AnchoredFileSystem` implementation but was not executed in
+  this Linux workspace; native CI remains required. The compatibility adapter
+  still reads the live athlete-home root, and the worker cutover remains under
+  ARCH-003F2c3. Concurrent compressed parses each retain one bounded archive
+  workspace/file, so aggregate disk and descriptor pressure remains bounded by
+  the caller's workset rather than a central queue.
 - ARCH-003F2c3e residual: this is a prerequisite seam only. The parser and all
   existing production callers still use the compatibility adapter; the bound
   refresh must not supply retained postprocess/derived inputs until weight,

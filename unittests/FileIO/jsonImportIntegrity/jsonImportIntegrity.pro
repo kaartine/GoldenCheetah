@@ -15,6 +15,7 @@ SOURCES = testJsonImportIntegrity.cpp \
           ../atomicActivitySave/RideFileTestStubs.cpp \
           ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileTemporaryWorkspace.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp
 

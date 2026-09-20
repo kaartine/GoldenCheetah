@@ -38,7 +38,6 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QTemporaryFile>
 
 #include <QtXml/QtXml>
 #include <algorithm> // for std::lower_bound
@@ -985,6 +984,22 @@ RideFileReader *RideFileFactory::readerForSuffix(QString suffix) const
 RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
                                            QStringList &errors, QList<RideFile*> *rideList) const
 {
+    RideFileOpenInputs inputs;
+    if (context && context->athlete && context->athlete->home) {
+        inputs.compressedTemporaryFiles =
+            rideFileTemporaryWorkspaceForRoot(
+                context->athlete->home->temp().absolutePath());
+    }
+    return openRideFile(context, file, errors, rideList, inputs);
+}
+
+RideFile *RideFileFactory::openRideFile(
+    Context *context,
+    QFile &file,
+    QStringList &errors,
+    QList<RideFile*> *rideList,
+    const RideFileOpenInputs &inputs) const
+{
 
     // since some file names contain "." as separator, not only for suffixes
     // find the file-type suffix and the compression type in a 2 step approach
@@ -1038,20 +1053,19 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
 
     RideFile *result = nullptr;
     if (compression == "zip" || compression == "gz") {
-        if (!context || !context->athlete || !context->athlete->home) {
+        if (!inputs.compressedTemporaryFiles) {
             errors << QObject::tr("Activity storage is unavailable.");
             return nullptr;
         }
 
-        const QString fileTemplate = QDir(
-            context->athlete->home->temp().absolutePath()).filePath(
-                QStringLiteral("gc-ride-XXXXXX.%1").arg(suffix));
-        QTemporaryFile uncompressedFile(fileTemplate);
-        if (!uncompressedFile.open()) {
+        std::unique_ptr<RideFileTemporaryFile> temporary =
+            inputs.compressedTemporaryFiles->createForSuffix(suffix);
+        if (!temporary) {
             errors << QObject::tr(
                 "Cannot create a temporary activity file.");
             return nullptr;
         }
+        QFile &uncompressedFile = temporary->file();
 
         const QString compressedPath =
             sourceFingerprintAvailable
@@ -1073,8 +1087,14 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
             return nullptr;
         }
         uncompressedFile.close();
+        QFile *readerFile = temporary->fileForReading();
+        if (!readerFile) {
+            errors << QObject::tr(
+                "Cannot create a temporary activity file.");
+            return nullptr;
+        }
         result = reader->openRideFile(
-            uncompressedFile, errors, rideList);
+            *readerFile, errors, rideList);
     } else {
         QFile *readerSource =
             sourceFingerprintAvailable

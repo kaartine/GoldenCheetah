@@ -6,6 +6,7 @@ TEMPLATE = app
 TARGET = tst_plannedActivityFileStager
 
 include(../../unittests.pri)
+win32:LIBS += -ladvapi32
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
@@ -14,6 +15,8 @@ SOURCES = testPlannedActivityFileStager.cpp \
           PlannedActivityFileStagerTestStubs.cpp \
           ../../../src/Core/PlannedActivityFileStager.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileTemporaryWorkspace.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp
 

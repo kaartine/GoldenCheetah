@@ -38,6 +38,11 @@
 #include <utility>
 #include <vector>
 
+namespace CompressedActivityFile {
+extern bool rideFileTestExtractCompressed;
+extern int rideFileTestExtractCalls;
+}
+
 #ifdef Q_OS_WIN
 #include <io.h>
 #include <qt_windows.h>
@@ -199,9 +204,15 @@ public:
     {
         QString currentPath = file.fileName();
         currentPath.detach();
+        QString canonicalPath = QFileInfo(file).canonicalFilePath();
+        canonicalPath.detach();
         {
             QMutexLocker locker(&openedPathMutex);
             openedPath = std::move(currentPath);
+            openedCanonicalPath = std::move(canonicalPath);
+            openedPermissions = QFileInfo(file).permissions();
+            openedDirectoryPermissions = QFileInfo(
+                QFileInfo(file).absolutePath()).permissions();
         }
         if (!file.isOpen()
             && !file.open(QIODevice::ReadOnly)) {
@@ -255,9 +266,45 @@ public:
         return snapshot;
     }
 
+    QString openedCanonicalPathForTest() const
+    {
+        QMutexLocker locker(&openedPathMutex);
+        QString snapshot = openedCanonicalPath;
+        snapshot.detach();
+        return snapshot;
+    }
+
+    QFileDevice::Permissions openedPermissionsForTest() const
+    {
+        QMutexLocker locker(&openedPathMutex);
+        return openedPermissions;
+    }
+
+    QFileDevice::Permissions openedDirectoryPermissionsForTest() const
+    {
+        QMutexLocker locker(&openedPathMutex);
+        return openedDirectoryPermissions;
+    }
+
 private:
     mutable QMutex openedPathMutex;
     mutable QString openedPath;
+    mutable QString openedCanonicalPath;
+    mutable QFileDevice::Permissions openedPermissions;
+    mutable QFileDevice::Permissions openedDirectoryPermissions;
+};
+
+class CountingTemporaryWorkspace final : public RideFileTemporaryWorkspace
+{
+public:
+    std::unique_ptr<RideFileTemporaryFile> createForSuffix(
+        const QString &) const override
+    {
+        ++calls;
+        return {};
+    }
+
+    mutable int calls = 0;
 };
 
 class PathDependentTestReader final : public RideFileReader
@@ -562,6 +609,11 @@ private slots:
     void changedAnalysisInputsRejectDependentFastPaths();
     void aggregateBindingsRejectChangedAnalysisInputs();
     void factoryCapturesSourceProvenance();
+    void compressedFactoryUsesNamedPrivateWorkspace();
+    void compressedFactoryPreservesFailureContracts();
+    void temporaryCapabilityIsLazyAndCreatesDistinctFiles();
+    void temporaryWorkspaceRejectsReplacedPaths();
+    void compressedPathDependentReaderStaysUnprovenanced();
     void factoryLeavesUnauditedReaderUnprovenanced();
     void factoryLeavesPathDependentReaderUnprovenanced();
     void factoryRejectsParserMutatedStage();
@@ -584,6 +636,8 @@ private slots:
 void TestRideFileCacheRefresh::cleanup()
 {
     RideFileCache::setContextPersistenceFallbackHookForTest({});
+    CompressedActivityFile::rideFileTestExtractCompressed = false;
+    CompressedActivityFile::rideFileTestExtractCalls = 0;
 }
 
 void TestRideFileCacheRefresh::
@@ -2156,6 +2210,231 @@ TestRideFileCacheRefresh::factoryCapturesSourceProvenance()
             QDate(2026, 7, 29),
             QTime(12, 34, 56)));
     QVERIFY(ride->sourceProvenanceMatchesForTest(sourcePath));
+}
+
+void TestRideFileCacheRefresh::compressedFactoryUsesNamedPrivateWorkspace()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("archive.with.dots.PROVENANCE.gz"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+    RideFileOpenInputs inputs;
+    inputs.compressedTemporaryFiles =
+        rideFileTemporaryWorkspaceForRoot(directory.path());
+    CompressedActivityFile::rideFileTestExtractCompressed = true;
+    CompressedActivityFile::rideFileTestExtractCalls = 0;
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors, nullptr, inputs));
+
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+    QCOMPARE(CompressedActivityFile::rideFileTestExtractCalls, 1);
+    const QString openedPath =
+        provenanceTestReader().openedPathForTest();
+    QVERIFY(QDir::isAbsolutePath(openedPath));
+    QCOMPARE(QFileInfo(openedPath).fileName(),
+             QStringLiteral("activity.PROVENANCE"));
+    QVERIFY(QFileInfo(provenanceTestReader().openedCanonicalPathForTest())
+                .absolutePath().startsWith(
+        directory.path() + QStringLiteral("/gc-ride-")));
+    QVERIFY(!QFileInfo::exists(openedPath));
+    QVERIFY(ride->sourceProvenanceMatchesForTest(sourcePath));
+#ifdef Q_OS_UNIX
+    const QFileDevice::Permissions broadPermissions =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup
+        | QFileDevice::ExeGroup | QFileDevice::ReadOther
+        | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    QCOMPARE(provenanceTestReader().openedPermissionsForTest()
+                 & broadPermissions,
+             QFileDevice::Permissions {});
+    QCOMPARE(provenanceTestReader().openedDirectoryPermissionsForTest()
+                 & broadPermissions,
+             QFileDevice::Permissions {});
+#endif
+}
+
+void TestRideFileCacheRefresh::compressedFactoryPreservesFailureContracts()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("source.provenance.gz"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+
+    QFile sourceWithoutCapability(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> absent(
+        RideFileFactory::instance().openRideFile(
+            nullptr,
+            sourceWithoutCapability,
+            errors,
+            nullptr,
+            RideFileOpenInputs {}));
+    QVERIFY(!absent);
+    QCOMPARE(errors, QStringList {
+        QStringLiteral("Activity storage is unavailable.")});
+
+    RideFileOpenInputs createFailureInputs;
+    createFailureInputs.compressedTemporaryFiles =
+        rideFileTemporaryWorkspaceForRoot(
+            directory.filePath(QStringLiteral("missing/root")));
+    QFile sourceCreateFailure(sourcePath);
+    errors.clear();
+    std::unique_ptr<RideFile> createFailure(
+        RideFileFactory::instance().openRideFile(
+            nullptr,
+            sourceCreateFailure,
+            errors,
+            nullptr,
+            createFailureInputs));
+    QVERIFY(!createFailure);
+    QCOMPARE(errors, QStringList {
+        QStringLiteral("Cannot create a temporary activity file.")});
+
+    RideFileOpenInputs decodeFailureInputs;
+    decodeFailureInputs.compressedTemporaryFiles =
+        rideFileTemporaryWorkspaceForRoot(directory.path());
+    CompressedActivityFile::rideFileTestExtractCompressed = false;
+    QFile sourceDecodeFailure(sourcePath);
+    errors.clear();
+    std::unique_ptr<RideFile> decodeFailure(
+        RideFileFactory::instance().openRideFile(
+            nullptr,
+            sourceDecodeFailure,
+            errors,
+            nullptr,
+            decodeFailureInputs));
+    QVERIFY(!decodeFailure);
+    QCOMPARE(errors, QStringList {
+        QStringLiteral(
+            "Compressed activity file is invalid or exceeds safety limits.")});
+    QCOMPARE(QDir(directory.path()).entryList(
+                 QDir::Dirs | QDir::NoDotAndDotDot,
+                 QDir::Name),
+             QStringList {});
+}
+
+void TestRideFileCacheRefresh::temporaryCapabilityIsLazyAndCreatesDistinctFiles()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    auto counting = std::make_shared<CountingTemporaryWorkspace>();
+    RideFileOpenInputs inputs;
+    inputs.compressedTemporaryFiles = counting;
+
+    const QString plainPath = directory.filePath(
+        QStringLiteral("source.provenance"));
+    writeFileBytes(plainPath, QByteArrayLiteral("source-a"));
+    QFile plain(plainPath);
+    QStringList errors;
+    std::unique_ptr<RideFile> plainRide(
+        RideFileFactory::instance().openRideFile(
+            nullptr, plain, errors, nullptr, inputs));
+    QVERIFY2(plainRide, qPrintable(errors.join(QLatin1Char('\n'))));
+    QCOMPARE(counting->calls, 0);
+
+    const QString unknownPath = directory.filePath(
+        QStringLiteral("source.unknown.gz"));
+    writeFileBytes(unknownPath, QByteArrayLiteral("source-a"));
+    QFile unknown(unknownPath);
+    errors.clear();
+    std::unique_ptr<RideFile> unknownRide(
+        RideFileFactory::instance().openRideFile(
+            nullptr, unknown, errors, nullptr, inputs));
+    QVERIFY(!unknownRide);
+    QCOMPARE(counting->calls, 0);
+
+    const auto workspace =
+        rideFileTemporaryWorkspaceForRoot(directory.path());
+    std::unique_ptr<RideFileTemporaryFile> first =
+        workspace->createForSuffix(QStringLiteral("fit"));
+    std::unique_ptr<RideFileTemporaryFile> second =
+        workspace->createForSuffix(QStringLiteral("fit"));
+    QVERIFY(first);
+    QVERIFY(second);
+    QVERIFY(!first->file().fileName().isEmpty());
+    QVERIFY(first->file().fileName() != second->file().fileName());
+    const QString firstPath = first->file().fileName();
+    const QString secondPath = second->file().fileName();
+    first.reset();
+    second.reset();
+    QVERIFY(!QFileInfo::exists(firstPath));
+    QVERIFY(!QFileInfo::exists(secondPath));
+}
+
+void TestRideFileCacheRefresh::temporaryWorkspaceRejectsReplacedPaths()
+{
+#ifdef Q_OS_UNIX
+    QTemporaryDir target;
+    QTemporaryDir links;
+    QVERIFY(target.isValid());
+    QVERIFY(links.isValid());
+    const QString rootLink = links.filePath(QStringLiteral("root-link"));
+    QVERIFY(QFile::link(target.path(), rootLink));
+    const auto linkedWorkspace =
+        rideFileTemporaryWorkspaceForRoot(rootLink);
+    QVERIFY(!linkedWorkspace->createForSuffix(QStringLiteral("fit")));
+
+    const auto workspace =
+        rideFileTemporaryWorkspaceForRoot(target.path());
+    std::unique_ptr<RideFileTemporaryFile> temporary =
+        workspace->createForSuffix(QStringLiteral("fit"));
+    QVERIFY(temporary);
+    QCOMPARE(temporary->file().write(QByteArrayLiteral("safe")), 4);
+    QVERIFY(temporary->file().flush());
+    temporary->file().close();
+
+    const QString originalDirectory =
+        QFileInfo(temporary->file().fileName()).absolutePath();
+    const QString movedDirectory =
+        originalDirectory + QStringLiteral("-moved");
+    QVERIFY(QDir().rename(originalDirectory, movedDirectory));
+    QVERIFY(QDir().mkdir(originalDirectory));
+    QVERIFY(!temporary->fileForReading());
+
+    temporary.reset();
+    QVERIFY(QDir().rmdir(originalDirectory));
+    QVERIFY(QDir(movedDirectory).removeRecursively());
+#else
+    QSKIP("Path replacement coverage is Unix-specific");
+#endif
+}
+
+void TestRideFileCacheRefresh::compressedPathDependentReaderStaysUnprovenanced()
+{
+    static PathDependentTestReader reader;
+    RideFileFactory::instance().registerReader(
+        QStringLiteral("dependent"),
+        QStringLiteral("path-dependent test"),
+        &reader);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("source.dependent.gz"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+    RideFileOpenInputs inputs;
+    inputs.compressedTemporaryFiles =
+        rideFileTemporaryWorkspaceForRoot(directory.path());
+    CompressedActivityFile::rideFileTestExtractCompressed = true;
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors, nullptr, inputs));
+
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+    QCOMPARE(QFileInfo(reader.openedPath).fileName(),
+             QStringLiteral("activity.dependent"));
+    QVERIFY(!QFileInfo::exists(reader.openedPath));
+    QVERIFY(!ride->sourceProvenanceMatchesForTest(sourcePath));
 }
 
 void
