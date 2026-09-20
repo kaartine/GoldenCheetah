@@ -88,7 +88,7 @@ private slots:
     {
         auto snapshot = triangleSnapshot();
         snapshot.bindings[0].nativeForwardOriginMm = -1020;
-        snapshot.bindings[0].nativeUpExtentMm = 350;
+        snapshot.bindings[0].nativeUpExtentMm = 540;
         snapshot.bindings[0].resolvedExtentMm = 700;
 
         const WorkoutGameAssetRenderTransform transform =
@@ -98,7 +98,7 @@ private slots:
                  QStringLiteral("FT-02-log-over-greybox"));
         QCOMPARE(transform.obstacleAnchorMeters, 10.0);
         QCOMPARE(transform.forwardScale, 700.0 / 540.0);
-        QCOMPARE(transform.upScale, 2.0);
+        QCOMPARE(transform.upScale, 700.0 / 540.0);
         QCOMPARE(transform.forwardExtentMeters, 0.7);
         QCOMPARE(transform.upExtentMeters, 0.7);
         QCOMPARE(transform.assetStartDistanceMeters,
@@ -108,6 +108,22 @@ private slots:
         QCOMPARE(WorkoutGameAssetPhysicsSampler::renderTransform(snapshot, 0)
                     .status,
                  WorkoutGameAssetRenderFitStatus::Invalid);
+    }
+
+    void rejectsRenderMetadataThatDoesNotDescribeThePackagedFt02Mesh()
+    {
+        auto snapshot = triangleSnapshot();
+        snapshot.bindings[0].nativeForwardOriginMm = -1020;
+
+        for (const auto &corrupt : {
+                 std::pair<std::int32_t, std::uint32_t>{-900, 540},
+                 std::pair<std::int32_t, std::uint32_t>{-1020, 350}}) {
+            snapshot.bindings[0].nativeForwardOriginMm = corrupt.first;
+            snapshot.bindings[0].nativeUpExtentMm = corrupt.second;
+            QCOMPARE(WorkoutGameAssetPhysicsSampler::renderTransform(
+                         snapshot, 0).status,
+                     WorkoutGameAssetRenderFitStatus::Invalid);
+        }
     }
 
     void handlesUnboundLegacyAndInvalidIndicesWithoutDereferencing()

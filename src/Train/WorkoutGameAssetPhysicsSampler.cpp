@@ -133,10 +133,17 @@ WorkoutGameAssetRenderFit WorkoutGameAssetPhysicsSampler::renderFit(
     }
     const WorkoutGameAssetPhysicsBinding &binding =
             snapshot.bindings[piece.bindingIndex];
+    const bool supportedFt02RenderFit =
+            binding.assetId != QStringLiteral("FT-02-log-over-greybox")
+            || (binding.variantKey.isEmpty()
+                && binding.nativeForwardOriginMm == -1020
+                && binding.nativeForwardExtentMm == 540
+                && binding.nativeUpExtentMm == 540);
     if (binding.definitionIndex != piece.definitionIndex
             || binding.nativeForwardExtentMm == 0
             || binding.nativeUpExtentMm == 0
-            || binding.resolvedExtentMm == 0) {
+            || binding.resolvedExtentMm == 0
+            || !supportedFt02RenderFit) {
         result.status = WorkoutGameAssetRenderFitStatus::Invalid;
         return result;
     }

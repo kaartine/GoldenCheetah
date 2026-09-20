@@ -11,14 +11,18 @@ SOURCES = testWorkoutGame3DFeatureAsset.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \
           ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
-          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp
+          ../../../src/Train/WorkoutGameGapJumpGeometry.cpp \
+          ../../../src/Train/WorkoutGameMesh.cpp \
+          ../../../src/Train/WorkoutGameRoadProjection.cpp
 
 HEADERS = ../../../src/Train/WorkoutGame3DFeatureAsset.h \
           ../../../src/Train/WorkoutGameAssetPhysicsSampler.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameFeatureGeometry.h \
           ../../../src/Train/WorkoutGameGapJumpGeometry.h \
-          ../../../src/Train/WorkoutGameTabletopGeometry.h
+          ../../../src/Train/WorkoutGameTabletopGeometry.h \
+          ../../../src/Train/WorkoutGameMesh.h \
+          ../../../src/Train/WorkoutGameRoadProjection.h
 
 include(../../unittests.pri)
 

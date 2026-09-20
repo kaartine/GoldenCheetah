@@ -32,6 +32,52 @@
 #include <limits>
 #include <utility>
 
+namespace {
+
+WorkoutGameRoadCourse roadWithAssetObstacle(
+        double totalLengthMeters,
+        double obstacleAnchorMeters,
+        std::shared_ptr<WorkoutGameCourseAssetPhysicsSnapshot> &snapshot)
+{
+    WorkoutGameRoadCourse road;
+    road.ready = true;
+    road.seed = 0x51f2u;
+    road.totalLengthMeters = totalLengthMeters;
+    road.visualLengthMeters = totalLengthMeters;
+    WorkoutGameRoadPiece piece;
+    piece.terrain = WorkoutGameTerrainKind::SmoothTrail;
+    piece.lengthMeters = totalLengthMeters;
+    piece.relief.enabled = true;
+    piece.exit.halfWidthMeters = piece.entry.halfWidthMeters;
+    road.pieces.push_back(piece);
+
+    snapshot = std::make_shared<WorkoutGameCourseAssetPhysicsSnapshot>();
+    snapshot->catalogSchemaVersion = 1;
+    WorkoutGameAssetPhysicsDefinition definition;
+    definition.coulombFrictionMilli = 1100;
+    definition.chains = {{{{-276, 0}, {-270, 0},
+                            {270, 540}, {276, 540}}}};
+    snapshot->physicsDefinitions.push_back(definition);
+    WorkoutGameAssetPhysicsBinding asset;
+    asset.assetId = QStringLiteral("FT-02-log-over-greybox");
+    asset.definitionIndex = 0;
+    asset.nativeForwardOriginMm = -1020;
+    asset.nativeForwardExtentMm = 540;
+    asset.nativeUpExtentMm = 540;
+    asset.resolvedExtentMm = 540;
+    snapshot->bindings.push_back(asset);
+    WorkoutGameAssetPhysicsPieceBinding binding;
+    binding.definitionIndex = 0;
+    binding.bindingIndex = 0;
+    binding.obstacleAnchorMm = std::int32_t(std::llround(
+            obstacleAnchorMeters * 1000.0));
+    snapshot->pieceBindings.push_back(binding);
+    road.assetPhysicsSnapshot = snapshot;
+    return road;
+}
+
+}
+
 class TestWorkoutGameWorld : public QObject
 {
     Q_OBJECT
@@ -337,6 +383,63 @@ private slots:
             QVERIFY2(physics.update(input).ready,
                      qPrintable(QStringLiteral("grade=%1").arg(grade)));
         }
+    }
+
+    void distantAssetObstacleDoesNotLosePrecisionBeforeWindowClipping()
+    {
+        std::shared_ptr<WorkoutGameCourseAssetPhysicsSnapshot> snapshot;
+        const WorkoutGameRoadCourse road = roadWithAssetObstacle(
+                66000.0, 10.0, snapshot);
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+
+        WorkoutGamePhysicsInput input;
+        input.courseDistanceMeters = 65536.0;
+        const WorkoutGameWorldSnapshot frame = physics.update(input);
+        QVERIFY(frame.ready);
+        QCOMPARE(frame.rider.distanceMeters, 65536.0);
+    }
+
+    void longCourseAssetObstacleUsesRebasedMillimeterCoordinates()
+    {
+        std::shared_ptr<WorkoutGameCourseAssetPhysicsSnapshot> snapshot;
+        const WorkoutGameRoadCourse road = roadWithAssetObstacle(
+                66000.0, 65536.0, snapshot);
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+
+        WorkoutGamePhysicsInput input;
+        input.courseDistanceMeters = 65534.0;
+        QVERIFY(physics.update(input).ready);
+        input.workoutTimeMs = 20;
+        input.courseDistanceMeters = 65536.0;
+        QVERIFY(physics.update(input).ready);
+    }
+
+    void failedRebaseDisablesPhysicsWithoutUsingDestroyedBox2DState()
+    {
+        std::shared_ptr<WorkoutGameCourseAssetPhysicsSnapshot> snapshot;
+        const WorkoutGameRoadCourse road = roadWithAssetObstacle(
+                1000.0, 500.0, snapshot);
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+
+        WorkoutGamePhysicsInput input;
+        input.courseDistanceMeters = 0.0;
+        QVERIFY(physics.update(input).ready);
+
+        const WorkoutGameAssetPhysicsDefinition validDefinition =
+                snapshot->physicsDefinitions.front();
+        snapshot->physicsDefinitions.front().chains = {{{{0, 0}, {1, 0}}}};
+        input.workoutTimeMs = 20;
+        input.courseDistanceMeters = 500.0;
+        input.paused = true;
+        QVERIFY(!physics.update(input).ready);
+
+        snapshot->physicsDefinitions.front() = validDefinition;
+        input.workoutTimeMs = 40;
+        input.terrain = WorkoutGameTerrainKind::Roots;
+        QVERIFY(!physics.update(input).ready);
     }
 
     void authoritativeDistanceKeepsTerrainOffsetLocalToTheVehicle()

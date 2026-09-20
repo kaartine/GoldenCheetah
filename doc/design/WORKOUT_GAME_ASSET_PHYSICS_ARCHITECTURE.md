@@ -169,13 +169,17 @@ sampling and Box2D segment emission are implemented end to end.
   canonical comparison, or deduplication.
 - FT-02 v1 uses its separately versioned faceted-log evaluator to emit the
   resolved integer polyline directly. It brackets steep facet changes only
-  when every final world-space segment, after the course grade is applied and
-  coordinates are converted to `float`, remains longer than Box2D's 5 mm
-  linear slop. The resolver adds a 6 mm flat support segment at each end and
-  the world preflights the final segments before creating any Box2D shape.
-  Failure is closed rather than delegated to a Box2D assertion. This evaluator
-  is checked at every difficulty permille for valid final segments and is
-  covered at difficulty 0, 0.5, and 1 by the 2 mm legacy parity gate.
+  when every final segment, after the course grade is applied and local
+  rebased coordinates are converted to `float`, remains longer than Box2D's
+  5 mm linear slop. The resolver adds a 6 mm flat support segment at each end.
+  The world preflights every segment in an obstacle-local coordinate frame,
+  excludes segments outside the active terrain window in `double` precision,
+  and only then converts in-window coordinates to Box2D `float` values. A
+  failed initial build or rebase permanently disables that physics instance;
+  it cannot continue with destroyed Box2D bodies or joints. Failure is closed
+  rather than delegated to a Box2D assertion. This evaluator is checked at
+  every difficulty permille for valid final segments and is covered at
+  difficulty 0, 0.5, and 1 by the 2 mm legacy parity gate.
   Production writing remains on schema 6 until legacy migration calls this
   frozen evaluator and stores its complete resolved definition.
 - Runtime conversion is exactly `meters = millimeters / 1000.0`. Interpolation
@@ -194,6 +198,14 @@ reconstruct it as
 metres. Profile coordinates remain integer millimetres; the remainder prevents
 the course anchor itself from moving by almost half a millimetre during
 snapshot materialization.
+
+The FT-02 pilot has one packaged visual coordinate contract: an empty variant,
+`nativeForwardOriginMm == -1020`, `nativeForwardExtentMm == 540`, and
+`nativeUpExtentMm == 540`. Runtime render fitting rejects any persisted FT-02
+binding that claims different native geometry. With those fixed values, the
+packaged mesh obstacle at native forward coordinates 0.75--1.29 m and the
+procedural fallback both span the resolved collision interval symmetrically
+about the micrometre-precise obstacle anchor.
 
 ### Collision-proxy conversion
 

@@ -81,9 +81,8 @@ public:
         }
         chain.points.front().heightMm = 0;
         chain.points.back().heightMm = 0;
-        // Preserve the zero-height socket across the worst half-millimetre
-        // anchor quantization error. Six millimetres also keeps these flat
-        // support segments above Box2D's five-millimetre linear slop.
+        // Keep the flat support facets above Box2D's five-millimetre linear
+        // slop after the profile is projected onto every supported road grade.
         chain.points.insert(chain.points.begin(), {
             chain.points.front().forwardMm - SupportPaddingMm, 0
         });
