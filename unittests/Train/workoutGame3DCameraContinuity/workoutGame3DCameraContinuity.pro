@@ -19,6 +19,7 @@ SOURCES += testWorkoutGame3DCameraContinuity.cpp \
            ../../../src/Train/WorkoutGameCoursePrescription.cpp \
            ../../../src/Train/WorkoutGameDiagnostics.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
+           ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.cpp \
            ../../../src/Train/WorkoutGameRoadPlan.cpp \
            ../../../src/Train/WorkoutGameRoadQuality.cpp \
            ../../../src/Train/WorkoutGameRoadPhysics.cpp \

@@ -12,6 +12,7 @@ SOURCES = testWorkoutGameFeatureRuntime.cpp \
           ../../../src/Train/WorkoutGameGapJumpLaunchWindow.cpp \
           ../../../src/Train/WorkoutGameGapJumpSelector.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
+          ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.cpp \
           ../../../src/Train/WorkoutGameRoadPlan.cpp \
           ../../../src/Train/WorkoutGameRoadQuality.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp

@@ -27,6 +27,7 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGameDistancePlayback.cpp \
            ../../../src/Train/WorkoutGameDiagnostics.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
+           ../../../src/Train/WorkoutGameAssetPhysicsSnapshot.cpp \
            ../../../src/Train/WorkoutGameRoadPlan.cpp \
            ../../../src/Train/WorkoutGameRoadQuality.cpp \
            ../../../src/Train/WorkoutGameRoadPhysics.cpp \
