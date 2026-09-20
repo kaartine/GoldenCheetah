@@ -21,10 +21,12 @@
 #include "GoldenCheetah.h"
 #include "RideFileCRC.h"
 #include "RideFileDerivedSeriesInputs.h"
+#include "RideFilePostProcessInputs.h"
 
 #include <QDate>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QList>
 #include <QMap>
 #include <QVector>
@@ -765,6 +767,10 @@ class RideFileFactory {
         int registerReader(const QString &suffix, const QString &description,
                            RideFileReader *reader);
         RideFile *openRideFile(Context *context, QFile &file, QStringList &errors, QList<RideFile*>* = 0) const;
+        void postProcessRideFile(
+            RideFile &ride,
+            const QFileInfo &source,
+            const RideFilePostProcessInputs &inputs) const;
         bool writeRideFile(Context *context, const RideFile *ride, QFile &file, QString format) const;
         QStringList suffixes() const;
         QStringList writeSuffixes() const;

@@ -35,8 +35,24 @@ bool extractSingleFile(
 
 } // namespace CompressedActivityFile
 
-void FilterHrv(XDataSeries *, double, double, double, int)
+int rideFileTestFilterHrvCalls = 0;
+double rideFileTestFilterHrvMinimum = 0.0;
+double rideFileTestFilterHrvMaximum = 0.0;
+double rideFileTestFilterHrvRelative = 0.0;
+int rideFileTestFilterHrvWindow = 0;
+
+void FilterHrv(
+    XDataSeries *,
+    double minimum,
+    double maximum,
+    double relative,
+    int window)
 {
+    ++rideFileTestFilterHrvCalls;
+    rideFileTestFilterHrvMinimum = minimum;
+    rideFileTestFilterHrvMaximum = maximum;
+    rideFileTestFilterHrvRelative = relative;
+    rideFileTestFilterHrvWindow = window;
 }
 
 double Specification::secsStart() const

@@ -9118,6 +9118,36 @@ commit before the next finding begins.
   code permits the ride's CP metadata override only in the latter case. Carry
   domain presence explicitly in the value input and cover both zero-CP states
   before accepting the compatibility adapter.
+- ARCH-003F2c3e2 (parser postprocess prerequisite recorded before correction):
+  After a reader returns, `RideFileFactory::openRideFile()` still consults live
+  metadata definitions, a `.notes` sidecar, athlete identity, RR-filter
+  settings, zones, and wheel-size settings before publishing source
+  provenance. Capture those inputs at the same post-parse points in the legacy
+  adapter and move the mutation algorithm behind a FileIO-owned value-only
+  postprocess seam. Preserve ordered interval-field matching, tri-state notes,
+  empty-but-present athlete tags, RR defaults, derived-series ordering, and
+  provenance timing. This prerequisite must not yet move compressed temporary
+  storage or switch the bound worker to the new seam.
+- ARCH-003F2c3e2a (filename-time capture ordering regression recorded before
+  correction): The first value-seam draft captured dated zone inputs before
+  applying the legacy filename timestamp override, although the original
+  postprocess resolved zones afterward. Resolve the effective filename time
+  once and use its date for derived-input capture as well as the RideFile
+  mutation. Nonmatching names retain the parser timestamp; matching but
+  invalid date components retain the legacy invalid-timestamp behavior.
+- ARCH-003F2c3e2a1 (effective-date regression test gap found by independent
+  review and recorded before correction): The initial tests proved filename
+  timestamp mutation and explicit derived inputs separately, so they would
+  still pass if the adapter reverted to capturing zones from the parser date.
+  Pin valid, nonmatching, and matching-invalid filename behavior and assert
+  that the shared effective date feeds derived-input capture before the
+  value-only postprocess call.
+- ARCH-003F2c3e2b (eager metadata-registry lookup found by regression testing
+  and recorded before correction): The first adapter draft dereferenced the
+  global metadata registry for every parsed ride, while the legacy loop only
+  consulted it after seeing a tag containing `##`. Preserve that lazy lookup
+  before capturing the ordered interval fields; the cache-refresh harness
+  deliberately has no GlobalContext and must keep parsing ordinary rides.
 - ARCH-003F3 (required publication item recorded before correction): A worker
   currently mutates `RideItem` in place before the generation acceptance check,
   so an invalidated generation can expose partial or stale results even when
@@ -10396,12 +10426,46 @@ commit before the next finding begins.
   14/14, the linker-section policy check passes, and `git diff --check` is
   clean. Independent review first returned NO-GO for the corrected CP-domain
   ambiguity and then GO with no remaining blocker, major, or minor finding.
+- ARCH-003F2c3e2 resolution: parser postprocessing now receives one
+  FileIO-owned value containing ordered interval-field names, tri-state legacy
+  notes, athlete-tag presence/value, RR-filter scalars, and explicit
+  derived-series inputs. The extracted mutation path performs interval-tag
+  transfer, timestamp override, special tags, sample/interval/developer-data
+  normalization, HRV filtering, derived calculation, data-presence update,
+  and CIQ decoding without reading Context, GlobalContext, settings, or file
+  contents. The compatibility adapter retains provenance publication after
+  all postprocessing and retains the original lazy metadata-registry lookup.
+- ARCH-003F2c3e2a/F2c3e2a1 resolution: one shared filename-time resolver feeds
+  both the RideFile timestamp mutation and the effective date used to capture
+  zone-derived inputs. Focused cases pin valid matching, nonmatching, and
+  matching-invalid filename behavior, while a source-order contract binds
+  context attachment, effective-date selection, derived-input capture, and
+  the subsequent value-only call in that order.
+- ARCH-003F2c3e2b resolution: ordered interval fields are captured only when
+  the parsed tag map contains a `##` candidate, matching the legacy lookup's
+  lazy precondition. The broader cache-refresh harness again parses ordinary
+  rides without a GlobalContext and reaches all tests instead of crashing.
+- ARCH-003F2c3e2 verification: the expanded RideFile ownership/value suite
+  passes 29/29 normally and under ASan/UBSan with leak detection disabled. It
+  covers metadata first-match order, readable-empty and parser-owned notes,
+  empty-but-present athlete tags, filename time variants, point/interval/
+  developer-data offsets, exact HRV arguments, explicit derived inputs, the
+  value-only source contract, and adapter capture order. The complete cache
+  suite passes 54/55: its sole `savedRideRebindsAndPersistsAtomically` failure
+  is the pre-existing, independently reproducible missing cache-directory
+  prerequisite already recorded under ARCH-003F2c2c4; all parser/provenance
+  cases pass. `RideFile.cpp` compiles with warnings as errors, source
+  dependencies pass 14/14, the linker-section policy check passes, and
+  `git diff --check` is clean. Independent review first returned NO-GO for
+  the effective-date regression-test gap, then returned GO after that fix and
+  the separately discovered lazy-metadata regression, with no blocker or
+  major correctness finding remaining.
 - ARCH-003F2c3e residual: this is a prerequisite seam only. The parser and all
-  existing production callers still use the compatibility overload; the bound
-  refresh must not supply retained derived-series inputs until weight,
+  existing production callers still use the compatibility adapter; the bound
+  refresh must not supply retained postprocess/derived inputs until weight,
   concrete zone ranges, CPX, metric execution, and interval discovery can move
-  as one generation-consistent transaction. Parser temp/metadata/notes/athlete
-  tag/RR inputs remain a separate snapshot prerequisite under ARCH-003F2c3.
+  as one generation-consistent transaction. Compressed temporary-file
+  capability and the worker cutover remain separate work under ARCH-003F2c3.
 - ARCH-003F2c3a residual: generation-bound `checkStale` still writes color,
   weight, CRC, and stale state in the worker, as tracked by ARCH-003F3c2. The
   builder's remaining live environment consumers are tracked by ARCH-003F2c3,

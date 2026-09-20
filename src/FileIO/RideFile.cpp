@@ -64,6 +64,17 @@
 
 const QChar deltaChar(0x0394);
 
+static RideFileDerivedSeriesInputs
+rideFileDerivedSeriesInputs(const RideFile &ride);
+static RideFileDerivedSeriesInputs
+rideFileDerivedSeriesInputs(
+    const RideFile &ride,
+    const QDate &effectiveDate);
+static bool
+rideFileStartTimeOverride(
+    const QFileInfo &source,
+    QDateTime &startTime);
+
 RideFile::RideFile(const QDateTime &startTime, double recIntSecs) :
             context(nullptr), wstale(true),
             startTime_(startTime), recIntSecs_(recIntSecs),
@@ -1088,165 +1099,64 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
     if (result) {
 
         result->context = context;
-
-        // post process metadata- take tags from main metadata
-        // and move to interval metadata where there is a match
-        // this really only applies to JSON ride files
-        QStringList removelist;
-        QMap<QString,QString>::const_iterator i;
-        for (i=result->tags().constBegin(); i != result->tags().constEnd(); i++) {
-
-            QString name = i.key();
-            QString value = i.value();
-
-            // if contains '##' we should id it as interval metadata
-            if (name.contains("##")) {
-                bool found=false;
-                foreach(FieldDefinition x, GlobalContext::context()->rideMetadata->getFields()) {
-                    if (x.interval == true) {
-                        if (name.endsWith("##" + x.name)) {
-                            // we have some metadata, lets see if it matches
-                            // any intervals we have defined
-                            foreach(RideFileInterval *p, result->intervals()) {
-                                if (name.startsWith(p->name + "##")) {
-                                    // we have a winner, lets transfer
-                                    p->setTag(x.name, value);
-                                    found=true;
-                                    removelist << name;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if (found) break;
+        const QFileInfo fileInfo(file.fileName());
+        RideFilePostProcessInputs postInputs;
+        bool hasIntervalMetadataCandidate = false;
+        for (auto tag = result->tags().constBegin();
+             tag != result->tags().constEnd(); ++tag) {
+            if (tag.key().contains("##")) {
+                hasIntervalMetadataCandidate = true;
+                break;
+            }
+        }
+        if (hasIntervalMetadataCandidate) {
+            for (const FieldDefinition &field
+                 : GlobalContext::context()->rideMetadata->getFields()) {
+                if (field.interval) {
+                    postInputs.orderedIntervalMetadataNames.append(
+                        field.name);
                 }
             }
         }
-        // now remove metadata that was inserted into
-        // interval metadata from the main tags
-        foreach(QString key, removelist) result->tags_.remove(key);
-
-        if (result->intervals().empty()) result->fillInIntervals();
-        // override the file ride time with that set from the filename
-        // but only if it matches the GC format
-        QFileInfo fileInfo(file.fileName());
-
-        // Regular expression to match either date format, including a mix of dashes and underscores
-        // yyyy-MM-dd-hh-mm-ss.extension
-        // or yyyy_MM_dd_hh_mm_ss.extension
-        // year is the only one matching for 4 digits, the rest can either be 1 or 2 digits.
-        const QRegularExpression rx(
-            QStringLiteral(
-                "^((\\d{4})[-_](\\d{1,2})[-_](\\d{1,2})[-_]"
-                "(\\d{1,2})[-_](\\d{1,2})[-_](\\d{1,2}))\\.(.+)$"));
-        const QRegularExpressionMatch fileNameMatch =
-            rx.match(fileInfo.fileName());
-        if (fileNameMatch.hasMatch()) {
-            QDate date(
-                fileNameMatch.captured(2).toInt(),
-                fileNameMatch.captured(3).toInt(),
-                fileNameMatch.captured(4).toInt());
-            QTime time(
-                fileNameMatch.captured(5).toInt(),
-                fileNameMatch.captured(6).toInt(),
-                fileNameMatch.captured(7).toInt());
-            QDateTime datetime(date, time);
-            result->setStartTime(datetime);
-        }
-
-        // legacy support for .notes file
-        QString notesFileName = fileInfo.canonicalPath() + '/' + fileInfo.baseName() + ".notes";
-        QFile notesFile(notesFileName);
-
-        // read it in if it exists and "Notes" is not already set
-        if (result->getTag("Notes", "") == "" && notesFile.exists() &&
-            notesFile.open(QFile::ReadOnly | QFile::Text)) {
-            QTextStream in(&notesFile);
-            result->setTag("Notes", in.readAll());
-            notesFile.close();
-        }
-
-        // set other "special" fields
-        result->setTag("Filename", QFileInfo(file.fileName()).fileName());
-        result->setTag("File Format", result->fileFormat());
-        if (context) result->setTag("Athlete", context->athlete->cyclist);
-        result->setTag("Year", result->startTime().toString("yyyy"));
-        result->setTag("Month", result->startTime().toString("MMMM"));
-        result->setTag("Weekday", result->startTime().toString("ddd"));
-
-        // reset timestamps and distances to always start from zero
-        double timeOffset=0.00f, kmOffset=0.00f;
-        if (result->dataPoints().count()) {
-            timeOffset=result->dataPoints()[0]->secs;
-            kmOffset=result->dataPoints()[0]->km;
-        }
-
-        // drag back samples
-        if (timeOffset || kmOffset) {
-            foreach (RideFilePoint *p, result->dataPoints()) {
-                p->km = p->km - kmOffset;
-                p->secs = p->secs - timeOffset;
-            }
-
-            // drag back intervals
-            foreach(RideFileInterval *i, result->intervals()) {
-                i->start -= timeOffset;
-                i->stop -= timeOffset;
-            }
-
-            // drag back DEVELOPER xdata
-            QMapIterator<QString,XDataSeries*> it(result->xdata());
-            while(it.hasNext()) {
-                it.next();
-                XDataSeries *s = it.value();
-                if (s->name == "DEVELOPER")
-                {
-                    foreach (XDataPoint *p, s->datapoints) {
-                        if (p->secs>0)
-                            p->secs = p->secs - timeOffset;
-                        if (p->km>0)
-                            p->km = p->km -kmOffset;
-                    }
-                }
+        if (result->getTag("Notes", "").isEmpty()) {
+            const QString notesFileName = fileInfo.canonicalPath() + '/'
+                + fileInfo.baseName() + ".notes";
+            QFile notesFile(notesFileName);
+            if (notesFile.exists()
+                && notesFile.open(QFile::ReadOnly | QFile::Text)) {
+                QTextStream in(&notesFile);
+                postInputs.notes.readable = true;
+                postInputs.notes.text = in.readAll();
             }
         }
-
-        // calculate derived data series -- after data fixers applied above
-        // Update presens and filter HRV
-        XDataSeries *series = result->xdata("HRV");
-
-        if (series && series->datapoints.count() > 0) {
-            double rrMax = appsettings->value(NULL, GC_RR_MAX, "2000.0").toDouble();
-            double rrMin = appsettings->value(NULL, GC_RR_MIN, "270.0").toDouble();
-            double rrFilt = appsettings->value(NULL, GC_RR_FILT, "0.2").toDouble();
-            int rrWindow = appsettings->value(NULL, GC_RR_WINDOW, "20").toInt();
-
-            FilterHrv(series, rrMin, rrMax, rrFilt, rrWindow);
+        if (context) {
+            postInputs.athleteTagAvailable = true;
+            postInputs.athleteName = context->athlete->cyclist;
+        }
+        XDataSeries *hrv = result->xdata("HRV");
+        if (hrv && !hrv->datapoints.isEmpty()) {
+            postInputs.hrv.maximum = appsettings->value(
+                nullptr, GC_RR_MAX, "2000.0").toDouble();
+            postInputs.hrv.minimum = appsettings->value(
+                nullptr, GC_RR_MIN, "270.0").toDouble();
+            postInputs.hrv.relativeFilter = appsettings->value(
+                nullptr, GC_RR_FILT, "0.2").toDouble();
+            postInputs.hrv.window = appsettings->value(
+                nullptr, GC_RR_WINDOW, "20").toInt();
+        }
+        if (context) {
+            postInputs.recalculateDerivedSeries = true;
+            QDateTime filenameStartTime;
+            const QDate effectiveDate = rideFileStartTimeOverride(
+                fileInfo, filenameStartTime)
+                ? filenameStartTime.date()
+                : result->startTime().date();
+            postInputs.derivedSeries =
+                rideFileDerivedSeriesInputs(*result, effectiveDate);
         }
 
-        // calculate derived data series -- after data fixers applied above
-        if (context) result->recalculateDerivedSeries();
+        postProcessRideFile(*result, fileInfo, postInputs);
 
-        // what data is present - after processor in case 'derived' or adjusted
-        result->updateDataTag();
-
-        //If we have a CIQ tag, populate the CIQinfo
-        QString ciq = result->getTag("CIQ","");
-        if (!ciq.isEmpty())
-        {
-            QJsonDocument doc = QJsonDocument::fromJson(ciq.toUtf8());
-
-            if (!doc.isNull() && (doc.isObject() || doc.isArray()))
-            {
-                ciq = doc.toJson(QJsonDocument::Compact);
-
-                QList<CIQinfo> infos = CIQinfo::listFromJson(ciq);
-                foreach(CIQinfo info, infos)
-                {
-                    result->addCIQ(info);
-                }
-            }
-        }
         //foreach(RideFile::seriestype x, result->arePresent()) qDebug()<<"present="<<x;
 
         // sample code for using XDATA, left here temporarily till we have an
@@ -1306,6 +1216,120 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
     }
 
     return result;
+}
+
+static bool
+rideFileStartTimeOverride(
+    const QFileInfo &source,
+    QDateTime &startTime)
+{
+    const QRegularExpression timestamp(
+        QStringLiteral(
+            "^((\\d{4})[-_](\\d{1,2})[-_](\\d{1,2})[-_]"
+            "(\\d{1,2})[-_](\\d{1,2})[-_](\\d{1,2}))\\.(.+)$"));
+    const QRegularExpressionMatch match = timestamp.match(source.fileName());
+    if (!match.hasMatch()) return false;
+
+    startTime = QDateTime(
+        QDate(
+            match.captured(2).toInt(),
+            match.captured(3).toInt(),
+            match.captured(4).toInt()),
+        QTime(
+            match.captured(5).toInt(),
+            match.captured(6).toInt(),
+            match.captured(7).toInt()));
+    return true;
+}
+
+void
+RideFileFactory::postProcessRideFile(
+    RideFile &ride,
+    const QFileInfo &source,
+    const RideFilePostProcessInputs &inputs) const
+{
+    QStringList removeList;
+    for (auto tag = ride.tags().constBegin();
+         tag != ride.tags().constEnd(); ++tag) {
+        const QString name = tag.key();
+        if (!name.contains("##")) continue;
+        bool found = false;
+        for (const QString &fieldName
+             : inputs.orderedIntervalMetadataNames) {
+            if (!name.endsWith("##" + fieldName)) continue;
+            for (RideFileInterval *interval : ride.intervals()) {
+                if (name.startsWith(interval->name + "##")) {
+                    interval->setTag(fieldName, tag.value());
+                    removeList.append(name);
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+        }
+    }
+    for (const QString &key : removeList) ride.tags_.remove(key);
+
+    if (ride.intervals().isEmpty()) ride.fillInIntervals();
+    QDateTime filenameStartTime;
+    if (rideFileStartTimeOverride(source, filenameStartTime))
+        ride.setStartTime(filenameStartTime);
+
+    if (ride.getTag("Notes", "").isEmpty() && inputs.notes.readable)
+        ride.setTag("Notes", inputs.notes.text);
+    ride.setTag("Filename", source.fileName());
+    ride.setTag("File Format", ride.fileFormat());
+    if (inputs.athleteTagAvailable)
+        ride.setTag("Athlete", inputs.athleteName);
+    ride.setTag("Year", ride.startTime().toString("yyyy"));
+    ride.setTag("Month", ride.startTime().toString("MMMM"));
+    ride.setTag("Weekday", ride.startTime().toString("ddd"));
+
+    double timeOffset = 0.0;
+    double distanceOffset = 0.0;
+    if (!ride.dataPoints().isEmpty()) {
+        timeOffset = ride.dataPoints().constFirst()->secs;
+        distanceOffset = ride.dataPoints().constFirst()->km;
+    }
+    if (timeOffset || distanceOffset) {
+        for (RideFilePoint *point : ride.dataPoints()) {
+            point->secs -= timeOffset;
+            point->km -= distanceOffset;
+        }
+        for (RideFileInterval *interval : ride.intervals()) {
+            interval->start -= timeOffset;
+            interval->stop -= timeOffset;
+        }
+        for (XDataSeries *series : ride.xdata()) {
+            if (series->name != "DEVELOPER") continue;
+            for (XDataPoint *point : series->datapoints) {
+                if (point->secs > 0) point->secs -= timeOffset;
+                if (point->km > 0) point->km -= distanceOffset;
+            }
+        }
+    }
+
+    XDataSeries *hrv = ride.xdata("HRV");
+    if (hrv && !hrv->datapoints.isEmpty()) {
+        FilterHrv(
+            hrv, inputs.hrv.minimum, inputs.hrv.maximum,
+            inputs.hrv.relativeFilter, inputs.hrv.window);
+    }
+    if (inputs.recalculateDerivedSeries) {
+        ride.recalculateDerivedSeries(false, inputs.derivedSeries);
+    }
+    ride.updateDataTag();
+
+    QString ciq = ride.getTag("CIQ", "");
+    if (!ciq.isEmpty()) {
+        const QJsonDocument document = QJsonDocument::fromJson(ciq.toUtf8());
+        if (!document.isNull()
+            && (document.isObject() || document.isArray())) {
+            ciq = document.toJson(QJsonDocument::Compact);
+            const QList<CIQinfo> infos = CIQinfo::listFromJson(ciq);
+            for (CIQinfo info : infos) ride.addCIQ(info);
+        }
+    }
 }
 
 void
@@ -2688,17 +2712,32 @@ RideFile::recalculateDerivedSeries(bool force)
 {
     if (!force && dstale == false) return;
 
+    const RideFileDerivedSeriesInputs inputs =
+        rideFileDerivedSeriesInputs(*this);
+    recalculateDerivedSeriesImpl(
+        force, inputs, inputs.powerZonesAvailable);
+}
+
+static RideFileDerivedSeriesInputs
+rideFileDerivedSeriesInputs(const RideFile &ride)
+{
+    return rideFileDerivedSeriesInputs(ride, ride.startTime().date());
+}
+
+static RideFileDerivedSeriesInputs
+rideFileDerivedSeriesInputs(
+    const RideFile &ride,
+    const QDate &effectiveDate)
+{
     RideFileDerivedSeriesInputs inputs;
-    bool allowCpMetadataOverride = false;
-    Athlete *athlete = context ? context->athlete : nullptr;
-    if (athlete && athlete->zones(sport())) {
+    Athlete *athlete = ride.context ? ride.context->athlete : nullptr;
+    if (athlete && athlete->zones(ride.sport())) {
         inputs.powerZonesAvailable = true;
-        const int zoneRange = athlete->zones(sport())->whichRange(
-            startTime().date());
+        const int zoneRange = athlete->zones(ride.sport())->whichRange(
+            effectiveDate);
         inputs.configuredCp = zoneRange >= 0
-            ? athlete->zones(sport())->getCP(zoneRange)
+            ? athlete->zones(ride.sport())->getCP(zoneRange)
             : 0;
-        allowCpMetadataOverride = true;
     }
     if (athlete && appsettings) {
         inputs.configuredWheelSizeMillimeters = appsettings->cvalue(
@@ -2706,8 +2745,7 @@ RideFile::recalculateDerivedSeries(bool force)
             GC_WHEELSIZE,
             2100).toInt();
     }
-    recalculateDerivedSeriesImpl(
-        force, inputs, allowCpMetadataOverride);
+    return inputs;
 }
 
 void

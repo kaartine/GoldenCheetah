@@ -14,6 +14,12 @@
 
 #include "RideFile.h"
 
+extern int rideFileTestFilterHrvCalls;
+extern double rideFileTestFilterHrvMinimum;
+extern double rideFileTestFilterHrvMaximum;
+extern double rideFileTestFilterHrvRelative;
+extern int rideFileTestFilterHrvWindow;
+
 namespace {
 
 #define GC_STRINGIFY_IMPL(value) #value
@@ -118,7 +124,220 @@ private slots:
     void zeroWheelInputUsesLegacyDefault();
     void cleanDerivedSeriesSkipsExplicitRecalculation();
     void explicitDerivedCalculationHasNoLiveFallback();
+    void postProcessPreservesValueInputsAndOrdering();
+    void postProcessKeepsParserTimeForNonmatchingFilename();
+    void postProcessKeepsLegacyInvalidMatchingTimestamp();
+    void postProcessPreservesParsedNotes();
+    void postProcessPassesExplicitHrvInputs();
+    void postProcessUsesExplicitDerivedInputs();
+    void postProcessImplementationHasNoLiveFallback();
+    void openRideFileCapturesEffectiveDateBeforePostProcess();
 };
+
+void TestRideFileOwnership::postProcessPreservesValueInputsAndOrdering()
+{
+    RideFile ride(QDateTime(QDate(2001, 2, 3), QTime(4, 5)), 1.0);
+    ride.setFileFormat(QStringLiteral("test format"));
+    ride.addInterval(
+        RideFileInterval::DEVICE, 10.0, 15.0, QStringLiteral("lap"));
+    ride.setTag(
+        QStringLiteral("lap##Field##Name"), QStringLiteral("ordered"));
+
+    RideFilePoint first;
+    first.secs = 10.0;
+    first.km = 2.0;
+    ride.appendPoint(first);
+    RideFilePoint second = first;
+    second.secs = 15.0;
+    second.km = 3.0;
+    ride.appendPoint(second);
+
+    auto *developer = new XDataSeries;
+    developer->name = QStringLiteral("DEVELOPER");
+    auto *developerPoint = new XDataPoint;
+    developerPoint->secs = 12.0;
+    developerPoint->km = 2.5;
+    developer->datapoints.append(developerPoint);
+    ride.addXData(QStringLiteral("DEVELOPER"), developer);
+
+    RideFilePostProcessInputs inputs;
+    inputs.orderedIntervalMetadataNames = {
+        QStringLiteral("Name"), QStringLiteral("Field##Name")};
+    inputs.notes.readable = true;
+    inputs.notes.text = QString();
+    inputs.athleteTagAvailable = true;
+    inputs.athleteName = QString();
+
+    RideFileFactory::instance().postProcessRideFile(
+        ride,
+        QFileInfo(QStringLiteral("/tmp/2026_09_20_12_34_56.fit")),
+        inputs);
+
+    QCOMPARE(ride.startTime(),
+             QDateTime(QDate(2026, 9, 20), QTime(12, 34, 56)));
+    QCOMPARE(ride.getTag(QStringLiteral("Filename"), QString()),
+             QStringLiteral("2026_09_20_12_34_56.fit"));
+    QCOMPARE(ride.getTag(QStringLiteral("File Format"), QString()),
+             QStringLiteral("test format"));
+    QVERIFY(ride.tags().contains(QStringLiteral("Notes")));
+    QVERIFY(ride.tags().contains(QStringLiteral("Athlete")));
+    QCOMPARE(ride.getTag(QStringLiteral("Year"), QString()),
+             QStringLiteral("2026"));
+    QCOMPARE(ride.intervals().constFirst()->getTag(
+                 QStringLiteral("Name"), QString()),
+             QStringLiteral("ordered"));
+    QVERIFY(!ride.intervals().constFirst()->tags().contains(
+        QStringLiteral("Field##Name")));
+    QVERIFY(!ride.tags().contains(QStringLiteral("lap##Field##Name")));
+    QCOMPARE(ride.dataPoints().constFirst()->secs, 0.0);
+    QCOMPARE(ride.dataPoints().constFirst()->km, 0.0);
+    QCOMPARE(ride.dataPoints().constLast()->secs, 5.0);
+    QCOMPARE(ride.dataPoints().constLast()->km, 1.0);
+    QCOMPARE(ride.intervals().constFirst()->start, 0.0);
+    QCOMPARE(ride.intervals().constFirst()->stop, 5.0);
+    QCOMPARE(developerPoint->secs, 2.0);
+    QCOMPARE(developerPoint->km, 0.5);
+}
+
+void TestRideFileOwnership::postProcessPreservesParsedNotes()
+{
+    RideFile ride;
+    ride.setTag(QStringLiteral("Notes"), QStringLiteral("parsed"));
+    RideFilePostProcessInputs inputs;
+    inputs.notes.readable = true;
+    inputs.notes.text = QStringLiteral("sidecar");
+
+    RideFileFactory::instance().postProcessRideFile(
+        ride, QFileInfo(QStringLiteral("activity.fit")), inputs);
+
+    QCOMPARE(ride.getTag(QStringLiteral("Notes"), QString()),
+             QStringLiteral("parsed"));
+}
+
+void TestRideFileOwnership::postProcessKeepsParserTimeForNonmatchingFilename()
+{
+    const QDateTime parserTime(QDate(2001, 2, 3), QTime(4, 5, 6));
+    RideFile ride(parserTime, 1.0);
+
+    RideFileFactory::instance().postProcessRideFile(
+        ride,
+        QFileInfo(QStringLiteral("activity.fit")),
+        RideFilePostProcessInputs {});
+
+    QCOMPARE(ride.startTime(), parserTime);
+}
+
+void TestRideFileOwnership::postProcessKeepsLegacyInvalidMatchingTimestamp()
+{
+    RideFile ride(QDateTime(QDate(2001, 2, 3), QTime(4, 5, 6)), 1.0);
+
+    RideFileFactory::instance().postProcessRideFile(
+        ride,
+        QFileInfo(QStringLiteral("2026_99_99_99_99_99.fit")),
+        RideFilePostProcessInputs {});
+
+    QVERIFY(!ride.startTime().isValid());
+}
+
+void TestRideFileOwnership::postProcessPassesExplicitHrvInputs()
+{
+    RideFile ride;
+    auto *hrv = new XDataSeries;
+    hrv->name = QStringLiteral("HRV");
+    hrv->datapoints.append(new XDataPoint);
+    ride.addXData(QStringLiteral("HRV"), hrv);
+    RideFilePostProcessInputs inputs;
+    inputs.hrv.minimum = 111.0;
+    inputs.hrv.maximum = 222.0;
+    inputs.hrv.relativeFilter = 0.35;
+    inputs.hrv.window = 17;
+    rideFileTestFilterHrvCalls = 0;
+
+    RideFileFactory::instance().postProcessRideFile(
+        ride, QFileInfo(QStringLiteral("activity.fit")), inputs);
+
+    QCOMPARE(rideFileTestFilterHrvCalls, 1);
+    QCOMPARE(rideFileTestFilterHrvMinimum, 111.0);
+    QCOMPARE(rideFileTestFilterHrvMaximum, 222.0);
+    QCOMPARE(rideFileTestFilterHrvRelative, 0.35);
+    QCOMPARE(rideFileTestFilterHrvWindow, 17);
+}
+
+void TestRideFileOwnership::postProcessUsesExplicitDerivedInputs()
+{
+    RideFile actual;
+    RideFile expected;
+    populateDerivedSeriesRide(actual);
+    populateDerivedSeriesRide(expected);
+    RideFilePostProcessInputs postInputs;
+    postInputs.recalculateDerivedSeries = true;
+    postInputs.derivedSeries.powerZonesAvailable = true;
+    postInputs.derivedSeries.configuredCp = 275;
+    postInputs.derivedSeries.configuredWheelSizeMillimeters = 2300;
+
+    RideFileFactory::instance().postProcessRideFile(
+        actual, QFileInfo(QStringLiteral("activity.fit")), postInputs);
+    expected.recalculateDerivedSeries(true, postInputs.derivedSeries);
+
+    compareDerivedSeries(actual, expected);
+}
+
+void TestRideFileOwnership::postProcessImplementationHasNoLiveFallback()
+{
+    const QDir root(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)));
+    QFile source(root.filePath(QStringLiteral("src/FileIO/RideFile.cpp")));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QByteArray contents = source.readAll();
+    const qsizetype implementation = contents.indexOf(
+        "RideFileFactory::postProcessRideFile(");
+    const qsizetype nextMethod = contents.indexOf(
+        "\nvoid\nRideFile::addXData", implementation + 1);
+    QVERIFY(implementation >= 0);
+    QVERIFY(nextMethod > implementation);
+    const QByteArray body = contents.mid(
+        implementation, nextMethod - implementation);
+    QVERIFY(!body.contains("GlobalContext"));
+    QVERIFY(!body.contains("context"));
+    QVERIFY(!body.contains("appsettings"));
+    QVERIFY(!body.contains("athlete->"));
+    QVERIFY(!body.contains("QTextStream"));
+    QVERIFY(!body.contains("notesFile"));
+}
+
+void TestRideFileOwnership::openRideFileCapturesEffectiveDateBeforePostProcess()
+{
+    const QDir root(QString::fromUtf8(GC_STRINGIFY(GC_TEST_SOURCE_ROOT)));
+    QFile source(root.filePath(QStringLiteral("src/FileIO/RideFile.cpp")));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QByteArray contents = source.readAll();
+    const qsizetype implementation = contents.indexOf(
+        "RideFile *RideFileFactory::openRideFile(");
+    const qsizetype nextMethod = contents.indexOf(
+        "\nstatic bool\nrideFileStartTimeOverride(", implementation + 1);
+    QVERIFY(implementation >= 0);
+    QVERIFY(nextMethod > implementation);
+    const QByteArray body = contents.mid(
+        implementation, nextMethod - implementation);
+
+    const qsizetype attachContext = body.indexOf(
+        "result->context = context;");
+    const qsizetype resolveEffectiveDate = body.indexOf(
+        "const QDate effectiveDate = rideFileStartTimeOverride(");
+    const qsizetype captureDerivedInputs = body.indexOf(
+        "rideFileDerivedSeriesInputs(*result, effectiveDate);");
+    const qsizetype postProcess = body.indexOf(
+        "postProcessRideFile(*result, fileInfo, postInputs);");
+    QVERIFY(attachContext >= 0);
+    QVERIFY(resolveEffectiveDate > attachContext);
+    QVERIFY(captureDerivedInputs > resolveEffectiveDate);
+    QVERIFY(postProcess > captureDerivedInputs);
+    const QByteArray effectiveDateSelection = body.mid(
+        resolveEffectiveDate,
+        captureDerivedInputs - resolveEffectiveDate);
+    QVERIFY(effectiveDateSelection.contains("? filenameStartTime.date()"));
+    QVERIFY(effectiveDateSelection.contains(
+        ": result->startTime().date();"));
+}
 
 void TestRideFileOwnership::explicitDerivedInputsPreserveLegacyDefaults()
 {

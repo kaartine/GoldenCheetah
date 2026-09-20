@@ -22,6 +22,7 @@ SOURCES = testRideFileOwnership.cpp \
 
 HEADERS = ../../../src/FileIO/RideFile.h \
           ../../../src/FileIO/RideFileDerivedSeriesInputs.h \
+          ../../../src/FileIO/RideFilePostProcessInputs.h \
           ../../../src/FileIO/RideFileCommand.h
 
 INCLUDEPATH += ../../../src \
