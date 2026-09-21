@@ -133,6 +133,7 @@ all qt Train/workoutGameAssetCatalog
 all qt Train/workoutGameAssetPhysicsResolver
 all qt Train/workoutGameAssetPhysicsRoadCourse
 all qt Train/workoutGameAssetPhysicsSampler
+all qt Train/workoutGameLegacyFt02V1
 all qt Train/workoutGameCanvas
 all qt Train/workoutGameClock
 all qt Train/workoutGameCompetition
