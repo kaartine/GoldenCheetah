@@ -404,7 +404,24 @@ private slots:
                 QJsonDocument(root).toJson(QJsonDocument::Compact);
 
         WorkoutGameCourseDocument decoded;
-        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encodedV1, decoded),
+        const WorkoutGameCourseDocumentStatus decodeStatus =
+                WorkoutGameCourseDocumentCodec::decode(encodedV1, decoded);
+        if (decodeStatus != WorkoutGameCourseDocumentStatus::Ready) {
+            QVERIFY(decoded.course.roadPlan);
+            QVERIFY(decoded.course.roadPlan->assetPhysicsSnapshot);
+            QVERIFY(decoded.course.roadPlan->assetPhysicsSnapshot
+                        ->migratedFromLegacyLayout);
+            QCOMPARE(WorkoutGameRoadPlanValidator::validate(
+                        *decoded.course.roadPlan,
+                        decoded.course.sections.size()),
+                     WorkoutGameRoadPlanValidationStatus::Ready);
+            QVERIFY(WorkoutGameRoadQuality::audit(
+                        *decoded.course.roadPlan).accepted());
+            QVERIFY(WorkoutGameDistanceCourseBuilder::validCourse(
+                        decoded.course));
+            QVERIFY(WorkoutGameCourseDocumentCodec::valid(decoded));
+        }
+        QCOMPARE(decodeStatus,
                  WorkoutGameCourseDocumentStatus::Ready);
         QVERIFY(decoded.course.roadPlan->assetPhysicsSnapshot);
         QCOMPARE(decoded.course.roadPlan->assetPhysicsSnapshot
