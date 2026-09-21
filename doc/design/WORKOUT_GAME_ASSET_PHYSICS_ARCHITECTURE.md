@@ -25,13 +25,13 @@ The current code has these relevant properties:
   for road elevation, while `WorkoutGamePhysics` samples the road again to
   create Box2D segments.
 - `WorkoutGameRoadPiece` stores terrain, difficulty, anchors, connectors, and
-  challenge gates, but no resolved asset or collision-profile identity. A
-  `WorkoutGameCourse` can hold an immutable `WorkoutGameRoadPlan`; the plan is
-  currently generation version 2 and is limited to 4,096 pieces.
-- The coordinated integration base uses course schema 6 and conversion
-  algorithm 6, and is
-  limited to 8 MiB. It persists the road plan, but not the exact feature
-  profiles used to materialize it.
+  challenge gates. A `WorkoutGameCourse` can hold an immutable
+  `WorkoutGameRoadPlan`; current plans use generation version 3 and are limited
+  to 4,096 pieces.
+- New course artifacts use schema 7 and conversion algorithm 6, with an 8 MiB
+  document limit. Schema 7 persists the road plan and its bounded resolved
+  asset-physics snapshot. Schemas 1 through 6 remain readable and are upgraded
+  only by an explicit save operation.
 - Asset manifests permit external physics metadata. The validator enforces
   `authority: "external"`, bounded surface values, and either no collision
   proxy or a named GLB node. Runtime development loading validates that data,
@@ -124,10 +124,12 @@ authority only: it does not define obstacle contact or an asset material.
 Legacy FT-02 records are deduplicated by exact record version, enabled state,
 and binary64 bits in first-use order. A road-piece binding refers to the record
 through a separate legacy index, never through the integer collision-definition
-index. The existing schema-6 `legacyFor()` marker remains unchanged. A separate
-preparatory builder creates frozen records for a future explicit migration;
-schema 7 remains runtime-gated until codec, playback, render, contact, trainer,
-and recording acceptance gates all pass.
+index. The schema-6 `legacyFor()` marker remains unchanged for legacy reads.
+The schema-7 writer uses the separate frozen builder and stores the records on
+new conversion and explicit legacy save. Codec, playback, render, contact and
+deterministic Engine parity gates cover that activation. Trainer and recording
+failure independence remains a separate release gate and must not move control
+or recording ownership into the game subsystem.
 
 An enabled record's anchor must bit-match its persisted road challenge. Disabled
 road challenges omit their inactive fields from the road-piece JSON, so their
@@ -223,8 +225,8 @@ sampling and Box2D segment emission are implemented end to end.
   rather than delegated to a Box2D assertion. This evaluator is checked at
   every difficulty permille for valid final segments and is covered at
   difficulty 0, 0.5, and 1 by the 2 mm legacy parity gate.
-  Production writing remains on schema 6 until legacy migration calls this
-  frozen evaluator and stores its complete resolved definition.
+  Production schema-7 writing calls the frozen evaluator during conversion and
+  explicit legacy save, and stores its complete resolved FT-02 definition.
 - Runtime conversion is exactly `meters = millimeters / 1000.0`. Interpolation
   occurs between converted adjacent integer points. No consumer may refit,
   smooth, resample, or infer collision from the render mesh.

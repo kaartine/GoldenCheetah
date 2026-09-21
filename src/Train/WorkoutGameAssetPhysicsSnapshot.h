@@ -102,8 +102,8 @@ struct WorkoutGameCourseAssetPhysicsSnapshot
     static constexpr std::uint32_t CurrentVersion = 2;
     static constexpr std::uint32_t NoIndex =
             std::numeric_limits<std::uint32_t>::max();
-    // Explicit legacy adapter tag; activation of frozen legacy evaluation is
-    // separate from this preparatory persistence model.
+    // Explicit adapter tag retained by schema-6 reads and schema-7 frozen
+    // legacy records.
     static constexpr std::uint32_t LegacyProceduralV1 = 1U << 0;
     static constexpr std::uint32_t LegacyProcedural = LegacyProceduralV1;
     static constexpr std::size_t MaximumDefinitions = 64;
