@@ -10,6 +10,15 @@ SOURCES = testWorkoutGameEngine.cpp \
           ../../../src/Train/WorkoutGameAudioEvents.cpp \
           ../../../src/Train/WorkoutGameCompetition.cpp \
           ../../../src/Train/WorkoutGameCourse.cpp \
+          ../../../src/Train/WorkoutGameCourseDocument.cpp \
+          ../../../src/Train/WorkoutGameCourseConversion.cpp \
+          ../../../src/Train/WorkoutGameCourseCrsExporter.cpp \
+          ../../../src/Train/WorkoutGameCoursePrescription.cpp \
+          ../../../src/Train/WorkoutGameCourseSummary.cpp \
+          ../../../src/Train/WorkoutGameCourseTerrain.cpp \
+          ../../../src/Train/WorkoutGameDistanceCourse.cpp \
+          ../../../src/Train/WorkoutGameDistancePlayback.cpp \
+          ../../../src/Train/WorkoutGameRoadPhysics.cpp \
           ../../../src/Train/WorkoutGameEngine.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameFeatureLab.cpp \
