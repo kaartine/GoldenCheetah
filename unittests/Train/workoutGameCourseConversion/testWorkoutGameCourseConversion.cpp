@@ -173,7 +173,7 @@ private slots:
         const QJsonObject contractDocument = QJsonDocument::fromJson(
                     contractFile.readAll()).object();
         QCOMPARE(contractDocument.value(QStringLiteral("contractVersion"))
-                         .toInt(), 6);
+                         .toInt(), 7);
         QCOMPARE(contractDocument.value(
                      QStringLiteral("conversionAlgorithmVersion")).toInt(), 6);
         QCOMPARE(contractDocument.value(QStringLiteral("runtimeProgression"))
