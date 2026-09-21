@@ -193,7 +193,12 @@ class WorkoutGameGalleryTest(unittest.TestCase):
         )
         glxinfo.chmod(0o755)
         environment = dict(os.environ)
-        for name in ("DRI_PRIME", "LIBGL_ALWAYS_SOFTWARE", "GALLIUM_DRIVER"):
+        for name in (
+            "DRI_PRIME",
+            "LIBGL_ALWAYS_SOFTWARE",
+            "GALLIUM_DRIVER",
+            "WG_GALLERY_RENDERER",
+        ):
             environment.pop(name, None)
         environment.update({
             "DISPLAY": ":99",
@@ -282,6 +287,7 @@ class WorkoutGameGalleryTest(unittest.TestCase):
                 "DISPLAY": ":99",
                 "PATH": f"{self.external_root / 'bin'}:/usr/bin:/bin",
                 "WG_DOCKER_CAPTURE": str(self.external_root / "unused"),
+                "WG_GALLERY_RENDERER": "auto",
                 "XAUTHORITY": str(self.external_root / "missing-authority"),
             },
             text=True,
@@ -317,6 +323,7 @@ class WorkoutGameGalleryTest(unittest.TestCase):
         environment.update({
             "DISPLAY": ":99",
             "PATH": f"{binary}:/usr/bin:/bin",
+            "WG_GALLERY_RENDERER": "auto",
             "XAUTHORITY": str(self.external_root / "missing-authority"),
         })
 
