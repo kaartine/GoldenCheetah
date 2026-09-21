@@ -487,6 +487,12 @@ private slots:
         QVERIFY(roadPlan->assetPhysicsSnapshot);
         QCOMPARE(roadPlan->pieces.size(), std::size_t(1700));
         source.course.roadPlan = roadPlan;
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(
+                    *roadPlan, source.course.sections.size()),
+                 WorkoutGameRoadPlanValidationStatus::Ready);
+        QVERIFY(WorkoutGameRoadQuality::audit(*roadPlan).accepted());
+        QVERIFY(WorkoutGameDistanceCourseBuilder::validCourse(source.course));
+        QVERIFY(WorkoutGameCourseDocumentCodec::valid(source));
 
         const QByteArray schemaSix =
                 WorkoutGameCourseDocumentCodec::encode(source);
