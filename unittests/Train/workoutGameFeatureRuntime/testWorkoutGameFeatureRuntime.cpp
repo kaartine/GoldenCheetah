@@ -426,6 +426,65 @@ private slots:
         QVERIFY(result.actionId != 0u);
     }
 
+    void frozenLegacyLogUsesExactActionBoundsIndependentOfDifficulty()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const int section = sectionFor(course, WorkoutGameTerrainKind::LogOver);
+        const WorkoutGameRoadPiece *sourcePiece = challengePieceFor(
+                road, section);
+        QVERIFY(sourcePiece != nullptr);
+        const std::size_t pieceIndex = std::size_t(
+                std::distance(road.pieces.data(), sourcePiece));
+
+        WorkoutGameRoadPlan plan;
+        plan.pieces = road.pieces;
+        const auto frozen =
+                WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
+                    plan);
+        QVERIFY(frozen);
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>(*frozen);
+        const std::uint32_t recordIndex =
+                snapshot->pieceBindings[pieceIndex].legacyFt02RecordIndex;
+        QVERIFY(recordIndex
+                != WorkoutGameCourseAssetPhysicsSnapshot::NoIndex);
+        WorkoutGameLegacyFt02Record &record =
+                snapshot->legacyFt02Records[recordIndex];
+        record.startMeters = -0.73;
+        record.endMeters = 1.31;
+        record.heightMeters = 0.89;
+        road.assetPhysicsSnapshot = snapshot;
+
+        const double expectedTakeoff = record.obstacleAnchorMeters
+                + record.startMeters;
+        const double expectedGeometryEnd = record.obstacleAnchorMeters
+                + record.endMeters;
+        WorkoutGameFeatureRuntimeSnapshot reference;
+        for (const double difficulty : {0.0, 1.0}) {
+            road.pieces[pieceIndex].difficulty = difficulty;
+            WorkoutGameFeatureRuntime runtime;
+            QVERIFY(runtime.configure(road));
+            const WorkoutGameFeatureRuntimeSnapshot result = runtime.update(
+                    snapshot(section, progressAtDistance(
+                                road, section, expectedTakeoff + 0.01),
+                             WorkoutGameFeatureOutcome::Completed));
+            QCOMPARE(result.physicalTakeoffDistanceMeters, expectedTakeoff);
+            QCOMPARE(result.actionStartDistanceMeters, expectedTakeoff);
+            QVERIFY(result.actionEndDistanceMeters
+                    >= expectedGeometryEnd + 1.5);
+            if (difficulty == 0.0) {
+                reference = result;
+            } else {
+                QCOMPARE(result.physicalTakeoffDistanceMeters,
+                         reference.physicalTakeoffDistanceMeters);
+                QCOMPARE(result.actionStartDistanceMeters,
+                         reference.actionStartDistanceMeters);
+            }
+        }
+    }
+
     void airbornePolicyStartsAtThePhysicalTakeoff()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);

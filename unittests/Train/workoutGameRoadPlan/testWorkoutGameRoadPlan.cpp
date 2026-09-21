@@ -645,6 +645,57 @@ private slots:
                  WorkoutGameRoadPlanValidationStatus::InvalidPlan);
     }
 
+    void frozenLegacyFt02BoundsOwnDecisionAndBankProtection()
+    {
+        WorkoutGameRoadPlan plan = planWithTurns(
+                {15.0, -15.0, 15.0}, 20.0);
+        WorkoutGameRoadPiece &feature = plan.pieces[1];
+        feature.terrain = WorkoutGameTerrainKind::LogOver;
+        feature.challenge.enabled = true;
+        feature.challenge.profile.enabled = true;
+        feature.challenge.prepareDistanceMeters = 22.0;
+        feature.challenge.decisionDistanceMeters = 24.0;
+        feature.challenge.obstacleDistanceMeters = 30.0;
+        feature.challenge.bypassStartDistanceMeters = 22.0;
+        feature.challenge.bypassEndDistanceMeters = 38.0;
+
+        const auto generated =
+                WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
+                    plan);
+        QVERIFY(generated);
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>(*generated);
+        const std::uint32_t recordIndex =
+                snapshot->pieceBindings[1].legacyFt02RecordIndex;
+        QVERIFY(recordIndex
+                != WorkoutGameCourseAssetPhysicsSnapshot::NoIndex);
+        snapshot->legacyFt02Records[recordIndex].startMeters = -6.0;
+        snapshot->legacyFt02Records[recordIndex].endMeters = 11.0;
+        snapshot->legacyFt02Records[recordIndex].heightMeters = 0.54;
+        plan.assetPhysicsSnapshot = snapshot;
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
+                 WorkoutGameRoadPlanValidationStatus::Ready);
+
+        plan.pieces[1].challenge.decisionDistanceMeters = 24.01;
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
+                 WorkoutGameRoadPlanValidationStatus::InvalidPlan);
+        plan.pieces[1].challenge.decisionDistanceMeters = 24.0;
+
+        WorkoutGameRoadBankProfile &bank = plan.pieces[2].bank;
+        bank.enabled = true;
+        bank.startDistanceMeters = 40.0;
+        bank.curveStartDistanceMeters = 42.0;
+        bank.curveEndDistanceMeters = 48.0;
+        bank.endDistanceMeters = 50.0;
+        bank.socketHalfWidthMeters = plan.pieces[2].entry.halfWidthMeters;
+        bank.activeHalfWidthMeters = 1.2;
+        bank.maximumBankRadians = 0.35;
+        bank.maximumLineOffsetMeters = 0.5;
+        bank.designSpeedMetersPerSecond = 8.0;
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
+                 WorkoutGameRoadPlanValidationStatus::InvalidPlan);
+    }
+
     void snapshotValidationRejectsBadGeometryIndicesAndLimits()
     {
         WorkoutGameAssetPhysicsSnapshotBuilder builder;
