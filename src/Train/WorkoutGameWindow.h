@@ -72,6 +72,11 @@ private:
     void displayFrame(const WorkoutGameEngineFrame &frame);
     double anchorRate() const;
     QString workoutIdentity(ErgFile *workout) const;
+#ifdef GC_WORKOUT_GAME_TEST_FAULTS
+    void observeTestFrame();
+    std::int64_t testSessionStartedMs = -1;
+    bool testRunnerUnavailable = false;
+#endif
 
     Context *context;
     QStackedWidget *renderStack;

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
 import math
 import os
@@ -40,6 +42,7 @@ UI_TEST_NAMES = (
     "data_generator_and_virtual_gears",
     "create_edit_mtb_course_lifecycle",
     "workout_game_training_lifecycle",
+    "training_failure_independence",
     "workout_generator_lifecycle",
     "new_workout_save_as",
     "dirty_workout_transition_guard",
@@ -47,6 +50,7 @@ UI_TEST_NAMES = (
     "graceful_shutdown_request",
 )
 UI_TEST_DEPENDENCIES = {
+    "training_failure_independence": ("prepared_workout_library_import",),
     "library_scan_preserves_unsearched_workouts": (
         "prepared_workout_library_import",
     ),
@@ -85,6 +89,17 @@ def generator_mode_from_environment() -> str:
             f"Unsupported GC_UI_GENERATOR_MODE {mode!r}; expected one of {supported}"
         )
     return mode
+
+
+def training_failure_case_from_environment() -> str | None:
+    case = os.environ.get("GC_UI_TRAINING_FAILURE_CASE", "")
+    if not case:
+        return None
+    if case not in {"absent", "healthy", "renderer", "runner"}:
+        raise ValueError("Unsupported GC_UI_TRAINING_FAILURE_CASE")
+    if os.environ.get("GC_WORKOUT_GAME_FEATURE_LAB", "0") != "0":
+        raise ValueError("Failure-independence tests must disable Feature Lab")
+    return case
 
 
 def game_run_seconds_from_environment() -> float:
@@ -154,6 +169,7 @@ def selected_ui_tests_from_environment() -> tuple[str, ...]:
     value = os.environ.get("GC_UI_TESTS", "").strip()
     if not value:
         selected = set(UI_TEST_NAMES)
+        selected.discard("training_failure_independence")
         if not validate_mtb_course_from_environment():
             selected.discard("create_edit_mtb_course_lifecycle")
     else:
@@ -168,6 +184,13 @@ def selected_ui_tests_from_environment() -> tuple[str, ...]:
                 "GC_UI_TESTS contains unknown tests: " + ", ".join(unknown)
             )
         selected = set(requested)
+
+    failure_case = training_failure_case_from_environment()
+    if failure_case:
+        selected = {"startup_and_main_navigation", "prepared_workout_library_import",
+                    "training_failure_independence", "graceful_shutdown_request"}
+    elif "training_failure_independence" in selected:
+        raise ValueError("training_failure_independence requires GC_UI_TRAINING_FAILURE_CASE")
 
     pending = list(selected)
     while pending:
@@ -301,6 +324,32 @@ folder=true
         "athlete-private.ini",
     ):
         write_text(athlete / "config" / name, "")
+    failure_case = training_failure_case_from_environment()
+    if failure_case:
+        fixture = os.environ.get("GC_UI_TRAINING_FAILURE_FIXTURE")
+        if fixture:
+            for suffix in ("crs", "gcmtb.json"):
+                shutil.copyfile(Path(fixture) / f"failure-course.{suffix}",
+                                athlete / "workouts" / f"ui-test-mtb.{suffix}")
+        # A hidden game chart is still instantiated. Version 4 also prevents
+        # perspective migration from silently adding chart 59 to the baseline.
+        layouts = ET.Element("layouts", version="4")
+        charts = [("Workout Editor", "36")]
+        if failure_case != "absent":
+            charts.append(("Workout Game", "59"))
+        for title, chart_id in charts:
+            layout = ET.SubElement(layouts, "layout", name=title, style="0",
+                                   type="1", expression="", trainswitch="0")
+            chart = ET.SubElement(layout, "chart", id=chart_id, name="", title=title)
+            for name, kind, value in (("title", "QString", title),
+                                      ("subtitle", "QString", ""),
+                                      ("widthFactor", "double", "1"),
+                                      ("heightFactor", "double", "1"),
+                                      ("style", "int", "0"),
+                                      ("resizable", "bool", "0")):
+                ET.SubElement(chart, "property", name=name, type=kind, value=value)
+        write_text(athlete / "config/train-perspectives.xml",
+                   ET.tostring(layouts, encoding="unicode") + "\n")
     write_text(
         athlete / "workouts/ui-test.erg",
         """[COURSE HEADER]
@@ -360,6 +409,216 @@ DISTANCE GRADE WIND
 
 class UiFailure(RuntimeError):
     pass
+
+
+def training_recording_rows(text: str) -> list[dict[str, float]]:
+    """Read complete production CSV rows; malformed evidence must not pass."""
+    if not text or not text.endswith("\n"):
+        raise UiFailure("Recording is empty or contains an incomplete row")
+    reader = csv.DictReader(io.StringIO(text), skipinitialspace=True)
+    required = {"secs", "cad", "hr", "km", "watts", "target", "virtualgear"}
+    if not required.issubset(reader.fieldnames or ()):
+        raise UiFailure("Recording is missing required fields")
+    rows = []
+    for raw in reader:
+        try:
+            row = {key: float(raw[key]) for key in required}
+        except (TypeError, ValueError) as error:
+            raise UiFailure("Recording contains a nonnumeric value") from error
+        if not all(math.isfinite(value) for value in row.values()):
+            raise UiFailure("Recording contains non-finite values")
+        if (row["secs"] < 0 or not row["secs"].is_integer()
+                or not row["virtualgear"].is_integer()
+                or not 1 <= row["virtualgear"] <= 12
+                or any(row[key] < 0 for key in ("cad", "hr", "km", "watts", "target"))):
+            raise UiFailure("Recording contains invalid training values")
+        if rows and (row["secs"] <= rows[-1]["secs"]
+                     or row["km"] < rows[-1]["km"]):
+            raise UiFailure("Recording time or distance is not monotonic")
+        rows.append(row)
+    return rows
+
+
+def training_effort_watts(document: dict, watts: float, gear: int) -> float:
+    conversion = document["conversion"]
+    if conversion["preset"] != "workout-first":
+        raise UiFailure("Failure fixture requires the workout-first prescription")
+    reference = conversion["parameters"].get("referenceGear", 6)
+    sprockets = (51, 45, 39, 33, 28, 24, 21, 18, 16, 14, 12, 10)
+    if (not isinstance(gear, int) or not 1 <= gear <= 12
+            or not isinstance(reference, int) or not 1 <= reference <= 12
+            or not math.isfinite(watts) or watts < 0):
+        raise UiFailure("Invalid prescription effort or gear")
+    value = min(1500.0, watts) * sprockets[reference - 1] / sprockets[gear - 1]
+    return min(1500.0, value)
+
+
+def training_prescribed_target(document: dict, position_ms: float, gear: int) -> int:
+    """Read the persisted terrain-effort prescription, including variation."""
+    if not math.isfinite(position_ms) or position_ms < 0:
+        raise UiFailure("Invalid prescription position")
+    for interval in training_effort_sections(document):
+        start = interval["startMs"]
+        duration = interval["durationMs"]
+        if start <= position_ms < start + duration:
+            fraction = (position_ms - start) / duration
+            watts = (interval["startWatts"]
+                     + fraction * (interval["endWatts"] - interval["startWatts"]))
+            return math.floor(training_effort_watts(document, watts, gear) + 0.5)
+    raise UiFailure("Dispatch position is outside the prepared prescription")
+
+
+def training_effort_sections(document: dict) -> list[dict]:
+    sections = document.get("course", {}).get("sections")
+    if sections is None:
+        return document["source"]["intervals"]
+    result = []
+    for section in sections:
+        start = section.get("referenceEffortStartWatts", -1)
+        end = section.get("referenceEffortEndWatts", -1)
+        if start < 0 or end < 0:
+            start, end = section["targetStartWatts"], section["targetEndWatts"]
+        result.append({"startMs": section["sourceStartMs"],
+                       "durationMs": section["nominalDurationMs"],
+                       "startWatts": start, "endWatts": end})
+    return result
+
+
+def training_prescribed_targets(document: dict, position_ms: float, gear: int) -> set[int]:
+    # Production reports llround(section progress * nominal duration). Evaluate
+    # only that +/-0.5 ms bin, separately on each side of section discontinuities.
+    # Do not accept the intervening watts of a discontinuous power step.
+    values = set()
+    for interval in training_effort_sections(document):
+        low = max(interval["startMs"], position_ms - 0.5)
+        high = min(interval["startMs"] + interval["durationMs"], position_ms + 0.5)
+        if low >= high:
+            continue
+        endpoints = [training_prescribed_target(document, sample, gear)
+                     for sample in (low, math.nextafter(high, low))]
+        values.update(range(min(endpoints), max(endpoints) + 1))
+    if not values:
+        raise UiFailure("Dispatch position has no valid prescription quantization bin")
+    return values
+
+
+def training_recorded_targets(document: dict, distance_km: float, gear: int) -> set[int]:
+    """CSV stores current course effort, not a log of dispatched commands.
+
+    This no-seek fixture advances displayDistance and rawWorkoutDistance by the
+    same increments. diskUpdate writes km with QTextStream's default six
+    significant digits. guiUpdate truncates its continuous target into long
+    load; dispatch can instead leave a rounded target at the same position.
+    Evaluate just those conversions within the serialized distance bin.
+    """
+    if not math.isfinite(distance_km) or distance_km < 0:
+        raise UiFailure("Invalid recorded prescription distance")
+    exponent = math.floor(math.log10(distance_km)) if distance_km else 0
+    half_bin_km = 0.5 * 10 ** (exponent - 5) if distance_km else 0.0
+    # Below an exact decade (e.g. 0.01), six significant digits give ten
+    # times finer spacing than above it. A symmetric bin admits other targets.
+    lower_half_bin_km = half_bin_km / 10 if distance_km == 10 ** exponent else half_bin_km
+    low_m = max(0.0, (distance_km - lower_half_bin_km) * 1000.0)
+    high_m = (distance_km + half_bin_km) * 1000.0
+    sections = document.get("course", {}).get("sections", [])
+    values = set()
+    for section, effort in zip(sections, training_effort_sections(document)):
+        start, length = section["startDistanceMeters"], section["lengthMeters"]
+        if not math.isfinite(start) or not math.isfinite(length) or length <= 0:
+            raise UiFailure("Invalid persisted course distance section")
+        low, high = max(start, low_m), min(start + length, high_m)
+        if low > high or low >= start + length:
+            continue
+        samples = (low, math.nextafter(high, low) if high > low else low)
+        endpoints = []
+        for distance in samples:
+            fraction = (distance - start) / length
+            watts = effort["startWatts"] + fraction * (effort["endWatts"] - effort["startWatts"])
+            value = training_effort_watts(document, watts, gear)
+            endpoints.extend((math.trunc(value), math.floor(value + 0.5)))
+        # Keep discontinuous sections separate: never fill the watts between
+        # the two sides of a step, even when distance precision straddles it.
+        values.update(range(min(endpoints), max(endpoints) + 1))
+    if not values:
+        raise UiFailure("Recorded distance is outside the prepared prescription")
+    return values
+
+
+def training_dispatches(text: str, expected_pid: int | None = None) -> list[dict]:
+    """Pair real controller receipts with the subsequent coordinator trace."""
+    pending = None
+    result = []
+    for line in text.splitlines():
+        receiver = "gc-test-device event=load "
+        target = "workout-game-trainer-target "
+        if receiver in line:
+            fields = dict(word.split("=", 1) for word in line.split(receiver, 1)[1].split()
+                          if "=" in word)
+            try:
+                if expected_pid is not None and int(fields["pid"]) != expected_pid:
+                    raise ValueError("receipt belongs to another application process")
+                pending = {key: float(fields[key])
+                           for key in ("mono_ms", "value", "accepted", "gear")}
+                if (not all(math.isfinite(value) for value in pending.values())
+                        or not pending["gear"].is_integer()
+                        or not 1 <= pending["gear"] <= 12
+                        or pending["value"] != pending["accepted"]):
+                    raise ValueError("invalid receipt")
+                pending["gear"] = int(pending["gear"])
+            except (KeyError, ValueError) as error:
+                raise UiFailure("Invalid Data Generator receipt") from error
+        elif target in line:
+            fields = dict(word.split("=", 1) for word in line.split(target, 1)[1].split()
+                          if "=" in word)
+            try:
+                if (pending is None or fields["mode"] != "erg"
+                        or fields["devices"] != "1"
+                        or float(fields["value"]) != pending["value"]):
+                    raise ValueError("unmatched dispatch")
+                position = float(fields["workout_pos"])
+                if not math.isfinite(position) or position < 0:
+                    raise ValueError("invalid position")
+            except (KeyError, ValueError) as error:
+                raise UiFailure("Dispatch lacks a matching real controller receipt") from error
+            result.append(dict(pending, workout_pos=position))
+            pending = None
+    return result
+
+
+def validate_training_phase(before: str, after: str, commands: list[dict], *,
+                            active: bool, gear: int, document: dict) -> dict:
+    previous = training_recording_rows(before)
+    current = training_recording_rows(after)
+    if not after.startswith(before):
+        raise UiFailure("Recording was replaced or rewritten during training")
+    added = current[len(previous):]
+    if not active:
+        if added or commands:
+            raise UiFailure("Recording or target dispatch continued while paused/stopped")
+    else:
+        if len(added) < 2 or len(commands) < 2:
+            raise UiFailure("Active recording or target dispatch stalled")
+        if any(command["gear"] != gear for command in commands):
+            raise UiFailure("Trainer receipts have the wrong virtual gear")
+        positions = [command["workout_pos"] for command in commands]
+        if (positions[-1] <= positions[0]
+                or any(right < left for left, right in zip(positions, positions[1:]))
+                or added[-1]["km"] <= added[0]["km"]
+                or any(row[key] <= 0 for row in added for key in ("cad", "hr", "watts"))):
+            raise UiFailure("Active workout progression or generated telemetry stalled")
+        for row in added:
+            if row["virtualgear"] != gear:
+                raise UiFailure("Recording does not match received targets/gear")
+            expected = training_recorded_targets(document, row["km"], gear)
+            if row["target"] not in expected:
+                raise UiFailure(f"Recorded {row['target']} W at {row['km']} km; "
+                                f"prescribed {sorted(expected)} W for gear {gear}")
+        adjacent = ([previous[-1]] if previous else []) + added
+        if any(right["secs"] - left["secs"] > 3
+               for left, right in zip(adjacent, adjacent[1:])):
+            raise UiFailure("Recording cadence stalled or included paused time")
+    return {"new_rows": len(added), "commands": len(commands), "gear": gear,
+            "active": active}
 
 
 def validate_generated_workout(path: Path) -> dict:
@@ -1612,7 +1871,7 @@ class WorkoutGameUiWorkflow:
             + ", ".join(repr(name) for name in workout_names)
         )
 
-    def open_game(self, workout_ride_expected=None) -> None:
+    def open_game(self, workout_ride_expected=None, game_visible=True) -> None:
         self.enter_train()
         self.select_prepared_workout()
 
@@ -1661,9 +1920,12 @@ class WorkoutGameUiWorkflow:
                         "select Workout Ride before opening Workout Game"
                     )
 
-        self.driver.select_combo_item(
-            ["Workout Game", "Workout Editor"], "Workout Game"
-        )
+        if game_visible:
+            self.driver.select_combo_item(
+                ["Workout Game", "Workout Editor"], "Workout Game"
+            )
+        else:
+            self.driver.select_combo_item(["Workout Editor"], "Workout Editor")
         if workout_ride_expected:
             deadline = time.monotonic() + 5.0
             while (not self.driver.combo_selects(ride_mode, "Workout Ride")
@@ -1673,10 +1935,13 @@ class WorkoutGameUiWorkflow:
                 raise UiFailure(
                     "Workout Game did not automatically select Workout Ride"
                 )
-        self.canvas = self.driver.find_named_any(
-            WORKOUT_GAME_CANVAS_NAMES, showing=True
-        )
-        self.canvas_accessible_name = self.driver.name(self.canvas)
+        if game_visible:
+            self.canvas = self.driver.find_named_any(
+                WORKOUT_GAME_CANVAS_NAMES, showing=True
+            )
+            self.canvas_accessible_name = self.driver.name(self.canvas)
+        else:
+            self.canvas_accessible_name = "no game chart"
         self.existing_records = set(self.records.glob("*.csv"))
         self.existing_activities = set(self.activities.glob("*.json"))
 
@@ -1849,6 +2114,181 @@ class WorkoutGameUiWorkflow:
         if validate_trainer_acceptance_from_environment():
             preserve_game_recording(recording, self.artifacts)
         return activity
+
+
+class TrainingFailureUiWorkflow(WorkoutGameUiWorkflow):
+    """Real app exercise. Mocks of this class prove orchestration only."""
+
+    def __init__(self, driver, root, artifacts, enter_train, case, document):
+        super().__init__(driver, root, artifacts, False, enter_train, ("ui-test-mtb",))
+        self.case = case
+        self.document = document
+        self.phases = []
+        self.run_delays = (0.0, 0.0, 0.0)
+        self.training_log_offset = 0
+
+    def log_text(self):
+        stderr = (self.artifacts / "application.log").read_text(encoding="utf-8", errors="replace")
+        runtime = self.root / "library/goldencheetah.log"
+        # Debug builds redirect stderr; release --debug normally stays on it.
+        # Choose one stream so mirrored receipts can never be counted twice.
+        if "gc-test-" not in stderr and runtime.is_file():
+            if runtime.is_symlink() or f'"{runtime}"' not in stderr:
+                raise UiFailure("Redirected log does not belong to this isolated athlete root")
+            return runtime.read_text(encoding="utf-8", errors="replace")
+        return stderr
+
+    def run_failure_case(self):
+        print(f"Training failure case {self.case}: selecting generated course", flush=True)
+        self.open_game(workout_ride_expected=False, game_visible=self.case != "absent")
+        reference = self.document["conversion"]["parameters"].get("referenceGear", 6)
+        self.driver.set_value(self.gear, reference)
+        self.training_log_offset = len(self.log_text())
+        print(f"Training failure case {self.case}: starting recording", flush=True)
+        recording = self.start()
+        self.wait_initial_evidence(recording)
+        self.wait_fault_evidence()
+        self.hold_phase("initial", recording, active=True, gear=reference)
+        self.driver.set_value(self.gear, reference + 1)
+        self.hold_phase("gear-up", recording, active=True, gear=reference + 1)
+        self.driver.set_value(self.gear, reference)
+        self.hold_phase("gear-back", recording, active=True, gear=reference)
+        self.toggle_pause()
+        self.hold_phase("paused", recording, active=False, gear=reference)
+        self.driver.set_value(self.gear, reference + 1)
+        self.hold_phase("paused-gear", recording, active=False, gear=reference + 1)
+        self.toggle_pause()
+        self.hold_phase("resumed", recording, active=True, gear=reference + 1)
+        self.stop_and_continue(recording)
+        self.hold_phase("continued", recording, active=True, gear=reference + 1)
+        self.stop_save_and_reopen(recording)
+        self.hold_phase("stopped", recording, active=False, gear=reference + 1)
+        self.finish_evidence(recording)
+
+    def wait_initial_evidence(self, recording):
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            text = recording.read_text(encoding="utf-8")
+            try:
+                rows = training_recording_rows(text)
+            except UiFailure:
+                rows = []
+            if len(rows) >= 2:
+                log = self.log_text()
+                if self.case == "runner" and "event=runner-unavailable " in log:
+                    raise UiFailure("Runner fault preceded the initial recording evidence")
+                commands = training_dispatches(log[self.training_log_offset:],
+                                               expected_pid=self.driver.app_pgid)
+                if len(commands) < 2:
+                    raise UiFailure("Initial recording lacks real controller receipts")
+                write_text(self.artifacts / "before-fault-recording.csv", text)
+                return
+            time.sleep(0.1)
+        raise UiFailure("Initial real recording did not start")
+
+    def wait_fault_evidence(self):
+        marker = {"runner": "event=runner-unavailable ",
+                  "renderer": "event=renderer-fallback ",
+                  "healthy": "event=frame "}.get(self.case)
+        if marker is None:
+            if "gc-test-game event=constructed" in self.log_text():
+                raise UiFailure("Absent-game baseline instantiated a hidden game chart")
+            return
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            if "gc-test-game " + marker in self.log_text():
+                return
+            time.sleep(0.1)
+        raise UiFailure("Missing compiled-in game fault/frame evidence: " + marker)
+
+    def toggle_pause(self):
+        self.driver.activate(self.driver.find(
+            "Start or pause training", "push button", showing=True))
+
+    def stop_and_continue(self, recording):
+        self.activate_stop_training()
+        self.driver.find("Continue Training", "push button", showing=True, timeout=30.0)
+        self.hold_phase("stop-confirmation", recording, active=False,
+                        gear=int(self.driver.current_value(self.gear)))
+        self.activate_stop_dialog_button("Continue Training")
+        self.stop_training_button = self.driver.find_enabled(
+            "Stop training", "push button", showing=True, timeout=10.0)
+
+    def hold_phase(self, name, recording, *, active, gear):
+        print(f"Training failure case {self.case}: observing {name}", flush=True)
+        # Let one already queued telemetry/disk callback settle, then observe
+        # more than two recording intervals. Never compare exact A/B row counts.
+        time.sleep(1.2)
+        before = recording.read_text(encoding="utf-8")
+        started_ms = time.monotonic() * 1000.0
+        time.sleep(3.2)
+        finished_ms = time.monotonic() * 1000.0
+        after = recording.read_text(encoding="utf-8")
+        log = self.log_text()[self.training_log_offset:]
+        all_commands = training_dispatches(log, expected_pid=self.driver.app_pgid)
+        commands = [command for command in all_commands
+                    if started_ms <= command["mono_ms"] <= finished_ms]
+        # An unpaired controller receipt is also a real command. It must not
+        # disappear merely because the coordinator trace was absent.
+        receipts = []
+        for line in log.splitlines():
+            if "gc-test-device event=load " not in line:
+                continue
+            fields = dict(word.split("=", 1) for word in line.split() if "=" in word)
+            timestamp = float(fields["mono_ms"])
+            if started_ms <= timestamp <= finished_ms:
+                receipts.append(fields)
+        evidence = {"name": name, "start_ms": started_ms, "end_ms": finished_ms,
+                    "before": before, "after": after, "commands": commands}
+        self.phases.append(evidence)
+        write_text(self.artifacts / "training-failure-phases.json",
+                   json.dumps(self.phases, indent=2) + "\n")
+        write_text(self.artifacts / "game-training-recording.csv", after)
+        if len(receipts) != len(commands):
+            raise UiFailure("Unpaired real controller commands during " + name)
+        validate_training_phase(before, after, commands, active=active, gear=gear,
+                                document=self.document)
+        if active and self.case in ("healthy", "renderer"):
+            frames = []
+            for line in log.splitlines():
+                if "gc-test-game event=frame " in line:
+                    fields = dict(word.split("=", 1) for word in line.split() if "=" in word)
+                    if started_ms <= float(fields["mono_ms"]) <= finished_ms:
+                        frames.append(line)
+            if len(frames) < 2:
+                raise UiFailure("Control/fallback game stopped producing fresh frames during " + name)
+        for command in commands:
+            expected = training_prescribed_targets(self.document, command["workout_pos"], gear)
+            if command["value"] not in expected:
+                raise UiFailure(f"{name}: received {command['value']} W, prescribed {sorted(expected)} W")
+
+    def finish_evidence(self, recording):
+        log = self.log_text()
+        self.wait_fault_evidence()
+        if self.case == "runner":
+            following = log.split("gc-test-game event=runner-unavailable ", 1)[1]
+            if "gc-test-game event=frame " in following:
+                raise UiFailure("Unavailable runner was restarted by a lifecycle event")
+        if self.case != "absent" and "Workout Game session course: distance-course" not in log:
+            raise UiFailure("Game did not accept the generated distance course")
+        if "gc-test-device event=mode value=1" not in log:
+            raise UiFailure("Data Generator did not receive ERG mode")
+        reference = self.document["conversion"]["parameters"].get("referenceGear", 6)
+        prescription_values = {
+            training_prescribed_target(self.document, command["workout_pos"], reference)
+            for phase in self.phases for command in phase["commands"]
+        }
+        if len(prescription_values) < 2:
+            raise UiFailure("Post-fault exercise never crossed a prescribed power transition")
+        rows = training_recording_rows(recording.read_text(encoding="utf-8"))
+        if any(right["secs"] - left["secs"] > 3
+               for left, right in zip(rows, rows[1:])):
+            raise UiFailure("Recording clock includes pause time or has a cadence gap")
+        preserve_game_recording(recording, self.artifacts)
+        write_text(self.artifacts / "training-failure-summary.json", json.dumps({
+            "case": self.case, "phases": [phase["name"] for phase in self.phases],
+            "result": "lifecycle-checked", "scope": "recoverable game failure; simulated trainer",
+        }, indent=2) + "\n")
 
 
 class Suite:
@@ -2224,6 +2664,36 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             completed = False
             try:
                 workflow.run()
+                completed = True
+            finally:
+                if not completed:
+                    stop_without_saving()
+
+        def training_failure_independence():
+            case = training_failure_case_from_environment()
+            generator = MtbCourseUiWorkflow(driver, root, artifacts, False, enter_train)
+            if os.environ.get("GC_UI_TRAINING_FAILURE_FIXTURE"):
+                validate_mtb_course_sidecar(generator.sidecar_path, "workout-first", generator.title)
+            else:
+                print("Training failure fixture: creating the production MTB course", flush=True)
+                generator.create("workout-first")
+            course_before = generator.course_path.read_bytes()
+            sidecar_before = generator.sidecar_path.read_bytes()
+            shutil.copy2(generator.course_path, artifacts / "failure-course.crs")
+            shutil.copy2(generator.sidecar_path, artifacts / "failure-course.gcmtb.json")
+            workflow = TrainingFailureUiWorkflow(
+                driver, root, artifacts, enter_train, case, json.loads(sidecar_before))
+            completed = False
+            try:
+                workflow.run_failure_case()
+                if (generator.course_path.read_bytes() != course_before
+                        or generator.sidecar_path.read_bytes() != sidecar_before):
+                    raise UiFailure("Game failure fixture changed the persisted course")
+                summary_path = artifacts / "training-failure-summary.json"
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                summary["result"] = "passed"
+                summary["persisted_course_unchanged"] = True
+                write_text(summary_path, json.dumps(summary, indent=2) + "\n")
                 completed = True
             finally:
                 if not completed:
@@ -2840,6 +3310,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             suite.run("create_edit_mtb_course_lifecycle", mtb_course_lifecycle)
         if "workout_game_training_lifecycle" in selected_tests:
             suite.run("workout_game_training_lifecycle", game_training_lifecycle)
+        if "training_failure_independence" in selected_tests:
+            suite.run("training_failure_independence", training_failure_independence)
         if "workout_generator_lifecycle" in selected_tests:
             suite.run("workout_generator_lifecycle", workout_generator)
         if (

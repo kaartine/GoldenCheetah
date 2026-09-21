@@ -171,6 +171,22 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
         useSceneGraphFallback();
     }
 
+#ifdef GC_WORKOUT_GAME_TEST_FAULTS
+    const QByteArray testCase = qgetenv("GC_UI_TRAINING_FAILURE_CASE");
+    if (!testCase.isEmpty()) {
+        qInfo().noquote().nospace() << "gc-test-game event=constructed case=" << testCase;
+        if (testCase == "renderer" && renderStack->currentWidget() != painterCanvas) {
+            // Traverse the real fallback chain, preserving each backend's stop
+            // behavior. This affects presentation only, never training state.
+            if (renderStack->currentWidget() == threeDContainer) useSceneGraphFallback();
+            if (renderStack->currentWidget() == sceneGraphContainer) useOpenGLFallback();
+            if (renderStack->currentWidget() == openGLCanvas) usePainterFallback();
+            qInfo().noquote().nospace() << "gc-test-game event=renderer-fallback mono_ms="
+                                      << WorkoutGameRunner::monotonicMilliseconds();
+        }
+    }
+#endif
+
     connect(context, qOverload<ErgFile *>(&Context::ergFileSelected),
             this, &WorkoutGameWindow::ergFileSelected);
     connect(context, &Context::telemetryUpdate,
@@ -367,6 +383,11 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
         }
     }
 
+#ifdef GC_WORKOUT_GAME_TEST_FAULTS
+    // A workout/perspective lifecycle event must not resurrect the deliberately
+    // unavailable subsystem during this process's isolated failure case.
+    if (!testRunnerUnavailable)
+#endif
     runner.configure(
             currentCourse, ftpWatts, featureLabEnabled,
             featureLabGapScenario);
@@ -430,6 +451,9 @@ void WorkoutGameWindow::workoutPositionDiscontinuity()
 
 void WorkoutGameWindow::start()
 {
+#ifdef GC_WORKOUT_GAME_TEST_FAULTS
+    testSessionStartedMs = WorkoutGameRunner::monotonicMilliseconds();
+#endif
     if (sessionState.hasDeferredWorkoutSelection()) {
         ergFileSelected(context ? context->currentErgFile() : nullptr);
     }
@@ -641,7 +665,29 @@ void WorkoutGameWindow::drainRunnerFrame()
     lastFrame = frame;
     hasFrame = true;
     displayFrame(frame);
+#ifdef GC_WORKOUT_GAME_TEST_FAULTS
+    observeTestFrame();
+#endif
 }
+
+#ifdef GC_WORKOUT_GAME_TEST_FAULTS
+void WorkoutGameWindow::observeTestFrame()
+{
+    const QByteArray testCase = qgetenv("GC_UI_TRAINING_FAILURE_CASE");
+    if (testCase.isEmpty() || !sessionActive || paused || !isVisible()) return;
+    const std::int64_t now = WorkoutGameRunner::monotonicMilliseconds();
+    qInfo().noquote().nospace() << "gc-test-game event=frame mono_ms=" << now;
+    if (testCase == "runner" && !testRunnerUnavailable
+            && testSessionStartedMs >= 0 && now - testSessionStartedMs >= 4000) {
+        // Unlike dropping frames in the view, shutdown actually joins the
+        // worker and clears its configured state. start/resume then do nothing.
+        runner.shutdown();
+        testRunnerUnavailable = true;
+        qInfo().noquote().nospace() << "gc-test-game event=runner-unavailable mono_ms="
+                                  << WorkoutGameRunner::monotonicMilliseconds();
+    }
+}
+#endif
 
 void WorkoutGameWindow::displayFrame(const WorkoutGameEngineFrame &frame)
 {
