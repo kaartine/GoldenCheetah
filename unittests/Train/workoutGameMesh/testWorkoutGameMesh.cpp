@@ -18,6 +18,7 @@
 #include "Train/WorkoutGameOcclusion.h"
 #include "Train/WorkoutGameTrailBranch.h"
 #include "Train/WorkoutGameTrailTile.h"
+#include "Train/WorkoutGameRoadPlan.h"
 
 #include <QTest>
 
