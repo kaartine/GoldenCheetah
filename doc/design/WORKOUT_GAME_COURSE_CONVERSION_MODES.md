@@ -230,13 +230,14 @@ neither the course nor its sidecar exists or changes before the user invokes
 Create/Save. Create/Save persists the already-previewed deterministic result,
 apart from user-edited title/path metadata.
 
-New or explicitly regenerated documents use schema version 6 and conversion
+New or explicitly regenerated documents use schema version 7 and conversion
 algorithm version 6. They store terrain-effort parameters, reference effort at
-section endpoints, source annotations and the distance-authored road plan.
-Schema 6 does not calculate or persist a source-content hash: normalized source
-intervals are the regeneration input. Schemas 1 through 5 remain readable;
-their legacy SHA-256 field is validated when present, and an explicit save
-upgrades to schema 6 without carrying the hash forward.
+section endpoints, source annotations, the distance-authored road plan and its
+bounded resolved asset-physics snapshot. Schema 6 introduced documents without
+a source-content hash, and schema 7 retains that behavior: normalized source
+intervals are the regeneration input. Schemas 1 through 6 remain readable;
+the schema 1 through 5 legacy SHA-256 field is validated when present, and an
+explicit save upgrades to schema 7 without carrying the hash forward.
 
 CRS export maps source lap and timed-text positions onto generated course
 distance. During a game ride, targets and cues follow the same distance-derived

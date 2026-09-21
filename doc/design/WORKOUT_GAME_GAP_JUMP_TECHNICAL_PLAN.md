@@ -32,8 +32,9 @@ feature engine:
   terrain kinds.
 - `WorkoutGameDistanceCourse` and `WorkoutGameCourseDocument` generate and
   persist deterministic MTB courses. The gap-jump work began with schema 1;
-  current schema 6 stores distance-bound terrain effort and omits the legacy
-  source-content hash while retaining string terrain identifiers.
+  current schema 7 stores distance-bound terrain effort, string terrain
+  identifiers and the resolved asset-physics snapshot. It retains schema 6's
+  removal of the legacy source-content hash.
 - `WorkoutGameRoadCourse` turns sections into connected road pieces. Challenge
   placement, obstacle anchors and bypass sockets are authored here.
 - `WorkoutGameFeatureChallenge` measures effort, cadence, speed and adherence.

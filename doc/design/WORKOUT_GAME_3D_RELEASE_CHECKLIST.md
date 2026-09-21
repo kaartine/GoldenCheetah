@@ -1533,9 +1533,11 @@ cannot advance or skip the course. The source effort profile is subdivided at a
 user-selected distance wavelength and receives deterministic bounded variation;
 the generated reference-effort curve drives elevation and effort-semantic
 feature placement. Reference virtual gear 6 follows that curve, while lower or
-higher virtual gears scale the physical ERG resistance around it. New schema-6
-documents omit the redundant source-content SHA-256; schemas 1--5 remain
-readable and explicit save migrates them without retaining the hash.
+higher virtual gears scale the physical ERG resistance around it. Schema 6
+introduced omission of the redundant source-content SHA-256. Current schema-7
+documents retain that rule and add the frozen asset-physics snapshot; schemas
+1--6 remain readable and explicit save migrates them without retaining the
+hash.
 
 **Live-ride feedback hardening (2026-09-09):** Qt Quick 3D is now the default
 on supported desktop OpenGL platforms; the explicit painter and Scene Graph
