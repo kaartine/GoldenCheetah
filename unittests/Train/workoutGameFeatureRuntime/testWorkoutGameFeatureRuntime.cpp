@@ -16,6 +16,7 @@
 #include "Train/WorkoutGameRootGeometry.h"
 #include "Train/WorkoutGameRockGardenGeometry.h"
 #include "Train/WorkoutGameRockSlabGeometry.h"
+#include "Train/WorkoutGameRoadPlan.h"
 #include "Train/WorkoutGameSkinnyGeometry.h"
 
 #include <QTest>
@@ -436,7 +437,7 @@ private slots:
                 road, section);
         QVERIFY(sourcePiece != nullptr);
         const std::size_t pieceIndex = std::size_t(
-                std::distance(road.pieces.data(), sourcePiece));
+                sourcePiece - road.pieces.data());
 
         WorkoutGameRoadPlan plan;
         plan.pieces = road.pieces;
