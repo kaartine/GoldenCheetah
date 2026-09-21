@@ -789,6 +789,24 @@ private slots:
                {-0.50, -0.34, -0.12, 0.18, 0.34, 0.40, 0.59});
     }
 
+    void frozenLegacyFt02FallbackPreservesDistinctSubFemtometreKnots()
+    {
+        const WorkoutGameMesh mesh =
+                WorkoutGameMeshLibrary::legacyFt02V1Fallback(
+                    -1.0e-16, 1.0e-16, 1.0e-16);
+        QVERIFY(mesh.ready);
+        QVERIFY(WorkoutGameMeshLibrary::valid(mesh));
+        QVERIFY(mesh.vertices.size() >= 2u * 7u * 2u);
+        QVERIFY(!mesh.triangles.empty());
+        for (const WorkoutGameMeshVertex &vertex : mesh.vertices) {
+            QVERIFY(std::isfinite(vertex.forwardMeters));
+            QVERIFY(std::isfinite(vertex.rightMeters));
+            QVERIFY(std::isfinite(vertex.upMeters));
+            QVERIFY(std::isfinite(vertex.u));
+            QVERIFY(std::isfinite(vertex.v));
+        }
+    }
+
     void challengeTileKeepsAContinuousTrailSurfaceUnderAnObstacle()
     {
         const WorkoutGameRoadCourse course = featureCourse(

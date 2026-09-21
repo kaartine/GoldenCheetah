@@ -912,8 +912,8 @@ WorkoutGameMesh WorkoutGameMeshLibrary::legacyFt02V1Fallback(
     std::vector<ProfileSample> samples;
     const auto appendSample = [&samples](double forward, double up) {
         if (!samples.empty()
-                && std::abs(samples.back().forward - forward) <= 1e-15
-                && std::abs(samples.back().up - up) <= 1e-15) {
+                && samples.back().forward == forward
+                && samples.back().up == up) {
             return;
         }
         samples.push_back({forward, up});
