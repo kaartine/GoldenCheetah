@@ -445,18 +445,19 @@ private slots:
                 WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
                     plan);
         QVERIFY(frozen);
-        auto snapshot = std::make_shared<
+        auto physicsSnapshot = std::make_shared<
                 WorkoutGameCourseAssetPhysicsSnapshot>(*frozen);
         const std::uint32_t recordIndex =
-                snapshot->pieceBindings[pieceIndex].legacyFt02RecordIndex;
+                physicsSnapshot->pieceBindings[pieceIndex]
+                    .legacyFt02RecordIndex;
         QVERIFY(recordIndex
                 != WorkoutGameCourseAssetPhysicsSnapshot::NoIndex);
         WorkoutGameLegacyFt02Record &record =
-                snapshot->legacyFt02Records[recordIndex];
+                physicsSnapshot->legacyFt02Records[recordIndex];
         record.startMeters = -0.73;
         record.endMeters = 1.31;
         record.heightMeters = 0.89;
-        road.assetPhysicsSnapshot = snapshot;
+        road.assetPhysicsSnapshot = physicsSnapshot;
 
         const double expectedTakeoff = record.obstacleAnchorMeters
                 + record.startMeters;
