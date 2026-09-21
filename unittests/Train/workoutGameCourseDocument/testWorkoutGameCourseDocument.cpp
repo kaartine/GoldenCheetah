@@ -458,12 +458,16 @@ private slots:
             const double rise = (section.endElevationMeters
                     - section.startElevationMeters) / PiecesPerSection;
             for (int local = 0; local < PiecesPerSection; ++local) {
+                const std::size_t global = roadPlan->pieces.size();
                 WorkoutGameRoadPiece piece;
                 piece.sourceSectionIndex = sectionIndex;
                 piece.terrain = section.terrain;
                 piece.startDistanceMeters = connector.zMeters;
                 piece.lengthMeters = length;
                 piece.riseMeters = rise;
+                piece.turnRadians = global == 1275
+                        ? 1.35
+                        : (global % 2 == 0 ? 0.30 : -0.30);
                 piece.difficulty = section.difficulty;
                 piece.geometryAnchorDistanceMeters =
                         piece.startDistanceMeters + length * 0.5;
@@ -472,6 +476,7 @@ private slots:
                 piece.exit = connector;
                 piece.exit.zMeters += length;
                 piece.exit.elevationMeters += rise;
+                piece.exit.headingRadians += piece.turnRadians;
                 connector = piece.exit;
                 roadPlan->pieces.push_back(piece);
             }
