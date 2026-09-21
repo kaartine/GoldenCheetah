@@ -30,6 +30,334 @@ WORKOUT_WIZARD_SOURCE_PATH = (
 
 
 class PreReleaseUiWorkflowTests(unittest.TestCase):
+    @staticmethod
+    def training_course(start=100, end=100):
+        return {
+            "conversion": {"preset": "workout-first", "parameters": {"referenceGear": 6}},
+            "course": {"sections": [{
+                "startDistanceMeters": 0, "lengthMeters": 100,
+                "sourceStartMs": 0, "nominalDurationMs": 10000,
+                "referenceEffortStartWatts": start, "referenceEffortEndWatts": end,
+            }]},
+        }
+
+    def test_csv_oracle_uses_own_distance_not_receiver_sample(self):
+        document = self.training_course(320, 340)
+        # 321.665 W at gear 6 becomes 367.617142... W at gear 7.
+        targets = UI.training_recorded_targets(document, 0.008325, 7)
+        self.assertEqual(targets, {367, 368})
+        before = "secs,cad,hr,km,watts,target,virtualgear\n1,90,120,0.001,366,366,7\n"
+        after = before + "2,90,120,0.008325,368,367,7\n3,90,120,0.02,370,370,7\n"
+        commands = [{"mono_ms": t, "value": value, "gear": 7, "workout_pos": t}
+                    for t, value in ((1100, 368), (2100, 369))]
+        UI.validate_training_phase(before, after, commands, active=True, gear=7,
+                                   document=document)
+        for broken in (after.replace(",367,7", ",369,7"),
+                       after.replace(",370,7", ",100,7"),
+                       after.replace(",370,7", ",370,6"),
+                       after.replace("0.02,370", "0.002,370")):
+            with self.subTest(broken=broken), self.assertRaises(UI.UiFailure):
+                UI.validate_training_phase(before, broken, commands, active=True,
+                                           gear=7, document=document)
+
+    def test_csv_oracle_preserves_quantization_and_step_discontinuity(self):
+        document = self.training_course(100, 100)
+        document["course"]["sections"][0]["lengthMeters"] = 1.234567
+        second = dict(document["course"]["sections"][0],
+                      startDistanceMeters=1.234567, lengthMeters=10,
+                      referenceEffortStartWatts=300, referenceEffortEndWatts=300)
+        document["course"]["sections"].append(second)
+        # QTextStream's default six significant digits places this distance
+        # bin across the step. Intermediate watts must never be admitted.
+        self.assertEqual(UI.training_recorded_targets(document, 0.00123457, 6), {100, 300})
+        self.assertEqual(UI.training_recorded_targets(document, 0.00123456, 6), {100})
+        self.assertEqual(UI.training_recorded_targets(document, 0.00123458, 6), {300})
+        for km, gear in ((-1, 6), (float("nan"), 6), (1, 6), (0.001, 13)):
+            with self.subTest(km=km, gear=gear), self.assertRaises(UI.UiFailure):
+                UI.training_recorded_targets(document, km, gear)
+
+    def test_csv_precision_bin_is_asymmetric_at_power_of_ten(self):
+        document = self.training_course()
+        document["course"]["sections"][0]["lengthMeters"] = 9.99997
+        document["course"]["sections"].append(dict(
+            document["course"]["sections"][0], startDistanceMeters=9.99997,
+            lengthMeters=10, referenceEffortStartWatts=300, referenceEffortEndWatts=300))
+        self.assertEqual(UI.training_recorded_targets(document, 0.01, 6), {300})
+        self.assertEqual(UI.training_recorded_targets(document, 0.00999996, 6), {100})
+
+    def test_csv_oracle_zero_reference_gear_and_clamps(self):
+        self.assertEqual(UI.training_recorded_targets(self.training_course(), 0, 6), {100})
+        document = self.training_course(2000, 2000)
+        self.assertEqual(UI.training_recorded_targets(document, 0.001, 6), {1500})
+        self.assertEqual(UI.training_recorded_targets(document, 0.001, 7), {1500})
+        document["conversion"]["parameters"]["referenceGear"] = 7
+        self.assertEqual(UI.training_recorded_targets(document, 0.001, 7), {1500})
+        # Input clamps to 1500 before gear-down, not after multiplying 2000.
+        self.assertEqual(UI.training_recorded_targets(document, 0.001, 6), {1312, 1313})
+
+    def test_failure_case_is_explicit_and_rejects_feature_lab(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(UI.training_failure_case_from_environment())
+            for case in ("absent", "healthy", "renderer", "runner"):
+                os.environ["GC_UI_TRAINING_FAILURE_CASE"] = case
+                self.assertEqual(UI.training_failure_case_from_environment(), case)
+            os.environ["GC_UI_TRAINING_FAILURE_CASE"] = "typo"
+            with self.assertRaises(ValueError):
+                UI.training_failure_case_from_environment()
+            os.environ["GC_UI_TRAINING_FAILURE_CASE"] = "runner"
+            os.environ["GC_WORKOUT_GAME_FEATURE_LAB"] = "1"
+            with self.assertRaisesRegex(ValueError, "Feature Lab"):
+                UI.training_failure_case_from_environment()
+
+    def test_failure_fixture_absent_means_no_game_chart_not_a_hidden_one(self):
+        for case in ("absent", "healthy", "renderer", "runner"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                with mock.patch.dict(os.environ, {
+                    "GC_UI_TRAINING_FAILURE_CASE": case,
+                }, clear=True):
+                    UI.prepare(Path(directory))
+                path = Path(directory) / "library" / UI.ATHLETE / "config/train-perspectives.xml"
+                document = UI.ET.parse(path).getroot()
+                self.assertEqual(document.attrib["version"], "4")
+                game_charts = document.findall(".//chart[@id='59']")
+                self.assertEqual(len(game_charts), 0 if case == "absent" else 1)
+                for chart in document.findall(".//chart"):
+                    for dimension in ("widthFactor", "heightFactor"):
+                        self.assertEqual(chart.find(f"property[@name='{dimension}']").attrib["value"], "1")
+
+    def test_recording_parser_fails_closed_and_accepts_actual_csv_spacing(self):
+        header = "secs, cad, hr, km, watts, target, virtualgear,\n"
+        valid = header + "1,90,120,0.001,101,100,6,\n2,91,121,0.002,102,100,6,\n"
+        rows = UI.training_recording_rows(valid)
+        self.assertEqual([row["secs"] for row in rows], [1, 2])
+        for broken in (
+            valid.replace("2,91", "1,91"),
+            valid.replace("0.002", "0.000"),
+            valid.replace("102", "nan"),
+            valid.replace("100,6", "100,6.5"),
+            valid.replace("virtualgear", "missinggear"),
+            valid.rstrip("\n"),
+        ):
+            with self.subTest(broken=broken), self.assertRaises(UI.UiFailure):
+                UI.training_recording_rows(broken)
+
+    def test_failure_target_oracle_uses_prescription_position_and_reference_gear(self):
+        document = {
+            "conversion": {"preset": "workout-first", "parameters": {"referenceGear": 6}},
+            "source": {"intervals": [
+                {"startMs": 0, "durationMs": 6000, "startWatts": 100, "endWatts": 100},
+                {"startMs": 6000, "durationMs": 6000, "startWatts": 220, "endWatts": 100},
+            ]},
+        }
+        self.assertEqual(UI.training_prescribed_target(document, 1000, 6), 100)
+        self.assertEqual(UI.training_prescribed_target(document, 1000, 7), 114)
+        self.assertEqual(UI.training_prescribed_target(document, 6000, 6), 220)
+        self.assertEqual(UI.training_prescribed_target(document, 9000, 6), 160)
+        with self.assertRaises(UI.UiFailure):
+            UI.training_prescribed_target(document, 12000, 6)
+        document["conversion"]["preset"] = "balanced"
+        with self.assertRaises(UI.UiFailure):
+            UI.training_prescribed_target(document, 1000, 6)
+
+    def test_failure_target_oracle_preserves_generated_terrain_effort(self):
+        document = {
+            "conversion": {"preset": "workout-first", "parameters": {"referenceGear": 6}},
+            "source": {"intervals": [
+                {"startMs": 0, "durationMs": 6000, "startWatts": 100, "endWatts": 100},
+            ]},
+            "course": {"sections": [
+                {"sourceStartMs": 0, "nominalDurationMs": 6000,
+                 "targetStartWatts": 100, "targetEndWatts": 100,
+                 "referenceEffortStartWatts": 150, "referenceEffortEndWatts": 130},
+            ]},
+        }
+        self.assertEqual(UI.training_prescribed_target(document, 3000, 6), 140)
+        self.assertEqual(UI.training_prescribed_target(document, 3000, 7), 160)
+        # The dispatch log rounds nominal position to one millisecond. Only
+        # values genuinely possible in that quantization bin may be accepted.
+        self.assertEqual(UI.training_prescribed_targets(document, 3000, 6), {140})
+        self.assertNotIn(100, UI.training_prescribed_targets(document, 3000, 6))
+
+    def test_failure_workflow_reads_the_redirected_debug_log_without_duplicate_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "library").mkdir()
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            app_log = artifacts / "application.log"
+            runtime_log = root / "library/goldencheetah.log"
+            app_log.write_text(f'GoldenCheetah: redirecting log messages (stderr) to file  "{runtime_log}"\n', encoding="utf-8")
+            runtime_log.write_text("gc-test-game event=frame mono_ms=100\n", encoding="utf-8")
+            workflow = object.__new__(UI.TrainingFailureUiWorkflow)
+            workflow.root = root
+            workflow.artifacts = artifacts
+            self.assertEqual(workflow.log_text(), runtime_log.read_text(encoding="utf-8"))
+            app_log.write_text('redirecting log messages to file "/another/session/goldencheetah.log"\n', encoding="utf-8")
+            with self.assertRaises(UI.UiFailure):
+                workflow.log_text()
+            # Release logging may use stderr instead; choose one authority,
+            # never concatenate two copies of the same receipt stream.
+            app_log.write_text("gc-test-game event=frame mono_ms=200\n", encoding="utf-8")
+            self.assertEqual(workflow.log_text(), app_log.read_text(encoding="utf-8"))
+
+    def test_dispatch_evidence_requires_a_matching_real_receiver(self):
+        receiver = "gc-test-device event=load mono_ms=1500 value=100 accepted=100 gear=6\n"
+        target = "workout-game-trainer-target mode=erg value=100 wind=0 workout_pos=200 devices=1\n"
+        dispatches = UI.training_dispatches(receiver + target)
+        self.assertEqual(len(dispatches), 1)
+        self.assertEqual(dispatches[0]["gear"], 6)
+        self.assertEqual(dispatches[0]["workout_pos"], 200)
+        for broken in (
+            target,
+            receiver + target.replace("value=100", "value=110"),
+            receiver.replace("accepted=100", "accepted=90") + target,
+            receiver + target.replace("devices=1", "devices=0"),
+            receiver + target.replace("mode=erg", "mode=slope"),
+            receiver + target + target,
+            receiver.replace("mono_ms=1500", "mono_ms=nan") + target,
+        ):
+            with self.subTest(broken=broken), self.assertRaises(UI.UiFailure):
+                UI.training_dispatches(broken)
+
+    def test_dispatch_evidence_rejects_a_different_application_process(self):
+        receiver = "gc-test-device event=load mono_ms=1500 value=100 accepted=100 gear=6 pid=42\n"
+        target = "workout-game-trainer-target mode=erg value=100 wind=0 workout_pos=200 devices=1\n"
+        self.assertEqual(len(UI.training_dispatches(receiver + target, expected_pid=42)), 1)
+        with self.assertRaises(UI.UiFailure):
+            UI.training_dispatches(receiver + target, expected_pid=43)
+
+    def test_phase_evidence_rejects_stalled_recording_or_commands(self):
+        header = "secs,cad,hr,km,watts,target,virtualgear\n"
+        before = header + "1,90,120,0.001,100,100,6\n"
+        after = before + "2,90,120,0.002,100,100,6\n3,90,120,0.003,100,100,6\n"
+        commands = [{"mono_ms": t, "value": 100, "gear": 6, "workout_pos": t}
+                    for t in (1100, 2100)]
+        UI.validate_training_phase(before, after, commands, active=True, gear=6,
+                                   document=self.training_course())
+        UI.validate_training_phase(before, before, [], active=False, gear=6,
+                                   document=self.training_course())
+        for recording, receipts, active, gear in (
+            (before, commands, True, 6),
+            (after, [], True, 6),
+            (after, commands, True, 7),
+            (after, commands, False, 6),
+            (before, commands, False, 6),
+            (after.replace("100,6", "130,6"), commands, True, 6),
+        ):
+            with self.subTest(active=active, gear=gear), self.assertRaises(UI.UiFailure):
+                UI.validate_training_phase(before, recording, receipts, active=active, gear=gear,
+                                           document=self.training_course())
+
+    def test_active_failure_phase_requires_real_progress_and_live_telemetry(self):
+        before = "secs,cad,hr,km,watts,target,virtualgear\n1,90,120,0.001,100,100,6\n"
+        after = before + "2,90,120,0.002,100,100,6\n3,90,120,0.003,100,100,6\n"
+        commands = [{"mono_ms": t, "value": 100, "gear": 6, "workout_pos": t}
+                    for t in (1100, 2100)]
+        for frozen, receipts in (
+            (after, [dict(command, workout_pos=0) for command in commands]),
+            (after.replace("0.002", "0.001").replace("0.003", "0.001"), commands),
+            (after.replace("90,120,0.002,100", "0,0,0.002,0")
+                  .replace("90,120,0.003,100", "0,0,0.003,0"), commands),
+        ):
+            with self.subTest(frozen=frozen), self.assertRaises(UI.UiFailure):
+                UI.validate_training_phase(before, frozen, receipts, active=True, gear=6,
+                                           document=self.training_course())
+
+    def test_recorded_targets_cannot_reverse_prescribed_progression(self):
+        before = "secs,cad,hr,km,watts,target,virtualgear\n1,90,120,0.001,100,100,6\n"
+        commands = [{"mono_ms": t, "value": value, "gear": 6, "workout_pos": t}
+                    for t, value in ((1100, 100), (2100, 200))]
+        reversed_rows = before + "2,90,120,0.002,200,200,6\n3,90,120,0.003,100,100,6\n"
+        with self.assertRaises(UI.UiFailure):
+            UI.validate_training_phase(before, reversed_rows, commands, active=True, gear=6,
+                                       document=self.training_course())
+
+    def test_failure_workflow_exercises_pause_gears_and_stop_in_order(self):
+        workflow = object.__new__(UI.TrainingFailureUiWorkflow)
+        workflow.case = "runner"
+        workflow.document = {"conversion": {"parameters": {"referenceGear": 6}}}
+        workflow.gear = object()
+        workflow.driver = mock.Mock()
+        workflow.log_text = mock.Mock(return_value="")
+        calls = mock.Mock()
+        for name in ("open_game", "start", "wait_initial_evidence", "wait_fault_evidence",
+                     "hold_phase", "toggle_pause", "stop_and_continue", "stop_save_and_reopen",
+                     "finish_evidence"):
+            setattr(workflow, name, getattr(calls, name))
+        with tempfile.TemporaryDirectory() as directory:
+            workflow.artifacts = Path(directory)
+            (workflow.artifacts / "application.log").write_text("", encoding="utf-8")
+            recording = Path(directory) / "recording.csv"
+            calls.start.return_value = recording
+            workflow.run_failure_case()
+        self.assertEqual(calls.open_game.call_args, mock.call(workout_ride_expected=False, game_visible=True))
+        self.assertEqual(calls.hold_phase.call_args_list, [
+            mock.call("initial", recording, active=True, gear=6),
+            mock.call("gear-up", recording, active=True, gear=7),
+            mock.call("gear-back", recording, active=True, gear=6),
+            mock.call("paused", recording, active=False, gear=6),
+            mock.call("paused-gear", recording, active=False, gear=7),
+            mock.call("resumed", recording, active=True, gear=7),
+            mock.call("continued", recording, active=True, gear=7),
+            mock.call("stopped", recording, active=False, gear=7),
+        ])
+        self.assertEqual(calls.toggle_pause.call_count, 2)
+        calls.wait_initial_evidence.assert_called_once_with(recording)
+        calls.wait_fault_evidence.assert_called_once_with()
+        calls.finish_evidence.assert_called_once_with(recording)
+        calls.stop_and_continue.assert_called_once_with(recording)
+        calls.stop_save_and_reopen.assert_called_once_with(recording)
+        self.assertLess(calls.mock_calls.index(mock.call.wait_initial_evidence(recording)),
+                        calls.mock_calls.index(mock.call.wait_fault_evidence()))
+
+    def test_failure_mode_selects_only_its_isolated_workflow(self):
+        with mock.patch.dict(os.environ, {"GC_UI_TRAINING_FAILURE_CASE": "runner"}, clear=True):
+            self.assertEqual(UI.selected_ui_tests_from_environment(), (
+                "startup_and_main_navigation", "prepared_workout_library_import",
+                "training_failure_independence", "graceful_shutdown_request",
+            ))
+
+    def test_failure_stop_confirmation_is_observed_before_continue(self):
+        workflow = object.__new__(UI.TrainingFailureUiWorkflow)
+        calls = mock.Mock()
+        workflow.driver = calls.driver
+        workflow.gear = object()
+        workflow.driver.current_value.return_value = 7
+        workflow.activate_stop_training = calls.stop
+        workflow.activate_stop_dialog_button = calls.dialog
+        workflow.hold_phase = calls.hold
+        recording = Path("recording.csv")
+        workflow.stop_and_continue(recording)
+        calls.hold.assert_called_once_with("stop-confirmation", recording, active=False, gear=7)
+        self.assertLess(calls.mock_calls.index(mock.call.stop()),
+                        calls.mock_calls.index(mock.call.hold("stop-confirmation", recording, active=False, gear=7)))
+        self.assertLess(calls.mock_calls.index(mock.call.hold("stop-confirmation", recording, active=False, gear=7)),
+                        calls.mock_calls.index(mock.call.dialog("Continue Training")))
+
+    def test_failure_runner_does_not_require_visual_continuity_or_disable_sandbox(self):
+        source = RUNNER_PATH.read_text(encoding="utf-8")
+        self.assertIn('case "${GC_UI_TRAINING_FAILURE_CASE:-}" in', source)
+        self.assertIn('unset QTWEBENGINE_DISABLE_SANDBOX', source)
+        self.assertIn('export GC_WORKOUT_GAME_FORCE_PAINTER=0', source)
+        self.assertIn('[ -z "${GC_UI_TRAINING_FAILURE_CASE:-}" ]', source)
+
+    def test_failure_fixture_can_reuse_the_exact_generated_course(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "fixture"
+            fixture.mkdir()
+            (fixture / "failure-course.crs").write_bytes(b"generated course\n")
+            (fixture / "failure-course.gcmtb.json").write_bytes(b'{"preserved":true}\n')
+            root = Path(directory) / "new-run"
+            with mock.patch.dict(os.environ, {
+                "GC_UI_TRAINING_FAILURE_CASE": "runner",
+                "GC_UI_TRAINING_FAILURE_FIXTURE": str(fixture),
+            }, clear=True):
+                UI.prepare(root)
+            workouts = root / "library" / UI.ATHLETE / "workouts"
+            self.assertEqual((workouts / "ui-test-mtb.crs").read_bytes(), b"generated course\n")
+            self.assertEqual((workouts / "ui-test-mtb.gcmtb.json").read_bytes(), b'{"preserved":true}\n')
+
+
     def test_generated_workout_validator_accepts_monotonic_mrc(self):
         with tempfile.TemporaryDirectory() as directory:
             workout = Path(directory) / "generated.mrc"

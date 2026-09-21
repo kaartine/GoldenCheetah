@@ -16,6 +16,35 @@ ARTIFACT_DIR=${2:-$PWD/ui-test-artifacts}
     exit 2
 }
 
+# This mode requires a dedicated build with GC_WORKOUT_GAME_TEST_FAULTS.
+# Run healthy first, then reuse its failure-course pair via
+# GC_UI_TRAINING_FAILURE_FIXTURE for absent/renderer/runner, preserving inputs.
+case "${GC_UI_TRAINING_FAILURE_CASE:-}" in
+    "") ;;
+    absent|healthy|renderer|runner)
+        if [ -n "${GC_UI_EXISTING_DISPLAY:-}" ]; then
+            echo "Failure independence requires an isolated Xvfb/D-Bus session" >&2
+            exit 2
+        fi
+        if [ "${GC_WORKOUT_GAME_FEATURE_LAB:-0}" != 0 ] || \
+           [ "${GC_UI_VALIDATE_TRAINER_ACCEPTANCE:-0}" != 0 ] || \
+           [ "${GC_UI_VALIDATE_MTB_COURSE:-0}" != 0 ] || \
+           [ "${GC_UI_REQUIRE_QUICK3D_EVIDENCE:-0}" != 0 ]; then
+            echo "Failure independence must run without Feature Lab or visual-acceptance gates" >&2
+            exit 2
+        fi
+        export GC_WORKOUT_GAME_TRACE=1
+        export GC_WORKOUT_GAME_FORCE_PAINTER=0
+        export GC_WORKOUT_GAME_3D=0
+        export GC_UI_REQUIRE_QUICK3D_EVIDENCE=0
+        export GC_UI_GENERATOR_MODE=on-target
+        ;;
+    *)
+        echo "Invalid GC_UI_TRAINING_FAILURE_CASE" >&2
+        exit 2
+        ;;
+esac
+
 case "${GC_UI_USE_HARDWARE_GL:-0}" in
     0|1) ;;
     *)
@@ -95,12 +124,31 @@ cleanup()
     [ -z "$XVFB_PID" ] || kill "$XVFB_PID" 2>/dev/null
     [ -z "$VIDEO_PID" ] || wait "$VIDEO_PID" 2>/dev/null
     [ -z "$XVFB_PID" ] || wait "$XVFB_PID" 2>/dev/null
+    if [ -n "${GC_UI_TRAINING_FAILURE_CASE:-}" ]; then
+        # Private D-Bus services may still hold FUSE mounts until the outer bus
+        # session exits. Preserve this small synthetic fixture for inspection;
+        # do not recursively remove a still-mounted runtime directory.
+        printf '%s\n' "$TEST_ROOT" >"$ARTIFACT_DIR/fixture-root.txt"
+        return
+    fi
     rm -rf -- "$TEST_ROOT"
 }
 trap cleanup EXIT HUP INT TERM
 
 python3 "$SCRIPT_DIR/pre_release_ui.py" prepare "$TEST_ROOT"
-configure_ui_test_xdg_environment "$TEST_ROOT/home"
+if [ -n "${GC_UI_TRAINING_FAILURE_CASE:-}" ]; then
+    # Isolate application settings without changing the user's HOME.
+    export XDG_CONFIG_HOME=$TEST_ROOT/home/.config
+    export XDG_CACHE_HOME=$TEST_ROOT/home/.cache
+    export XDG_DATA_HOME=$TEST_ROOT/home/.local/share
+    export XDG_STATE_HOME=$TEST_ROOT/home/.local/state
+    export XDG_RUNTIME_DIR=${PRESERVED_XDG_RUNTIME_DIR:-$TEST_ROOT/home/.runtime}
+    mkdir -p -- "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" \
+        "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
+    chmod 700 -- "$XDG_RUNTIME_DIR"
+else
+    configure_ui_test_xdg_environment "$TEST_ROOT/home"
+fi
 
 if [ -n "${GC_UI_EXISTING_DISPLAY:-}" ]; then
     export DISPLAY=$GC_UI_EXISTING_DISPLAY
@@ -141,6 +189,12 @@ else
         exit 1
     }
     dbus-update-activation-environment DISPLAY
+    if [ -n "${GC_UI_TRAINING_FAILURE_CASE:-}" ]; then
+        # The private bus was started before the fixture paths existed. Its
+        # activated services must use the same isolated settings/cache roots.
+        dbus-update-activation-environment XDG_CONFIG_HOME XDG_CACHE_HOME \
+            XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR
+    fi
 fi
 
 AT_SPI_REPLY=$(gdbus call --session --dest org.a11y.Bus \
@@ -182,7 +236,11 @@ if [ -n "${GC_UI_EXPECTED_GPU_PATTERN:-}" ] && \
     echo "GC_UI_EXPECTED_GPU_PATTERN requires GC_UI_USE_HARDWARE_GL=1" >&2
     exit 2
 fi
-export QTWEBENGINE_DISABLE_SANDBOX=1
+if [ -n "${GC_UI_TRAINING_FAILURE_CASE:-}" ]; then
+    unset QTWEBENGINE_DISABLE_SANDBOX
+else
+    export QTWEBENGINE_DISABLE_SANDBOX=1
+fi
 export APPIMAGE_EXTRACT_AND_RUN=1
 configure_ui_test_workout_game_renderer
 if [ -n "${GC_UI_REQUIRE_QUICK3D_EVIDENCE+x}" ]; then
@@ -244,6 +302,11 @@ python3 "$SCRIPT_DIR/pre_release_ui.py" exercise \
 STATUS=$?
 set -e
 
+if [ -n "${GC_UI_TRAINING_FAILURE_CASE:-}" ]; then
+    # Also retain partial recordings when an assertion or GUI prerequisite fails.
+    cp -a -- "$TEST_ROOT/library/UiTestAthlete/records" "$ARTIFACT_DIR/raw-recordings"
+fi
+
 if [ -f "$TEST_ROOT/library/goldencheetah.log" ]; then
     cp -f -- "$TEST_ROOT/library/goldencheetah.log" \
         "$ARTIFACT_DIR/goldencheetah.log"
@@ -260,7 +323,8 @@ if [ "$STATUS" -eq 0 ] && [ "${GC_UI_VALIDATE_MTB_COURSE:-0}" = 1 ]; then
     fi
 fi
 
-if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
+if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ] && \
+    [ -z "${GC_UI_TRAINING_FAILURE_CASE:-}" ]; then
     TRACE_LOG=$ARTIFACT_DIR/application.log
     if [ "$REQUIRE_QUICK3D_EVIDENCE" = 0 ] && \
         [ -f "$ARTIFACT_DIR/goldencheetah.log" ] && \

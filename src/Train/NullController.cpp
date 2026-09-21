@@ -23,6 +23,10 @@
 #include "NullController.h"
 #include "RealtimeData.h"
 #include "PhysicsUtility.h"
+#ifdef GC_WORKOUT_GAME_TEST_FAULTS
+#include "TrainSidebar.h"
+#include <QCoreApplication>
+#endif
 
 NullController::NullController(TrainSidebar *parent,
                                DeviceConfiguration *dc)
@@ -64,12 +68,31 @@ bool NullController::find() {
     return true;
 }
 
-void NullController::setMode(int ) {
+void NullController::setMode(int mode) {
+#ifdef GC_WORKOUT_GAME_TEST_FAULTS
+    if (!qgetenv("GC_UI_TRAINING_FAILURE_CASE").isEmpty()) {
+        qInfo().noquote().nospace() << "gc-test-device event=mode value=" << mode
+                                  << " pid=" << QCoreApplication::applicationPid();
+    }
+#else
+    Q_UNUSED(mode);
+#endif
     restart();
 }
 
 void NullController::setLoad(double watts) {
     generator.setTargetWatts(watts);
+#ifdef GC_WORKOUT_GAME_TEST_FAULTS
+    if (!qgetenv("GC_UI_TRAINING_FAILURE_CASE").isEmpty()) {
+        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+        qInfo().noquote().nospace()
+                << "gc-test-device event=load mono_ms=" << now
+                << " value=" << watts << " accepted=" << generator.targetWatts()
+                << " gear=" << (parent ? parent->virtualGear() : 0)
+                << " pid=" << QCoreApplication::applicationPid();
+    }
+#endif
 }
 
 void NullController::getRealtimeData(RealtimeData &rtData) {
