@@ -8,9 +8,12 @@
  */
 
 #include "WorkoutGameRoadPlan.h"
+#include "WorkoutGameAssetPhysicsSampler.h"
 #include "WorkoutGameChallengeGeometry.h"
 
+#include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace {
 
@@ -82,8 +85,16 @@ bool decisionMustPrecedeObstacle(WorkoutGameTerrainKind terrain)
     }
 }
 
-double latestChallengeDecisionDistance(const WorkoutGameRoadPiece &piece)
+double latestChallengeDecisionDistance(
+        const WorkoutGameRoadPiece &piece,
+        const WorkoutGameLegacyFt02Geometry *legacyFt02)
 {
+    if (legacyFt02
+            && legacyFt02->status == WorkoutGameAssetRenderFitStatus::Ready
+            && legacyFt02->enabled
+            && piece.terrain == WorkoutGameTerrainKind::LogOver) {
+        return legacyFt02->obstacleAnchorMeters + legacyFt02->startMeters;
+    }
     if (piece.terrain == WorkoutGameTerrainKind::BunnyHop
             || piece.terrain == WorkoutGameTerrainKind::LogOver
             || piece.terrain == WorkoutGameTerrainKind::Tabletop) {
@@ -246,7 +257,8 @@ bool validChallengeProfile(
 
 bool validChallenge(
         const WorkoutGameRoadPiece &piece,
-        double courseEndMeters)
+        double courseEndMeters,
+        const WorkoutGameLegacyFt02Geometry *legacyFt02)
 {
     const WorkoutGameRoadChallengeGate &gate = piece.challenge;
     const bool fieldsValid = finiteValue(gate.prepareDistanceMeters)
@@ -264,7 +276,7 @@ bool validChallenge(
                 <= gate.decisionDistanceMeters + DistanceToleranceMeters
             && (!decisionMustPrecedeObstacle(piece.terrain)
                 || gate.decisionDistanceMeters
-                    <= latestChallengeDecisionDistance(piece)
+                    <= latestChallengeDecisionDistance(piece, legacyFt02)
                         + DistanceToleranceMeters)
             && gate.bypassStartDistanceMeters
                 <= gate.bypassEndDistanceMeters + DistanceToleranceMeters;
@@ -295,6 +307,28 @@ bool validChallenge(
                 <= DistanceToleranceMeters
             && piece.qualityExemptionStartDistanceMeters
                 < piece.qualityExemptionEndDistanceMeters;
+}
+
+std::pair<double, double> challengeProtectedSpan(
+        const WorkoutGameRoadPiece &piece,
+        const WorkoutGameLegacyFt02Geometry *legacyFt02)
+{
+    if (!legacyFt02
+            || legacyFt02->status != WorkoutGameAssetRenderFitStatus::Ready
+            || !legacyFt02->enabled
+            || piece.terrain != WorkoutGameTerrainKind::LogOver) {
+        return workoutGameChallengeProtectedSpan(piece);
+    }
+    const double anchor = legacyFt02->obstacleAnchorMeters;
+    return {
+        std::min({piece.challenge.prepareDistanceMeters,
+                  piece.challenge.bypassStartDistanceMeters,
+                  anchor,
+                  anchor + legacyFt02->startMeters}),
+        std::max({piece.challenge.bypassEndDistanceMeters,
+                  anchor,
+                  anchor + legacyFt02->endMeters})
+    };
 }
 
 bool validGapJump(
@@ -453,7 +487,20 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
         return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
     }
 
-    for (const WorkoutGameRoadPiece &piece : plan.pieces) {
+    for (std::size_t pieceIndex = 0;
+         pieceIndex < plan.pieces.size(); ++pieceIndex) {
+        const WorkoutGameRoadPiece &piece = plan.pieces[pieceIndex];
+        WorkoutGameLegacyFt02Geometry legacyFt02;
+        const WorkoutGameLegacyFt02Geometry *legacyFt02Pointer = nullptr;
+        if (plan.assetPhysicsSnapshot) {
+            legacyFt02 = WorkoutGameAssetPhysicsSampler::legacyFt02Geometry(
+                    *plan.assetPhysicsSnapshot, pieceIndex);
+            if (legacyFt02.status
+                    == WorkoutGameAssetRenderFitStatus::Invalid) {
+                return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+            }
+            legacyFt02Pointer = &legacyFt02;
+        }
         if (piece.sourceSectionIndex >= sourceSectionCount
                 || piece.sourceSectionIndex < previousSection
                 || piece.sourceSectionIndex > previousSection + 1
@@ -488,7 +535,8 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
                 || !validConnector(piece.entry)
                 || !validConnector(piece.exit)
                 || (previousExit && !sameConnector(*previousExit, piece.entry))
-                || !validChallenge(piece, courseEndMeters)
+                || !validChallenge(
+                    piece, courseEndMeters, legacyFt02Pointer)
                 || !validGapJump(piece.gapJump, courseEndMeters)
                 || (plan.generationVersion
                         == WorkoutGameRoadPlan::LegacyGenerationVersion
@@ -514,10 +562,24 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
     }
     for (const WorkoutGameRoadPiece &banked : plan.pieces) {
         if (!banked.bank.enabled) continue;
-        for (const WorkoutGameRoadPiece &feature : plan.pieces) {
+        for (std::size_t featureIndex = 0;
+             featureIndex < plan.pieces.size(); ++featureIndex) {
+            const WorkoutGameRoadPiece &feature = plan.pieces[featureIndex];
             if (!feature.challenge.enabled) continue;
+            WorkoutGameLegacyFt02Geometry legacyFt02;
+            const WorkoutGameLegacyFt02Geometry *legacyFt02Pointer = nullptr;
+            if (plan.assetPhysicsSnapshot) {
+                legacyFt02 = WorkoutGameAssetPhysicsSampler
+                        ::legacyFt02Geometry(
+                            *plan.assetPhysicsSnapshot, featureIndex);
+                if (legacyFt02.status
+                        == WorkoutGameAssetRenderFitStatus::Invalid) {
+                    return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+                }
+                legacyFt02Pointer = &legacyFt02;
+            }
             const auto [protectedStart, protectedEnd] =
-                    workoutGameChallengeProtectedSpan(feature);
+                    challengeProtectedSpan(feature, legacyFt02Pointer);
             if (banked.bank.startDistanceMeters < protectedEnd
                     && banked.bank.endDistanceMeters > protectedStart) {
                 return WorkoutGameRoadPlanValidationStatus::InvalidPlan;

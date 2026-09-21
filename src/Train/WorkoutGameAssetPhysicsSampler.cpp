@@ -206,6 +206,37 @@ std::vector<double> WorkoutGameAssetPhysicsSampler::renderBreakpointsMeters(
     return breakpointsMeters(snapshot, pieceIndex);
 }
 
+WorkoutGameLegacyFt02Geometry
+WorkoutGameAssetPhysicsSampler::legacyFt02Geometry(
+        const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+        std::size_t pieceIndex)
+{
+    using Snapshot = WorkoutGameCourseAssetPhysicsSnapshot;
+    WorkoutGameLegacyFt02Geometry result;
+    if (pieceIndex >= snapshot.pieceBindings.size()) {
+        result.status = WorkoutGameAssetRenderFitStatus::Invalid;
+        return result;
+    }
+    const WorkoutGameAssetPhysicsPieceBinding &piece =
+            snapshot.pieceBindings[pieceIndex];
+    if ((piece.flags & Snapshot::LegacyProceduralV1) == 0) return result;
+    if (piece.legacyFt02RecordIndex == Snapshot::NoIndex) return result;
+
+    const WorkoutGameLegacyFt02Record *record =
+            legacyFt02RecordAt(snapshot, pieceIndex);
+    if (!record) {
+        result.status = WorkoutGameAssetRenderFitStatus::Invalid;
+        return result;
+    }
+    result.status = WorkoutGameAssetRenderFitStatus::Ready;
+    result.enabled = record->enabled;
+    result.obstacleAnchorMeters = record->obstacleAnchorMeters;
+    result.startMeters = record->startMeters;
+    result.endMeters = record->endMeters;
+    result.heightMeters = record->heightMeters;
+    return result;
+}
+
 WorkoutGameAssetRenderFit WorkoutGameAssetPhysicsSampler::renderFit(
         const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
         std::size_t pieceIndex)

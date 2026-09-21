@@ -9,6 +9,7 @@
 
 #include "WorkoutGameFeatureRuntime.h"
 
+#include "WorkoutGameAssetPhysicsSampler.h"
 #include "WorkoutGameBermGeometry.h"
 #include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGameTrailBranch.h"
@@ -245,6 +246,38 @@ bool WorkoutGameFeatureRuntime::configure(
         layout.endDistanceMeters = piece.startDistanceMeters + piece.lengthMeters;
         if (piece.challenge.enabled) {
             layout.challengePieceIndex = pieceIndex;
+            layout.frozenLegacyFt02 = false;
+        }
+        if (configuredCourse.assetPhysicsSnapshot) {
+            const WorkoutGameLegacyFt02Geometry frozen =
+                    WorkoutGameAssetPhysicsSampler::legacyFt02Geometry(
+                        *configuredCourse.assetPhysicsSnapshot, pieceIndex);
+            if (frozen.status == WorkoutGameAssetRenderFitStatus::Invalid) {
+                reset();
+                return false;
+            }
+            if (frozen.status == WorkoutGameAssetRenderFitStatus::Ready) {
+                if (piece.terrain != WorkoutGameTerrainKind::LogOver
+                        || frozen.enabled != piece.challenge.enabled
+                        || (frozen.enabled
+                            && WorkoutGameLegacyBinary64::encode(
+                                frozen.obstacleAnchorMeters)
+                                != WorkoutGameLegacyBinary64::encode(
+                                    piece.challenge
+                                        .obstacleDistanceMeters))) {
+                    reset();
+                    return false;
+                }
+                if (frozen.enabled
+                        && layout.challengePieceIndex == pieceIndex) {
+                    layout.frozenLegacyFt02 = true;
+                    layout.frozenObstacleAnchorMeters =
+                            frozen.obstacleAnchorMeters;
+                    layout.frozenStartMeters = frozen.startMeters;
+                    layout.frozenEndMeters = frozen.endMeters;
+                    layout.frozenHeightMeters = frozen.heightMeters;
+                }
+            }
         }
     }
     for (const WorkoutGameRoadTimelineSection &timeline :
@@ -455,20 +488,31 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     result.prepareDistanceMeters = piece->challenge.prepareDistanceMeters;
     result.decisionDistanceMeters = piece->challenge.decisionDistanceMeters;
     result.obstacleDistanceMeters = piece->challenge.obstacleDistanceMeters;
+    if (layout->frozenLegacyFt02) {
+        result.obstacleDistanceMeters =
+                layout->frozenObstacleAnchorMeters;
+    }
     result.physicalTakeoffDistanceMeters = result.obstacleDistanceMeters;
     result.distanceToObstacleMeters = result.obstacleDistanceMeters
             - result.visualDistanceMeters;
 
     if (result.motion == WorkoutGameFeatureMotion::Jump
             && piece->terrain != WorkoutGameTerrainKind::GapJump) {
-        const WorkoutGameFeatureGeometryProfile geometry =
-                WorkoutGameFeatureGeometry::profile(
-                    piece->terrain, piece->difficulty);
-        if (geometry.ready) {
-            const double takeoffOffset = piece->terrain
-                    == WorkoutGameTerrainKind::Tabletop
-                ? geometry.plateauStartMeters : geometry.startMeters;
-            result.physicalTakeoffDistanceMeters += takeoffOffset;
+        if (layout->frozenLegacyFt02
+                && piece->terrain == WorkoutGameTerrainKind::LogOver) {
+            result.physicalTakeoffDistanceMeters =
+                    layout->frozenObstacleAnchorMeters
+                        + layout->frozenStartMeters;
+        } else {
+            const WorkoutGameFeatureGeometryProfile geometry =
+                    WorkoutGameFeatureGeometry::profile(
+                        piece->terrain, piece->difficulty);
+            if (geometry.ready) {
+                const double takeoffOffset = piece->terrain
+                        == WorkoutGameTerrainKind::Tabletop
+                    ? geometry.plateauStartMeters : geometry.startMeters;
+                result.physicalTakeoffDistanceMeters += takeoffOffset;
+            }
         }
     }
     double actionStart = result.obstacleDistanceMeters;
@@ -832,12 +876,16 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                         * requestedFlightSeconds);
             result.flightDurationSeconds = requestedFlightSeconds;
         } else {
+            const double geometryEndDistance = layout->frozenLegacyFt02
+                    && piece->terrain == WorkoutGameTerrainKind::LogOver
+                ? layout->frozenObstacleAnchorMeters
+                    + layout->frozenEndMeters
+                : result.obstacleDistanceMeters + geometry.endMeters;
             actionEnd = std::min(
                     layout->endDistanceMeters,
                     std::max({actionStart + minimumJumpTravelMeters(
                                         piece->terrain),
-                             result.obstacleDistanceMeters
-                                + geometry.endMeters + 1.5,
+                             geometryEndDistance + 1.5,
                              actionStart + timelineMetersPerSecond
                                 * requestedFlightSeconds}));
             result.flightDurationSeconds = std::clamp(

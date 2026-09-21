@@ -215,6 +215,42 @@ private slots:
         QCOMPARE(asymmetricRenderPoints.back(), 12.3456789 + 0.34);
     }
 
+    void exposesFrozenLegacyGeometryAuthorityExplicitly()
+    {
+        const auto snapshot = legacyFt02Snapshot();
+        const WorkoutGameLegacyFt02Geometry geometry =
+                WorkoutGameAssetPhysicsSampler::legacyFt02Geometry(
+                    snapshot, 0);
+        QCOMPARE(geometry.status, WorkoutGameAssetRenderFitStatus::Ready);
+        QVERIFY(geometry.enabled);
+        QVERIFY(identical(geometry.obstacleAnchorMeters, 12.3456789));
+        QVERIFY(identical(geometry.startMeters, -0.270049));
+        QVERIFY(identical(geometry.endMeters, 0.270049));
+        QVERIFY(identical(geometry.heightMeters, 0.540098));
+
+        const WorkoutGameLegacyFt02Geometry disabled =
+                WorkoutGameAssetPhysicsSampler::legacyFt02Geometry(
+                    legacyFt02Snapshot(false), 0);
+        QCOMPARE(disabled.status, WorkoutGameAssetRenderFitStatus::Ready);
+        QVERIFY(!disabled.enabled);
+
+        auto schemaSix = legacyFt02Snapshot();
+        schemaSix.pieceBindings[0].legacyFt02RecordIndex =
+                WorkoutGameCourseAssetPhysicsSnapshot::NoIndex;
+        QCOMPARE(WorkoutGameAssetPhysicsSampler::legacyFt02Geometry(
+                     schemaSix, 0).status,
+                 WorkoutGameAssetRenderFitStatus::Unbound);
+
+        auto invalid = legacyFt02Snapshot();
+        invalid.pieceBindings[0].legacyFt02RecordIndex = 99;
+        QCOMPARE(WorkoutGameAssetPhysicsSampler::legacyFt02Geometry(
+                     invalid, 0).status,
+                 WorkoutGameAssetRenderFitStatus::Invalid);
+        QCOMPARE(WorkoutGameAssetPhysicsSampler::legacyFt02Geometry(
+                     invalid, 1).status,
+                 WorkoutGameAssetRenderFitStatus::Invalid);
+    }
+
     void validatesLegacyRecordVersionsReferencesAndLimits()
     {
         auto snapshot = legacyFt02Snapshot();

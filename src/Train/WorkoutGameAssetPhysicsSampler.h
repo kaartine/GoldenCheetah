@@ -70,6 +70,17 @@ struct WorkoutGameAssetRenderTransform
     double upExtentMeters = 0.0;
 };
 
+struct WorkoutGameLegacyFt02Geometry
+{
+    WorkoutGameAssetRenderFitStatus status =
+            WorkoutGameAssetRenderFitStatus::Unbound;
+    bool enabled = false;
+    double obstacleAnchorMeters = 0.0;
+    double startMeters = 0.0;
+    double endMeters = 0.0;
+    double heightMeters = 0.0;
+};
+
 class WorkoutGameAssetPhysicsSampler
 {
 public:
@@ -83,6 +94,10 @@ public:
             std::size_t pieceIndex);
 
     static std::vector<double> renderBreakpointsMeters(
+            const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+            std::size_t pieceIndex);
+
+    static WorkoutGameLegacyFt02Geometry legacyFt02Geometry(
             const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
             std::size_t pieceIndex);
 

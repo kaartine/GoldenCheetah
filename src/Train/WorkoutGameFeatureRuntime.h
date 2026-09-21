@@ -107,6 +107,11 @@ private:
                 std::numeric_limits<std::size_t>::max();
         std::size_t terrainPieceIndex =
                 std::numeric_limits<std::size_t>::max();
+        bool frozenLegacyFt02 = false;
+        double frozenObstacleAnchorMeters = 0.0;
+        double frozenStartMeters = 0.0;
+        double frozenEndMeters = 0.0;
+        double frozenHeightMeters = 0.0;
     };
 
     struct GapJumpState

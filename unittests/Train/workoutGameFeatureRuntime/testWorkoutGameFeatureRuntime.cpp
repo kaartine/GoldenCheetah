@@ -487,6 +487,35 @@ private slots:
         }
     }
 
+    void configureRejectsInvalidDeclaredFrozenLegacyGeometry()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameRoadPlan plan;
+        plan.pieces = road.pieces;
+        const auto frozen =
+                WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
+                    plan);
+        QVERIFY(frozen);
+        auto invalid = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>(*frozen);
+        const auto binding = std::find_if(
+                invalid->pieceBindings.begin(),
+                invalid->pieceBindings.end(),
+                [](const WorkoutGameAssetPhysicsPieceBinding &candidate) {
+                    return candidate.legacyFt02RecordIndex
+                            != WorkoutGameCourseAssetPhysicsSnapshot::NoIndex;
+                });
+        QVERIFY(binding != invalid->pieceBindings.end());
+        binding->legacyFt02RecordIndex = std::uint32_t(
+                invalid->legacyFt02Records.size());
+        road.assetPhysicsSnapshot = invalid;
+
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(!runtime.configure(road));
+    }
+
     void airbornePolicyStartsAtThePhysicalTakeoff()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
