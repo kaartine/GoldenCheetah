@@ -11,6 +11,7 @@
 #include "Train/WorkoutGame3DTerrainProfile.h"
 #include "Train/WorkoutGameAssetCatalog.h"
 #include "Train/WorkoutGameAssetPhysicsResolver.h"
+#include "Train/WorkoutGameAssetPhysicsSampler.h"
 #include "Train/WorkoutGameBermGeometry.h"
 #include "Train/WorkoutGameClimbGeometry.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
@@ -28,11 +29,62 @@
 #include <QTest>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <utility>
 
 namespace {
+
+std::array<double, 15> parityScalars(const WorkoutGameWorldSnapshot &frame)
+{
+    const auto &rider = frame.rider;
+    return {{frame.gradePercent, frame.difficulty, frame.terrainOffsetMeters,
+             frame.surfaceElevationMeters, frame.speedMetersPerSecond,
+             frame.landingImpact, rider.distanceMeters, rider.elevationMeters,
+             rider.pitchDegrees, rider.rollDegrees, rider.rearSuspension,
+             rider.frontSuspension, rider.rearWheelRadians,
+             rider.frontWheelRadians, rider.clearanceMeters}};
+}
+
+bool identicalWorldState(const WorkoutGameWorldSnapshot &left,
+                         const WorkoutGameWorldSnapshot &right)
+{
+    const auto a = parityScalars(left);
+    const auto b = parityScalars(right);
+    return left.ready == right.ready && left.generation == right.generation
+            && left.terrain == right.terrain && left.seed == right.seed
+            && left.rider.rearWheelGrounded == right.rider.rearWheelGrounded
+            && left.rider.frontWheelGrounded == right.rider.frontWheelGrounded
+            && left.rider.airborne == right.rider.airborne
+            && left.rider.walking == right.rider.walking
+            && std::memcmp(a.data(), b.data(), a.size() * sizeof(double)) == 0;
+}
+
+WorkoutGameCourse legacyParityCourse(double difficulty, bool rebase)
+{
+    WorkoutGameCourse source;
+    source.status = WorkoutGameCourseStatus::Ready;
+    source.seed = 0x8f12u;
+    WorkoutGameSection log;
+    log.feature = WorkoutGameFeature::SprintJump;
+    log.terrain = WorkoutGameTerrainKind::LogOver;
+    log.durationMs = 30000;
+    log.lengthMeters = 120.0;
+    log.targetWatts = 260.0;
+    log.difficulty = difficulty;
+    log.challengeCount = 1;
+    // Keep one terrain throughout: a terrain change would rebuild the world
+    // again and could hide loss of the frozen snapshot during rebasing.
+    if (rebase) {
+        log.durationMs = 150000;
+        log.lengthMeters = 600.0;
+    }
+    source.sections.push_back(log);
+    source.durationMs = log.startMs + log.durationMs;
+    return source;
+}
 
 WorkoutGameRoadCourse roadWithAssetObstacle(
         double totalLengthMeters,
@@ -83,6 +135,179 @@ class TestWorkoutGameWorld : public QObject
     Q_OBJECT
 
 private slots:
+    void frozenLegacyPreservesSteppedWorld_data()
+    {
+        QTest::addColumn<double>("difficulty");
+        QTest::addColumn<double>("speed");
+        QTest::addColumn<int>("mode"); // 0: uncommitted, 1: action, 2: bypass, 3: control.
+        QTest::addColumn<bool>("rebase");
+        for (double difficulty : {0.0, 0.50049, 1.0}) {
+            for (double speed : {3.33, 5.0, 7.0}) {
+                for (int mode = 0; mode < 3; ++mode) {
+                    const QByteArray name = QStringLiteral("d%1-v%2-mode%3")
+                            .arg(difficulty).arg(speed).arg(mode).toLatin1();
+                    QTest::newRow(name.constData())
+                            << difficulty << speed << mode << false;
+                }
+            }
+        }
+        for (int mode = 0; mode < 3; ++mode) {
+            const QByteArray name = QStringLiteral("rebase-mode%1")
+                    .arg(mode).toLatin1();
+            QTest::newRow(name.constData()) << 0.50049 << 7.0 << mode << true;
+        }
+        QTest::newRow("catalog-contact-sensitivity") << 0.5 << 4.0 << 3 << false;
+    }
+
+    void frozenLegacyPreservesSteppedWorld()
+    {
+        QFETCH(double, difficulty);
+        QFETCH(double, speed);
+        QFETCH(int, mode);
+        QFETCH(bool, rebase);
+        const auto source = legacyParityCourse(difficulty, rebase);
+        auto legacyPlan = WorkoutGameRoadCourseBuilder::generatePlan(source, 200.0);
+        legacyPlan.assetPhysicsSnapshot.reset();
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(
+                     legacyPlan, source.sections.size()),
+                 WorkoutGameRoadPlanValidationStatus::Ready);
+        const auto challenge = std::find_if(legacyPlan.pieces.begin(),
+                legacyPlan.pieces.end(), [](const auto &piece) {
+                    return piece.terrain == WorkoutGameTerrainKind::LogOver
+                            && piece.challenge.enabled;
+                });
+        QVERIFY(challenge != legacyPlan.pieces.end());
+        const double anchor = challenge->challenge.obstacleDistanceMeters;
+        const auto profile = WorkoutGameFeatureGeometry::profile(
+                WorkoutGameTerrainKind::LogOver, challenge->difficulty);
+        auto frozenPlan = legacyPlan;
+        frozenPlan.assetPhysicsSnapshot =
+                WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(legacyPlan);
+        QVERIFY(frozenPlan.assetPhysicsSnapshot);
+        QVERIFY(!frozenPlan.assetPhysicsSnapshot->legacyFt02Records.empty());
+        QVERIFY(frozenPlan.assetPhysicsSnapshot->physicsDefinitions.empty());
+        const std::size_t challengeIndex = std::size_t(std::distance(
+                legacyPlan.pieces.begin(), challenge));
+        const auto &snapshot = *frozenPlan.assetPhysicsSnapshot;
+        const auto &binding = snapshot.pieceBindings.at(challengeIndex);
+        QVERIFY(binding.legacyFt02RecordIndex < snapshot.legacyFt02Records.size());
+        const auto &record = snapshot.legacyFt02Records.at(binding.legacyFt02RecordIndex);
+        QVERIFY(record.enabled);
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(record.obstacleAnchorMeters),
+                 WorkoutGameLegacyBinary64::encode(anchor));
+        const auto apex = WorkoutGameAssetPhysicsSampler::sample(
+                snapshot, challengeIndex, anchor);
+        QVERIFY(apex.bound);
+        QVERIFY(apex.surfacePresent);
+        QVERIFY(!apex.obstacleContact);
+        QVERIFY(!apex.materialDefined);
+        QCOMPARE(apex.offsetMeters, profile.heightMeters);
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(
+                     frozenPlan, source.sections.size()),
+                 WorkoutGameRoadPlanValidationStatus::Ready);
+        const auto legacyRoad = WorkoutGameRoadCourseBuilder::materialize(source, legacyPlan);
+        const auto frozenRoad = WorkoutGameRoadCourseBuilder::materialize(source, frozenPlan);
+        QVERIFY(legacyRoad.ready);
+        QVERIFY(frozenRoad.ready);
+        WorkoutGamePhysics oldPhysics, frozenPhysics, contactControl;
+        QVERIFY(oldPhysics.configure(legacyRoad));
+        QVERIFY(frozenPhysics.configure(frozenRoad));
+        if (mode == 3) {
+            QString error;
+            const auto catalog = WorkoutGameAssetCatalog::load(&error);
+            QVERIFY2(catalog, qPrintable(error));
+            auto contactPlan = legacyPlan;
+            const auto resolved = WorkoutGameAssetPhysicsResolver::resolve(
+                    *catalog, contactPlan.pieces);
+            QCOMPARE(resolved.status, WorkoutGameAssetPhysicsResolveStatus::Ready);
+            QVERIFY(resolved.snapshot);
+            contactPlan.assetPhysicsSnapshot = resolved.snapshot;
+            const auto contactApex = WorkoutGameAssetPhysicsSampler::sample(
+                    *resolved.snapshot, challengeIndex, anchor);
+            QVERIFY(contactApex.obstacleContact);
+            QVERIFY(contactApex.surfacePresent);
+            const auto contactRoad = WorkoutGameRoadCourseBuilder::materialize(
+                    source, contactPlan);
+            QVERIFY(contactRoad.ready);
+            QVERIFY(contactControl.configure(contactRoad));
+        }
+
+        WorkoutGamePhysicsInput input;
+        input.desiredSpeedMetersPerSecond = speed;
+        input.courseSpeedMetersPerSecond = speed;
+        input.effortRatio = 1.0;
+        input.forceGroundFollowing = mode == 2;
+        const double start = rebase ? 0.0 : anchor - 2.0;
+        const double finish = anchor + speed * 4.0;
+        QVERIFY(start >= 0.0);
+        QVERIFY(finish < legacyRoad.totalLengthMeters);
+        if (rebase) QVERIFY(anchor > 220.0);
+        bool airborne = false, landed = false, jumped = false;
+        bool previousAirborne = false;
+        double maximumContactDifference = 0.0;
+        bool crossedRebase = false, crossedAnchor = false;
+        double previousDistance = start;
+        const int ticks = int(std::ceil((finish - start) / speed * 120.0));
+        for (int tick = 0; tick <= ticks; ++tick) {
+            input.workoutTimeMs = (std::int64_t(tick) * 1000 + 119) / 120;
+            input.courseDistanceMeters = start
+                    + speed * double(input.workoutTimeMs) / 1000.0;
+            const auto roadSample = WorkoutGameRoadCourseBuilder::sample(
+                    legacyRoad, input.courseDistanceMeters);
+            QVERIFY(roadSample.ready);
+            input.terrain = roadSample.terrain;
+            input.gradePercent = roadSample.center.gradePercent;
+            input.difficulty = difficulty;
+            input.featureMainLineCommitted = mode == 1
+                    && input.courseDistanceMeters >= anchor - 2.0;
+            input.featureActionId = input.featureMainLineCommitted ? 19 : 0;
+            input.jumpRequested = input.featureMainLineCommitted
+                    && input.courseDistanceMeters >= anchor + profile.startMeters;
+            jumped |= input.jumpRequested;
+            const auto oldFrame = oldPhysics.update(input);
+            const auto frozenFrame = frozenPhysics.update(input);
+            QVERIFY(oldFrame.ready);
+            QVERIFY(frozenFrame.ready);
+            const auto scalars = parityScalars(oldFrame);
+            QVERIFY(std::all_of(scalars.begin(), scalars.end(),
+                               [](double value) { return std::isfinite(value); }));
+            QVERIFY2(identicalWorldState(oldFrame, frozenFrame),
+                     qPrintable(QStringLiteral("first divergent tick %1 at %2 m")
+                         .arg(tick).arg(input.courseDistanceMeters, 0, 'g', 17)));
+            if (mode == 3) {
+                const auto contactFrame = contactControl.update(input);
+                QVERIFY(contactFrame.ready);
+                maximumContactDifference = std::max(maximumContactDifference,
+                        std::abs(contactFrame.rider.elevationMeters
+                                 - oldFrame.rider.elevationMeters));
+            }
+            QVERIFY(oldFrame.rider.distanceMeters >= previousDistance - 1e-8);
+            if (airborne && previousAirborne && !oldFrame.rider.airborne) landed = true;
+            if (jumped && !previousAirborne && oldFrame.rider.airborne) airborne = true;
+            previousAirborne = oldFrame.rider.airborne;
+            if (mode == 2) QVERIFY(!oldFrame.rider.airborne);
+            // Rebase rebuilds do not increment published generation. Continuous
+            // travel from zero crosses the 180 m local threshold at course 176 m.
+            crossedRebase |= previousDistance < 176.0
+                    && oldFrame.rider.distanceMeters >= 176.0;
+            crossedAnchor |= previousDistance < anchor
+                    && oldFrame.rider.distanceMeters >= anchor;
+            previousDistance = oldFrame.rider.distanceMeters;
+        }
+        QVERIFY(crossedAnchor);
+        QVERIFY(previousDistance >= finish);
+        if (rebase) QVERIFY(crossedRebase);
+        QCOMPARE(jumped, mode == 1);
+        if (mode == 1) {
+            QVERIFY(airborne);
+            QVERIFY(landed);
+        }
+        if (mode == 3) {
+            QVERIFY2(maximumContactDifference > 0.05,
+                     "trace must detect replacing decorative legacy geometry with a collider");
+        }
+    }
+
     void resolvedLogWorldMatchesPinnedLegacyDynamics()
     {
         QString catalogError;
