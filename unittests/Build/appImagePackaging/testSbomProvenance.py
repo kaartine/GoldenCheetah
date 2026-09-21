@@ -13,6 +13,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+import urllib.error
 import zipfile
 
 
@@ -591,6 +592,300 @@ class SbomProvenanceTests(unittest.TestCase):
 
         self.assertEqual(len(attempts), 3)
         self.assertEqual(result["sha256"], artifact_digest)
+
+    def test_authenticated_debian_artifact_uses_verified_ubuntu_fallback(self):
+        artifact_payload = b"authenticated Ubuntu archive fixture"
+        artifact_digest = hashlib.sha256(artifact_payload).hexdigest()
+        identity = {
+            "architecture": "amd64",
+            "binary": "libfixture",
+            "binary_version": "1.0",
+        }
+        record = {
+            "filename": "pool/main/f/fixture/libfixture_1.0_amd64.deb",
+            "sha256": artifact_digest,
+            "size": len(artifact_payload),
+            "spec": "libfixture:amd64=1.0",
+        }
+        archive_url = (
+            "https://archive.ubuntu.com/ubuntu/"
+            "pool/main/f/fixture/libfixture_1.0_amd64.deb"
+        )
+
+        def failed_apt_download(arguments, **kwargs):
+            raise subprocess.CalledProcessError(100, arguments)
+
+        def archive_download(request, timeout):
+            self.assertEqual(request.full_url, archive_url)
+            self.assertGreater(timeout, 0)
+            return io.BytesIO(artifact_payload)
+
+        opener = mock.Mock()
+        opener.open.side_effect = archive_download
+        self.runtime_generator.DEBIAN_ARTIFACT_CACHE.clear()
+        with mock.patch.object(
+            self.runtime_generator, "apt_package_record", return_value=record
+        ), mock.patch.object(
+            self.runtime_generator.subprocess,
+            "run",
+            side_effect=failed_apt_download,
+        ), mock.patch(
+            "urllib.request.build_opener", return_value=opener
+        ), mock.patch.object(
+            self.runtime_generator,
+            "deb_regular_file_hashes",
+            return_value={"usr/lib/libfixture.so": "f" * 64},
+        ), mock.patch.object(
+            self.runtime_generator,
+            "APT_DOWNLOAD_RETRY_DELAYS_SECONDS",
+            (),
+            create=True,
+        ):
+            result = self.runtime_generator.authenticated_debian_artifact(identity)
+
+        opener.open.assert_called_once()
+        self.assertEqual(result["sha256"], artifact_digest)
+
+    def test_authenticated_debian_artifact_tries_both_ubuntu_archives(self):
+        artifact_payload = b"authenticated security archive fixture"
+        artifact_digest = hashlib.sha256(artifact_payload).hexdigest()
+        identity = {
+            "architecture": "amd64",
+            "binary": "libfixture",
+            "binary_version": "1.0",
+        }
+        record = {
+            "filename": "pool/main/f/fixture/libfixture_1.0_amd64.deb",
+            "sha256": artifact_digest,
+            "size": len(artifact_payload),
+            "spec": "libfixture:amd64=1.0",
+        }
+
+        opener = mock.Mock()
+        opener.open.side_effect = [
+            OSError("archive unavailable"),
+            io.BytesIO(artifact_payload),
+        ]
+        with mock.patch.object(
+            self.runtime_generator, "apt_package_record", return_value=record
+        ), mock.patch.object(
+            self.runtime_generator.subprocess,
+            "run",
+            side_effect=subprocess.CalledProcessError(100, ["apt-get"]),
+        ), mock.patch(
+            "urllib.request.build_opener", return_value=opener
+        ), mock.patch.object(
+            self.runtime_generator,
+            "deb_regular_file_hashes",
+            return_value={"usr/lib/libfixture.so": "f" * 64},
+        ), mock.patch.object(
+            self.runtime_generator,
+            "APT_DOWNLOAD_RETRY_DELAYS_SECONDS",
+            (),
+            create=True,
+        ):
+            self.runtime_generator.DEBIAN_ARTIFACT_CACHE.clear()
+            result = self.runtime_generator.authenticated_debian_artifact(identity)
+
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertEqual(
+            opener.open.call_args_list[1].args[0].full_url,
+            "https://security.ubuntu.com/ubuntu/"
+            "pool/main/f/fixture/libfixture_1.0_amd64.deb",
+        )
+        self.assertEqual(result["sha256"], artifact_digest)
+
+    def test_authenticated_debian_artifact_rejects_fallback_digest_mismatch(self):
+        expected_payload = b"expected authenticated package"
+        downloaded_payload = b"modified authenticated package"
+        identity = {
+            "architecture": "amd64",
+            "binary": "libfixture",
+            "binary_version": "1.0",
+        }
+        record = {
+            "filename": "pool/main/f/fixture/libfixture_1.0_amd64.deb",
+            "sha256": hashlib.sha256(expected_payload).hexdigest(),
+            "size": len(downloaded_payload),
+            "spec": "libfixture:amd64=1.0",
+        }
+
+        opener = mock.Mock()
+        opener.open.return_value = io.BytesIO(downloaded_payload)
+        with mock.patch.object(
+            self.runtime_generator, "apt_package_record", return_value=record
+        ), mock.patch.object(
+            self.runtime_generator.subprocess,
+            "run",
+            side_effect=subprocess.CalledProcessError(100, ["apt-get"]),
+        ), mock.patch(
+            "urllib.request.build_opener", return_value=opener
+        ), mock.patch.object(
+            self.runtime_generator,
+            "APT_DOWNLOAD_RETRY_DELAYS_SECONDS",
+            (),
+            create=True,
+        ):
+            self.runtime_generator.DEBIAN_ARTIFACT_CACHE.clear()
+            with self.assertRaisesRegex(ValueError, "authenticated .deb"):
+                self.runtime_generator.authenticated_debian_artifact(identity)
+
+        opener.open.assert_called_once()
+
+    def test_ubuntu_fallback_rejects_redirects(self):
+        record = {
+            "filename": "pool/main/f/fixture/libfixture_1.0_amd64.deb",
+            "sha256": hashlib.sha256(b"fixture").hexdigest(),
+            "size": len(b"fixture"),
+        }
+        opener = mock.Mock()
+        opener.open.side_effect = [
+            urllib.error.HTTPError(
+                "https://archive.ubuntu.com/ubuntu/fixture",
+                302,
+                "redirect rejected",
+                {},
+                None,
+            ),
+            urllib.error.HTTPError(
+                "https://security.ubuntu.com/ubuntu/fixture",
+                302,
+                "redirect rejected",
+                {},
+                None,
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "urllib.request.build_opener", return_value=opener
+        ) as build_opener:
+            with self.assertRaisesRegex(ValueError, "official Ubuntu archives"):
+                self.runtime_generator.download_ubuntu_archive_artifact(
+                    record, directory
+                )
+
+        build_opener.assert_called_once()
+        redirect_handler = build_opener.call_args.args[0]
+        self.assertIsInstance(
+            redirect_handler, self.runtime_generator.RejectRedirectHandler
+        )
+        with self.assertRaisesRegex(
+            urllib.error.HTTPError, "redirects are not allowed"
+        ):
+            redirect_handler.redirect_request(
+                SimpleNamespace(full_url="https://archive.ubuntu.com/fixture"),
+                None,
+                302,
+                "Found",
+                {},
+                "https://example.invalid/fixture",
+            )
+        self.assertEqual(opener.open.call_count, 2)
+
+    def test_ubuntu_fallback_rejects_unsafe_artifact_paths(self):
+        unsafe_filenames = (
+            "../libfixture.deb",
+            "/pool/main/libfixture.deb",
+            "pool//main/libfixture.deb",
+            "pool/main/libfixture.deb?download=1",
+            "pool/main/libfixture.deb#fragment",
+            "pool/main/libfixture.tar",
+            "pool\\main\\libfixture.deb",
+            "pool/main/libfixture\x00.deb",
+        )
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "urllib.request.build_opener"
+        ) as build_opener:
+            for filename in unsafe_filenames:
+                with self.subTest(filename=filename), self.assertRaisesRegex(
+                    ValueError, "Ubuntu archive artifact path"
+                ):
+                    self.runtime_generator.download_ubuntu_archive_artifact(
+                        {
+                            "filename": filename,
+                            "sha256": "f" * 64,
+                            "size": 1,
+                        },
+                        directory,
+                    )
+
+        build_opener.assert_not_called()
+
+    def test_ubuntu_fallback_rejects_incorrect_response_sizes(self):
+        expected = b"1234"
+        record = {
+            "filename": "pool/main/f/fixture/libfixture_1.0_amd64.deb",
+            "sha256": hashlib.sha256(expected).hexdigest(),
+            "size": len(expected),
+        }
+
+        for payload in (b"123", b"12345"):
+            opener = mock.Mock()
+            opener.open.return_value = io.BytesIO(payload)
+            with self.subTest(size=len(payload)), tempfile.TemporaryDirectory(
+            ) as directory, mock.patch(
+                "urllib.request.build_opener", return_value=opener
+            ):
+                with self.assertRaisesRegex(ValueError, "size mismatch"):
+                    self.runtime_generator.download_ubuntu_archive_artifact(
+                        record, directory
+                    )
+
+    def test_ubuntu_fallback_fails_when_both_official_hosts_fail(self):
+        record = {
+            "filename": "pool/main/f/fixture/libfixture_1.0_amd64.deb",
+            "sha256": "f" * 64,
+            "size": 1,
+        }
+        opener = mock.Mock()
+        opener.open.side_effect = [
+            OSError("archive unavailable"),
+            OSError("security unavailable"),
+        ]
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "urllib.request.build_opener", return_value=opener
+        ):
+            with self.assertRaisesRegex(ValueError, "official Ubuntu archives"):
+                self.runtime_generator.download_ubuntu_archive_artifact(
+                    record, directory
+                )
+
+        self.assertEqual(opener.open.call_count, 2)
+
+    def test_successful_apt_download_digest_failure_does_not_use_fallback(self):
+        expected_payload = b"expected package"
+        identity = {
+            "architecture": "amd64",
+            "binary": "libfixture",
+            "binary_version": "1.0",
+        }
+        record = {
+            "filename": "pool/main/f/fixture/libfixture_1.0_amd64.deb",
+            "sha256": hashlib.sha256(expected_payload).hexdigest(),
+            "size": len(expected_payload),
+            "spec": "libfixture:amd64=1.0",
+        }
+
+        def apt_download(arguments, **kwargs):
+            Path(kwargs["cwd"], "libfixture_1.0_amd64.deb").write_bytes(
+                b"modified package"
+            )
+
+        with mock.patch.object(
+            self.runtime_generator, "apt_package_record", return_value=record
+        ), mock.patch.object(
+            self.runtime_generator.subprocess,
+            "run",
+            side_effect=apt_download,
+        ), mock.patch.object(
+            self.runtime_generator, "download_ubuntu_archive_artifact"
+        ) as fallback:
+            self.runtime_generator.DEBIAN_ARTIFACT_CACHE.clear()
+            with self.assertRaisesRegex(ValueError, "digest mismatch"):
+                self.runtime_generator.authenticated_debian_artifact(identity)
+
+        fallback.assert_not_called()
 
     def test_debian_provenance_records_authenticated_apt_and_deb_digest(self):
         payload = self.appdir / "lib" / "libauthenticated.so.1"

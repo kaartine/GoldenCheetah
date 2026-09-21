@@ -13,6 +13,8 @@ import tarfile
 import tempfile
 import time
 from urllib.parse import quote, unquote, urlparse
+import urllib.error
+import urllib.request
 
 
 VERSION_RE = re.compile(r"^[^\s\x00\r\n]+$")
@@ -27,6 +29,11 @@ ICU_LIBRARY_RE = re.compile(
     r"^libicu(?:data|i18n|io|test|tu|uc)\.so\.(\d+\.\d+)$"
 )
 APT_DOWNLOAD_RETRY_DELAYS_SECONDS = (2, 5)
+UBUNTU_ARCHIVE_BASE_URLS = (
+    "https://archive.ubuntu.com/ubuntu/",
+    "https://security.ubuntu.com/ubuntu/",
+)
+UBUNTU_ARCHIVE_TIMEOUT_SECONDS = 60
 
 
 def sha256_file(path):
@@ -856,6 +863,86 @@ def deb_regular_file_hashes(path):
 DEBIAN_ARTIFACT_CACHE = {}
 
 
+class RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            code,
+            "Ubuntu archive redirects are not allowed",
+            headers,
+            fp,
+        )
+
+
+def ubuntu_archive_artifact_path(record):
+    filename = record.get("filename")
+    if not isinstance(filename, str) or not filename.isascii():
+        raise ValueError("invalid Ubuntu archive artifact path")
+    parsed = urlparse(filename)
+    path = PurePosixPath(parsed.path)
+    if (
+        filename != parsed.path
+        or "\\" in filename
+        or "\x00" in filename
+        or path.is_absolute()
+        or path.as_posix() != filename
+        or any(part in {"", ".", ".."} for part in filename.split("/"))
+        or not path.name.endswith(".deb")
+    ):
+        raise ValueError("invalid Ubuntu archive artifact path")
+    return path
+
+
+def download_ubuntu_archive_artifact(record, directory):
+    artifact_path = ubuntu_archive_artifact_path(record)
+    fallback_directory = Path(directory, "ubuntu-archive")
+    fallback_directory.mkdir(mode=0o700)
+    destination = fallback_directory / artifact_path.name
+    partial = destination.with_name(destination.name + ".partial")
+    quoted_filename = quote(artifact_path.as_posix(), safe="/")
+    last_error = None
+    opener = urllib.request.build_opener(RejectRedirectHandler())
+
+    for base_url in UBUNTU_ARCHIVE_BASE_URLS:
+        partial.unlink(missing_ok=True)
+        request = urllib.request.Request(
+            base_url + quoted_filename,
+            headers={"User-Agent": "GoldenCheetah-runtime-provenance/1"},
+        )
+        try:
+            digest = hashlib.sha256()
+            size = 0
+            with opener.open(
+                request, timeout=UBUNTU_ARCHIVE_TIMEOUT_SECONDS
+            ) as response, partial.open("xb") as output:
+                for block in iter(lambda: response.read(1024 * 1024), b""):
+                    size += len(block)
+                    if size > record["size"]:
+                        raise ValueError("Ubuntu archive .deb size mismatch")
+                    output.write(block)
+                    digest.update(block)
+        except ValueError:
+            partial.unlink(missing_ok=True)
+            raise
+        except (OSError, urllib.error.URLError) as error:
+            partial.unlink(missing_ok=True)
+            last_error = error
+            continue
+
+        if size != record["size"]:
+            partial.unlink(missing_ok=True)
+            raise ValueError("Ubuntu archive .deb size mismatch")
+        if digest.hexdigest() != record["sha256"]:
+            partial.unlink(missing_ok=True)
+            raise ValueError("Ubuntu archive .deb digest mismatch")
+        partial.replace(destination)
+        return destination
+
+    raise ValueError(
+        "cannot download .deb from official Ubuntu archives"
+    ) from last_error
+
+
 def authenticated_debian_artifact(identity):
     record = apt_package_record(identity)
     cache_key = (
@@ -867,6 +954,9 @@ def authenticated_debian_artifact(identity):
     if cache_key in DEBIAN_ARTIFACT_CACHE:
         return DEBIAN_ARTIFACT_CACHE[cache_key]
     with tempfile.TemporaryDirectory(prefix="gc-debian-provenance-") as directory:
+        apt_directory = Path(directory, "apt")
+        apt_directory.mkdir(mode=0o700)
+        apt_download_error = None
         try:
             for attempt in range(len(APT_DOWNLOAD_RETRY_DELAYS_SECONDS) + 1):
                 try:
@@ -880,7 +970,7 @@ def authenticated_debian_artifact(identity):
                             record["spec"],
                         ],
                         check=True,
-                        cwd=directory,
+                        cwd=apt_directory,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.PIPE,
                     )
@@ -890,13 +980,21 @@ def authenticated_debian_artifact(identity):
                         raise
                     time.sleep(APT_DOWNLOAD_RETRY_DELAYS_SECONDS[attempt])
         except (FileNotFoundError, subprocess.CalledProcessError) as error:
-            raise ValueError(
-                f"cannot acquire authenticated .deb for {record['spec']}"
-            ) from error
-        artifacts = sorted(Path(directory).glob("*.deb"))
-        if len(artifacts) != 1 or artifacts[0].is_symlink():
-            raise ValueError(f"invalid authenticated .deb download for {record['spec']}")
-        artifact = artifacts[0]
+            apt_download_error = error
+        if apt_download_error is not None:
+            try:
+                artifact = download_ubuntu_archive_artifact(record, directory)
+            except (KeyError, ValueError) as error:
+                raise ValueError(
+                    f"cannot acquire authenticated .deb for {record['spec']}"
+                ) from error
+        else:
+            artifacts = sorted(apt_directory.glob("*.deb"))
+            if len(artifacts) != 1 or artifacts[0].is_symlink():
+                raise ValueError(
+                    f"invalid authenticated .deb download for {record['spec']}"
+                )
+            artifact = artifacts[0]
         if (
             artifact.stat().st_size != record["size"]
             or sha256_file(artifact) != record["sha256"]
