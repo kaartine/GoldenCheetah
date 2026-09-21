@@ -170,9 +170,9 @@ class CourseConversionContractTest(unittest.TestCase):
             "nested technical sets",
             "SmoothTrail in every mode",
             "original workout power profile on a time axis",
-            "schema version 6",
+            "schema version 7",
             "does not calculate or persist a source-content hash",
-            "Schemas 1 through 5 remain readable",
+            "Schemas 1 through 6 remain readable",
         )
         for phrase in required:
             with self.subTest(phrase=phrase):

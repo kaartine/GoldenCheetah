@@ -12,8 +12,11 @@
 #include "Train/WorkoutGameAssetPhysicsResolver.h"
 #include "Train/WorkoutGameAssetPhysicsSampler.h"
 #include "Train/WorkoutGameCourseDocument.h"
+#include "Train/WorkoutGameCourseRuntime.h"
+#include "Train/WorkoutGameCourseSourceAdapter.h"
 #include "Train/WorkoutGameDistancePlayback.h"
 #include "Train/WorkoutGameFeatureLab.h"
+#include "Train/WorkoutGameLegacyFt02V1.h"
 #include "Train/WorkoutGameRoadPlan.h"
 #include "Train/WorkoutGameRiderVisual.h"
 #include "Train/WorkoutGameTabletopGeometry.h"
@@ -23,6 +26,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTemporaryDir>
 #include <QTest>
 
 #include <algorithm>
@@ -212,6 +216,24 @@ WorkoutGameCourseDocument legacyLogDocument(double difficulty, double speed,
     return document;
 }
 
+WorkoutGameCourseSourceRequest convertedFt02Request()
+{
+    WorkoutGameCourseSourceRequest request;
+    request.sourceContents = QByteArrayLiteral("converted FT02 fixture");
+    request.sourceFileName = QStringLiteral("converted-ft02.erg");
+    request.ftpWatts = 190.0;
+    request.preset = WorkoutGameCoursePreset::RideFirst;
+    request.seed = 1701u;
+    double timeMs = 0.0;
+    for (int interval = 0; interval < 12; ++interval) {
+        const double watts = interval % 2 == 0 ? 150.0 : 153.0;
+        request.points.push_back({timeMs, watts});
+        timeMs += 5.0 * 60000.0;
+        request.points.push_back({timeMs, watts});
+    }
+    return request;
+}
+
 }
 
 class TestWorkoutGameEngine : public QObject
@@ -219,6 +241,123 @@ class TestWorkoutGameEngine : public QObject
     Q_OBJECT
 
 private slots:
+    void convertedCoursePersistsFrozenLogPhysicsIntoRuntimeEngine()
+    {
+        const WorkoutGameCourseSourceResult converted =
+                WorkoutGameCourseSourceAdapter::convert(
+                    convertedFt02Request());
+        QCOMPARE(converted.status, WorkoutGameCourseSourceStatus::Ready);
+        QCOMPARE(converted.document.schemaVersion,
+                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
+        QVERIFY(converted.document.course.roadPlan);
+        const auto &generatedPlan = *converted.document.course.roadPlan;
+        QVERIFY(generatedPlan.assetPhysicsSnapshot);
+        const auto &generatedSnapshot = *generatedPlan.assetPhysicsSnapshot;
+        QCOMPARE(generatedSnapshot.pieceBindings.size(),
+                 generatedPlan.pieces.size());
+
+        const auto generatedPiece = std::find_if(
+                generatedPlan.pieces.begin(), generatedPlan.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.challenge.enabled
+                            && piece.terrain == WorkoutGameTerrainKind::LogOver;
+                });
+        QVERIFY(generatedPiece != generatedPlan.pieces.end());
+        const std::size_t pieceIndex = std::size_t(
+                generatedPiece - generatedPlan.pieces.begin());
+        const auto &generatedBinding =
+                generatedSnapshot.pieceBindings.at(pieceIndex);
+        QVERIFY((generatedBinding.flags
+                 & WorkoutGameCourseAssetPhysicsSnapshot::LegacyProceduralV1)
+                != 0u);
+        QVERIFY(generatedBinding.legacyFt02RecordIndex
+                < generatedSnapshot.legacyFt02Records.size());
+        const auto &generatedRecord = generatedSnapshot.legacyFt02Records.at(
+                generatedBinding.legacyFt02RecordIndex);
+        const double generatedRadius =
+                WorkoutGameLegacyFt02V1::radiusMeters(
+                    generatedPiece->difficulty);
+        QVERIFY(generatedRecord.enabled);
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(generatedRecord.startMeters),
+                 WorkoutGameLegacyBinary64::encode(-generatedRadius));
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(generatedRecord.endMeters),
+                 WorkoutGameLegacyBinary64::encode(generatedRadius));
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(generatedRecord.heightMeters),
+                 WorkoutGameLegacyBinary64::encode(2.0 * generatedRadius));
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(
+                    generatedRecord.obstacleAnchorMeters),
+                 WorkoutGameLegacyBinary64::encode(
+                    generatedPiece->challenge.obstacleDistanceMeters));
+
+        WorkoutGameCourseDocument persisted = converted.document;
+        auto persistedPlan = std::make_shared<WorkoutGameRoadPlan>(
+                generatedPlan);
+        auto persistedSnapshot =
+                std::make_shared<WorkoutGameCourseAssetPhysicsSnapshot>(
+                    generatedSnapshot);
+        auto &persistedRecord = persistedSnapshot->legacyFt02Records.at(
+                generatedBinding.legacyFt02RecordIndex);
+        persistedRecord.startMeters = -0.731;
+        persistedRecord.endMeters = 1.337;
+        persistedRecord.heightMeters = 0.913;
+        persistedPlan->assetPhysicsSnapshot = persistedSnapshot;
+        persisted.course.roadPlan = persistedPlan;
+        QVERIFY(WorkoutGameCourseDocumentCodec::valid(persisted));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString coursePath = directory.filePath(
+                QStringLiteral("converted-ft02.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    coursePath, persisted, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseRuntime runtime;
+        QCOMPARE(runtime.configure(coursePath),
+                 WorkoutGameCourseRuntimeStatus::Ready);
+        QVERIFY(runtime.visualCourse().roadPlan);
+        const auto &runtimeSnapshot =
+                *runtime.visualCourse().roadPlan->assetPhysicsSnapshot;
+        const auto &runtimeRecord = runtimeSnapshot.legacyFt02Records.at(
+                generatedBinding.legacyFt02RecordIndex);
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(runtimeRecord.startMeters),
+                 WorkoutGameLegacyBinary64::encode(-0.731));
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(runtimeRecord.endMeters),
+                 WorkoutGameLegacyBinary64::encode(1.337));
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(runtimeRecord.heightMeters),
+                 WorkoutGameLegacyBinary64::encode(0.913));
+
+        WorkoutGameDistancePlayback playback;
+        QVERIFY(playback.configure(persisted.course));
+        const WorkoutGameDistancePlaybackSnapshot atObstacle =
+                playback.atDistance(runtimeRecord.obstacleAnchorMeters);
+        QVERIFY(atObstacle.ready && !atObstacle.finished);
+
+        WorkoutGameEngine engine;
+        QVERIFY(engine.configure(runtime.visualCourse(), runtime.ftpWatts(),
+                                 false));
+        WorkoutGameEngineInput input;
+        input.simulation.workoutTimeMs = atObstacle.nominalTimeMs;
+        input.simulation.actualWatts = 220.0;
+        input.simulation.targetWatts = atObstacle.targetWatts;
+        input.simulation.cadenceRpm = 90.0;
+        input.simulation.authoritativeSpeedKph = 28.0;
+        const WorkoutGameEngineFrame frame = engine.update(input, 100000);
+        QVERIFY(frame.visual.feature.ready);
+        QCOMPARE(frame.visual.feature.terrain,
+                 WorkoutGameTerrainKind::LogOver);
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(
+                    frame.visual.feature.obstacleDistanceMeters),
+                 WorkoutGameLegacyBinary64::encode(
+                    runtimeRecord.obstacleAnchorMeters));
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(
+                    frame.visual.feature.physicalTakeoffDistanceMeters),
+                 WorkoutGameLegacyBinary64::encode(
+                    runtimeRecord.obstacleAnchorMeters
+                        + runtimeRecord.startMeters));
+    }
+
     void frozenLogEngineTraceSurvivesCodec_data()
     {
         QTest::addColumn<double>("difficulty");

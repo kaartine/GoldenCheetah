@@ -11,6 +11,8 @@ SOURCES = testWorkoutGameEngine.cpp \
           ../../../src/Train/WorkoutGameCompetition.cpp \
           ../../../src/Train/WorkoutGameCourse.cpp \
           ../../../src/Train/WorkoutGameCourseDocument.cpp \
+          ../../../src/Train/WorkoutGameCourseRuntime.cpp \
+          ../../../src/Train/WorkoutGameCourseSourceAdapter.cpp \
           ../../../src/Train/WorkoutGameCourseConversion.cpp \
           ../../../src/Train/WorkoutGameCourseCrsExporter.cpp \
           ../../../src/Train/WorkoutGameCoursePrescription.cpp \
@@ -37,7 +39,9 @@ SOURCES = testWorkoutGameEngine.cpp \
           ../../../src/Train/WorkoutGameTerrainTransition.cpp \
           ../../../src/Train/WorkoutGameVisualSmoother.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp \
-          ../../../src/Train/WorkoutGameWorldGroundProfile.cpp
+          ../../../src/Train/WorkoutGameWorldGroundProfile.cpp \
+          ../../../src/Train/WorkoutGameWorkoutAdapter.cpp \
+          ../../../src/Train/VirtualDrivetrain.cpp
 
 HEADERS = ../../../src/Train/WorkoutGame3DTerrainProfile.h \
           ../../../src/Train/WorkoutGameEngine.h \
