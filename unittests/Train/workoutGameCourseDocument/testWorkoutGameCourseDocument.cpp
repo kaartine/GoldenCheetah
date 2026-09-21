@@ -547,6 +547,9 @@ private slots:
                     ::MaximumEncodedBytes);
         QJsonObject serializedPlan = root.value(
                 QStringLiteral("roadPlan")).toObject();
+        serializedPlan.insert(QStringLiteral("generationVersion"),
+                              double(WorkoutGameRoadPlan
+                                ::CurrentGenerationVersion));
         serializedPlan.insert(
                 QStringLiteral("assetPhysicsSnapshot"), legacySnapshot);
         root.insert(QStringLiteral("roadPlan"), serializedPlan);
