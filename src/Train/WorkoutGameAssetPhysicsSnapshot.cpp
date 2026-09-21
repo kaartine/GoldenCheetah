@@ -65,8 +65,10 @@ WorkoutGameAssetPhysicsSnapshotValidationStatus validateLegacyFt02Record(
             || std::abs(record.endMeters) > 64.0
             || record.heightMeters <= 0.0
             || record.heightMeters > 16.0
-            || record.obstacleAnchorMeters < 0.0
-            || record.obstacleAnchorMeters > MaximumCourseDistanceMeters) {
+            || (record.enabled
+                && (record.obstacleAnchorMeters < 0.0
+                    || record.obstacleAnchorMeters
+                        > MaximumCourseDistanceMeters))) {
         return Status::InvalidSnapshot;
     }
     return Status::Ready;

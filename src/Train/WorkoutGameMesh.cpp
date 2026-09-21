@@ -275,13 +275,12 @@ void addRootSegment(
     }
 }
 
-WorkoutGameMesh logModel(double difficulty)
+WorkoutGameMesh logModelFromDimensions(
+        double forwardExtentMeters,
+        double heightMeters)
 {
     WorkoutGameMesh mesh;
-    const WorkoutGameFeatureGeometryProfile profile =
-            WorkoutGameFeatureGeometry::profile(
-                    WorkoutGameTerrainKind::LogOver, difficulty);
-    const double radius = profile.heightMeters * 0.5;
+    const double radius = forwardExtentMeters * 0.5;
     constexpr int Rings = 7;
     const double right[Rings] = {
         -0.95, -0.73, -0.40, 0.0, 0.39, 0.72, 0.95
@@ -298,7 +297,7 @@ WorkoutGameMesh logModel(double difficulty)
             const double angle = 2.0 * Pi * double(index)
                     / double(WorkoutGameLogRadialSegments);
             const double verticalScale = std::sin(angle) >= 0.0
-                    ? profile.heightMeters : profile.heightMeters * 0.13;
+                    ? heightMeters : heightMeters * 0.13;
             addVertex(mesh,
                     forwardOffset[ring] + std::cos(angle) * localRadius,
                     right[ring],
@@ -350,6 +349,16 @@ WorkoutGameMesh logModel(double difficulty)
     mesh.exit = {radius, 0.95, 0.0};
     mesh.ready = true;
     return mesh;
+}
+
+WorkoutGameMesh logModel(double difficulty)
+{
+    const WorkoutGameFeatureGeometryProfile profile =
+            WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::LogOver, difficulty);
+    return logModelFromDimensions(
+            profile.endMeters - profile.startMeters,
+            profile.heightMeters);
 }
 
 WorkoutGameMesh bunnyHopModel(double difficulty)
@@ -862,6 +871,12 @@ WorkoutGameMesh WorkoutGameMeshLibrary::feature(
         return {};
     }
     return {};
+}
+
+WorkoutGameMesh WorkoutGameMeshLibrary::legacyFt02V1Fallback()
+{
+    constexpr double NativeExtentMeters = 0.54;
+    return logModelFromDimensions(NativeExtentMeters, NativeExtentMeters);
 }
 
 WorkoutGameMesh WorkoutGameMeshLibrary::trailTile(

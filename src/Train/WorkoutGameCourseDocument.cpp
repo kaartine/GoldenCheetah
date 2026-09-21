@@ -1279,8 +1279,12 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
                 object, "snapshotVersion", snapshot->snapshotVersion)) {
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
-    if (snapshot->snapshotVersion
-            != WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion) {
+    const std::uint32_t encodedSnapshotVersion = snapshot->snapshotVersion;
+    const bool legacyLayout = encodedSnapshotVersion
+            == WorkoutGameCourseAssetPhysicsSnapshot::LegacyLayoutVersion;
+    if (!legacyLayout
+            && encodedSnapshotVersion
+                != WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion) {
         return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
     }
     if (!unsignedNumber(object, "catalogSchemaVersion", snapshot->catalogSchemaVersion)) {
@@ -1289,14 +1293,15 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
     if (snapshot->catalogSchemaVersion > 1) {
         return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
     }
-    if (object.size() != 6) {
+    if (object.size() != (legacyLayout ? 5 : 6)) {
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
     const QJsonValue definitionsValue =
             object.value(QStringLiteral("physicsDefinitions"));
     const QJsonValue bindingsValue = object.value(QStringLiteral("bindings"));
-    const QJsonValue legacyFt02RecordsValue = object.value(
-            QStringLiteral("legacyFt02Records"));
+    const QJsonValue legacyFt02RecordsValue = legacyLayout
+            ? QJsonValue(QJsonArray())
+            : object.value(QStringLiteral("legacyFt02Records"));
     const QJsonValue pieceBindingsValue =
             object.value(QStringLiteral("pieceBindings"));
     if (!definitionsValue.isArray() || !bindingsValue.isArray()
@@ -1484,12 +1489,14 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
         WorkoutGameAssetPhysicsPieceBinding binding;
         const QJsonObject bindingObject = pieceBindingValue.toObject();
         std::int32_t anchorRemainder = 0;
-        if (bindingObject.size() != 6
+        if (bindingObject.size() != (legacyLayout ? 5 : 6)
                 || !unsignedNumber(bindingObject, "definitionIndex", binding.definitionIndex)
                 || !unsignedNumber(bindingObject, "bindingIndex",
                             binding.bindingIndex)
-                || !unsignedNumber(bindingObject, "legacyFt02RecordIndex",
-                            binding.legacyFt02RecordIndex)
+                || (!legacyLayout
+                    && !unsignedNumber(
+                        bindingObject, "legacyFt02RecordIndex",
+                        binding.legacyFt02RecordIndex))
                 || !signed32Number(bindingObject, "obstacleAnchorMm",
                     binding.obstacleAnchorMm)
                 || !signed32Number(bindingObject,
@@ -1502,6 +1509,8 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
                 std::int16_t(anchorRemainder);
         snapshot->pieceBindings.push_back(binding);
     }
+    snapshot->snapshotVersion =
+            WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion;
     const auto validation = WorkoutGameAssetPhysicsSnapshotValidator::validate(
             *snapshot, roadPieceCount);
     const auto status = snapshotStatusToDocumentStatus(validation);

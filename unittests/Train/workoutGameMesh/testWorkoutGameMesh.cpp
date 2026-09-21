@@ -593,6 +593,92 @@ private slots:
                      course, *piece).ready);
     }
 
+    void frozenLegacyFt02FallbackUsesExactAsymmetricBounds()
+    {
+        WorkoutGameRoadCourse course = featureCourse(
+                WorkoutGameTerrainKind::LogOver, 0.0);
+        auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const std::size_t pieceIndex = std::size_t(
+                std::distance(course.pieces.begin(), piece));
+
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        WorkoutGameLegacyFt02Record record;
+        record.enabled = true;
+        record.startMeters = -0.20;
+        record.endMeters = 0.34;
+        record.heightMeters = 0.81;
+        record.obstacleAnchorMeters =
+                piece->challenge.obstacleDistanceMeters;
+        snapshot->legacyFt02Records.push_back(record);
+        snapshot->pieceBindings.resize(course.pieces.size());
+        auto &binding = snapshot->pieceBindings[pieceIndex];
+        binding.flags =
+                WorkoutGameCourseAssetPhysicsSnapshot::LegacyProceduralV1;
+        binding.legacyFt02RecordIndex = 0;
+        course.assetPhysicsSnapshot = snapshot;
+
+        const auto featureInstance = [](const WorkoutGameTrailTile &tile) {
+            return std::find_if(
+                    tile.mainLine.begin(), tile.mainLine.end(),
+                    [](const WorkoutGameMeshInstance &instance) {
+                        return instance.renderLayer
+                                == WorkoutGameMeshRenderLayer::RaisedProp;
+                    });
+        };
+
+        const WorkoutGameTrailTile easy =
+                WorkoutGameTrailTileAssembler::challenge(course, *piece);
+        QVERIFY(easy.ready);
+        const auto easyFeature = featureInstance(easy);
+        QVERIFY(easyFeature != easy.mainLine.end());
+        const double easyStart = easyFeature->anchorDistanceMeters
+                + easyFeature->mesh.entry.forwardMeters
+                    * easyFeature->forwardScale;
+        const double easyEnd = easyFeature->anchorDistanceMeters
+                + easyFeature->mesh.exit.forwardMeters
+                    * easyFeature->forwardScale;
+        QCOMPARE(easyStart, record.obstacleAnchorMeters + record.startMeters);
+        QCOMPARE(easyEnd, record.obstacleAnchorMeters + record.endMeters);
+        QCOMPARE(easyFeature->anchorDistanceMeters,
+                 record.obstacleAnchorMeters
+                    + (record.startMeters + record.endMeters) * 0.5);
+
+        double renderedHeight = 0.0;
+        for (const WorkoutGameMeshVertex &vertex : easyFeature->mesh.vertices) {
+            renderedHeight = std::max(
+                    renderedHeight, vertex.upMeters * easyFeature->upScale);
+        }
+        QCOMPARE(renderedHeight, record.heightMeters);
+
+        piece->difficulty = 1.0;
+        const WorkoutGameTrailTile hard =
+                WorkoutGameTrailTileAssembler::challenge(course, *piece);
+        QVERIFY(hard.ready);
+        const auto hardFeature = featureInstance(hard);
+        QVERIFY(hardFeature != hard.mainLine.end());
+        QCOMPARE(hardFeature->anchorDistanceMeters,
+                 easyFeature->anchorDistanceMeters);
+        QCOMPARE(hardFeature->forwardScale, easyFeature->forwardScale);
+        QCOMPARE(hardFeature->upScale, easyFeature->upScale);
+        QCOMPARE(hardFeature->mesh.vertices.size(),
+                 easyFeature->mesh.vertices.size());
+        for (std::size_t index = 0;
+                index < hardFeature->mesh.vertices.size(); ++index) {
+            QCOMPARE(hardFeature->mesh.vertices[index].forwardMeters,
+                     easyFeature->mesh.vertices[index].forwardMeters);
+            QCOMPARE(hardFeature->mesh.vertices[index].rightMeters,
+                     easyFeature->mesh.vertices[index].rightMeters);
+            QCOMPARE(hardFeature->mesh.vertices[index].upMeters,
+                     easyFeature->mesh.vertices[index].upMeters);
+        }
+    }
+
     void challengeTileKeepsAContinuousTrailSurfaceUnderAnObstacle()
     {
         const WorkoutGameRoadCourse course = featureCourse(

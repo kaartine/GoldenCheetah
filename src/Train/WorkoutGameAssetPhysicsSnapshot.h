@@ -98,7 +98,8 @@ struct WorkoutGameAssetPhysicsPieceBinding
 
 struct WorkoutGameCourseAssetPhysicsSnapshot
 {
-    static constexpr std::uint32_t CurrentVersion = 1;
+    static constexpr std::uint32_t LegacyLayoutVersion = 1;
+    static constexpr std::uint32_t CurrentVersion = 2;
     static constexpr std::uint32_t NoIndex =
             std::numeric_limits<std::uint32_t>::max();
     // Explicit legacy adapter tag; activation of frozen legacy evaluation is

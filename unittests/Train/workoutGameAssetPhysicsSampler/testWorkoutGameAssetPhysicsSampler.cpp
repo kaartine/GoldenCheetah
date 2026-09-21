@@ -150,6 +150,14 @@ private slots:
         QVERIFY(!crest.materialDefined);
         QVERIFY(identical(crest.offsetMeters, 0.540098));
 
+        const auto legacyNan = WorkoutGameAssetPhysicsSampler::sample(
+                snapshot, 0,
+                std::numeric_limits<double>::quiet_NaN());
+        QVERIFY(legacyNan.bound);
+        QVERIFY(legacyNan.surfacePresent);
+        QVERIFY(!legacyNan.obstacleContact);
+        QVERIFY(identical(legacyNan.offsetMeters, 0.270049));
+
         const auto transform = WorkoutGameAssetPhysicsSampler::renderTransform(
                 snapshot, 0);
         QCOMPARE(transform.status, WorkoutGameAssetRenderFitStatus::Ready);
@@ -160,6 +168,14 @@ private slots:
         QVERIFY(identical(transform.upScale, 0.540098 / 0.54));
         QVERIFY(WorkoutGameAssetPhysicsSampler::breakpointsMeters(
                     snapshot, 0).empty());
+        const auto renderPoints =
+                WorkoutGameAssetPhysicsSampler::renderBreakpointsMeters(
+                    snapshot, 0);
+        QCOMPARE(renderPoints.size(), std::size_t(9));
+        QCOMPARE(renderPoints.front(),
+                 12.3456789 - 0.270049);
+        QCOMPARE(renderPoints.back(),
+                 12.3456789 + 0.270049);
 
         const auto disabled = WorkoutGameAssetPhysicsSampler::sample(
                 legacyFt02Snapshot(false), 0, 12.3456789);
@@ -183,8 +199,20 @@ private slots:
         QVERIFY(identical(asymmetricTransform.upScale, 1.5));
         QVERIFY(identical(asymmetricTransform.forwardExtentMeters, 0.54));
         QVERIFY(identical(asymmetricTransform.upExtentMeters, 0.81));
+        QVERIFY(identical(
+                    asymmetricTransform.obstacleStartDistanceMeters,
+                    12.3456789 - 0.20));
+        QVERIFY(identical(
+                    asymmetricTransform.obstacleEndDistanceMeters,
+                    12.3456789 + 0.34));
         QVERIFY(identical(asymmetricTransform.assetStartDistanceMeters,
                           12.3456789 - 0.20 - 0.75));
+        const auto asymmetricRenderPoints =
+                WorkoutGameAssetPhysicsSampler::renderBreakpointsMeters(
+                    asymmetric, 0);
+        QVERIFY(asymmetricRenderPoints.size() > 2);
+        QCOMPARE(asymmetricRenderPoints.front(), 12.3456789 - 0.20);
+        QCOMPARE(asymmetricRenderPoints.back(), 12.3456789 + 0.34);
     }
 
     void validatesLegacyRecordVersionsReferencesAndLimits()
@@ -241,6 +269,8 @@ private slots:
         QCOMPARE(transform.upScale, 700.0 / 540.0);
         QCOMPARE(transform.forwardExtentMeters, 0.7);
         QCOMPARE(transform.upExtentMeters, 0.7);
+        QCOMPARE(transform.obstacleStartDistanceMeters, 9.65);
+        QCOMPARE(transform.obstacleEndDistanceMeters, 10.35);
         QCOMPARE(transform.assetStartDistanceMeters,
                  10.0 - 1.02 * transform.forwardScale);
 
@@ -293,10 +323,20 @@ private slots:
         snapshot = legacyFt02Snapshot();
         snapshot.legacyFt02Records[0].heightMeters = 17.0;
         sample = WorkoutGameAssetPhysicsSampler::sample(snapshot, 0, 10.0);
-        QVERIFY(!sample.bound);
+        QVERIFY(sample.bound);
+        QVERIFY(!sample.surfacePresent);
         QCOMPARE(WorkoutGameAssetPhysicsSampler::renderTransform(
                      snapshot, 0).status,
-                 WorkoutGameAssetRenderFitStatus::Unbound);
+                 WorkoutGameAssetRenderFitStatus::Invalid);
+
+        snapshot = legacyFt02Snapshot();
+        snapshot.pieceBindings[0].legacyFt02RecordIndex = 99;
+        sample = WorkoutGameAssetPhysicsSampler::sample(snapshot, 0, 10.0);
+        QVERIFY(sample.bound);
+        QVERIFY(!sample.surfacePresent);
+        QCOMPARE(WorkoutGameAssetPhysicsSampler::renderTransform(
+                     snapshot, 0).status,
+                 WorkoutGameAssetRenderFitStatus::Invalid);
     }
 };
 

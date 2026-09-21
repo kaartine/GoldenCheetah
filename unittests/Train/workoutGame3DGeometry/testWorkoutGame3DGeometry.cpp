@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGame3DGeometry.h"
+#include "WorkoutGameAssetPhysicsSampler.h"
 #include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
@@ -25,6 +26,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <memory>
 #include <utility>
 
 namespace {
@@ -2161,6 +2163,57 @@ private slots:
             }
         }
         QVERIFY(sampledObstacle);
+    }
+
+    void frozenLegacyFt02AddsExactRenderSamples()
+    {
+        WorkoutGameRoadCourse course = straightCourse(100.0);
+        WorkoutGameRoadPiece &piece = course.pieces.front();
+        piece.terrain = WorkoutGameTerrainKind::LogOver;
+        piece.difficulty = 1.0;
+        piece.challenge.enabled = true;
+        piece.challenge.obstacleDistanceMeters = 50.1234;
+
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        WorkoutGameLegacyFt02Record record;
+        record.enabled = true;
+        record.startMeters = -0.2137;
+        record.endMeters = 0.3479;
+        record.heightMeters = 0.7813;
+        record.obstacleAnchorMeters =
+                piece.challenge.obstacleDistanceMeters;
+        snapshot->legacyFt02Records.push_back(record);
+        snapshot->pieceBindings.resize(1);
+        snapshot->pieceBindings[0].flags =
+                WorkoutGameCourseAssetPhysicsSnapshot::LegacyProceduralV1;
+        snapshot->pieceBindings[0].legacyFt02RecordIndex = 0;
+        course.assetPhysicsSnapshot = snapshot;
+
+        const std::vector<double> expected =
+                WorkoutGameAssetPhysicsSampler::renderBreakpointsMeters(
+                    *snapshot, 0);
+        QVERIFY(expected.size() > 2);
+
+        WorkoutGame3DGeometry geometry(
+                WorkoutGame3DGeometry::Layer::Trail);
+        geometry.setCourse(course);
+        QVERIFY(geometry.ready());
+
+        for (const double expectedDistance : expected) {
+            bool found = false;
+            for (int sample = 0; sample < geometry.sampleCount(); ++sample) {
+                const double renderedDistance = vertexFloat(
+                        geometry.vertexData(), geometry.stride(),
+                        sample * 2, 2 * int(sizeof(float)));
+                found = found
+                        || std::abs(renderedDistance - expectedDistance)
+                            < 1.0e-5;
+            }
+            QVERIFY2(found, qPrintable(QStringLiteral(
+                "missing frozen FT-02 render sample at %1 m")
+                .arg(expectedDistance, 0, 'f', 9)));
+        }
     }
 
     void rangeBuildContainsOnlyRequestedCourseChunk()

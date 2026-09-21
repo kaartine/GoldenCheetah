@@ -573,6 +573,41 @@ private slots:
         }
     }
 
+    void frozenDisabledLegacyFt02PreservesInactiveAnchorBits()
+    {
+        for (const double inactiveAnchor : {-1.0, 300000.25}) {
+            WorkoutGameRoadPlan plan = planWithTurns({15.0});
+            plan.pieces[0].terrain = WorkoutGameTerrainKind::LogOver;
+            plan.pieces[0].challenge.enabled = false;
+            plan.pieces[0].challenge.obstacleDistanceMeters = inactiveAnchor;
+            QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
+                     WorkoutGameRoadPlanValidationStatus::Ready);
+
+            const auto frozen =
+                    WorkoutGameAssetPhysicsSnapshotBuilder
+                        ::frozenLegacyFt02For(plan);
+            QVERIFY(frozen);
+            QCOMPARE(frozen->legacyFt02Records.size(), std::size_t(1));
+            const WorkoutGameLegacyFt02Record &record =
+                    frozen->legacyFt02Records.front();
+            QVERIFY(!record.enabled);
+            QCOMPARE(WorkoutGameLegacyBinary64::encode(
+                         record.obstacleAnchorMeters),
+                     WorkoutGameLegacyBinary64::encode(inactiveAnchor));
+            QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                        *frozen, 1),
+                     WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready);
+
+            auto invalidEnabled =
+                    WorkoutGameCourseAssetPhysicsSnapshot(*frozen);
+            invalidEnabled.legacyFt02Records[0].enabled = true;
+            QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                        invalidEnabled, 1),
+                     WorkoutGameAssetPhysicsSnapshotValidationStatus
+                        ::InvalidSnapshot);
+        }
+    }
+
     void frozenLegacyFt02ReferenceMustMatchItsRoadPieceExactly()
     {
         WorkoutGameRoadPlan plan = planWithTurns({15.0});

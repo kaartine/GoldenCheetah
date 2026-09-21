@@ -60,11 +60,23 @@ const WorkoutGameLegacyFt02Record *legacyFt02RecordAt(
             || std::abs(record.endMeters) > 64.0
             || record.heightMeters <= 0.0
             || record.heightMeters > 16.0
-            || record.obstacleAnchorMeters < 0.0
-            || record.obstacleAnchorMeters > 250000.0) {
+            || (record.enabled
+                && (record.obstacleAnchorMeters < 0.0
+                    || record.obstacleAnchorMeters > 250000.0))) {
         return nullptr;
     }
     return &record;
+}
+
+bool legacyFt02ReferenceDeclared(
+        const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+        std::size_t pieceIndex)
+{
+    using Snapshot = WorkoutGameCourseAssetPhysicsSnapshot;
+    if (pieceIndex >= snapshot.pieceBindings.size()) return false;
+    const auto &piece = snapshot.pieceBindings[pieceIndex];
+    return (piece.flags & Snapshot::LegacyProceduralV1) != 0
+            && piece.legacyFt02RecordIndex != Snapshot::NoIndex;
 }
 
 }
@@ -75,9 +87,10 @@ WorkoutGameAssetPhysicsSample WorkoutGameAssetPhysicsSampler::sample(
         double distanceMeters)
 {
     WorkoutGameAssetPhysicsSample result;
-    if (!std::isfinite(distanceMeters)) return result;
-    if (const auto *legacy = legacyFt02RecordAt(snapshot, pieceIndex)) {
+    if (legacyFt02ReferenceDeclared(snapshot, pieceIndex)) {
         result.bound = true;
+        const auto *legacy = legacyFt02RecordAt(snapshot, pieceIndex);
+        if (!legacy) return result;
         if (!legacy->enabled) return result;
         const double local = distanceMeters - legacy->obstacleAnchorMeters;
         if (local < legacy->startMeters || local > legacy->endMeters) {
@@ -89,6 +102,7 @@ WorkoutGameAssetPhysicsSample WorkoutGameAssetPhysicsSampler::sample(
                 legacy->heightMeters);
         return result;
     }
+    if (!std::isfinite(distanceMeters)) return result;
     const WorkoutGameAssetPhysicsPieceBinding *piece = nullptr;
     const WorkoutGameAssetPhysicsDefinition *definition =
             definitionAt(snapshot, pieceIndex, piece);
@@ -159,6 +173,39 @@ std::vector<double> WorkoutGameAssetPhysicsSampler::breakpointsMeters(
     return result;
 }
 
+std::vector<double> WorkoutGameAssetPhysicsSampler::renderBreakpointsMeters(
+        const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+        std::size_t pieceIndex)
+{
+    if (const auto *legacy = legacyFt02RecordAt(snapshot, pieceIndex)) {
+        if (!legacy->enabled) return {};
+        std::vector<double> result;
+        result.reserve(WorkoutGameLegacyFt02V1::RadialSegments / 2 + 3);
+        const auto appendLocal = [&](double local) {
+            if (local >= legacy->startMeters
+                    && local <= legacy->endMeters) {
+                result.push_back(legacy->obstacleAnchorMeters + local);
+            }
+        };
+        appendLocal(legacy->startMeters);
+        const double radius = legacy->heightMeters * 0.5;
+        constexpr double Pi = 3.14159265358979323846;
+        for (int segment = 0;
+                segment <= WorkoutGameLegacyFt02V1::RadialSegments / 2;
+                ++segment) {
+            const double angle = Pi
+                    - double(segment) * 2.0 * Pi
+                        / double(WorkoutGameLegacyFt02V1::RadialSegments);
+            appendLocal(std::cos(angle) * radius);
+        }
+        appendLocal(legacy->endMeters);
+        std::sort(result.begin(), result.end());
+        result.erase(std::unique(result.begin(), result.end()), result.end());
+        return result;
+    }
+    return breakpointsMeters(snapshot, pieceIndex);
+}
+
 WorkoutGameAssetRenderFit WorkoutGameAssetPhysicsSampler::renderFit(
         const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
         std::size_t pieceIndex)
@@ -173,7 +220,13 @@ WorkoutGameAssetRenderFit WorkoutGameAssetPhysicsSampler::renderFit(
             snapshot.pieceBindings[pieceIndex];
     if ((piece.flags & Snapshot::LegacyProceduralV1) != 0) {
         const auto *legacy = legacyFt02RecordAt(snapshot, pieceIndex);
-        if (!legacy || !legacy->enabled) return result;
+        if (!legacy) {
+            if (piece.legacyFt02RecordIndex != Snapshot::NoIndex) {
+                result.status = WorkoutGameAssetRenderFitStatus::Invalid;
+            }
+            return result;
+        }
+        if (!legacy->enabled) return result;
         result.status = WorkoutGameAssetRenderFitStatus::Ready;
         result.assetId = QStringLiteral("FT-02-log-over-greybox");
         result.exactLegacy = true;
@@ -238,6 +291,10 @@ WorkoutGameAssetPhysicsSampler::renderTransform(
         const double forwardExtent = fit.exactEndMeters
                 - fit.exactStartMeters;
         result.obstacleAnchorMeters = fit.exactObstacleAnchorMeters;
+        result.obstacleStartDistanceMeters = result.obstacleAnchorMeters
+                + fit.exactStartMeters;
+        result.obstacleEndDistanceMeters = result.obstacleAnchorMeters
+                + fit.exactEndMeters;
         result.forwardScale = forwardExtent / Ft02NativeExtentMeters;
         result.upScale = fit.exactHeightMeters / Ft02NativeExtentMeters;
         result.assetStartDistanceMeters = result.obstacleAnchorMeters
@@ -250,6 +307,10 @@ WorkoutGameAssetPhysicsSampler::renderTransform(
     result.obstacleAnchorMeters =
             (double(fit.obstacleAnchorMm) * 1000.0
              + fit.obstacleAnchorMicrometerRemainder) / 1000000.0;
+    result.obstacleStartDistanceMeters = result.obstacleAnchorMeters
+            - double(fit.resolvedExtentMm) / 2000.0;
+    result.obstacleEndDistanceMeters = result.obstacleAnchorMeters
+            + double(fit.resolvedExtentMm) / 2000.0;
     result.forwardScale = double(fit.resolvedExtentMm)
             / double(fit.nativeForwardExtentMm);
     result.upScale = double(fit.resolvedExtentMm)
@@ -263,12 +324,16 @@ WorkoutGameAssetPhysicsSampler::renderTransform(
     result.upExtentMeters = double(fit.nativeUpExtentMm) / 1000.0
             * result.upScale;
     if (!std::isfinite(result.obstacleAnchorMeters)
+            || !std::isfinite(result.obstacleStartDistanceMeters)
+            || !std::isfinite(result.obstacleEndDistanceMeters)
             || !std::isfinite(result.assetStartDistanceMeters)
             || !std::isfinite(result.forwardScale)
             || !std::isfinite(result.upScale)
             || !std::isfinite(result.forwardExtentMeters)
             || !std::isfinite(result.upExtentMeters)
             || result.forwardScale <= 0.0 || result.upScale <= 0.0
+            || result.obstacleStartDistanceMeters
+                >= result.obstacleEndDistanceMeters
             || result.forwardExtentMeters <= 0.0
             || result.upExtentMeters <= 0.0) {
         result = {};

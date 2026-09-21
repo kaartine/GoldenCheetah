@@ -72,14 +72,12 @@ WorkoutGame3DFeatureAssetSnapshot placePiece(
     }
 
     if (renderTransform.status == WorkoutGameAssetRenderFitStatus::Ready) {
-        if (renderTransform.assetStartDistanceMeters < 0.0
-                || renderTransform.assetStartDistanceMeters
-                    > course.totalLengthMeters) {
-            return result;
-        }
+        const double assetStartDistanceMeters = std::clamp(
+                renderTransform.assetStartDistanceMeters,
+                0.0, course.totalLengthMeters);
         const WorkoutGameRoadSample sample =
                 WorkoutGameRoadCourseBuilder::sample(
-                    course, renderTransform.assetStartDistanceMeters);
+                    course, assetStartDistanceMeters);
         if (!sample.ready) return result;
         result.ready = true;
         result.terrain = piece.terrain;

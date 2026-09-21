@@ -61,6 +61,8 @@ struct WorkoutGameAssetRenderTransform
     QString assetId;
     QString variantKey;
     double obstacleAnchorMeters = 0.0;
+    double obstacleStartDistanceMeters = 0.0;
+    double obstacleEndDistanceMeters = 0.0;
     double assetStartDistanceMeters = 0.0;
     double forwardScale = 1.0;
     double upScale = 1.0;
@@ -77,6 +79,10 @@ public:
             double distanceMeters);
 
     static std::vector<double> breakpointsMeters(
+            const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
+            std::size_t pieceIndex);
+
+    static std::vector<double> renderBreakpointsMeters(
             const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
             std::size_t pieceIndex);
 

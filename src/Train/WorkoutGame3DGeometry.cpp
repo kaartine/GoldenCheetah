@@ -13,6 +13,7 @@
 #include "WorkoutGameBermGeometry.h"
 #include "WorkoutGameClimbGeometry.h"
 #include "WorkoutGame3DTerrainProfile.h"
+#include "WorkoutGameAssetPhysicsSampler.h"
 #include "WorkoutGameFeatureGeometry.h"
 #include "WorkoutGameGapJumpGeometry.h"
 #include "WorkoutGameRockGardenGeometry.h"
@@ -290,7 +291,9 @@ void appendFeatureSamples(
             mandatoryDistances.push_back(distance);
         }
     };
-    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+    for (std::size_t pieceIndex = 0;
+            pieceIndex < course.pieces.size(); ++pieceIndex) {
+        const WorkoutGameRoadPiece &piece = course.pieces[pieceIndex];
         if (!piece.challenge.enabled) continue;
         if (piece.gapJump.enabled) {
             appendMandatory(piece.gapJump.splitStartDistanceMeters);
@@ -304,6 +307,18 @@ void appendFeatureSamples(
                 append(line.landingDistanceMeters);
             }
             appendMandatory(piece.gapJump.mergeEndDistanceMeters);
+            continue;
+        }
+        if (piece.terrain == WorkoutGameTerrainKind::LogOver
+                && course.assetPhysicsSnapshot
+                && WorkoutGameAssetPhysicsSampler::renderTransform(
+                    *course.assetPhysicsSnapshot, pieceIndex).status
+                    == WorkoutGameAssetRenderFitStatus::Ready) {
+            for (const double distance :
+                    WorkoutGameAssetPhysicsSampler::renderBreakpointsMeters(
+                        *course.assetPhysicsSnapshot, pieceIndex)) {
+                append(distance);
+            }
             continue;
         }
         if (piece.terrain == WorkoutGameTerrainKind::RockSlab) {

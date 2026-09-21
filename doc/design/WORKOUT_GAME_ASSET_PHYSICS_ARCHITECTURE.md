@@ -134,6 +134,11 @@ road challenges omit their inactive fields from the road-piece JSON, so their
 exact anchor remains authoritative only in the frozen record. Render fitting
 uses the exact `end - start` span independently from exact height; asymmetric
 legacy bounds must not be reconstructed from difficulty or forced square.
+The procedural render fallback is a pinned 0.54 m FT-02 v1 mesh which is
+translated and scaled onto those exact bounds; it never rebuilds the fallback
+from a mutable road-piece difficulty. Render-only facet breakpoints come from
+the frozen record through a separate API and do not become Box2D collision or
+surface-material breakpoints.
 
 ```text
 ProfileV1 {
@@ -352,11 +357,15 @@ versions.
   course behavior still increments the conversion algorithm and road-plan
   generation; the persistence exception is not permission to reinterpret an
   existing generation.
-- The integration commit increments the then-current road-plan generation,
-  conversion algorithm, and course-document schema exactly once; it must not
-  assume that the values observed while this ADR was written are still the
-  integration base. Course snapshot schema starts at 1. Existing generations
-  must never be reinterpreted as the new format.
+- The first behavior-changing catalog integration increments the then-current
+  road-plan generation, conversion algorithm, and course-document schema
+  exactly once; it must not assume that the values observed while this ADR was
+  written are still the integration base. A persistence-only legacy freeze
+  does not use that rule and leaves the conversion algorithm unchanged. Course
+  snapshot schema 1 is the pre-legacy-pool layout; schema 2 adds the separately
+  versioned legacy record pool and per-piece index. Readers migrate schema 1
+  snapshots in memory and writers emit schema 2. Existing generations must
+  never be reinterpreted as the new format.
 - Older course documents continue through their existing decoders and
   pinned legacy profile adapter. Loading them creates an in-memory snapshot
   that reproduces the legacy C++ profiles; it does not bind them to the newest

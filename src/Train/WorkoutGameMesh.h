@@ -121,6 +121,7 @@ public:
     static WorkoutGameMesh feature(
             WorkoutGameTerrainKind terrain,
             double difficulty);
+    static WorkoutGameMesh legacyFt02V1Fallback();
     static WorkoutGameMesh trailTile(
             double lengthMeters,
             double entryHalfWidthMeters,
