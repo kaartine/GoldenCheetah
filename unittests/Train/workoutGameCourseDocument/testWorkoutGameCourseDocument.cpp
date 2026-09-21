@@ -466,7 +466,7 @@ private slots:
                 piece.lengthMeters = length;
                 piece.riseMeters = rise;
                 piece.turnRadians = global == 1275
-                        ? 1.35
+                        ? -1.35
                         : (global % 2 == 0 ? 0.30 : -0.30);
                 piece.difficulty = section.difficulty;
                 piece.geometryAnchorDistanceMeters =
