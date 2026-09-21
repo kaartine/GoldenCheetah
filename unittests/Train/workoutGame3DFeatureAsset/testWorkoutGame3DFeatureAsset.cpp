@@ -238,6 +238,61 @@ private slots:
         QCOMPARE(asset.scaleZ, 1.0);
     }
 
+    void catalogLogOutsideCourseRetainsHistoricalRejection()
+    {
+        WorkoutGameRoadCourse course = courseWith(
+                WorkoutGameTerrainKind::LogOver, 0.6);
+        const std::size_t pieceIndex = challengePieceIndex(course);
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        snapshot->catalogSchemaVersion = 1;
+        snapshot->physicsDefinitions.resize(1);
+        WorkoutGameAssetPhysicsBinding binding;
+        binding.assetId = QStringLiteral("FT-02-log-over-greybox");
+        binding.definitionIndex = 0;
+        binding.nativeForwardOriginMm = -1020;
+        binding.nativeForwardExtentMm = 540;
+        binding.nativeUpExtentMm = 540;
+        binding.resolvedExtentMm = 700;
+        snapshot->bindings.push_back(binding);
+        snapshot->pieceBindings.resize(course.pieces.size());
+        WorkoutGameAssetPhysicsPieceBinding &pieceBinding =
+                snapshot->pieceBindings[pieceIndex];
+        pieceBinding.definitionIndex = 0;
+        pieceBinding.bindingIndex = 0;
+        pieceBinding.obstacleAnchorMm = 500;
+        course.assetPhysicsSnapshot = snapshot;
+
+        QVERIFY(!WorkoutGame3DFeatureAsset::placeAt(
+                     course, pieceIndex).ready);
+    }
+
+    void asymmetricFrozenLogUsesProceduralVisualFallback()
+    {
+        WorkoutGameRoadCourse course = courseWith(
+                WorkoutGameTerrainKind::LogOver, 0.6);
+        const std::size_t pieceIndex = challengePieceIndex(course);
+        const WorkoutGameRoadPiece &piece = course.pieces[pieceIndex];
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        WorkoutGameLegacyFt02Record record;
+        record.enabled = true;
+        record.startMeters = -0.20;
+        record.endMeters = 0.34;
+        record.heightMeters = 0.81;
+        record.obstacleAnchorMeters =
+                piece.challenge.obstacleDistanceMeters;
+        snapshot->legacyFt02Records.push_back(record);
+        snapshot->pieceBindings.resize(course.pieces.size());
+        snapshot->pieceBindings[pieceIndex].flags =
+                WorkoutGameCourseAssetPhysicsSnapshot::LegacyProceduralV1;
+        snapshot->pieceBindings[pieceIndex].legacyFt02RecordIndex = 0;
+        course.assetPhysicsSnapshot = snapshot;
+
+        QVERIFY(!WorkoutGame3DFeatureAsset::placeAt(
+                     course, pieceIndex).ready);
+    }
+
     void rejectsUnsupportedOrUnavailableFeatures()
     {
         QVERIFY(!WorkoutGame3DFeatureAsset::place({}, {}).ready);
