@@ -134,11 +134,24 @@ road challenges omit their inactive fields from the road-piece JSON, so their
 exact anchor remains authoritative only in the frozen record. Render fitting
 uses the exact `end - start` span independently from exact height; asymmetric
 legacy bounds must not be reconstructed from difficulty or forced square.
-The procedural render fallback is a pinned 0.54 m FT-02 v1 mesh which is
-translated and scaled onto those exact bounds; it never rebuilds the fallback
-from a mutable road-piece difficulty. Render-only facet breakpoints come from
-the frozen record through a separate API and do not become Box2D collision or
-surface-material breakpoints.
+For ordinary symmetric records, the procedural render fallback rebuilds the
+pinned FT-02 v1 mesh directly from the frozen dimensions. This preserves the
+historical operation order: ring radii are scaled but the small per-ring
+forward offsets are not. An asymmetric record instead produces a clipped
+procedural mesh centred on the exact obstacle anchor; its centre ring follows
+the frozen faceted evaluator. The packaged asset is hidden for that case
+because one affine transform cannot represent both an anchor-centred crest and
+independent asymmetric support bounds. Neither path reads mutable road-piece
+difficulty. Render-only facet breakpoints come from the frozen record through
+a separate API and do not become Box2D collision or surface-material
+breakpoints.
+
+Road-plan validation and feature runtime query the frozen legacy geometry
+through an explicit sampler API. A declared invalid reference fails closed.
+For an enabled FT-02 record, exact frozen start/end values own the latest
+decision point, bank-protected span, physical takeoff, and action geometry end.
+Schema-6 bindings without a legacy-record index remain unbound and retain the
+pinned procedural fallback behavior.
 
 ```text
 ProfileV1 {
@@ -364,7 +377,11 @@ versions.
   does not use that rule and leaves the conversion algorithm unchanged. Course
   snapshot schema 1 is the pre-legacy-pool layout; schema 2 adds the separately
   versioned legacy record pool and per-piece index. Readers migrate schema 1
-  snapshots in memory and writers emit schema 2. Existing generations must
+  snapshots in memory and writers emit schema 2. A schema-1 snapshot that fit
+  the 256 KiB read limit remains readable even when mandatory schema-2 sentinel
+  fields make its in-memory canonical encoding larger. That provenance never
+  relaxes the write limit: encoding or saving the expanded schema-2 snapshot
+  fails until the caller reduces it. Existing generations must
   never be reinterpreted as the new format.
 - Older course documents continue through their existing decoders and
   pinned legacy profile adapter. Loading them creates an in-memory snapshot
