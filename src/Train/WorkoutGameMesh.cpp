@@ -896,44 +896,135 @@ WorkoutGameMesh WorkoutGameMeshLibrary::legacyFt02V1Fallback(
                 endMeters - startMeters, heightMeters);
     }
 
-    WorkoutGameMesh mesh = logModelFromDimensions(
-            heightMeters, heightMeters);
     constexpr int Rings = 7;
+    const double right[Rings] = {
+        -0.95, -0.73, -0.40, 0.0, 0.39, 0.72, 0.95
+    };
     const double radiusScale[Rings] = {
         0.56, 0.80, 0.94, 1.0, 0.91, 0.74, 0.50
     };
-    for (int ring = 0; ring < Rings; ++ring) {
-        for (int radial = 0;
-                radial < WorkoutGameLogRadialSegments; ++radial) {
-            WorkoutGameMeshVertex &vertex = mesh.vertices[
-                    std::size_t(ring * WorkoutGameLogRadialSegments
-                        + radial)];
-            vertex.forwardMeters = std::clamp(
-                    vertex.forwardMeters, startMeters, endMeters);
-            if (radial <= WorkoutGameLogRadialSegments / 2) {
-                vertex.upMeters = radiusScale[ring]
-                        * WorkoutGameLegacyFt02V1::surfaceOffsetMeters(
-                            vertex.forwardMeters,
-                            startMeters, endMeters, heightMeters);
-            }
+
+    struct ProfileSample
+    {
+        double forward = 0.0;
+        double up = 0.0;
+    };
+    std::vector<ProfileSample> samples;
+    const auto appendSample = [&samples](double forward, double up) {
+        if (!samples.empty()
+                && std::abs(samples.back().forward - forward) <= 1e-15
+                && std::abs(samples.back().up - up) <= 1e-15) {
+            return;
+        }
+        samples.push_back({forward, up});
+    };
+    const auto surface = [=](double forward) {
+        return WorkoutGameLegacyFt02V1::surfaceOffsetMeters(
+                forward, startMeters, endMeters, heightMeters);
+    };
+
+    // Endpoint guards and the post-radius legacy plateau are discontinuous.
+    // Duplicate knots make those jumps explicit vertical faces instead of
+    // smearing them across the neighboring rendered facet.
+    appendSample(startMeters, 0.0);
+    appendSample(startMeters,
+                 surface(std::nextafter(startMeters, endMeters)));
+    if (-radius > startMeters && -radius < endMeters) {
+        appendSample(-radius, surface(-radius));
+    }
+    constexpr double LegacyTolerance = 1e-12;
+    for (int segment = 0;
+            segment < WorkoutGameLegacyFt02V1::RadialSegments / 2;
+            ++segment) {
+        const double toAngle = Pi - double(segment + 1) * 2.0 * Pi
+                / double(WorkoutGameLegacyFt02V1::RadialSegments);
+        const double transition =
+                std::cos(toAngle) * radius + LegacyTolerance;
+        if (transition <= startMeters || transition >= endMeters) continue;
+        appendSample(transition, surface(transition));
+        if (segment == WorkoutGameLegacyFt02V1::RadialSegments / 2 - 1) {
+            appendSample(transition, radius);
         }
     }
-    for (std::size_t index = std::size_t(
-                Rings * WorkoutGameLogRadialSegments);
-            index < mesh.vertices.size(); ++index) {
-        mesh.vertices[index].forwardMeters = std::clamp(
-                mesh.vertices[index].forwardMeters,
-                startMeters, endMeters);
+    appendSample(endMeters,
+                 surface(std::nextafter(endMeters, startMeters)));
+    appendSample(endMeters, 0.0);
+
+    WorkoutGameMesh mesh;
+    const std::size_t topStart = mesh.vertices.size();
+    for (std::size_t sample = 0; sample < samples.size(); ++sample) {
+        const double progress = double(sample)
+                / double(samples.size() - 1u);
+        for (int ring = 0; ring < Rings; ++ring) {
+            addVertex(mesh,
+                      samples[sample].forward,
+                      right[ring],
+                      samples[sample].up * radiusScale[ring],
+                      progress,
+                      double(ring) / double(Rings - 1));
+        }
+    }
+    const std::size_t bottomStart = mesh.vertices.size();
+    for (std::size_t sample = 0; sample < samples.size(); ++sample) {
+        const double progress = double(sample)
+                / double(samples.size() - 1u);
+        for (int ring = 0; ring < Rings; ++ring) {
+            addVertex(mesh,
+                      samples[sample].forward,
+                      right[ring],
+                      -0.13 * heightMeters * radiusScale[ring],
+                      progress,
+                      double(ring) / double(Rings - 1));
+        }
+    }
+    const auto vertex = [](std::size_t start, std::size_t sample, int ring) {
+        return std::uint32_t(start + sample * Rings + std::size_t(ring));
+    };
+    for (std::size_t sample = 1; sample < samples.size(); ++sample) {
+        for (int ring = 1; ring < Rings; ++ring) {
+            const WorkoutGameMeshMaterial material =
+                    (int(sample) + ring) % 4 == 0
+                    ? WorkoutGameMeshMaterial::WoodHighlight
+                    : WorkoutGameMeshMaterial::WoodSide;
+            addQuad(mesh,
+                    vertex(topStart, sample - 1u, ring - 1),
+                    vertex(topStart, sample - 1u, ring),
+                    vertex(topStart, sample, ring),
+                    vertex(topStart, sample, ring - 1), material);
+            addQuad(mesh,
+                    vertex(bottomStart, sample, ring - 1),
+                    vertex(bottomStart, sample, ring),
+                    vertex(bottomStart, sample - 1u, ring),
+                    vertex(bottomStart, sample - 1u, ring - 1),
+                    WorkoutGameMeshMaterial::WoodSide);
+        }
+        for (int ring : {0, Rings - 1}) {
+            addQuad(mesh,
+                    vertex(bottomStart, sample - 1u, ring),
+                    vertex(topStart, sample - 1u, ring),
+                    vertex(topStart, sample, ring),
+                    vertex(bottomStart, sample, ring),
+                    WorkoutGameMeshMaterial::WoodSide);
+        }
+    }
+    for (std::size_t sample : {std::size_t(0), samples.size() - 1u}) {
+        for (int ring = 1; ring < Rings; ++ring) {
+            addQuad(mesh,
+                    vertex(bottomStart, sample, ring - 1),
+                    vertex(bottomStart, sample, ring),
+                    vertex(topStart, sample, ring),
+                    vertex(topStart, sample, ring - 1),
+                    WorkoutGameMeshMaterial::WoodTop);
+        }
     }
     mesh.lengthMeters = endMeters - startMeters;
-    mesh.entry.forwardMeters = startMeters;
-    mesh.exit.forwardMeters = endMeters;
-    if (!mesh.colliders.empty()) {
-        mesh.colliders.front().forwardMeters =
-                (startMeters + endMeters) * 0.5;
-        mesh.colliders.front().halfForwardMeters =
-                (endMeters - startMeters) * 0.5;
-    }
+    mesh.entry = {startMeters, 0.95, 0.0};
+    mesh.exit = {endMeters, 0.95, 0.0};
+    mesh.colliders.push_back({
+        (startMeters + endMeters) * 0.5, 0.0, heightMeters * 0.5,
+        (endMeters - startMeters) * 0.5, 0.95, heightMeters * 0.5
+    });
+    mesh.ready = true;
     return mesh;
 }
 

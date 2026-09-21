@@ -64,6 +64,35 @@ WorkoutGameRoadCourse featureCourse(
     return WorkoutGameRoadCourseBuilder::build(course, 200.0);
 }
 
+double visibleMeshSurfaceAt(const WorkoutGameMesh &mesh, double forward)
+{
+    double top = std::numeric_limits<double>::quiet_NaN();
+    for (const WorkoutGameMeshTriangle &triangle : mesh.triangles) {
+        const WorkoutGameMeshVertex &a = mesh.vertices[triangle.indices[0]];
+        const WorkoutGameMeshVertex &b = mesh.vertices[triangle.indices[1]];
+        const WorkoutGameMeshVertex &c = mesh.vertices[triangle.indices[2]];
+        const double determinant =
+                (b.rightMeters - c.rightMeters) *
+                    (a.forwardMeters - c.forwardMeters)
+                + (c.forwardMeters - b.forwardMeters) *
+                    (a.rightMeters - c.rightMeters);
+        if (std::abs(determinant) < 1e-12) continue;
+        const double wa = ((b.rightMeters - c.rightMeters) *
+                    (forward - c.forwardMeters)
+                - (b.forwardMeters - c.forwardMeters) * c.rightMeters)
+                / determinant;
+        const double wb = ((c.rightMeters - a.rightMeters) *
+                    (forward - c.forwardMeters)
+                + (a.forwardMeters - c.forwardMeters) * c.rightMeters)
+                / determinant;
+        const double wc = 1.0 - wa - wb;
+        if (wa < -1e-10 || wb < -1e-10 || wc < -1e-10) continue;
+        const double up = wa * a.upMeters + wb * b.upMeters + wc * c.upMeters;
+        top = std::isfinite(top) ? std::max(top, up) : up;
+    }
+    return top;
+}
+
 }
 
 class TestWorkoutGameMesh : public QObject
@@ -707,20 +736,7 @@ private slots:
         }
         QCOMPARE(renderedHeight, record.heightMeters);
 
-        constexpr std::size_t CenterRing = 3;
-        for (std::size_t radial = 0;
-                radial < std::size_t(WorkoutGameLogRadialSegments / 2 + 1);
-                ++radial) {
-            const WorkoutGameMeshVertex &vertex =
-                    easyFeature->mesh.vertices[
-                        CenterRing * WorkoutGameLogRadialSegments + radial];
-            QCOMPARE(vertex.upMeters,
-                     WorkoutGameLegacyFt02V1::surfaceOffsetMeters(
-                        vertex.forwardMeters,
-                        record.startMeters,
-                        record.endMeters,
-                        record.heightMeters));
-        }
+        QVERIFY(WorkoutGameMeshLibrary::valid(easyFeature->mesh));
 
         piece->difficulty = 1.0;
         const WorkoutGameTrailTile hard =
@@ -743,6 +759,34 @@ private slots:
             QCOMPARE(hardFeature->mesh.vertices[index].upMeters,
                      easyFeature->mesh.vertices[index].upMeters);
         }
+    }
+
+    void frozenLegacyFt02FallbackSurfaceMatchesPinnedEvaluatorBetweenVertices()
+    {
+        const auto verify = [](double start, double end, double height,
+                               const std::vector<double> &samples) {
+            const WorkoutGameMesh mesh =
+                    WorkoutGameMeshLibrary::legacyFt02V1Fallback(
+                        start, end, height);
+            QVERIFY(mesh.ready);
+            for (double forward : samples) {
+                const double rendered = visibleMeshSurfaceAt(mesh, forward);
+                const double expected =
+                        WorkoutGameLegacyFt02V1::surfaceOffsetMeters(
+                            forward, start, end, height);
+                QVERIFY2(std::isfinite(rendered),
+                         qPrintable(QString("no surface at %1").arg(forward)));
+                QVERIFY2(std::abs(rendered - expected) < 1e-9,
+                         qPrintable(QString(
+                            "surface mismatch at %1: rendered=%2 expected=%3")
+                            .arg(forward).arg(rendered).arg(expected)));
+            }
+        };
+
+        verify(-0.20, 0.34, 0.81,
+               {-0.199, -0.15, -0.03, 0.17, 0.286378, 0.33, 0.339});
+        verify(-0.60, 0.60, 0.70,
+               {-0.50, -0.34, -0.12, 0.18, 0.34, 0.40, 0.59});
     }
 
     void challengeTileKeepsAContinuousTrailSurfaceUnderAnObstacle()
