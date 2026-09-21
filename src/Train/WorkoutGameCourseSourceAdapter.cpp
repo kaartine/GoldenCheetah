@@ -52,7 +52,7 @@ bool attachRoadPlan(
                     preset
                 });
     plan.assetPhysicsSnapshot =
-            WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan);
+            WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(plan);
     if (WorkoutGameRoadPlanValidator::validate(plan, course.sections.size())
             != WorkoutGameRoadPlanValidationStatus::Ready
             || !plan.assetPhysicsSnapshot

@@ -1227,16 +1227,34 @@ QJsonObject assetPhysicsSnapshotToJson(
     QJsonArray pieceBindings;
     for (const WorkoutGameAssetPhysicsPieceBinding &binding :
             snapshot.pieceBindings) {
-        pieceBindings.append(QJsonObject {
-            {QStringLiteral("definitionIndex"), double(binding.definitionIndex)},
-            {QStringLiteral("bindingIndex"), double(binding.bindingIndex)},
-            {QStringLiteral("legacyFt02RecordIndex"),
-             double(binding.legacyFt02RecordIndex)},
-            {QStringLiteral("obstacleAnchorMm"), binding.obstacleAnchorMm},
-            {QStringLiteral("obstacleAnchorMicrometerRemainder"),
-             binding.obstacleAnchorMicrometerRemainder},
-            {QStringLiteral("flags"), double(binding.flags)}
-        });
+        QJsonObject object;
+        if (binding.definitionIndex
+                != WorkoutGameCourseAssetPhysicsSnapshot::NoIndex) {
+            object.insert(QStringLiteral("definitionIndex"),
+                          double(binding.definitionIndex));
+        }
+        if (binding.bindingIndex
+                != WorkoutGameCourseAssetPhysicsSnapshot::NoIndex) {
+            object.insert(QStringLiteral("bindingIndex"),
+                          double(binding.bindingIndex));
+        }
+        if (binding.legacyFt02RecordIndex
+                != WorkoutGameCourseAssetPhysicsSnapshot::NoIndex) {
+            object.insert(QStringLiteral("legacyFt02RecordIndex"),
+                          double(binding.legacyFt02RecordIndex));
+        }
+        if (binding.obstacleAnchorMm != 0) {
+            object.insert(QStringLiteral("obstacleAnchorMm"),
+                          binding.obstacleAnchorMm);
+        }
+        if (binding.obstacleAnchorMicrometerRemainder != 0) {
+            object.insert(QStringLiteral("obstacleAnchorMicrometerRemainder"),
+                          binding.obstacleAnchorMicrometerRemainder);
+        }
+        if (binding.flags != 0) {
+            object.insert(QStringLiteral("flags"), double(binding.flags));
+        }
+        pieceBindings.append(object);
     }
     return {
         {QStringLiteral("snapshotVersion"), double(snapshot.snapshotVersion)},
@@ -1489,20 +1507,54 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
         WorkoutGameAssetPhysicsPieceBinding binding;
         const QJsonObject bindingObject = pieceBindingValue.toObject();
         std::int32_t anchorRemainder = 0;
-        if (bindingObject.size() != (legacyLayout ? 5 : 6)
-                || !unsignedNumber(bindingObject, "definitionIndex", binding.definitionIndex)
-                || !unsignedNumber(bindingObject, "bindingIndex",
-                            binding.bindingIndex)
-                || (!legacyLayout
-                    && !unsignedNumber(
-                        bindingObject, "legacyFt02RecordIndex",
-                        binding.legacyFt02RecordIndex))
-                || !signed32Number(bindingObject, "obstacleAnchorMm",
-                    binding.obstacleAnchorMm)
-                || !signed32Number(bindingObject,
-                    "obstacleAnchorMicrometerRemainder", anchorRemainder)
-                || anchorRemainder < -500 || anchorRemainder > 500
-                || !unsignedNumber(bindingObject, "flags", binding.flags)) {
+        const auto hasOnlyKnownFields = [&bindingObject]() {
+            for (auto it = bindingObject.constBegin();
+                    it != bindingObject.constEnd(); ++it) {
+                if (it.key() != QStringLiteral("definitionIndex")
+                        && it.key() != QStringLiteral("bindingIndex")
+                        && it.key() != QStringLiteral("legacyFt02RecordIndex")
+                        && it.key() != QStringLiteral("obstacleAnchorMm")
+                        && it.key() != QStringLiteral(
+                            "obstacleAnchorMicrometerRemainder")
+                        && it.key() != QStringLiteral("flags")) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        const auto optionalUnsigned = [&bindingObject](
+                const char *key, std::uint32_t &destination) {
+            return !bindingObject.contains(QLatin1String(key))
+                    || unsignedNumber(bindingObject, key, destination);
+        };
+        const auto optionalSigned = [&bindingObject](
+                const char *key, std::int32_t &destination) {
+            return !bindingObject.contains(QLatin1String(key))
+                    || signed32Number(bindingObject, key, destination);
+        };
+        const bool fieldsValid = legacyLayout
+                ? bindingObject.size() == 5
+                    && unsignedNumber(bindingObject, "definitionIndex",
+                        binding.definitionIndex)
+                    && unsignedNumber(bindingObject, "bindingIndex",
+                        binding.bindingIndex)
+                    && signed32Number(bindingObject, "obstacleAnchorMm",
+                        binding.obstacleAnchorMm)
+                    && signed32Number(bindingObject,
+                        "obstacleAnchorMicrometerRemainder", anchorRemainder)
+                    && unsignedNumber(bindingObject, "flags", binding.flags)
+                : hasOnlyKnownFields()
+                    && optionalUnsigned("definitionIndex",
+                        binding.definitionIndex)
+                    && optionalUnsigned("bindingIndex", binding.bindingIndex)
+                    && optionalUnsigned("legacyFt02RecordIndex",
+                        binding.legacyFt02RecordIndex)
+                    && optionalSigned("obstacleAnchorMm",
+                        binding.obstacleAnchorMm)
+                    && optionalSigned("obstacleAnchorMicrometerRemainder",
+                        anchorRemainder)
+                    && optionalUnsigned("flags", binding.flags);
+        if (!fieldsValid || anchorRemainder < -500 || anchorRemainder > 500) {
             return WorkoutGameCourseDocumentStatus::InvalidDocument;
         }
         binding.obstacleAnchorMicrometerRemainder =
@@ -1796,11 +1848,10 @@ bool documentForPersistence(
                 *destination.course.roadPlan);
         upgradedPlan->generationVersion =
                 WorkoutGameRoadPlan::CurrentGenerationVersion;
-        if (!upgradedPlan->assetPhysicsSnapshot) {
-            upgradedPlan->assetPhysicsSnapshot =
-                    WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(
-                        *upgradedPlan);
-        }
+        upgradedPlan->assetPhysicsSnapshot =
+                WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
+                    *upgradedPlan);
+        if (!upgradedPlan->assetPhysicsSnapshot) return false;
         destination.course.roadPlan = std::move(upgradedPlan);
         destination.schemaVersion =
                 WorkoutGameCourseDocumentCodec::CurrentSchemaVersion;
@@ -1848,8 +1899,9 @@ bool documentForPersistence(
     persistedPlan->generationVersion =
             WorkoutGameRoadPlan::CurrentGenerationVersion;
     persistedPlan->assetPhysicsSnapshot =
-            WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(
+            WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
                 *persistedPlan);
+    if (!persistedPlan->assetPhysicsSnapshot) return false;
     destination.course.roadPlan = std::move(persistedPlan);
     return WorkoutGameCourseDocumentCodec::valid(destination);
 }

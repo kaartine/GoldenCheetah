@@ -180,12 +180,20 @@ private slots:
 
         const WorkoutGameCourse visual =
                 WorkoutGameDistancePlayback::visualCourse(conversion.course);
-        const WorkoutGameRoadPlan plan =
+        WorkoutGameRoadPlan plan =
                 WorkoutGameRoadCourseBuilder::generatePlan(
                     visual, request.ftpWatts, {
                         WorkoutGameRoadCourseGenerationParameters::CurrentVersion,
                         request.preset
                     });
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(
+                    plan, conversion.course.sections.size()),
+                 WorkoutGameRoadPlanValidationStatus::Ready);
+        QVERIFY(WorkoutGameRoadQuality::audit(plan).accepted());
+        plan.assetPhysicsSnapshot =
+                WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
+                    plan);
+        QVERIFY(plan.assetPhysicsSnapshot);
         QCOMPARE(WorkoutGameRoadPlanValidator::validate(
                     plan, conversion.course.sections.size()),
                  WorkoutGameRoadPlanValidationStatus::Ready);
@@ -730,10 +738,11 @@ private slots:
         QCOMPARE(reopened.schemaVersion,
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QVERIFY(reopened.course.roadPlan);
-        // The production schema-6 writer persists generation 2 while
-        // generation 3/snapshot persistence is prepared behind the codec gate.
         QCOMPARE(reopened.course.roadPlan->generationVersion,
-                 WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
+        QVERIFY(reopened.course.roadPlan->assetPhysicsSnapshot);
+        QVERIFY(!reopened.course.roadPlan->assetPhysicsSnapshot
+                    ->pieceBindings.empty());
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(reopened),
                  WorkoutGameCourseDocumentCodec::encode(
                      regenerated.document));

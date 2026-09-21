@@ -10,6 +10,7 @@
 #include "Train/WorkoutGameCourseCrsExporter.h"
 #include "Train/WorkoutGameCourseDocument.h"
 #include "Train/WorkoutGameDistancePlayback.h"
+#include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameRoadCourse.h"
 #include "Train/WorkoutGameRoadPlan.h"
 #include "Train/WorkoutGameRoadQuality.h"
@@ -204,14 +205,14 @@ class TestWorkoutGameCourseDocument : public QObject
     Q_OBJECT
 
 private slots:
-    void defaultWriterStaysAtSchemaSixUntilRuntimeIsReady()
+    void defaultWriterUsesFrozenAssetPhysicsSchema()
     {
-        QCOMPARE(WorkoutGameCourseDocumentCodec::CurrentSchemaVersion, 6);
-        QCOMPARE(WorkoutGameCourseDocument().schemaVersion, 6);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::CurrentSchemaVersion, 7);
+        QCOMPARE(WorkoutGameCourseDocument().schemaVersion, 7);
         const auto encoded = WorkoutGameCourseDocumentCodec::encode(sampleDocument());
         QVERIFY(!encoded.isEmpty());
-        QCOMPARE(QJsonDocument::fromJson(encoded).object().value("schemaVersion").toInt(), 6);
-        QVERIFY(!encoded.contains("assetPhysicsSnapshot"));
+        QCOMPARE(QJsonDocument::fromJson(encoded).object().value("schemaVersion").toInt(), 7);
+        QVERIFY(encoded.contains("assetPhysicsSnapshot"));
     }
 
     void canonicalJsonRoundTrips()
@@ -233,7 +234,7 @@ private slots:
         QVERIFY(encoded.contains("\"variationLengthMeters\":60"));
         QVERIFY(encoded.contains("\"referenceGear\":6"));
         QVERIFY(encoded.contains("\"referenceEffortStartWatts\""));
-        QVERIFY(!encoded.contains("\"assetPhysicsSnapshot\""));
+        QVERIFY(encoded.contains("\"assetPhysicsSnapshot\""));
         QVERIFY(!encoded.contains("\"sha256\""));
         QCOMPARE(decoded.title, source.title);
         QCOMPARE(decoded.sourceFileName, source.sourceFileName);
@@ -246,7 +247,7 @@ private slots:
         QCOMPARE(decoded.course.sections[1].adjustableConnector, true);
         QVERIFY(decoded.course.roadPlan);
         QCOMPARE(decoded.course.roadPlan->generationVersion,
-                 WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
         QVERIFY(decoded.course.roadPlan->assetPhysicsSnapshot);
         QCOMPARE(decoded.course.roadPlan->assetPhysicsSnapshot
                     ->pieceBindings.size(),
@@ -315,6 +316,20 @@ private slots:
         QVERIFY(encoded.contains("\"assetId\":\"FT-02-log-over-greybox\""));
         QVERIFY(!encoded.contains("sha256"));
         QVERIFY(!encoded.contains("digest"));
+        const QJsonArray canonicalPieceBindings = QJsonDocument::fromJson(
+                encoded).object().value(QStringLiteral("roadPlan")).toObject()
+                    .value(QStringLiteral("assetPhysicsSnapshot")).toObject()
+                    .value(QStringLiteral("pieceBindings")).toArray();
+        QVERIFY(!canonicalPieceBindings.at(0).toObject().contains(
+                    QStringLiteral("definitionIndex")));
+        QVERIFY(!canonicalPieceBindings.at(0).toObject().contains(
+                    QStringLiteral("bindingIndex")));
+        QVERIFY(canonicalPieceBindings.at(0).toObject().contains(
+                    QStringLiteral("flags")));
+        QVERIFY(canonicalPieceBindings.at(2).toObject().contains(
+                    QStringLiteral("definitionIndex")));
+        QVERIFY(canonicalPieceBindings.at(2).toObject().contains(
+                    QStringLiteral("bindingIndex")));
 
         WorkoutGameCourseDocument decoded;
         QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
@@ -331,6 +346,51 @@ private slots:
                  std::int32_t(540));
         QVERIFY(snapshot.bindings[0].variantKey.isEmpty());
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), encoded);
+
+        QJsonObject expandedRoot = QJsonDocument::fromJson(encoded).object();
+        QJsonObject expandedPlan = expandedRoot.value(
+                QStringLiteral("roadPlan")).toObject();
+        QJsonObject expandedSnapshot = expandedPlan.value(
+                QStringLiteral("assetPhysicsSnapshot")).toObject();
+        QJsonArray expandedPieceBindings = expandedSnapshot.value(
+                QStringLiteral("pieceBindings")).toArray();
+        for (qsizetype index = 0; index < expandedPieceBindings.size(); ++index) {
+            QJsonObject piece = expandedPieceBindings.at(index).toObject();
+            const double noIndex = double(
+                    WorkoutGameCourseAssetPhysicsSnapshot::NoIndex);
+            if (!piece.contains(QStringLiteral("definitionIndex"))) {
+                piece.insert(QStringLiteral("definitionIndex"), noIndex);
+            }
+            if (!piece.contains(QStringLiteral("bindingIndex"))) {
+                piece.insert(QStringLiteral("bindingIndex"), noIndex);
+            }
+            if (!piece.contains(QStringLiteral("legacyFt02RecordIndex"))) {
+                piece.insert(QStringLiteral("legacyFt02RecordIndex"), noIndex);
+            }
+            if (!piece.contains(QStringLiteral("obstacleAnchorMm"))) {
+                piece.insert(QStringLiteral("obstacleAnchorMm"), 0);
+            }
+            if (!piece.contains(QStringLiteral(
+                        "obstacleAnchorMicrometerRemainder"))) {
+                piece.insert(QStringLiteral(
+                            "obstacleAnchorMicrometerRemainder"), 0);
+            }
+            if (!piece.contains(QStringLiteral("flags"))) {
+                piece.insert(QStringLiteral("flags"), 0);
+            }
+            expandedPieceBindings[index] = piece;
+        }
+        expandedSnapshot.insert(QStringLiteral("pieceBindings"),
+                                expandedPieceBindings);
+        expandedPlan.insert(QStringLiteral("assetPhysicsSnapshot"),
+                            expandedSnapshot);
+        expandedRoot.insert(QStringLiteral("roadPlan"), expandedPlan);
+        WorkoutGameCourseDocument expandedDecoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(expandedRoot).toJson(QJsonDocument::Compact),
+                    expandedDecoded), WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(expandedDecoded),
+                 encoded);
 
         // An unsupported profile must retain the version-specific status.
         QJsonObject root = QJsonDocument::fromJson(encoded).object();
@@ -392,6 +452,25 @@ private slots:
                 QStringLiteral("pieceBindings")).toArray();
         for (qsizetype index = 0; index < pieceBindings.size(); ++index) {
             QJsonObject binding = pieceBindings.at(index).toObject();
+            const double noIndex = double(
+                    WorkoutGameCourseAssetPhysicsSnapshot::NoIndex);
+            if (!binding.contains(QStringLiteral("definitionIndex"))) {
+                binding.insert(QStringLiteral("definitionIndex"), noIndex);
+            }
+            if (!binding.contains(QStringLiteral("bindingIndex"))) {
+                binding.insert(QStringLiteral("bindingIndex"), noIndex);
+            }
+            if (!binding.contains(QStringLiteral("obstacleAnchorMm"))) {
+                binding.insert(QStringLiteral("obstacleAnchorMm"), 0);
+            }
+            if (!binding.contains(QStringLiteral(
+                        "obstacleAnchorMicrometerRemainder"))) {
+                binding.insert(QStringLiteral(
+                            "obstacleAnchorMicrometerRemainder"), 0);
+            }
+            if (!binding.contains(QStringLiteral("flags"))) {
+                binding.insert(QStringLiteral("flags"), 0);
+            }
             binding.remove(QStringLiteral("legacyFt02RecordIndex"));
             pieceBindings[index] = binding;
         }
@@ -442,7 +521,7 @@ private slots:
         QVERIFY(encodedV2 != encodedV1);
         QVERIFY(encodedV2.contains("\"snapshotVersion\":2"));
         QVERIFY(encodedV2.contains("\"legacyFt02Records\":[]"));
-        QVERIFY(encodedV2.contains("\"legacyFt02RecordIndex\""));
+        QVERIFY(!encodedV2.contains("\"legacyFt02RecordIndex\""));
         WorkoutGameCourseDocument canonical;
         QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
                     encodedV2, canonical),
@@ -459,7 +538,7 @@ private slots:
                  WorkoutGameCourseDocumentStatus::InvalidDocument);
     }
 
-    void nearLimitVersionOneSnapshotRemainsReadableAfterMigration()
+    void nearLimitVersionOneSnapshotMigratesToCompactVersionTwo()
     {
         constexpr int PiecesPerSection = 850;
         WorkoutGameCourseDocument source = sampleDocument();
@@ -504,6 +583,9 @@ private slots:
         QVERIFY(roadPlan->assetPhysicsSnapshot);
         QCOMPARE(roadPlan->pieces.size(), std::size_t(1700));
         source.course.roadPlan = roadPlan;
+        source.schemaVersion = 6;
+        roadPlan->generationVersion =
+                WorkoutGameRoadPlan::BankAndReliefGenerationVersion;
         QCOMPARE(WorkoutGameRoadPlanValidator::validate(
                     *roadPlan, source.course.sections.size()),
                  WorkoutGameRoadPlanValidationStatus::Ready);
@@ -563,7 +645,25 @@ private slots:
         QCOMPARE(decoded.course.roadPlan->assetPhysicsSnapshot
                     ->snapshotVersion,
                  WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion);
-        QVERIFY(WorkoutGameCourseDocumentCodec::encode(decoded).isEmpty());
+        const QByteArray encodedV2 =
+                WorkoutGameCourseDocumentCodec::encode(decoded);
+        QVERIFY(!encodedV2.isEmpty());
+        const QJsonObject encodedV2Snapshot = QJsonDocument::fromJson(
+                encodedV2).object().value(QStringLiteral("roadPlan")).toObject()
+                    .value(QStringLiteral("assetPhysicsSnapshot")).toObject();
+        QVERIFY(QJsonDocument(encodedV2Snapshot).toJson(
+                    QJsonDocument::Compact).size()
+                <= WorkoutGameCourseAssetPhysicsSnapshot
+                    ::MaximumEncodedBytes);
+        const QJsonArray encodedV2Bindings = encodedV2Snapshot.value(
+                QStringLiteral("pieceBindings")).toArray();
+        QVERIFY(!encodedV2Bindings.at(0).toObject().contains(
+                    QStringLiteral("definitionIndex")));
+        WorkoutGameCourseDocument canonical;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    encodedV2, canonical),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(canonical), encodedV2);
     }
 
     void disabledLegacyFt02KeepsItsRecordAnchorWithoutRoadChallengeFields()
@@ -727,9 +827,12 @@ private slots:
         WorkoutGameCourseDocument playable;
         QString error;
         QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(coursePath, playable, error),
-                 WorkoutGameCourseDocumentStatus::UnsupportedVersion);
-        QVERIFY(!playable.course.roadPlan);
-        QVERIFY(!error.isEmpty());
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QVERIFY(playable.course.roadPlan);
+        QVERIFY(error.isEmpty());
+        QCOMPARE(playable.course.roadPlan->assetPhysicsSnapshot
+                    ->pieceBindings[0].definitionIndex,
+                 std::uint32_t(0));
         source.schemaVersion = 6;
         QVERIFY(WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
     }
@@ -1018,13 +1121,72 @@ private slots:
                  WorkoutGameCourseDocumentCodec::CurrentSchemaVersion);
         QCOMPARE(upgraded.conversionAlgorithmVersion, 6);
         QCOMPARE(upgraded.course.roadPlan->generationVersion,
-                 WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
         QVERIFY(upgraded.course.roadPlan->assetPhysicsSnapshot);
         const QByteArray upgradedJson =
                 WorkoutGameCourseDocumentCodec::encode(upgraded);
-        QVERIFY(!upgradedJson.contains("assetPhysicsSnapshot"));
+        QVERIFY(upgradedJson.contains("assetPhysicsSnapshot"));
         QVERIFY(!upgradedJson.contains("sha256"));
         QVERIFY(!upgradedJson.contains("digest"));
+    }
+
+    void versionSixFt02SaveFreezesRuntimeGeometryInSchemaSeven()
+    {
+        auto legacy = sampleLegacyFt02PhysicsDocument();
+        legacy.schemaVersion = 6;
+        auto legacyPlan = std::make_shared<WorkoutGameRoadPlan>(
+                *legacy.course.roadPlan);
+        legacyPlan->generationVersion =
+                WorkoutGameRoadPlan::BankAndReliefGenerationVersion;
+        legacyPlan->assetPhysicsSnapshot =
+                WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(*legacyPlan);
+        QVERIFY(legacyPlan->assetPhysicsSnapshot);
+        QVERIFY(legacyPlan->assetPhysicsSnapshot->legacyFt02Records.empty());
+        QCOMPARE(legacyPlan->assetPhysicsSnapshot->pieceBindings[0]
+                    .legacyFt02RecordIndex,
+                 WorkoutGameCourseAssetPhysicsSnapshot::NoIndex);
+        legacy.course.roadPlan = legacyPlan;
+
+        const QByteArray versionSix =
+                WorkoutGameCourseDocumentCodec::encode(legacy);
+        QVERIFY(!versionSix.isEmpty());
+        QVERIFY(!versionSix.contains("assetPhysicsSnapshot"));
+        WorkoutGameCourseDocument decodedSix;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    versionSix, decodedSix),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decodedSix.schemaVersion, 6);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString coursePath = directory.filePath(
+                QStringLiteral("legacy-ft02-v6.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    coursePath, decodedSix, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        WorkoutGameCourseDocument upgraded;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    coursePath, upgraded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(upgraded.schemaVersion, 7);
+        QCOMPARE(upgraded.course.roadPlan->generationVersion,
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
+        QVERIFY(upgraded.course.roadPlan->assetPhysicsSnapshot);
+        const auto &snapshot = *upgraded.course.roadPlan->assetPhysicsSnapshot;
+        QVERIFY(!snapshot.legacyFt02Records.empty());
+        QCOMPARE(snapshot.pieceBindings[0].legacyFt02RecordIndex,
+                 std::uint32_t(0));
+        const auto &piece = upgraded.course.roadPlan->pieces[0];
+        const auto profile = WorkoutGameFeatureGeometry::profile(
+                WorkoutGameTerrainKind::LogOver, piece.difficulty);
+        const auto &record = snapshot.legacyFt02Records[
+                snapshot.pieceBindings[0].legacyFt02RecordIndex];
+        QCOMPARE(record.startMeters, profile.startMeters);
+        QCOMPARE(record.endMeters, profile.endMeters);
+        QCOMPARE(record.heightMeters, profile.heightMeters);
+        QCOMPARE(record.obstacleAnchorMeters,
+                 piece.challenge.obstacleDistanceMeters);
     }
 
     void versionFourHashLoadsAndReplacementUpgradesWithoutIt()
@@ -1364,7 +1526,7 @@ private slots:
                  WorkoutGameCourseDocumentStatus::Ready);
         QVERIFY(loaded.course.roadPlan);
         QCOMPARE(loaded.course.roadPlan->generationVersion,
-                 WorkoutGameRoadPlan::BankAndReliefGenerationVersion);
+                 WorkoutGameRoadPlan::CurrentGenerationVersion);
         QVERIFY(std::all_of(
                 loaded.course.roadPlan->pieces.begin(),
                 loaded.course.roadPlan->pieces.end(),
@@ -1580,6 +1742,21 @@ private slots:
                         QJsonDocument(invalidAnchor).toJson(), decoded),
                      WorkoutGameCourseDocumentStatus::InvalidDocument);
         }
+
+        QJsonObject unknownPieceField = canonical;
+        plan = unknownPieceField.value(QStringLiteral("roadPlan")).toObject();
+        snapshot = plan.value(QStringLiteral("assetPhysicsSnapshot")).toObject();
+        QJsonArray pieceBindings = snapshot.value(
+                QStringLiteral("pieceBindings")).toArray();
+        QJsonObject pieceBinding = pieceBindings.at(0).toObject();
+        pieceBinding.insert(QStringLiteral("unexpected"), 1);
+        pieceBindings[0] = pieceBinding;
+        snapshot.insert(QStringLiteral("pieceBindings"), pieceBindings);
+        plan.insert(QStringLiteral("assetPhysicsSnapshot"), snapshot);
+        unknownPieceField.insert(QStringLiteral("roadPlan"), plan);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(unknownPieceField).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::InvalidDocument);
 
         QJsonObject oversized = canonical;
         plan = oversized.value(QStringLiteral("roadPlan")).toObject();
