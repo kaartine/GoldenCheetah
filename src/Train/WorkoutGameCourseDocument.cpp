@@ -1511,6 +1511,7 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
     }
     snapshot->snapshotVersion =
             WorkoutGameCourseAssetPhysicsSnapshot::CurrentVersion;
+    snapshot->migratedFromLegacyLayout = legacyLayout;
     const auto validation = WorkoutGameAssetPhysicsSnapshotValidator::validate(
             *snapshot, roadPieceCount);
     const auto status = snapshotStatusToDocumentStatus(validation);
@@ -2021,10 +2022,13 @@ bool WorkoutGameCourseDocumentCodec::valid(
                     *document.course.roadPlan->assetPhysicsSnapshot,
                     document.course.roadPlan->pieces.size())
                 == WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready
-            && QJsonDocument(assetPhysicsSnapshotToJson(
+            && (QJsonDocument(assetPhysicsSnapshotToJson(
                     *document.course.roadPlan->assetPhysicsSnapshot))
                     .toJson(QJsonDocument::Compact).size()
-                <= WorkoutGameCourseAssetPhysicsSnapshot::MaximumEncodedBytes;
+                    <= WorkoutGameCourseAssetPhysicsSnapshot
+                        ::MaximumEncodedBytes
+                || document.course.roadPlan->assetPhysicsSnapshot
+                    ->migratedFromLegacyLayout);
     const bool schemaValid = document.schemaVersion == 1
             ? !document.course.roadPlan
                 && !document.prescriptionMetadata.present()
@@ -2071,6 +2075,16 @@ QByteArray WorkoutGameCourseDocumentCodec::encode(
         const WorkoutGameCourseDocument &document)
 {
     if (!valid(document)) return {};
+    if (document.schemaVersion >= AssetPhysicsSchemaVersion
+            && document.course.roadPlan
+            && document.course.roadPlan->assetPhysicsSnapshot
+            && QJsonDocument(assetPhysicsSnapshotToJson(
+                    *document.course.roadPlan->assetPhysicsSnapshot))
+                    .toJson(QJsonDocument::Compact).size()
+                > WorkoutGameCourseAssetPhysicsSnapshot
+                    ::MaximumEncodedBytes) {
+        return {};
+    }
     QJsonObject source {
         {QStringLiteral("fileName"), document.sourceFileName}
     };

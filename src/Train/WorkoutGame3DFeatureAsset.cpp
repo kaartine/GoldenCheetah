@@ -72,9 +72,23 @@ WorkoutGame3DFeatureAssetSnapshot placePiece(
     }
 
     if (renderTransform.status == WorkoutGameAssetRenderFitStatus::Ready) {
-        const double assetStartDistanceMeters = std::clamp(
-                renderTransform.assetStartDistanceMeters,
-                0.0, course.totalLengthMeters);
+        if (renderTransform.exactLegacy) {
+            const double radius = renderTransform.exactHeightMeters * 0.5;
+            if (renderTransform.exactStartMeters != -radius
+                    || renderTransform.exactEndMeters != radius) {
+                return result;
+            }
+        }
+        double assetStartDistanceMeters =
+                renderTransform.assetStartDistanceMeters;
+        if (renderTransform.exactLegacy) {
+            assetStartDistanceMeters = std::clamp(
+                    assetStartDistanceMeters,
+                    0.0, course.totalLengthMeters);
+        } else if (assetStartDistanceMeters < 0.0
+                || assetStartDistanceMeters > course.totalLengthMeters) {
+            return result;
+        }
         const WorkoutGameRoadSample sample =
                 WorkoutGameRoadCourseBuilder::sample(
                     course, assetStartDistanceMeters);

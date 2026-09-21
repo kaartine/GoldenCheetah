@@ -68,6 +68,10 @@ struct WorkoutGameAssetRenderTransform
     double upScale = 1.0;
     double forwardExtentMeters = 0.0;
     double upExtentMeters = 0.0;
+    bool exactLegacy = false;
+    double exactStartMeters = 0.0;
+    double exactEndMeters = 0.0;
+    double exactHeightMeters = 0.0;
 };
 
 struct WorkoutGameLegacyFt02Geometry

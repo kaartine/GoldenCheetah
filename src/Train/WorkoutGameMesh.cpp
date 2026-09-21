@@ -879,6 +879,64 @@ WorkoutGameMesh WorkoutGameMeshLibrary::legacyFt02V1Fallback()
     return logModelFromDimensions(NativeExtentMeters, NativeExtentMeters);
 }
 
+WorkoutGameMesh WorkoutGameMeshLibrary::legacyFt02V1Fallback(
+        double startMeters,
+        double endMeters,
+        double heightMeters)
+{
+    WorkoutGameMesh empty;
+    if (!std::isfinite(startMeters) || !std::isfinite(endMeters)
+            || !std::isfinite(heightMeters) || startMeters >= endMeters
+            || heightMeters <= 0.0) {
+        return empty;
+    }
+    const double radius = heightMeters * 0.5;
+    if (startMeters == -radius && endMeters == radius) {
+        return logModelFromDimensions(
+                endMeters - startMeters, heightMeters);
+    }
+
+    WorkoutGameMesh mesh = logModelFromDimensions(
+            heightMeters, heightMeters);
+    constexpr int Rings = 7;
+    const double radiusScale[Rings] = {
+        0.56, 0.80, 0.94, 1.0, 0.91, 0.74, 0.50
+    };
+    for (int ring = 0; ring < Rings; ++ring) {
+        for (int radial = 0;
+                radial < WorkoutGameLogRadialSegments; ++radial) {
+            WorkoutGameMeshVertex &vertex = mesh.vertices[
+                    std::size_t(ring * WorkoutGameLogRadialSegments
+                        + radial)];
+            vertex.forwardMeters = std::clamp(
+                    vertex.forwardMeters, startMeters, endMeters);
+            if (radial <= WorkoutGameLogRadialSegments / 2) {
+                vertex.upMeters = radiusScale[ring]
+                        * WorkoutGameLegacyFt02V1::surfaceOffsetMeters(
+                            vertex.forwardMeters,
+                            startMeters, endMeters, heightMeters);
+            }
+        }
+    }
+    for (std::size_t index = std::size_t(
+                Rings * WorkoutGameLogRadialSegments);
+            index < mesh.vertices.size(); ++index) {
+        mesh.vertices[index].forwardMeters = std::clamp(
+                mesh.vertices[index].forwardMeters,
+                startMeters, endMeters);
+    }
+    mesh.lengthMeters = endMeters - startMeters;
+    mesh.entry.forwardMeters = startMeters;
+    mesh.exit.forwardMeters = endMeters;
+    if (!mesh.colliders.empty()) {
+        mesh.colliders.front().forwardMeters =
+                (startMeters + endMeters) * 0.5;
+        mesh.colliders.front().halfForwardMeters =
+                (endMeters - startMeters) * 0.5;
+    }
+    return mesh;
+}
+
 WorkoutGameMesh WorkoutGameMeshLibrary::trailTile(
         double lengthMeters,
         double entryHalfWidthMeters,

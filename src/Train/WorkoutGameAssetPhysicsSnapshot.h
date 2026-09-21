@@ -122,6 +122,9 @@ struct WorkoutGameCourseAssetPhysicsSnapshot
     std::vector<WorkoutGameAssetPhysicsBinding> bindings;
     std::vector<WorkoutGameLegacyFt02Record> legacyFt02Records;
     std::vector<WorkoutGameAssetPhysicsPieceBinding> pieceBindings;
+    // Read-only compatibility provenance. Writers still enforce the current
+    // encoded-size limit after a v1 layout has expanded in memory.
+    bool migratedFromLegacyLayout = false;
 };
 
 enum class WorkoutGameAssetPhysicsSnapshotValidationStatus

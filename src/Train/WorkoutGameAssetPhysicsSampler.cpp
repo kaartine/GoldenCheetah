@@ -319,6 +319,10 @@ WorkoutGameAssetPhysicsSampler::renderTransform(
     result.assetId = fit.assetId;
     result.variantKey = fit.variantKey;
     if (fit.exactLegacy) {
+        result.exactLegacy = true;
+        result.exactStartMeters = fit.exactStartMeters;
+        result.exactEndMeters = fit.exactEndMeters;
+        result.exactHeightMeters = fit.exactHeightMeters;
         const double forwardExtent = fit.exactEndMeters
                 - fit.exactStartMeters;
         result.obstacleAnchorMeters = fit.exactObstacleAnchorMeters;

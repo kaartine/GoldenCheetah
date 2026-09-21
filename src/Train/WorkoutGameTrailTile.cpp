@@ -89,14 +89,22 @@ WorkoutGameTrailTile WorkoutGameTrailTileAssembler::challenge(
         }
     }
 
-    WorkoutGameMesh feature = renderTransform.status
+    WorkoutGameMesh feature = renderTransform.exactLegacy
+            ? WorkoutGameMeshLibrary::legacyFt02V1Fallback(
+                renderTransform.exactStartMeters,
+                renderTransform.exactEndMeters,
+                renderTransform.exactHeightMeters)
+            : renderTransform.status
                     == WorkoutGameAssetRenderFitStatus::Ready
-            ? WorkoutGameMeshLibrary::legacyFt02V1Fallback()
-            : WorkoutGameMeshLibrary::feature(
-                piece.terrain, piece.difficulty);
+                ? WorkoutGameMeshLibrary::legacyFt02V1Fallback()
+                : WorkoutGameMeshLibrary::feature(
+                    piece.terrain, piece.difficulty);
     if (!WorkoutGameMeshLibrary::valid(feature)) return result;
 
-    if (renderTransform.status == WorkoutGameAssetRenderFitStatus::Ready) {
+    if (renderTransform.exactLegacy) {
+        featureAnchorMeters = renderTransform.obstacleAnchorMeters;
+    } else if (renderTransform.status
+            == WorkoutGameAssetRenderFitStatus::Ready) {
         const double nativeLength =
                 feature.exit.forwardMeters - feature.entry.forwardMeters;
         double nativeHeight = 0.0;
