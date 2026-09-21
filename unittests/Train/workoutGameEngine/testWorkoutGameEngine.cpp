@@ -179,6 +179,7 @@ WorkoutGameCourseDocument legacyLogDocument(double difficulty, double speed,
                                              bool rebase)
 {
     WorkoutGameCourseDocument document;
+    document.schemaVersion = 6;
     document.title = QStringLiteral("FT02 Engine codec trace");
     document.sourceFileName = QStringLiteral("ft02-trace.erg");
     document.ftpWatts = 200.0;
@@ -204,6 +205,8 @@ WorkoutGameCourseDocument legacyLogDocument(double difficulty, double speed,
                 WorkoutGameDistancePlayback::visualCourse(document.course),
                 document.ftpWatts));
     // The oracle really takes the old procedural path, not the frozen adapter.
+    plan->generationVersion =
+            WorkoutGameRoadPlan::BankAndReliefGenerationVersion;
     plan->assetPhysicsSnapshot.reset();
     document.course.roadPlan = plan;
     return document;
@@ -258,6 +261,7 @@ private slots:
         auto frozen = legacy;
         frozen.schemaVersion = WorkoutGameCourseDocumentCodec::AssetPhysicsSchemaVersion;
         auto plan = std::make_shared<WorkoutGameRoadPlan>(*legacy.course.roadPlan);
+        plan->generationVersion = WorkoutGameRoadPlan::CurrentGenerationVersion;
         auto snapshot = WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(*plan);
         QVERIFY(snapshot);
         const auto challenge = std::find_if(plan->pieces.begin(), plan->pieces.end(),
