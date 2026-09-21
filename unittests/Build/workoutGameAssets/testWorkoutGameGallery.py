@@ -168,6 +168,7 @@ class WorkoutGameGalleryTest(unittest.TestCase):
         *arguments: str,
         default_opengl: str = "4.6",
         prime_opengl: str = "4.6",
+        renderer_environment: dict[str, str] | None = None,
     ) -> list[str]:
         binary = self.external_root / "bin"
         binary.mkdir(exist_ok=True)
@@ -192,12 +193,16 @@ class WorkoutGameGalleryTest(unittest.TestCase):
         )
         glxinfo.chmod(0o755)
         environment = dict(os.environ)
+        for name in ("DRI_PRIME", "LIBGL_ALWAYS_SOFTWARE", "GALLIUM_DRIVER"):
+            environment.pop(name, None)
         environment.update({
             "DISPLAY": ":99",
             "PATH": f"{binary}:/usr/bin:/bin",
             "WG_DOCKER_CAPTURE": str(capture),
             "XAUTHORITY": str(self.external_root / "missing-authority"),
         })
+        if renderer_environment:
+            environment.update(renderer_environment)
         subprocess.run(
             [str(TOOLS / "open_gallery.sh"), *arguments],
             check=True,
@@ -207,7 +212,12 @@ class WorkoutGameGalleryTest(unittest.TestCase):
 
     def test_docker_launcher_selects_supported_discrete_gpu(self) -> None:
         arguments = self._capture_docker_launcher(
-            default_opengl="4.2", prime_opengl="4.3"
+            default_opengl="4.2",
+            prime_opengl="4.3",
+            renderer_environment={
+                "LIBGL_ALWAYS_SOFTWARE": "1",
+                "GALLIUM_DRIVER": "llvmpipe",
+            },
         )
 
         self.assertIn("DRI_PRIME=1", arguments)

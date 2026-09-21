@@ -49,6 +49,7 @@ gallery_renderer="${WG_GALLERY_RENDERER:-auto}"
 gallery_renderer_detail="hardware (OpenGL probe unavailable)"
 case "$gallery_renderer" in
     auto)
+        unset DRI_PRIME LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER
         if command -v glxinfo >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then
             default_opengl="$(probe_opengl_version || true)"
             if opengl_version_supported "$default_opengl"; then
@@ -67,6 +68,7 @@ case "$gallery_renderer" in
         fi
         ;;
     hardware)
+        unset LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER
         gallery_renderer_detail="hardware (forced)"
         ;;
     software)
