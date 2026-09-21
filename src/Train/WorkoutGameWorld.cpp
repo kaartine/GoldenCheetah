@@ -343,7 +343,7 @@ struct WorkoutGamePhysics::Impl
             const WorkoutGameAssetPhysicsSample sample =
                     WorkoutGameAssetPhysicsSampler::sample(
                         snapshot, pieceIndex, courseDistanceMeters);
-            if (sample.bound && sample.surfacePresent) {
+            if (sample.obstacleContact && sample.surfacePresent) {
                 offset += sample.offsetMeters;
             }
         }

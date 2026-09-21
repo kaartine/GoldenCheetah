@@ -403,7 +403,10 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
             return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
         }
         for (std::size_t index = 0; index < plan.pieces.size(); ++index) {
-            const double anchor = plan.pieces[index].geometryAnchorDistanceMeters;
+            const WorkoutGameRoadPiece &roadPiece = plan.pieces[index];
+            const auto &pieceBinding =
+                    plan.assetPhysicsSnapshot->pieceBindings[index];
+            const double anchor = roadPiece.geometryAnchorDistanceMeters;
             if (!finiteValue(anchor) || anchor < 0.0
                     || anchor > MaximumCourseDistanceMeters) {
                 return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
@@ -413,12 +416,26 @@ WorkoutGameRoadPlanValidationStatus WorkoutGameRoadPlanValidator::validate(
             const std::int16_t anchorRemainder = std::int16_t(std::llround(
                     anchor * 1000000.0)
                     - std::int64_t(anchorMm) * 1000);
-            if (plan.assetPhysicsSnapshot->pieceBindings[index].obstacleAnchorMm
-                        != anchorMm
-                    || plan.assetPhysicsSnapshot->pieceBindings[index]
-                            .obstacleAnchorMicrometerRemainder
+            if (pieceBinding.obstacleAnchorMm != anchorMm
+                    || pieceBinding.obstacleAnchorMicrometerRemainder
                         != anchorRemainder) {
                 return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+            }
+            if (pieceBinding.legacyFt02RecordIndex
+                    != WorkoutGameCourseAssetPhysicsSnapshot::NoIndex) {
+                const auto &record = plan.assetPhysicsSnapshot
+                        ->legacyFt02Records[
+                            pieceBinding.legacyFt02RecordIndex];
+                if (roadPiece.terrain != WorkoutGameTerrainKind::LogOver
+                        || record.enabled != roadPiece.challenge.enabled
+                        || (record.enabled
+                            && WorkoutGameLegacyBinary64::encode(
+                                record.obstacleAnchorMeters)
+                                != WorkoutGameLegacyBinary64::encode(
+                                roadPiece.challenge
+                                    .obstacleDistanceMeters))) {
+                    return WorkoutGameRoadPlanValidationStatus::InvalidPlan;
+                }
             }
         }
     }

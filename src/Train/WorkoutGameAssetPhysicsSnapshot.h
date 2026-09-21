@@ -60,10 +60,31 @@ struct WorkoutGameAssetPhysicsBinding
     std::uint32_t resolvedExtentMm = 0;
 };
 
+struct WorkoutGameLegacyFt02Record
+{
+    static constexpr std::uint32_t CurrentVersion = 1;
+
+    std::uint32_t recordVersion = CurrentVersion;
+    bool enabled = false;
+    double startMeters = 0.0;
+    double endMeters = 0.0;
+    double heightMeters = 0.0;
+    double obstacleAnchorMeters = 0.0;
+};
+
+class WorkoutGameLegacyBinary64
+{
+public:
+    static QString encode(double value);
+    static bool decode(const QString &encoded, double &value);
+};
+
 struct WorkoutGameAssetPhysicsPieceBinding
 {
     std::uint32_t definitionIndex = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t bindingIndex = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t legacyFt02RecordIndex =
+            std::numeric_limits<std::uint32_t>::max();
     std::int32_t obstacleAnchorMm = 0;
     std::int16_t obstacleAnchorMicrometerRemainder = 0;
     std::uint32_t flags = 0;
@@ -90,12 +111,15 @@ struct WorkoutGameCourseAssetPhysicsSnapshot
     static constexpr std::size_t MaximumPointsPerDefinition = 256;
     static constexpr std::size_t MaximumTotalPoints = 4096;
     static constexpr std::size_t MaximumPieceBindings = 4096;
+    static constexpr std::size_t MaximumLegacyRecords = 4096;
+    static constexpr std::size_t MaximumLegacyScalarFields = 32768;
     static constexpr qsizetype MaximumEncodedBytes = 256 * 1024;
 
     std::uint32_t snapshotVersion = CurrentVersion;
     std::uint32_t catalogSchemaVersion = 0; // 0 = no catalog/legacy, 1 = catalog v1.
     std::vector<WorkoutGameAssetPhysicsDefinition> physicsDefinitions;
     std::vector<WorkoutGameAssetPhysicsBinding> bindings;
+    std::vector<WorkoutGameLegacyFt02Record> legacyFt02Records;
     std::vector<WorkoutGameAssetPhysicsPieceBinding> pieceBindings;
 };
 
@@ -130,12 +154,17 @@ public:
     bool internBinding(
             const WorkoutGameAssetPhysicsBinding &binding,
             std::uint32_t &index);
+    bool internLegacyFt02Record(
+            const WorkoutGameLegacyFt02Record &record,
+            std::uint32_t &index);
     bool appendPieceBinding(
             const WorkoutGameAssetPhysicsPieceBinding &binding);
     std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot> finish() const;
 
     static std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
             legacyFor(const WorkoutGameRoadPlan &plan);
+    static std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+            frozenLegacyFt02For(const WorkoutGameRoadPlan &plan);
 
 private:
     WorkoutGameCourseAssetPhysicsSnapshot snapshot_;

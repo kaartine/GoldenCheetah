@@ -1207,12 +1207,31 @@ QJsonObject assetPhysicsSnapshotToJson(
              double(binding.resolvedExtentMm)}
         });
     }
+    QJsonArray legacyFt02Records;
+    for (const WorkoutGameLegacyFt02Record &record :
+            snapshot.legacyFt02Records) {
+        legacyFt02Records.append(QJsonObject {
+            {QStringLiteral("recordVersion"), double(record.recordVersion)},
+            {QStringLiteral("enabled"), record.enabled},
+            {QStringLiteral("startMetersBinary64"),
+             WorkoutGameLegacyBinary64::encode(record.startMeters)},
+            {QStringLiteral("endMetersBinary64"),
+             WorkoutGameLegacyBinary64::encode(record.endMeters)},
+            {QStringLiteral("heightMetersBinary64"),
+             WorkoutGameLegacyBinary64::encode(record.heightMeters)},
+            {QStringLiteral("obstacleAnchorMetersBinary64"),
+             WorkoutGameLegacyBinary64::encode(
+                 record.obstacleAnchorMeters)}
+        });
+    }
     QJsonArray pieceBindings;
     for (const WorkoutGameAssetPhysicsPieceBinding &binding :
             snapshot.pieceBindings) {
         pieceBindings.append(QJsonObject {
             {QStringLiteral("definitionIndex"), double(binding.definitionIndex)},
             {QStringLiteral("bindingIndex"), double(binding.bindingIndex)},
+            {QStringLiteral("legacyFt02RecordIndex"),
+             double(binding.legacyFt02RecordIndex)},
             {QStringLiteral("obstacleAnchorMm"), binding.obstacleAnchorMm},
             {QStringLiteral("obstacleAnchorMicrometerRemainder"),
              binding.obstacleAnchorMicrometerRemainder},
@@ -1224,6 +1243,7 @@ QJsonObject assetPhysicsSnapshotToJson(
         {QStringLiteral("catalogSchemaVersion"), double(snapshot.catalogSchemaVersion)},
         {QStringLiteral("physicsDefinitions"), definitions},
         {QStringLiteral("bindings"), bindings},
+        {QStringLiteral("legacyFt02Records"), legacyFt02Records},
         {QStringLiteral("pieceBindings"), pieceBindings}
     };
 }
@@ -1269,29 +1289,41 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
     if (snapshot->catalogSchemaVersion > 1) {
         return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
     }
-    if (object.size() != 5) {
+    if (object.size() != 6) {
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
     const QJsonValue definitionsValue =
             object.value(QStringLiteral("physicsDefinitions"));
     const QJsonValue bindingsValue = object.value(QStringLiteral("bindings"));
+    const QJsonValue legacyFt02RecordsValue = object.value(
+            QStringLiteral("legacyFt02Records"));
     const QJsonValue pieceBindingsValue =
             object.value(QStringLiteral("pieceBindings"));
     if (!definitionsValue.isArray() || !bindingsValue.isArray()
+            || !legacyFt02RecordsValue.isArray()
             || !pieceBindingsValue.isArray()) {
         return WorkoutGameCourseDocumentStatus::InvalidDocument;
     }
     const QJsonArray definitions = definitionsValue.toArray();
     const QJsonArray bindings = bindingsValue.toArray();
+    const QJsonArray legacyFt02Records = legacyFt02RecordsValue.toArray();
     const QJsonArray pieceBindings = pieceBindingsValue.toArray();
     if (definitions.size()
                 > int(WorkoutGameCourseAssetPhysicsSnapshot
                     ::MaximumDefinitions)
             || bindings.size()
                 > int(WorkoutGameCourseAssetPhysicsSnapshot::MaximumBindings)
+            || legacyFt02Records.size()
+                > int(WorkoutGameCourseAssetPhysicsSnapshot
+                    ::MaximumLegacyRecords)
             || pieceBindings.size()
                 > int(WorkoutGameCourseAssetPhysicsSnapshot
                     ::MaximumPieceBindings)) {
+        return WorkoutGameCourseDocumentStatus::ResourceLimit;
+    }
+    if (legacyFt02Records.size()
+            > int(WorkoutGameCourseAssetPhysicsSnapshot
+                ::MaximumLegacyScalarFields / 4)) {
         return WorkoutGameCourseDocumentStatus::ResourceLimit;
     }
     std::size_t totalPoints = 0;
@@ -1402,6 +1434,48 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
         binding.variantKey = variantKey.toString();
         snapshot->bindings.push_back(std::move(binding));
     }
+    snapshot->legacyFt02Records.reserve(
+            std::size_t(legacyFt02Records.size()));
+    for (const QJsonValue &recordValue : legacyFt02Records) {
+        if (!recordValue.isObject()) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        const QJsonObject recordObject = recordValue.toObject();
+        WorkoutGameLegacyFt02Record record;
+        if (!unsignedNumber(
+                    recordObject, "recordVersion", record.recordVersion)) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        if (record.recordVersion
+                != WorkoutGameLegacyFt02Record::CurrentVersion) {
+            return WorkoutGameCourseDocumentStatus::UnsupportedVersion;
+        }
+        const QJsonValue enabled = recordObject.value(
+                QStringLiteral("enabled"));
+        const QJsonValue start = recordObject.value(
+                QStringLiteral("startMetersBinary64"));
+        const QJsonValue end = recordObject.value(
+                QStringLiteral("endMetersBinary64"));
+        const QJsonValue height = recordObject.value(
+                QStringLiteral("heightMetersBinary64"));
+        const QJsonValue anchor = recordObject.value(
+                QStringLiteral("obstacleAnchorMetersBinary64"));
+        if (recordObject.size() != 6 || !enabled.isBool()
+                || !start.isString() || !end.isString()
+                || !height.isString() || !anchor.isString()
+                || !WorkoutGameLegacyBinary64::decode(
+                    start.toString(), record.startMeters)
+                || !WorkoutGameLegacyBinary64::decode(
+                    end.toString(), record.endMeters)
+                || !WorkoutGameLegacyBinary64::decode(
+                    height.toString(), record.heightMeters)
+                || !WorkoutGameLegacyBinary64::decode(
+                    anchor.toString(), record.obstacleAnchorMeters)) {
+            return WorkoutGameCourseDocumentStatus::InvalidDocument;
+        }
+        record.enabled = enabled.toBool();
+        snapshot->legacyFt02Records.push_back(record);
+    }
     snapshot->pieceBindings.reserve(std::size_t(pieceBindings.size()));
     for (const QJsonValue &pieceBindingValue : pieceBindings) {
         if (!pieceBindingValue.isObject()) {
@@ -1410,10 +1484,12 @@ WorkoutGameCourseDocumentStatus parseAssetPhysicsSnapshot(
         WorkoutGameAssetPhysicsPieceBinding binding;
         const QJsonObject bindingObject = pieceBindingValue.toObject();
         std::int32_t anchorRemainder = 0;
-        if (bindingObject.size() != 5
+        if (bindingObject.size() != 6
                 || !unsignedNumber(bindingObject, "definitionIndex", binding.definitionIndex)
                 || !unsignedNumber(bindingObject, "bindingIndex",
                             binding.bindingIndex)
+                || !unsignedNumber(bindingObject, "legacyFt02RecordIndex",
+                            binding.legacyFt02RecordIndex)
                 || !signed32Number(bindingObject, "obstacleAnchorMm",
                     binding.obstacleAnchorMm)
                 || !signed32Number(bindingObject,
@@ -1797,9 +1873,15 @@ bool WorkoutGameCourseDocumentCodec::valid(
         // legacy reads. Never silently discard explicitly resolved geometry.
         if (snapshot.catalogSchemaVersion != 0 || !snapshot.physicsDefinitions.empty()
                 || !snapshot.bindings.empty()
+                || !snapshot.legacyFt02Records.empty()
                 || !std::all_of(snapshot.pieceBindings.begin(), snapshot.pieceBindings.end(),
                     [](const auto &piece) {
-                        return piece.flags == WorkoutGameCourseAssetPhysicsSnapshot::LegacyProceduralV1;
+                        return piece.flags
+                                    == WorkoutGameCourseAssetPhysicsSnapshot
+                                        ::LegacyProceduralV1
+                                && piece.legacyFt02RecordIndex
+                                    == WorkoutGameCourseAssetPhysicsSnapshot
+                                        ::NoIndex;
                     })) return false;
     }
     static const QRegularExpression sha256Pattern(

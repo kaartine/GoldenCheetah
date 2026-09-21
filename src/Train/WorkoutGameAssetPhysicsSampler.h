@@ -19,6 +19,8 @@ struct WorkoutGameAssetPhysicsSample
 {
     bool bound = false;
     bool surfacePresent = false;
+    bool obstacleContact = false;
+    bool materialDefined = false;
     WorkoutGameAssetPhysicsOperation operation =
             WorkoutGameAssetPhysicsOperation::AddObstacle;
     double offsetMeters = 0.0;
@@ -45,6 +47,11 @@ struct WorkoutGameAssetRenderFit
     std::uint32_t nativeForwardExtentMm = 0;
     std::uint32_t nativeUpExtentMm = 0;
     std::uint32_t resolvedExtentMm = 0;
+    bool exactLegacy = false;
+    double exactObstacleAnchorMeters = 0.0;
+    double exactStartMeters = 0.0;
+    double exactEndMeters = 0.0;
+    double exactHeightMeters = 0.0;
 };
 
 struct WorkoutGameAssetRenderTransform

@@ -328,6 +328,58 @@ private slots:
         QCOMPARE(ordinary.restitution, 0.0);
     }
 
+    void frozenLegacyLogKeepsOrdinaryGroundAndDecorativeContactPolicy()
+    {
+        WorkoutGameRoadCourse road;
+        road.ready = true;
+        road.totalLengthMeters = 40.0;
+        road.visualLengthMeters = 40.0;
+        WorkoutGameRoadPiece piece;
+        piece.terrain = WorkoutGameTerrainKind::LogOver;
+        piece.lengthMeters = road.totalLengthMeters;
+        piece.relief.enabled = true;
+        piece.geometryAnchorDistanceMeters = 20.0;
+        piece.challenge.enabled = true;
+        piece.challenge.obstacleDistanceMeters = 20.0;
+        road.pieces.push_back(piece);
+        road.challengePieceIndexReady = true;
+        road.challengePieceIndices.push_back(0);
+
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>();
+        WorkoutGameLegacyFt02Record record;
+        record.enabled = true;
+        record.startMeters = -0.27;
+        record.endMeters = 0.27;
+        record.heightMeters = 0.54;
+        record.obstacleAnchorMeters = 20.0;
+        snapshot->legacyFt02Records.push_back(record);
+        WorkoutGameAssetPhysicsPieceBinding binding;
+        binding.flags =
+                WorkoutGameCourseAssetPhysicsSnapshot::LegacyProceduralV1;
+        binding.legacyFt02RecordIndex = 0;
+        binding.obstacleAnchorMm = 20000;
+        snapshot->pieceBindings.push_back(binding);
+        road.assetPhysicsSnapshot = snapshot;
+
+        const WorkoutGameRoadSample sample =
+                WorkoutGameRoadCourseBuilder::sample(road, 20.0);
+        QVERIFY(sample.ready);
+        QCOMPARE(sample.surfaceOffsetMeters, 0.54);
+        QCOMPARE(sample.nonPhysicalFeatureOffsetMeters, 0.54);
+        QCOMPARE(sample.visualGroundElevationMeters(), 0.0);
+
+        const auto material = WorkoutGameWorldGroundProfile::materialAt(
+                road, 20.0);
+        QVERIFY(!material.assetDefined);
+        QCOMPARE(material.coulombFriction, 1.1);
+        QCOMPARE(material.restitution, 0.0);
+        const std::vector<double> basePoints {19.9, 20.0, 20.1};
+        QCOMPARE(WorkoutGameWorldGroundProfile::mergeBreakpoints(
+                    road, 0.0, 0.0, 0.0, 40.0, basePoints),
+                 basePoints);
+    }
+
     void resolvedLogCreatesValidWorldSegmentsOnSteepGrades()
     {
         QString catalogError;

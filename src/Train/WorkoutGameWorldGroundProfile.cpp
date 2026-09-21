@@ -112,7 +112,7 @@ WorkoutGameWorldGroundMaterial WorkoutGameWorldGroundProfile::materialAt(
         const WorkoutGameAssetPhysicsSample sample =
                 WorkoutGameAssetPhysicsSampler::sample(
                     snapshot, pieceIndex, courseDistanceMeters);
-        if (!sample.surfacePresent) continue;
+        if (!sample.materialDefined || !sample.surfacePresent) continue;
         result.assetDefined = true;
         result.coulombFriction = sample.coulombFriction;
         result.restitution = sample.restitution;
@@ -137,7 +137,7 @@ WorkoutGameWorldGroundMaterial WorkoutGameWorldGroundProfile::baseMaterialAt(
         const WorkoutGameAssetPhysicsSample sample =
                 WorkoutGameAssetPhysicsSampler::sample(
                     snapshot, pieceIndex, courseDistanceMeters);
-        if (!sample.surfacePresent) continue;
+        if (!sample.materialDefined || !sample.surfacePresent) continue;
         if (sample.operation
                 == WorkoutGameAssetPhysicsOperation::AddObstacle) {
             return {};

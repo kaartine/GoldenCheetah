@@ -8,10 +8,13 @@
  */
 
 #include "WorkoutGameAssetPhysicsSnapshot.h"
+#include "WorkoutGameLegacyFt02V1.h"
 #include "WorkoutGameRoadPlan.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <limits>
 
 namespace {
 
@@ -19,6 +22,55 @@ constexpr double MaximumCourseDistanceMeters = 250000.0;
 constexpr std::int32_t MaximumForwardCoordinateMm = 64000;
 constexpr std::int32_t MaximumHeightCoordinateMm = 16000;
 constexpr std::int64_t MinimumBox2DSegmentLengthSquaredMm = 25;
+constexpr std::size_t LegacyFt02ScalarFieldsPerRecord = 4;
+
+static_assert(sizeof(double) == sizeof(std::uint64_t),
+              "legacy FT02 persistence requires binary64 doubles");
+static_assert(std::numeric_limits<double>::is_iec559,
+              "legacy FT02 persistence requires IEC 559 doubles");
+
+std::uint64_t binary64Bits(double value)
+{
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+bool sameLegacyFt02Record(
+        const WorkoutGameLegacyFt02Record &left,
+        const WorkoutGameLegacyFt02Record &right)
+{
+    return left.recordVersion == right.recordVersion
+            && left.enabled == right.enabled
+            && binary64Bits(left.startMeters) == binary64Bits(right.startMeters)
+            && binary64Bits(left.endMeters) == binary64Bits(right.endMeters)
+            && binary64Bits(left.heightMeters) == binary64Bits(right.heightMeters)
+            && binary64Bits(left.obstacleAnchorMeters)
+                == binary64Bits(right.obstacleAnchorMeters);
+}
+
+WorkoutGameAssetPhysicsSnapshotValidationStatus validateLegacyFt02Record(
+        const WorkoutGameLegacyFt02Record &record)
+{
+    using Status = WorkoutGameAssetPhysicsSnapshotValidationStatus;
+    if (record.recordVersion != WorkoutGameLegacyFt02Record::CurrentVersion) {
+        return Status::UnsupportedVersion;
+    }
+    if (!std::isfinite(record.startMeters)
+            || !std::isfinite(record.endMeters)
+            || !std::isfinite(record.heightMeters)
+            || !std::isfinite(record.obstacleAnchorMeters)
+            || record.startMeters >= record.endMeters
+            || std::abs(record.startMeters) > 64.0
+            || std::abs(record.endMeters) > 64.0
+            || record.heightMeters <= 0.0
+            || record.heightMeters > 16.0
+            || record.obstacleAnchorMeters < 0.0
+            || record.obstacleAnchorMeters > MaximumCourseDistanceMeters) {
+        return Status::InvalidSnapshot;
+    }
+    return Status::Ready;
+}
 
 bool samePoint(
         const WorkoutGameAssetPhysicsPoint &left,
@@ -111,8 +163,15 @@ bool validPieceBinding(
     }
     const bool hasPhysics = piece.definitionIndex != Snapshot::NoIndex;
     const bool hasAsset = piece.bindingIndex != Snapshot::NoIndex;
+    const bool hasLegacy = piece.legacyFt02RecordIndex != Snapshot::NoIndex;
     if ((piece.flags & Snapshot::LegacyProceduralV1) != 0
             && (hasPhysics || hasAsset)) {
+        return false;
+    }
+    if (hasLegacy
+            && ((piece.flags & Snapshot::LegacyProceduralV1) == 0
+                || piece.legacyFt02RecordIndex
+                    >= snapshot.legacyFt02Records.size())) {
         return false;
     }
     if (hasPhysics
@@ -207,6 +266,44 @@ WorkoutGameAssetPhysicsSnapshotValidationStatus validateDefinition(
 
 }
 
+QString WorkoutGameLegacyBinary64::encode(double value)
+{
+    if (!std::isfinite(value)) return {};
+    constexpr char Digits[] = "0123456789abcdef";
+    const std::uint64_t bits = binary64Bits(value);
+    QString result(16, QLatin1Char('0'));
+    for (int index = 0; index < result.size(); ++index) {
+        const int shift = (15 - index) * 4;
+        result[index] = QLatin1Char(Digits[(bits >> shift) & 0x0f]);
+    }
+    return result;
+}
+
+bool WorkoutGameLegacyBinary64::decode(
+        const QString &encoded,
+        double &value)
+{
+    if (encoded.size() != 16) return false;
+    std::uint64_t bits = 0;
+    for (const QChar character : encoded) {
+        const ushort code = character.unicode();
+        std::uint64_t nibble = 0;
+        if (code >= '0' && code <= '9') {
+            nibble = code - '0';
+        } else if (code >= 'a' && code <= 'f') {
+            nibble = code - 'a' + 10;
+        } else {
+            return false;
+        }
+        bits = (bits << 4) | nibble;
+    }
+    double decoded = 0.0;
+    std::memcpy(&decoded, &bits, sizeof(decoded));
+    if (!std::isfinite(decoded)) return false;
+    value = decoded;
+    return true;
+}
+
 WorkoutGameAssetPhysicsSnapshotValidationStatus
 WorkoutGameAssetPhysicsSnapshotValidator::validate(
         const WorkoutGameCourseAssetPhysicsSnapshot &snapshot,
@@ -220,7 +317,14 @@ WorkoutGameAssetPhysicsSnapshotValidator::validate(
     }
     if (snapshot.physicsDefinitions.size() > Snapshot::MaximumDefinitions
             || snapshot.bindings.size() > Snapshot::MaximumBindings
+            || snapshot.legacyFt02Records.size()
+                > Snapshot::MaximumLegacyRecords
             || snapshot.pieceBindings.size() > Snapshot::MaximumPieceBindings) {
+        return Status::ResourceLimit;
+    }
+    if (snapshot.legacyFt02Records.size()
+            > Snapshot::MaximumLegacyScalarFields
+                / LegacyFt02ScalarFieldsPerRecord) {
         return Status::ResourceLimit;
     }
     if (snapshot.pieceBindings.size() != roadPieceCount) {
@@ -237,6 +341,11 @@ WorkoutGameAssetPhysicsSnapshotValidator::validate(
         if (!validBinding(binding, snapshot.physicsDefinitions.size())) {
             return Status::InvalidSnapshot;
         }
+    }
+    for (const WorkoutGameLegacyFt02Record &record :
+            snapshot.legacyFt02Records) {
+        const Status status = validateLegacyFt02Record(record);
+        if (status != Status::Ready) return status;
     }
     for (const WorkoutGameAssetPhysicsPieceBinding &binding :
             snapshot.pieceBindings) {
@@ -261,23 +370,42 @@ WorkoutGameAssetPhysicsSnapshotValidator::validate(
             }
         }
     }
+    for (std::size_t i = 0; i < snapshot.legacyFt02Records.size(); ++i) {
+        for (std::size_t j = 0; j < i; ++j) {
+            if (sameLegacyFt02Record(snapshot.legacyFt02Records[i],
+                                     snapshot.legacyFt02Records[j])) {
+                return Status::InvalidSnapshot;
+            }
+        }
+    }
 
     std::size_t nextBinding = 0;
     std::size_t nextDefinition = 0;
+    std::size_t nextLegacyRecord = 0;
     for (const WorkoutGameAssetPhysicsPieceBinding &piece :
             snapshot.pieceBindings) {
         if (piece.bindingIndex != Snapshot::NoIndex) {
             if (piece.bindingIndex > nextBinding) return Status::InvalidSnapshot;
             if (piece.bindingIndex == nextBinding) ++nextBinding;
         }
-        if (piece.definitionIndex == Snapshot::NoIndex) continue;
-        if (piece.definitionIndex > nextDefinition) {
-            return Status::InvalidSnapshot;
+        if (piece.definitionIndex != Snapshot::NoIndex) {
+            if (piece.definitionIndex > nextDefinition) {
+                return Status::InvalidSnapshot;
+            }
+            if (piece.definitionIndex == nextDefinition) ++nextDefinition;
         }
-        if (piece.definitionIndex == nextDefinition) ++nextDefinition;
+        if (piece.legacyFt02RecordIndex != Snapshot::NoIndex) {
+            if (piece.legacyFt02RecordIndex > nextLegacyRecord) {
+                return Status::InvalidSnapshot;
+            }
+            if (piece.legacyFt02RecordIndex == nextLegacyRecord) {
+                ++nextLegacyRecord;
+            }
+        }
     }
     if (nextBinding != snapshot.bindings.size()
-            || nextDefinition != snapshot.physicsDefinitions.size()) {
+            || nextDefinition != snapshot.physicsDefinitions.size()
+            || nextLegacyRecord != snapshot.legacyFt02Records.size()) {
         return Status::InvalidSnapshot;
     }
     return Status::Ready;
@@ -346,6 +474,34 @@ bool WorkoutGameAssetPhysicsSnapshotBuilder::internBinding(
     return true;
 }
 
+bool WorkoutGameAssetPhysicsSnapshotBuilder::internLegacyFt02Record(
+        const WorkoutGameLegacyFt02Record &record,
+        std::uint32_t &index)
+{
+    if (validateLegacyFt02Record(record)
+            != WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready) {
+        return false;
+    }
+    const auto existing = std::find_if(
+            snapshot_.legacyFt02Records.begin(),
+            snapshot_.legacyFt02Records.end(),
+            [&record](const auto &candidate) {
+                return sameLegacyFt02Record(candidate, record);
+            });
+    if (existing != snapshot_.legacyFt02Records.end()) {
+        index = std::uint32_t(std::distance(
+                snapshot_.legacyFt02Records.begin(), existing));
+        return true;
+    }
+    if (snapshot_.legacyFt02Records.size()
+            >= WorkoutGameCourseAssetPhysicsSnapshot::MaximumLegacyRecords) {
+        return false;
+    }
+    index = std::uint32_t(snapshot_.legacyFt02Records.size());
+    snapshot_.legacyFt02Records.push_back(record);
+    return true;
+}
+
 bool WorkoutGameAssetPhysicsSnapshotBuilder::appendPieceBinding(
         const WorkoutGameAssetPhysicsPieceBinding &binding)
 {
@@ -389,6 +545,46 @@ WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(
         binding.obstacleAnchorMicrometerRemainder = std::int16_t(std::llround(
                 piece.geometryAnchorDistanceMeters * 1000000.0)
                 - std::int64_t(binding.obstacleAnchorMm) * 1000);
+        if (!builder.appendPieceBinding(binding)) return {};
+    }
+    return builder.finish();
+}
+
+std::shared_ptr<const WorkoutGameCourseAssetPhysicsSnapshot>
+WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
+        const WorkoutGameRoadPlan &plan)
+{
+    WorkoutGameAssetPhysicsSnapshotBuilder builder;
+    for (const WorkoutGameRoadPiece &piece : plan.pieces) {
+        WorkoutGameAssetPhysicsPieceBinding binding;
+        binding.flags = WorkoutGameCourseAssetPhysicsSnapshot::LegacyProceduralV1;
+        if (!std::isfinite(piece.geometryAnchorDistanceMeters)
+                || piece.geometryAnchorDistanceMeters < 0.0
+                || piece.geometryAnchorDistanceMeters
+                    > MaximumCourseDistanceMeters) {
+            return {};
+        }
+        binding.obstacleAnchorMm = std::int32_t(std::llround(
+                piece.geometryAnchorDistanceMeters * 1000.0));
+        binding.obstacleAnchorMicrometerRemainder = std::int16_t(std::llround(
+                piece.geometryAnchorDistanceMeters * 1000000.0)
+                - std::int64_t(binding.obstacleAnchorMm) * 1000);
+
+        if (piece.terrain == WorkoutGameTerrainKind::LogOver) {
+            const double radius =
+                    WorkoutGameLegacyFt02V1::radiusMeters(piece.difficulty);
+            WorkoutGameLegacyFt02Record record;
+            record.enabled = piece.challenge.enabled;
+            record.startMeters = -radius;
+            record.endMeters = radius;
+            record.heightMeters = 2.0 * radius;
+            record.obstacleAnchorMeters =
+                    piece.challenge.obstacleDistanceMeters;
+            if (!builder.internLegacyFt02Record(
+                        record, binding.legacyFt02RecordIndex)) {
+                return {};
+            }
+        }
         if (!builder.appendPieceBinding(binding)) return {};
     }
     return builder.finish();

@@ -522,6 +522,94 @@ private slots:
                  WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready);
     }
 
+    void frozenLegacyFt02SnapshotRetainsMoreThanCatalogDefinitionLimit()
+    {
+        std::vector<double> turns(128, 15.0);
+        WorkoutGameRoadPlan plan = planWithTurns(turns);
+        for (std::size_t index = 0; index < plan.pieces.size(); ++index) {
+            auto &piece = plan.pieces[index];
+            piece.terrain = WorkoutGameTerrainKind::LogOver;
+            piece.difficulty = (double(index) + 0.5)
+                    / double(plan.pieces.size());
+            piece.challenge.enabled = index != 17;
+            piece.challenge.obstacleDistanceMeters =
+                    piece.geometryAnchorDistanceMeters + 0.0000001;
+        }
+
+        const auto snapshot =
+                WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
+                    plan);
+        QVERIFY(snapshot);
+        QVERIFY(snapshot->physicsDefinitions.empty());
+        QVERIFY(snapshot->bindings.empty());
+        QCOMPARE(snapshot->legacyFt02Records.size(), std::size_t(128));
+        QCOMPARE(snapshot->pieceBindings.size(), std::size_t(128));
+        for (std::size_t index = 0; index < plan.pieces.size(); ++index) {
+            const auto &record = snapshot->legacyFt02Records[index];
+            const auto &reference = snapshot->pieceBindings[index];
+            QCOMPARE(reference.legacyFt02RecordIndex,
+                     std::uint32_t(index));
+            QCOMPARE(reference.flags,
+                     WorkoutGameCourseAssetPhysicsSnapshot::LegacyProceduralV1);
+            QCOMPARE(record.enabled, index != 17);
+            QCOMPARE(record.obstacleAnchorMeters,
+                     plan.pieces[index].challenge.obstacleDistanceMeters);
+            const double radius = 0.22 + 0.10 * plan.pieces[index].difficulty;
+            QCOMPARE(record.startMeters, -radius);
+            QCOMPARE(record.endMeters, radius);
+            QCOMPARE(record.heightMeters, 2.0 * radius);
+        }
+        QCOMPARE(WorkoutGameAssetPhysicsSnapshotValidator::validate(
+                    *snapshot, plan.pieces.size()),
+                 WorkoutGameAssetPhysicsSnapshotValidationStatus::Ready);
+
+        const auto schemaSix =
+                WorkoutGameAssetPhysicsSnapshotBuilder::legacyFor(plan);
+        QVERIFY(schemaSix);
+        QVERIFY(schemaSix->legacyFt02Records.empty());
+        for (const auto &piece : schemaSix->pieceBindings) {
+            QCOMPARE(piece.legacyFt02RecordIndex,
+                     WorkoutGameCourseAssetPhysicsSnapshot::NoIndex);
+        }
+    }
+
+    void frozenLegacyFt02ReferenceMustMatchItsRoadPieceExactly()
+    {
+        WorkoutGameRoadPlan plan = planWithTurns({15.0});
+        plan.pieces[0].terrain = WorkoutGameTerrainKind::LogOver;
+        plan.pieces[0].challenge.enabled = true;
+        plan.pieces[0].challenge.profile.enabled = true;
+        plan.pieces[0].challenge.prepareDistanceMeters = 2.0;
+        plan.pieces[0].challenge.decisionDistanceMeters = 4.0;
+        plan.pieces[0].challenge.obstacleDistanceMeters = 5.123456789;
+        plan.pieces[0].challenge.bypassStartDistanceMeters = 4.5;
+        plan.pieces[0].challenge.bypassEndDistanceMeters = 6.0;
+        const auto frozen =
+                WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(
+                    plan);
+        QVERIFY(frozen);
+        plan.assetPhysicsSnapshot = frozen;
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
+                 WorkoutGameRoadPlanValidationStatus::Ready);
+
+        auto changed = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>(
+                    *plan.assetPhysicsSnapshot);
+        changed->legacyFt02Records[0].obstacleAnchorMeters = std::nextafter(
+                plan.pieces[0].challenge.obstacleDistanceMeters,
+                std::numeric_limits<double>::infinity());
+        plan.assetPhysicsSnapshot = changed;
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(plan, 1),
+                 WorkoutGameRoadPlanValidationStatus::InvalidPlan);
+
+        WorkoutGameRoadPlan terrainMismatch = plan;
+        terrainMismatch.pieces[0].terrain =
+                WorkoutGameTerrainKind::SmoothTrail;
+        terrainMismatch.assetPhysicsSnapshot = frozen;
+        QCOMPARE(WorkoutGameRoadPlanValidator::validate(terrainMismatch, 1),
+                 WorkoutGameRoadPlanValidationStatus::InvalidPlan);
+    }
+
     void snapshotValidationRejectsBadGeometryIndicesAndLimits()
     {
         WorkoutGameAssetPhysicsSnapshotBuilder builder;

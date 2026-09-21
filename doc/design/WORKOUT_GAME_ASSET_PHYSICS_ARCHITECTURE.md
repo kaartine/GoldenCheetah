@@ -110,6 +110,31 @@ Catalog and course documents use integers for canonical physical data. Metres,
 floating-point transforms, and Box2D values exist only at consumer boundaries.
 Version 1 has this logical shape:
 
+The only exception is migration of the pre-catalog FT-02 procedural evaluator.
+That evaluator historically used unquantized `double` difficulty and anchor
+values, so converting it to the integer catalog profile is not lossless and can
+also change decorative logs into Box2D obstacles. Its separately versioned
+legacy record stores `startMeters`, `endMeters`, `heightMeters`, and the exact
+challenge anchor as finite IEEE-754 binary64 bit patterns. JSON spells each
+pattern as exactly 16 lowercase hexadecimal digits, most-significant nibble
+first. Signed zero is preserved; noncanonical strings, NaN, infinity, and
+unknown record versions are rejected. This exception is geometry and render-fit
+authority only: it does not define obstacle contact or an asset material.
+
+Legacy FT-02 records are deduplicated by exact record version, enabled state,
+and binary64 bits in first-use order. A road-piece binding refers to the record
+through a separate legacy index, never through the integer collision-definition
+index. The existing schema-6 `legacyFor()` marker remains unchanged. A separate
+preparatory builder creates frozen records for a future explicit migration;
+schema 7 remains runtime-gated until codec, playback, render, contact, trainer,
+and recording acceptance gates all pass.
+
+An enabled record's anchor must bit-match its persisted road challenge. Disabled
+road challenges omit their inactive fields from the road-piece JSON, so their
+exact anchor remains authoritative only in the frozen record. Render fitting
+uses the exact `end - start` span independently from exact height; asymmetric
+legacy bounds must not be reconstructed from difficulty or forced square.
+
 ```text
 ProfileV1 {
     profileId: ASCII string
@@ -320,8 +345,13 @@ versions.
   sockets, or render fit requires that profile's `profileVersion` to increase,
   even if its `profileId` is unchanged.
 - A change capable of altering generated road-piece validity, challenge
-  placement, or persisted course output also bumps the road-plan generation
+  placement, or generated ride behavior also bumps the road-plan generation
   and conversion algorithm.
+- A persistence-only migration that freezes already generated legacy FT-02
+  values keeps the conversion algorithm unchanged. Any change to generated
+  course behavior still increments the conversion algorithm and road-plan
+  generation; the persistence exception is not permission to reinterpret an
+  existing generation.
 - The integration commit increments the then-current road-plan generation,
   conversion algorithm, and course-document schema exactly once; it must not
   assume that the values observed while this ADR was written are still the
@@ -380,6 +410,8 @@ course decoder before allocation proportional to input:
 | Unique resolved profiles per snapshot | 64 |
 | Total resolved snapshot points | 4,096 |
 | Unique asset bindings per snapshot | 64 |
+| Legacy FT-02 records / piece references | 4,096 / 4,096 |
+| Binary64 scalar fields in the legacy pool | 32,768 |
 | Encoded asset/physics snapshot | 256 KiB |
 
 Existing 1 MiB development-manifest, 64 MiB development-GLB, per-manifest
@@ -423,9 +455,11 @@ without unbounded duplication.
 ### Store canonical geometry as JSON floating point
 
 Float spelling, parser conversion, platform math, and tolerance-based equality
-make canonical comparison, deduplication, and migration ambiguous. Millimetre integers are
-sufficient for the current authored geometry and produce exact canonical
-bytes.
+make canonical comparison, deduplication, and migration ambiguous. Millimetre
+integers are sufficient for current authored geometry and produce exact
+canonical bytes. The separately versioned FT-02 migration record above is the
+only exception: it stores canonical binary64 bits to preserve already generated
+legacy values rather than authoring new floating-point geometry.
 
 ### Apply physics hot reload to an active session
 

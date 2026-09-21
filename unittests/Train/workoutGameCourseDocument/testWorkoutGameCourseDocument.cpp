@@ -140,6 +140,42 @@ WorkoutGameCourseDocument samplePhysicsDocument()
     return document;
 }
 
+WorkoutGameCourseDocument sampleLegacyFt02PhysicsDocument()
+{
+    auto document = samplePhysicsDocument();
+    document.course.sections[0].terrain = WorkoutGameTerrainKind::LogOver;
+    auto plan = std::make_shared<WorkoutGameRoadPlan>(
+            *document.course.roadPlan);
+    for (WorkoutGameRoadPiece &piece : plan->pieces) {
+        if (piece.sourceSectionIndex == 0) {
+            piece.terrain = WorkoutGameTerrainKind::LogOver;
+        }
+    }
+    auto &challenge = plan->pieces[0].challenge;
+    challenge.enabled = true;
+    challenge.prepareDistanceMeters = 5.0;
+    challenge.decisionDistanceMeters = 11.0;
+    challenge.obstacleDistanceMeters = 12.3456789;
+    challenge.bypassStartDistanceMeters = 11.5;
+    challenge.bypassEndDistanceMeters = 13.0;
+    challenge.bypassLateralMeters = 1.0;
+    challenge.profile.enabled = true;
+    challenge.profile.cue = WorkoutGameChallengeCue::Jump;
+    auto snapshot = std::make_shared<WorkoutGameCourseAssetPhysicsSnapshot>(
+            *plan->assetPhysicsSnapshot);
+    WorkoutGameLegacyFt02Record record;
+    record.enabled = true;
+    record.startMeters = -0.270049;
+    record.endMeters = 0.270049;
+    record.heightMeters = 0.540098;
+    record.obstacleAnchorMeters = 12.3456789;
+    snapshot->legacyFt02Records.push_back(record);
+    snapshot->pieceBindings[0].legacyFt02RecordIndex = 0;
+    plan->assetPhysicsSnapshot = snapshot;
+    document.course.roadPlan = plan;
+    return document;
+}
+
 QByteArray readAll(const QString &path)
 {
     QFile file(path);
@@ -311,6 +347,130 @@ private slots:
                  WorkoutGameCourseDocumentStatus::UnsupportedVersion);
     }
 
+    void legacyFt02Binary64RecordsRoundTripCanonically()
+    {
+        const QByteArray encoded = WorkoutGameCourseDocumentCodec::encode(
+                sampleLegacyFt02PhysicsDocument());
+        QVERIFY(!encoded.isEmpty());
+        QVERIFY(encoded.contains("\"startMetersBinary64\":\"bfd1487b99d451fc\""));
+        QVERIFY(encoded.contains("\"endMetersBinary64\":\"3fd1487b99d451fc\""));
+        QVERIFY(encoded.contains("\"heightMetersBinary64\":\"3fe1487b99d451fc\""));
+        QVERIFY(encoded.contains(
+                    "\"obstacleAnchorMetersBinary64\":\"4028b0fcd324d5a2\""));
+        QVERIFY(encoded.contains("\"legacyFt02RecordIndex\":0"));
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        const auto &snapshot =
+                *decoded.course.roadPlan->assetPhysicsSnapshot;
+        QCOMPARE(snapshot.legacyFt02Records.size(), std::size_t(1));
+        const auto &record = snapshot.legacyFt02Records.front();
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(record.startMeters),
+                 QStringLiteral("bfd1487b99d451fc"));
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(record.endMeters),
+                 QStringLiteral("3fd1487b99d451fc"));
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(record.heightMeters),
+                 QStringLiteral("3fe1487b99d451fc"));
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(
+                    record.obstacleAnchorMeters),
+                 QStringLiteral("4028b0fcd324d5a2"));
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), encoded);
+    }
+
+    void disabledLegacyFt02KeepsItsRecordAnchorWithoutRoadChallengeFields()
+    {
+        auto source = sampleLegacyFt02PhysicsDocument();
+        auto plan = std::make_shared<WorkoutGameRoadPlan>(
+                *source.course.roadPlan);
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>(
+                    *plan->assetPhysicsSnapshot);
+        plan->pieces[0].challenge = WorkoutGameRoadChallengeGate();
+        plan->pieces[0].challenge.obstacleDistanceMeters = 12.3456789;
+        snapshot->legacyFt02Records[0].enabled = false;
+        plan->assetPhysicsSnapshot = snapshot;
+        source.course.roadPlan = plan;
+
+        const QByteArray encoded = WorkoutGameCourseDocumentCodec::encode(
+                source);
+        QVERIFY(!encoded.isEmpty());
+        QVERIFY(encoded.contains("\"enabled\":false"));
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        const auto &decodedPlan = *decoded.course.roadPlan;
+        QVERIFY(!decodedPlan.pieces[0].challenge.enabled);
+        QCOMPARE(decodedPlan.pieces[0].challenge.obstacleDistanceMeters, 0.0);
+        QCOMPARE(WorkoutGameLegacyBinary64::encode(
+                    decodedPlan.assetPhysicsSnapshot->legacyFt02Records[0]
+                        .obstacleAnchorMeters),
+                 QStringLiteral("4028b0fcd324d5a2"));
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), encoded);
+    }
+
+    void malformedLegacyFt02RecordsFailClosedBeforeAllocation()
+    {
+        const QJsonObject canonical = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(
+                    sampleLegacyFt02PhysicsDocument())).object();
+        QVERIFY(!canonical.isEmpty());
+        WorkoutGameCourseDocument decoded;
+
+        const auto mutateRecord = [&canonical](
+                const QString &key, const QJsonValue &value) {
+            QJsonObject root = canonical;
+            QJsonObject plan = root.value(QStringLiteral("roadPlan")).toObject();
+            QJsonObject snapshot = plan.value(
+                    QStringLiteral("assetPhysicsSnapshot")).toObject();
+            QJsonArray records = snapshot.value(
+                    QStringLiteral("legacyFt02Records")).toArray();
+            if (records.isEmpty()) return QByteArray();
+            QJsonObject record = records.at(0).toObject();
+            record.insert(key, value);
+            records[0] = record;
+            snapshot.insert(QStringLiteral("legacyFt02Records"), records);
+            plan.insert(QStringLiteral("assetPhysicsSnapshot"), snapshot);
+            root.insert(QStringLiteral("roadPlan"), plan);
+            return QJsonDocument(root).toJson(QJsonDocument::Compact);
+        };
+
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    mutateRecord(QStringLiteral("recordVersion"), 99), decoded),
+                 WorkoutGameCourseDocumentStatus::UnsupportedVersion);
+        for (const QString &invalid : {
+                 QStringLiteral("3fd1487b99d451f"),
+                 QStringLiteral("3FD1487B99D451FC"),
+                 QStringLiteral("7ff0000000000000"),
+                 QStringLiteral("7ff8000000000000")}) {
+            QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                        mutateRecord(
+                            QStringLiteral("endMetersBinary64"), invalid),
+                        decoded),
+                     WorkoutGameCourseDocumentStatus::InvalidDocument);
+        }
+
+        QJsonObject oversized = canonical;
+        QJsonObject plan = oversized.value(QStringLiteral("roadPlan")).toObject();
+        QJsonObject snapshot = plan.value(
+                QStringLiteral("assetPhysicsSnapshot")).toObject();
+        const QJsonObject record = snapshot.value(
+                QStringLiteral("legacyFt02Records")).toArray().at(0).toObject();
+        QJsonArray records;
+        for (std::size_t index = 0;
+                index <= WorkoutGameCourseAssetPhysicsSnapshot
+                    ::MaximumLegacyRecords; ++index) {
+            records.append(record);
+        }
+        snapshot.insert(QStringLiteral("legacyFt02Records"), records);
+        plan.insert(QStringLiteral("assetPhysicsSnapshot"), snapshot);
+        oversized.insert(QStringLiteral("roadPlan"), plan);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(oversized).toJson(QJsonDocument::Compact),
+                    decoded),
+                 WorkoutGameCourseDocumentStatus::ResourceLimit);
+    }
+
     void legacyWriterCannotDiscardResolvedPhysics()
     {
         auto source = samplePhysicsDocument();
@@ -356,6 +516,25 @@ private slots:
         QVERIFY(!error.isEmpty());
         source.schemaVersion = 6;
         QVERIFY(WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
+    }
+
+    void schemaSixWriterCannotDiscardFrozenLegacyFt02Records()
+    {
+        auto source = sampleLegacyFt02PhysicsDocument();
+        source.schemaVersion = 6;
+        QVERIFY(WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
+
+        auto plan = std::make_shared<WorkoutGameRoadPlan>(
+                *source.course.roadPlan);
+        auto snapshot = std::make_shared<
+                WorkoutGameCourseAssetPhysicsSnapshot>(
+                    *plan->assetPhysicsSnapshot);
+        snapshot->legacyFt02Records.clear();
+        snapshot->pieceBindings[0].legacyFt02RecordIndex =
+                WorkoutGameCourseAssetPhysicsSnapshot::NoIndex;
+        plan->assetPhysicsSnapshot = snapshot;
+        source.course.roadPlan = plan;
+        QVERIFY(!WorkoutGameCourseDocumentCodec::encode(source).isEmpty());
     }
 
     void snapshotChecksStructureBeforeEncodedSize()

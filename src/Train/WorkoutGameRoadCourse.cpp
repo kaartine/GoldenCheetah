@@ -293,7 +293,7 @@ double nonPhysicalFeatureOffsetAt(
                     && course.assetPhysicsSnapshot
                     && WorkoutGameAssetPhysicsSampler::sample(
                         *course.assetPhysicsSnapshot,
-                        pieceIndex, distanceMeters).bound) {
+                        pieceIndex, distanceMeters).obstacleContact) {
                 return;
             }
             offset += featureSurfaceOffsetAt(
