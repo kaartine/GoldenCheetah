@@ -10,6 +10,9 @@
 #include "Train/WorkoutGameEngine.h"
 #include "Train/WorkoutGameAssetCatalog.h"
 #include "Train/WorkoutGameAssetPhysicsResolver.h"
+#include "Train/WorkoutGameAssetPhysicsSampler.h"
+#include "Train/WorkoutGameCourseDocument.h"
+#include "Train/WorkoutGameDistancePlayback.h"
 #include "Train/WorkoutGameFeatureLab.h"
 #include "Train/WorkoutGameRoadPlan.h"
 #include "Train/WorkoutGameRiderVisual.h"
@@ -27,6 +30,7 @@
 #include <cstdint>
 #include <limits>
 #include <tuple>
+#include <utility>
 
 namespace {
 
@@ -153,6 +157,58 @@ auto worldValues(const WorkoutGameWorldSnapshot &world)
             rider.airborne, rider.walking);
 }
 
+auto featureValues(const WorkoutGameFeatureRuntimeSnapshot &f)
+{
+    return std::make_tuple(
+            f.ready, f.sourceSectionIndex, f.terrain, f.phase, f.motion,
+            f.outcome, f.route, f.visualDistanceMeters, f.prepareDistanceMeters,
+            f.launchWindowStartDistanceMeters, f.decisionDistanceMeters,
+            f.obstacleDistanceMeters, f.physicalTakeoffDistanceMeters,
+            f.actionStartDistanceMeters, f.actionEndDistanceMeters,
+            f.distanceToObstacleMeters, f.readiness, f.bermLineBias,
+            f.lateralOffsetMeters, f.verticalOffsetMeters, f.flightDurationSeconds,
+            f.pitchDegrees, f.vibration, f.landingImpact, f.provisionalGapLine,
+            f.lockedGapLine, f.steeringGapLine, f.predictedApproachSpeedMetersPerSecond,
+            f.launchRollingSpeedMetersPerSecond, f.launchBestSpeedMetersPerSecond,
+            f.launchPowerHoldMilliseconds, f.selectedGapLengthMeters,
+            f.launchWindowActive, f.launchSpeedReady, f.launchPowerReady,
+            f.gapLineReachable, f.gapLineLocked, f.actionId, f.triggerJump);
+}
+
+WorkoutGameCourseDocument legacyLogDocument(double difficulty, double speed,
+                                             bool rebase)
+{
+    WorkoutGameCourseDocument document;
+    document.title = QStringLiteral("FT02 Engine codec trace");
+    document.sourceFileName = QStringLiteral("ft02-trace.erg");
+    document.ftpWatts = 200.0;
+    document.course.status = WorkoutGameDistanceCourseStatus::Ready;
+    document.course.seed = 0x8f12u;
+    document.course.nominalDurationMs = rebase ? 90000 : 30000;
+    document.course.totalDistanceMeters = speed
+            * double(document.course.nominalDurationMs) / 1000.0;
+    WorkoutGameDistanceCourseSection section;
+    section.feature = WorkoutGameFeature::SprintJump;
+    section.terrain = WorkoutGameTerrainKind::LogOver;
+    section.nominalDurationMs = document.course.nominalDurationMs;
+    section.minimumDurationMs = section.nominalDurationMs;
+    section.maximumDurationMs = section.nominalDurationMs;
+    section.lengthMeters = document.course.totalDistanceMeters;
+    section.targetStartWatts = section.targetEndWatts = 260.0;
+    section.referenceEffortStartWatts = section.referenceEffortEndWatts = 260.0;
+    section.difficulty = difficulty;
+    section.challengeCount = 1;
+    document.course.sections.push_back(section);
+    auto plan = std::make_shared<WorkoutGameRoadPlan>(
+            WorkoutGameRoadCourseBuilder::generatePlan(
+                WorkoutGameDistancePlayback::visualCourse(document.course),
+                document.ftpWatts));
+    // The oracle really takes the old procedural path, not the frozen adapter.
+    plan->assetPhysicsSnapshot.reset();
+    document.course.roadPlan = plan;
+    return document;
+}
+
 }
 
 class TestWorkoutGameEngine : public QObject
@@ -160,6 +216,171 @@ class TestWorkoutGameEngine : public QObject
     Q_OBJECT
 
 private slots:
+    void frozenLogEngineTraceSurvivesCodec_data()
+    {
+        QTest::addColumn<double>("difficulty");
+        QTest::addColumn<double>("speed");
+        QTest::addColumn<bool>("bypass");
+        QTest::addColumn<bool>("rebase");
+        QTest::addColumn<bool>("customBounds");
+        for (double difficulty : {0.0, 0.50049, 1.0}) {
+            for (double speed : {3.33, 5.0, 7.0}) {
+                for (bool bypass : {false, true}) {
+                    const auto name = QStringLiteral("d%1-v%2-bypass%3")
+                            .arg(difficulty).arg(speed).arg(bypass).toLatin1();
+                    QTest::newRow(name.constData())
+                            << difficulty << speed << bypass << false << false;
+                }
+            }
+        }
+        for (bool bypass : {false, true}) {
+            const auto name = QStringLiteral("rebase-bypass%1").arg(bypass).toLatin1();
+            QTest::newRow(name.constData()) << 0.50049 << 7.0 << bypass << true << false;
+        }
+        QTest::newRow("stored-bounds-authority") << 0.50049 << 5.0 << false << false << true;
+    }
+
+    void frozenLogEngineTraceSurvivesCodec()
+    {
+        QFETCH(double, difficulty);
+        QFETCH(double, speed);
+        QFETCH(bool, bypass);
+        QFETCH(bool, rebase);
+        QFETCH(bool, customBounds);
+        const auto legacy = legacyLogDocument(difficulty, speed, rebase);
+        QVERIFY(WorkoutGameCourseDocumentCodec::valid(legacy));
+        const auto legacyBytes = WorkoutGameCourseDocumentCodec::encode(legacy);
+        QVERIFY(!legacyBytes.isEmpty());
+        WorkoutGameCourseDocument legacyDecoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(legacyBytes, legacyDecoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        auto frozen = legacy;
+        frozen.schemaVersion = WorkoutGameCourseDocumentCodec::AssetPhysicsSchemaVersion;
+        auto plan = std::make_shared<WorkoutGameRoadPlan>(*legacy.course.roadPlan);
+        auto snapshot = WorkoutGameAssetPhysicsSnapshotBuilder::frozenLegacyFt02For(*plan);
+        QVERIFY(snapshot);
+        const auto challenge = std::find_if(plan->pieces.begin(), plan->pieces.end(),
+                [](const auto &p) { return p.challenge.enabled; });
+        QVERIFY(challenge != plan->pieces.end());
+        const auto pieceIndex = std::size_t(challenge - plan->pieces.begin());
+        const auto recordIndex = snapshot->pieceBindings.at(pieceIndex).legacyFt02RecordIndex;
+        QVERIFY(recordIndex < snapshot->legacyFt02Records.size());
+        if (customBounds) {
+            auto modified = std::make_shared<WorkoutGameCourseAssetPhysicsSnapshot>(*snapshot);
+            auto &record = modified->legacyFt02Records.at(recordIndex);
+            record.startMeters = -0.73;
+            record.endMeters = 1.31;
+            record.heightMeters = 0.89;
+            snapshot = modified;
+        }
+        const auto record = snapshot->legacyFt02Records.at(recordIndex);
+        QVERIFY(record.enabled);
+        plan->assetPhysicsSnapshot = snapshot;
+        frozen.course.roadPlan = plan;
+        QVERIFY(WorkoutGameCourseDocumentCodec::valid(frozen));
+        const auto encoded = WorkoutGameCourseDocumentCodec::encode(frozen);
+        QVERIFY(!encoded.isEmpty());
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(encoded, decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), encoded);
+        QVERIFY(decoded.course.roadPlan->assetPhysicsSnapshot);
+        const auto &decodedSnapshot = *decoded.course.roadPlan->assetPhysicsSnapshot;
+        const auto &decodedBinding = decodedSnapshot.pieceBindings.at(pieceIndex);
+        QCOMPARE(decodedBinding.legacyFt02RecordIndex, recordIndex);
+        const auto &decodedRecord = decodedSnapshot.legacyFt02Records.at(recordIndex);
+        for (const auto &values : {std::make_pair(record.startMeters, decodedRecord.startMeters),
+                 std::make_pair(record.endMeters, decodedRecord.endMeters),
+                 std::make_pair(record.heightMeters, decodedRecord.heightMeters),
+                 std::make_pair(record.obstacleAnchorMeters, decodedRecord.obstacleAnchorMeters)}) {
+            QCOMPARE(WorkoutGameLegacyBinary64::encode(values.first),
+                     WorkoutGameLegacyBinary64::encode(values.second));
+        }
+        const auto sample = WorkoutGameAssetPhysicsSampler::sample(
+                decodedSnapshot, pieceIndex, record.obstacleAnchorMeters);
+        QVERIFY(sample.bound && sample.surfacePresent);
+        QVERIFY(!sample.obstacleContact && !sample.materialDefined);
+
+        WorkoutGameEngine legacyEngine, frozenEngine, decodedEngine;
+        QVERIFY(legacyEngine.configure(WorkoutGameDistancePlayback::visualCourse(
+                    legacyDecoded.course), legacy.ftpWatts, false));
+        QVERIFY(frozenEngine.configure(WorkoutGameDistancePlayback::visualCourse(
+                    frozen.course), frozen.ftpWatts, false));
+        QVERIFY(decodedEngine.configure(WorkoutGameDistancePlayback::visualCourse(
+                    decoded.course), decoded.ftpWatts, false));
+        bool sawCompleted = false, sawBypass = false, sawJump = false;
+        bool sawAirborne = false, sawLanding = false, priorAirborne = false;
+        bool crossedAnchor = false, crossedRebase = false, sawDistinctTakeoff = false;
+        double previousDistance = 0.0;
+        std::uint64_t committedActionId = 0;
+        for (std::int64_t timeMs = 0; timeMs < legacy.course.nominalDurationMs; timeMs += 20) {
+            WorkoutGameEngineInput input;
+            input.simulation.workoutTimeMs = timeMs;
+            input.simulation.actualWatts = 260.0 * (bypass ? 0.2 : 1.2);
+            input.simulation.targetWatts = 260.0;
+            input.simulation.cadenceRpm = 85.0;
+            input.simulation.authoritativeSpeedKph = speed * 3.6;
+            const auto old = legacyEngine.update(input, 100000 + timeMs);
+            const auto current = frozenEngine.update(input, 100000 + timeMs);
+            const auto loaded = decodedEngine.update(input, 100000 + timeMs);
+            const auto context = QStringLiteral("tick %1, distance %2")
+                    .arg(timeMs).arg(current.visual.world.rider.distanceMeters, 0, 'g', 17);
+            const auto &f = current.visual.feature;
+            QVERIFY(current.visual.world.ready && loaded.visual.world.ready);
+            QVERIFY2(featureValues(f) == featureValues(loaded.visual.feature), qPrintable(context));
+            QVERIFY2(worldValues(current.visual.world) == worldValues(loaded.visual.world), qPrintable(context));
+            QCOMPARE(current.visual.simulation.score, loaded.visual.simulation.score);
+            QCOMPARE(current.visual.simulation.route, loaded.visual.simulation.route);
+            QCOMPARE(current.visual.simulation.featureOutcome, loaded.visual.simulation.featureOutcome);
+            if (!customBounds) {
+                QVERIFY2(featureValues(old.visual.feature) == featureValues(f), qPrintable(context));
+                QVERIFY2(worldValues(old.visual.world) == worldValues(current.visual.world), qPrintable(context));
+                QCOMPARE(old.visual.simulation.score, current.visual.simulation.score);
+                QCOMPARE(old.visual.simulation.featureOutcome, current.visual.simulation.featureOutcome);
+                QCOMPARE(old.visual.simulation.route, current.visual.simulation.route);
+            }
+            if (f.ready) {
+                QCOMPARE(f.sourceSectionIndex, int(challenge->sourceSectionIndex));
+                QCOMPARE(f.obstacleDistanceMeters, record.obstacleAnchorMeters);
+                QCOMPARE(f.physicalTakeoffDistanceMeters,
+                         record.obstacleAnchorMeters + record.startMeters);
+                sawDistinctTakeoff |= f.physicalTakeoffDistanceMeters
+                        != old.visual.feature.physicalTakeoffDistanceMeters;
+                sawCompleted |= f.outcome == WorkoutGameFeatureOutcome::Completed;
+                sawBypass |= f.outcome == WorkoutGameFeatureOutcome::Bypassed;
+                if (f.outcome == WorkoutGameFeatureOutcome::Completed) {
+                    QCOMPARE(f.route, WorkoutGameRoute::MainLine);
+                    QVERIFY(f.actionId != 0);
+                    if (committedActionId == 0) committedActionId = f.actionId;
+                    QCOMPARE(f.actionId, committedActionId);
+                }
+                if (f.outcome == WorkoutGameFeatureOutcome::Bypassed)
+                    QCOMPARE(f.route, WorkoutGameRoute::SafeBypass);
+                sawJump |= f.triggerJump;
+            }
+            const auto &world = current.visual.world;
+            if (sawJump && !priorAirborne && world.rider.airborne) sawAirborne = true;
+            if (sawAirborne && priorAirborne && !world.rider.airborne) sawLanding = true;
+            if (bypass) QVERIFY(!world.rider.airborne && !f.triggerJump);
+            priorAirborne = world.rider.airborne;
+            crossedAnchor |= previousDistance < record.obstacleAnchorMeters
+                    && world.rider.distanceMeters >= record.obstacleAnchorMeters;
+            crossedRebase |= previousDistance < 176.0 && world.rider.distanceMeters >= 176.0;
+            previousDistance = world.rider.distanceMeters;
+        }
+        QVERIFY(crossedAnchor);
+        QCOMPARE(sawCompleted, !bypass);
+        QCOMPARE(sawBypass, bypass);
+        QCOMPARE(sawJump, !bypass);
+        if (!bypass) QVERIFY(sawAirborne && sawLanding);
+        if (rebase) {
+            QVERIFY(record.obstacleAnchorMeters > 220.0);
+            QVERIFY(crossedRebase);
+        }
+        QCOMPARE(sawDistinctTakeoff, customBounds);
+    }
+
     void configuredEngineOwnsSnapshotAfterCatalogReplacement()
     {
         constexpr std::int64_t DurationMs = 30000;
