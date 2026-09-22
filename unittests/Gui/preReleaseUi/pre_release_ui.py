@@ -1060,17 +1060,16 @@ class UiDriver:
                 continue
 
             if role == "check box":
+                before = self.checked(node)
                 try:
-                    if not node.queryComponent().grabFocus():
-                        raise UiFailure("accessible control rejected focus")
-                    time.sleep(0.1)
+                    action = node.queryAction()
+                    if action.nActions < 1 or not action.doAction(0):
+                        raise UiFailure("accessible control rejected action")
                     node = find_control(name, role)
                 except Exception as error:
                     raise UiFailure(
-                        f"Cannot focus {role} {name!r}"
+                        f"Cannot activate {role} {name!r}"
                     ) from error
-                before = self.checked(node)
-                self.send_named_key("space")
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
                     if self.checked(node) != before:
@@ -1078,7 +1077,8 @@ class UiDriver:
                     time.sleep(0.05)
                 else:
                     raise UiFailure(f"Cannot operate {role} {name!r}")
-                self.send_named_key("space")
+                if not node.queryAction().doAction(0):
+                    raise UiFailure(f"Cannot restore {role} {name!r}")
                 continue
 
             raise UiFailure(f"Unsupported keyboard-control role: {role}")

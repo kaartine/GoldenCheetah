@@ -539,12 +539,13 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             [mock.call("Home"), mock.call("Return")],
         )
 
-    def test_interactive_checkbox_uses_focused_keyboard_activation(self):
+    def test_interactive_checkbox_uses_accessible_action(self):
         focus = mock.Mock()
-        component = mock.Mock()
-        component.grabFocus.return_value = True
+        action = mock.Mock()
+        action.nActions = 1
+        action.doAction.return_value = True
         checkbox = mock.Mock()
-        checkbox.queryComponent.return_value = component
+        checkbox.queryAction.return_value = action
         driver = object.__new__(UI.UiDriver)
         driver.find = mock.Mock(side_effect=[focus, checkbox, checkbox])
         driver.name = mock.Mock(return_value="Sprint")
@@ -563,10 +564,11 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             driver.send_named_key.call_args_list,
-            [mock.call("Home"), mock.call("Return"),
-             mock.call("space"), mock.call("space")],
+            [mock.call("Home"), mock.call("Return")],
         )
         driver.click.assert_called_once_with(focus)
+        self.assertEqual(action.doAction.call_args_list,
+                         [mock.call(0), mock.call(0)])
 
     def test_workout_generator_declares_complete_tab_order(self):
         source = WORKOUT_WIZARD_SOURCE_PATH.read_text(encoding="utf-8")
