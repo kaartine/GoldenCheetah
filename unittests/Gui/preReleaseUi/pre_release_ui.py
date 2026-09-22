@@ -36,6 +36,7 @@ UI_TEST_NAMES = (
     "startup_and_main_navigation",
     "view_navigation",
     "prepared_workout_library_import",
+    "workout_list_management",
     "library_scan_preserves_unsearched_workouts",
     "library_scan_rejects_unavailable_path",
     "train_control_accessibility",
@@ -51,6 +52,7 @@ UI_TEST_NAMES = (
 )
 UI_TEST_DEPENDENCIES = {
     "training_failure_independence": ("prepared_workout_library_import",),
+    "workout_list_management": ("prepared_workout_library_import",),
     "library_scan_preserves_unsearched_workouts": (
         "prepared_workout_library_import",
     ),
@@ -405,6 +407,26 @@ DISTANCE GRADE WIND
 [END COURSE DATA]
 """,
     )
+    for name, description in (
+        ("ui-bulk-alpha", "Bulk alpha cleanup test"),
+        ("ui-bulk-beta", "Bulk beta cleanup test"),
+    ):
+        write_text(
+            athlete / "workouts" / f"{name}.erg",
+            f"""[COURSE HEADER]
+VERSION = 2
+UNITS = ENGLISH
+FTP = 190
+DESCRIPTION = {description}
+FILE NAME = {name}.erg
+MINUTES WATTS
+[END COURSE HEADER]
+[COURSE DATA]
+0 100
+1 100
+[END COURSE DATA]
+""",
+        )
 
 
 class UiFailure(RuntimeError):
@@ -1181,6 +1203,24 @@ class UiDriver:
 
     def context_click(self, node):
         self._mouse_click(node, 3)
+
+    def ctrl_click(self, node):
+        keycode = self.display.keysym_to_keycode(
+            self.XK.string_to_keysym("Control_L")
+        )
+        self.xtest.fake_input(self.display, self.X.KeyPress, keycode)
+        self.display.sync()
+        try:
+            self._mouse_click(node, 1)
+        finally:
+            self.xtest.fake_input(self.display, self.X.KeyRelease, keycode)
+            self.display.sync()
+
+    def press_key(self, name):
+        keycode = self.display.keysym_to_keycode(self.XK.string_to_keysym(name))
+        self.xtest.fake_input(self.display, self.X.KeyPress, keycode)
+        self.xtest.fake_input(self.display, self.X.KeyRelease, keycode)
+        self.display.sync()
 
     def activate_named(self, name, role=None, showing=None, timeout=30.0):
         deadline = time.monotonic() + timeout
@@ -2506,6 +2546,71 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 "ui-test", "table cell", showing=True, timeout=30.0
             )
 
+        def workout_list_management():
+            enter_train()
+            search = driver.find(
+                "Filter workouts", "text", showing=True, timeout=10.0
+            )
+            search.queryEditableText().setTextContents("bulk alpha")
+            driver.find(
+                "ui-bulk-alpha", "table cell", showing=True, timeout=10.0
+            )
+            if driver.find_all(
+                    name="ui-bulk-beta", role="table cell", showing=True):
+                raise UiFailure("Workout search did not require every term")
+
+            search.queryEditableText().setTextContents("ui-bulk")
+            alpha = driver.find(
+                "ui-bulk-alpha", "table cell", showing=True, timeout=10.0
+            )
+            beta = driver.find(
+                "ui-bulk-beta", "table cell", showing=True, timeout=10.0
+            )
+            driver.select_combo_item(
+                ("Name", "Recently used", "Newest"), "Newest"
+            )
+            alpha = driver.find(
+                "ui-bulk-alpha", "table cell", showing=True, timeout=10.0
+            )
+            beta = driver.find(
+                "ui-bulk-beta", "table cell", showing=True, timeout=10.0
+            )
+
+            driver.click(alpha)
+            driver.ctrl_click(beta)
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                alpha = driver.find(
+                    "ui-bulk-alpha", "table cell", showing=True, timeout=1.0
+                )
+                beta = driver.find(
+                    "ui-bulk-beta", "table cell", showing=True, timeout=1.0
+                )
+                if driver.selected(alpha) and driver.selected(beta):
+                    break
+                time.sleep(0.05)
+            else:
+                raise UiFailure("Workout list did not retain multiple selection")
+
+            driver.press_key("Delete")
+            driver.find(
+                "Are you sure you want to delete these 2 workouts?",
+                showing=True,
+                timeout=10.0,
+            )
+            driver.click(
+                driver.find("Delete", "push button", showing=True, timeout=10.0)
+            )
+            for name in ("ui-bulk-alpha", "ui-bulk-beta"):
+                driver.wait_file_removed(
+                    root / "library" / ATHLETE / "workouts" / f"{name}.erg",
+                    timeout=20.0,
+                )
+            search = driver.find(
+                "Filter workouts", "text", showing=True, timeout=10.0
+            )
+            search.queryEditableText().setTextContents("")
+
         def scan_preserves_unsearched_workouts():
             driver.click(
                 driver.find(
@@ -3314,6 +3419,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             suite.run("view_navigation", views)
         if "prepared_workout_library_import" in selected_tests:
             suite.run("prepared_workout_library_import", import_prepared_workout)
+        if "workout_list_management" in selected_tests:
+            suite.run("workout_list_management", workout_list_management)
         if "library_scan_preserves_unsearched_workouts" in selected_tests:
             suite.run(
                 "library_scan_preserves_unsearched_workouts",
