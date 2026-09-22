@@ -539,6 +539,35 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             [mock.call("Home"), mock.call("Return")],
         )
 
+    def test_interactive_checkbox_uses_focused_keyboard_activation(self):
+        focus = mock.Mock()
+        component = mock.Mock()
+        component.grabFocus.return_value = True
+        checkbox = mock.Mock()
+        checkbox.queryComponent.return_value = component
+        driver = object.__new__(UI.UiDriver)
+        driver.find = mock.Mock(side_effect=[focus, checkbox, checkbox])
+        driver.name = mock.Mock(return_value="Sprint")
+        driver.click = mock.Mock()
+        driver.send_named_key = mock.Mock()
+        driver.checked = mock.Mock(side_effect=[False, True])
+
+        with mock.patch.object(UI.time, "sleep"):
+            driver.require_interactive_controls(
+                [
+                    ("Training focus", "combo box"),
+                    ("Recovery after the last repetition", "check box"),
+                ],
+                timeout=1.0,
+            )
+
+        self.assertEqual(
+            driver.send_named_key.call_args_list,
+            [mock.call("Home"), mock.call("Return"),
+             mock.call("space"), mock.call("space")],
+        )
+        driver.click.assert_called_once_with(focus)
+
     def test_workout_generator_declares_complete_tab_order(self):
         source = WORKOUT_WIZARD_SOURCE_PATH.read_text(encoding="utf-8")
         tab_order = source[source.index("const QList<QWidget *> tabOrder") :]

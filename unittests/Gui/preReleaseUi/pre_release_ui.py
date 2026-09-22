@@ -1070,7 +1070,7 @@ class UiDriver:
                         f"Cannot focus {role} {name!r}"
                     ) from error
                 before = self.checked(node)
-                self.click(node)
+                self.send_named_key("space")
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
                     if self.checked(node) != before:
@@ -1078,7 +1078,7 @@ class UiDriver:
                     time.sleep(0.05)
                 else:
                     raise UiFailure(f"Cannot operate {role} {name!r}")
-                self.click(node)
+                self.send_named_key("space")
                 continue
 
             raise UiFailure(f"Unsupported keyboard-control role: {role}")
