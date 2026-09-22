@@ -39,6 +39,13 @@ struct WorkoutGameVisualSnapshot
 class WorkoutGameVisualSmoother
 {
 public:
+    struct DistanceTiming {
+        std::int64_t maximumAnchorGapMs = 0;
+        std::int64_t maximumPresentationGapMs = 0;
+        std::size_t bufferHolds = 0;
+        std::size_t historyCompactions = 0;
+        double lagMs = 0.0;
+    };
     static constexpr std::int64_t TransitionDurationMs = 200;
     static constexpr std::int64_t MaximumPredictionMs = 1500;
     static constexpr std::int64_t MinimumSourceIntervalMs = 20;
@@ -50,12 +57,17 @@ public:
     // advances the runner, trainer control, or recorded workout state.
     static constexpr std::int64_t FixedStepMaximumPredictionMs = 60;
     static constexpr std::int64_t DistanceCoursePresentationDelayMs = 200;
+    static constexpr std::int64_t MaximumDistancePresentationStepMs = 40;
+    static constexpr std::size_t MaximumCourseAnchors = 128;
 
     void reset();
     void setTarget(
             const WorkoutGameVisualSnapshot &snapshot,
             std::int64_t monotonicTimeMs);
-    WorkoutGameVisualSnapshot sample(std::int64_t monotonicTimeMs) const;
+    // Distance presentation advances state. Repeated timestamps are idempotent;
+    // a delayed render must not integrate all missed wall-clock time at once.
+    WorkoutGameVisualSnapshot sample(std::int64_t monotonicTimeMs);
+    const DistanceTiming &distanceTiming() const { return courseTiming; }
 
 private:
     static bool isDiscontinuity(
@@ -78,6 +90,9 @@ private:
     static void applyCourseMotion(
             WorkoutGameVisualSnapshot &result,
             const WorkoutGameVisualSnapshot &motion);
+    WorkoutGameVisualSnapshot sampleCourse(std::int64_t monotonicTimeMs);
+    WorkoutGameVisualSnapshot courseAt(double cursorMs) const;
+    void pruneCourseHistory();
 
     bool initialized = false;
     bool sourceAdvancing = false;
@@ -92,6 +107,14 @@ private:
     WorkoutGameVisualSnapshot target;
     std::deque<WorkoutGameVisualSnapshot> fixedStepHistory;
     std::deque<WorkoutGameVisualSnapshot> courseAnchorHistory;
+    bool coursePresentationStarted = false;
+    bool courseHolding = false;
+    double courseCursorMs = 0.0;
+    double courseBufferMs = DistanceCoursePresentationDelayMs;
+    double courseSpeedMetersPerSecond = 0.0;
+    double courseVelocityMetersPerSecond = 0.0;
+    std::int64_t courseLastSampleMs = 0;
+    DistanceTiming courseTiming;
     WorkoutGameTerrainTransition terrainTransition;
 };
 

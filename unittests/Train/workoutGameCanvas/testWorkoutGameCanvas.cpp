@@ -727,6 +727,147 @@ private slots:
         }
     }
 
+    void fixedStepDistanceJitterHasNoCatchupBursts_data()
+    {
+        QTest::addColumn<int>("intervalMs");
+        for (int interval : {180, 200, 220, 240, 400, 420, 600}) {
+            QTest::newRow(qPrintable(QString::number(interval))) << interval;
+        }
+    }
+
+    void fixedStepDistanceJitterHasNoCatchupBursts()
+    {
+        QFETCH(int, intervalMs);
+        WorkoutGameVisualSmoother smoother;
+        double previous = 0.0;
+        double confirmed = 0.0;
+        double previousPedals = 0.0;
+        for (int elapsed = 0; elapsed <= 10000; elapsed += 10) {
+            if (elapsed % 20 == 0) {
+                const int anchor = elapsed / intervalMs * intervalMs;
+                WorkoutGameVisualSnapshot frame;
+                frame.presentationTimeMs = 1000 + elapsed;
+                frame.distanceAnchoredPresentation = true;
+                frame.simulation.ready = true;
+                frame.simulation.workoutTimeMs = anchor;
+                frame.simulation.speedKph = 36.0;
+                frame.world.ready = true;
+                frame.world.generation = 1;
+                frame.world.speedMetersPerSecond = 10.0;
+                frame.world.rider.distanceMeters = anchor * 0.01;
+                frame.world.rider.elevationMeters = std::sin(anchor * 0.002) * 3.0;
+                frame.world.gradePercent = std::cos(anchor * 0.002) * 12.0;
+                frame.camera.ready = true;
+                frame.camera.centerDistanceMeters = frame.world.rider.distanceMeters + 6.0;
+                frame.riderPedalCycles = elapsed * 0.001;
+                confirmed = frame.world.rider.distanceMeters;
+                smoother.setTarget(frame, frame.presentationTimeMs);
+                QCOMPARE(frame.world.rider.distanceMeters, confirmed);
+            }
+            const auto rendered = smoother.sample(1000 + elapsed);
+            const double distance = rendered.world.rider.distanceMeters;
+            QVERIFY(distance + 1e-9 >= previous);
+            QVERIFY(distance <= confirmed + 1e-9);
+            if (elapsed > 2000) {
+                QVERIFY2(distance > previous + 1e-9, "regular delayed anchors stalled presentation");
+                QVERIFY2(distance - previous <= 0.105 + 1e-8, "late anchor caused a catch-up burst");
+                QVERIFY(rendered.riderPedalCycles > previousPedals);
+                QVERIFY(smoother.distanceTiming().lagMs < 1500.0);
+            }
+            QCOMPARE(rendered.camera.centerDistanceMeters, distance + 6.0);
+            previous = distance;
+            previousPedals = rendered.riderPedalCycles;
+        }
+        QCOMPARE(smoother.distanceTiming().historyCompactions, std::size_t(0));
+    }
+
+    void fixedStepDistanceGuiStallDoesNotConsumeMissedFrames_data()
+    {
+        QTest::addColumn<int>("gapMs");
+        QTest::addColumn<int>("anchorMs");
+        QTest::newRow("one-second") << 1000 << 200;
+        QTest::newRow("bounded-history") << 4000 << 20;
+    }
+
+    void fixedStepDistanceGuiStallDoesNotConsumeMissedFrames()
+    {
+        QFETCH(int, gapMs);
+        QFETCH(int, anchorMs);
+        WorkoutGameVisualSmoother smoother;
+        double beforeStall = 0.0;
+        for (int elapsed = 0; elapsed <= 2000 + gapMs; elapsed += 20) {
+            const int anchor = elapsed / anchorMs * anchorMs;
+            WorkoutGameVisualSnapshot frame;
+            frame.presentationTimeMs = 1000 + elapsed;
+            frame.distanceAnchoredPresentation = true;
+            frame.simulation.ready = true;
+            frame.simulation.workoutTimeMs = anchor;
+            frame.simulation.speedKph = 36.0;
+            frame.world.ready = true;
+            frame.world.generation = 1;
+            frame.world.speedMetersPerSecond = 10.0;
+            frame.world.rider.distanceMeters = anchor * 0.01;
+            smoother.setTarget(frame, frame.presentationTimeMs);
+            if (elapsed <= 2000) {
+                beforeStall = smoother.sample(frame.presentationTimeMs).world.rider.distanceMeters;
+            }
+        }
+        const auto resumed = smoother.sample(3000 + gapMs);
+        QVERIFY(resumed.world.rider.distanceMeters >= beforeStall);
+        QVERIFY(resumed.world.rider.distanceMeters - beforeStall <= 0.42 + 1e-9);
+        const auto repeated = smoother.sample(3000 + gapMs);
+        QCOMPARE(repeated.world.rider.distanceMeters, resumed.world.rider.distanceMeters);
+        QCOMPARE(repeated.simulation.workoutTimeMs, resumed.simulation.workoutTimeMs);
+        QCOMPARE(smoother.distanceTiming().maximumPresentationGapMs, std::int64_t(gapMs));
+        QCOMPARE(smoother.distanceTiming().maximumAnchorGapMs, std::int64_t(anchorMs));
+        if (anchorMs == 20) QVERIFY(smoother.distanceTiming().historyCompactions > 0);
+    }
+
+    void fixedStepDistanceMixedGapsBrakeWithoutVelocityJumps()
+    {
+        WorkoutGameVisualSmoother smoother;
+        const std::vector<int> gaps = {180, 240, 200, 600, 180, 220, 400, 200, 420};
+        std::vector<int> anchors = {0};
+        for (std::size_t i = 0; anchors.back() + gaps[i % gaps.size()] <= 12000; ++i)
+            anchors.push_back(anchors.back() + gaps[i % gaps.size()]);
+        double previousDistance = 0.0;
+        double previousVelocity = 0.0;
+        double confirmed = 0.0;
+        for (int elapsed = 0; elapsed <= 15000; elapsed += 10) {
+            if (elapsed % 20 == 0) {
+                const int anchor = *(std::upper_bound(anchors.begin(), anchors.end(), elapsed) - 1);
+                WorkoutGameVisualSnapshot frame;
+                frame.presentationTimeMs = 1000 + elapsed;
+                frame.distanceAnchoredPresentation = true;
+                frame.simulation.ready = true;
+                frame.simulation.workoutTimeMs = anchor;
+                frame.world.ready = true;
+                frame.world.generation = 1;
+                frame.world.speedMetersPerSecond = anchor < 4000 ? 10.0 : anchor < 8000 ? 3.0 : 12.0;
+                frame.simulation.speedKph = frame.world.speedMetersPerSecond * 3.6;
+                frame.world.rider.distanceMeters = std::min(anchor, 4000) * 0.01
+                        + std::clamp(anchor - 4000, 0, 4000) * 0.003
+                        + std::max(anchor - 8000, 0) * 0.012;
+                confirmed = frame.world.rider.distanceMeters;
+                smoother.setTarget(frame, frame.presentationTimeMs);
+            }
+            const double distance = smoother.sample(1000 + elapsed).world.rider.distanceMeters;
+            const double velocity = (distance - previousDistance) / 0.01;
+            QVERIFY(distance + 1e-9 >= previousDistance);
+            QVERIFY(distance <= confirmed + 1e-9);
+            QVERIFY(velocity <= 12.6 + 1e-6);
+            if (elapsed > 1000) {
+                QVERIFY2(std::abs(velocity - previousVelocity) <= 0.4 + 1e-6,
+                         qPrintable(QString("visual acceleration jump at %1: %2 -> %3")
+                                    .arg(elapsed).arg(previousVelocity).arg(velocity)));
+            }
+            previousDistance = distance;
+            previousVelocity = velocity;
+        }
+        QVERIFY(std::abs(previousDistance - confirmed) < 1e-6);
+        QVERIFY(previousVelocity < 1e-6);
+    }
+
     void fixedStepDistanceResumeUsesBoundedPresentationRamp()
     {
         WorkoutGameVisualSnapshot first;
@@ -753,6 +894,7 @@ private slots:
             WorkoutGameVisualSnapshot repeated = second;
             repeated.presentationTimeMs = nowMs;
             smoother.setTarget(repeated, nowMs);
+            smoother.sample(nowMs);
         }
 
         WorkoutGameVisualSnapshot resumed = second;
@@ -762,14 +904,29 @@ private slots:
         resumed.camera.centerDistanceMeters = 20.0;
         smoother.setTarget(resumed, 6200);
 
-        QCOMPARE(smoother.sample(6200).world.rider.distanceMeters, 12.0);
-        QVERIFY(std::abs(smoother.sample(6300).world.rider.distanceMeters
-                         - 13.0) < 1e-9);
-        QCOMPARE(smoother.sample(6400).world.rider.distanceMeters, 14.0);
+        double previous = smoother.sample(6200).world.rider.distanceMeters;
+        QVERIFY(previous >= 12.0 && previous <= 12.21);
+        for (std::int64_t nowMs = 6210; nowMs <= 7200; nowMs += 10) {
+            const double distance = smoother.sample(nowMs).world.rider.distanceMeters;
+            QVERIFY(distance >= previous);
+            QVERIFY(distance <= 14.0);
+            QVERIFY2(distance - previous <= 0.105 + 1e-9,
+                     "resume compressed missing distance into a fast catch-up");
+            previous = distance;
+        }
+        QCOMPARE(previous, 14.0);
+    }
+
+    void fixedStepDistanceModeAndSectionChangesCutAtBoundaries_data()
+    {
+        QTest::addColumn<int>("anchorGapMs");
+        QTest::newRow("normal") << 200;
+        QTest::newRow("late-hill") << 600;
     }
 
     void fixedStepDistanceModeAndSectionChangesCutAtBoundaries()
     {
+        QFETCH(int, anchorGapMs);
         WorkoutGameVisualSnapshot first;
         first.presentationTimeMs = 1000;
         first.distanceAnchoredPresentation = true;
@@ -800,7 +957,7 @@ private slots:
         first.feature.launchPowerReady = false;
 
         WorkoutGameVisualSnapshot second = first;
-        second.presentationTimeMs = 1200;
+        second.presentationTimeMs = 1000 + anchorGapMs;
         second.simulation.workoutTimeMs = 1200;
         second.simulation.activeSection = 1;
         second.simulation.previousFeatureReadiness = 0.9;
@@ -822,8 +979,9 @@ private slots:
 
         WorkoutGameVisualSmoother smoother;
         smoother.setTarget(first, 1000);
-        smoother.setTarget(second, 1200);
-        const WorkoutGameVisualSnapshot beforeBoundary = smoother.sample(1390);
+        smoother.setTarget(second, second.presentationTimeMs);
+        const auto initialSampleMs = second.presentationTimeMs + 100;
+        const WorkoutGameVisualSnapshot beforeBoundary = smoother.sample(initialSampleMs);
         QCOMPARE(beforeBoundary.simulation.activeSection, 0);
         QCOMPARE(beforeBoundary.simulation.previousFeatureReadiness, 0.2);
         QCOMPARE(beforeBoundary.simulation.challengeAssessment.completed,
@@ -841,10 +999,18 @@ private slots:
         QCOMPARE(beforeBoundary.feature.phase,
                  WorkoutGameFeaturePhase::Approach);
         QCOMPARE(beforeBoundary.feature.launchPowerReady, false);
-        QVERIFY(beforeBoundary.terrainTransition.active);
-        QCOMPARE(beforeBoundary.terrainTransition.progress, 0.0);
+        QVERIFY(!beforeBoundary.terrainTransition.active);
+        QCOMPARE(beforeBoundary.terrainTransition.progress, 1.0);
 
-        const WorkoutGameVisualSnapshot atBoundary = smoother.sample(1400);
+        WorkoutGameVisualSnapshot atBoundary;
+        std::int64_t boundaryMs = initialSampleMs + 10;
+        for (; boundaryMs <= initialSampleMs + 1500; boundaryMs += 10) {
+            atBoundary = smoother.sample(boundaryMs);
+            if (atBoundary.simulation.activeSection == 1) break;
+            QCOMPARE(atBoundary.world.terrain, WorkoutGameTerrainKind::Roots);
+            QCOMPARE(atBoundary.feature.phase, WorkoutGameFeaturePhase::Approach);
+            QVERIFY(!atBoundary.terrainTransition.active);
+        }
         QCOMPARE(atBoundary.simulation.activeSection, 1);
         QCOMPARE(atBoundary.simulation.previousFeatureReadiness, 0.9);
         QCOMPARE(atBoundary.simulation.challengeAssessment.completed, true);
@@ -861,7 +1027,7 @@ private slots:
         QCOMPARE(atBoundary.feature.phase, WorkoutGameFeaturePhase::Action);
         QCOMPARE(atBoundary.feature.launchPowerReady, true);
         QCOMPARE(atBoundary.terrainTransition.progress, 0.0);
-        QVERIFY(smoother.sample(1500).terrainTransition.progress > 0.0);
+        QVERIFY(smoother.sample(boundaryMs + 100).terrainTransition.progress > 0.0);
 
         WorkoutGameVisualSnapshot timeWorkout = second;
         timeWorkout.presentationTimeMs = 1220;

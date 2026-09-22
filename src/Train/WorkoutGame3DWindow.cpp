@@ -919,7 +919,15 @@ QString WorkoutGame3DWindow::healthTraceLine(
            << " rider_distance_m=" << viewModel->distanceMeters()
            << " speed_kph=" << viewModel->speedKph()
            << " grade_percent=" << viewModel->gradePercent()
-           << " fps=" << frameRateCounter.framesPerSecond();
+           << " fps=" << frameRateCounter.framesPerSecond()
+           << " anchor_gap_max_ms="
+                << visualSmoother.distanceTiming().maximumAnchorGapMs
+           << " presentation_gap_max_ms="
+                << visualSmoother.distanceTiming().maximumPresentationGapMs
+           << " course_lag_ms=" << visualSmoother.distanceTiming().lagMs
+           << " course_buffer_holds=" << visualSmoother.distanceTiming().bufferHolds
+           << " course_history_compactions=" << visualSmoother.distanceTiming().historyCompactions
+           << " frame_p99_ms=" << frameRateCounter.p99FrameIntervalMilliseconds();
     return result;
 }
 

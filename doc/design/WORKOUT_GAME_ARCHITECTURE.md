@@ -282,10 +282,28 @@ authoritative rider distance                                [GUI]
 The runner uses absolute monotonic deadlines so wakeup error does not accumulate
 as clock drift. It executes at most four overdue 20 ms publication ticks and
 then skips stale deadlines. Simulation snapshots carry their intended
-presentation timestamp. Rendering stays one tick behind and interpolates the
-previous/current complete pair; it does not extrapolate runner state past the
-latest physics result. The current input mailbox deliberately keeps only the
+presentation timestamp. Standard fixed-step presentation uses a 40 ms
+interpolation buffer; its brief display-only prediction never advances the
+runner's authoritative state. The current input mailbox deliberately keeps only the
 latest telemetry value, so timestamped telemetry replay remains future work.
+
+Distance courses keep distinct confirmed position anchors and a persistent
+presentation cursor. Their normal 200 ms buffering target grows with observed
+anchor gaps; actual lag can exceed the target during an outage. A late anchor
+must not rebase that cursor to wall-clock time or compress missing distance into
+a fixed catch-up interval. Presentation advances by at most 40 ms per rendered
+sample, with limited recovery speed and a post-step stopping-distance envelope.
+It never goes beyond confirmed distance. Repeated sampling at the same timestamp
+does not advance course motion. Pedals retain the separate high-rate clock.
+Terrain transitions start when the displayed cursor reaches the confirmed
+boundary, not at a predicted wall-clock deadline. Seeks, session changes and
+mode changes still cut the presentation explicitly.
+
+The anchor history is bounded to 128 entries. Exceptionally long unpresented
+backlogs are decimated while retaining the displayed origin and newest anchor;
+this can omit intermediate **visual** boundaries, but never changes authoritative
+sections, scoring, trainer commands or recording. Arbitrarily long data gaps
+can still stop the picture: no-extrapolation does not promise indefinite motion.
 Lifecycle generation changes and an engine tick share a narrow lifecycle
 barrier. A start, pause, resume, stop, or shutdown therefore cannot retire a
 generation halfway through a mutating engine update. Telemetry and anchor
@@ -432,6 +450,15 @@ below terrain, rider behind/outside the camera, or missing visible geometry.
 It stores no history and does no framebuffer readback. Set
 `GC_WORKOUT_GAME_HEALTH_LOG=0` only when routine local logging must be
 disabled; the higher-rate HUD and full trace remain opt-in.
+
+The health record also reports session-maximum `anchor_gap_max_ms` and
+`presentation_gap_max_ms`, current `course_lag_ms`, `course_buffer_holds`,
+`course_history_compactions`, and recent `frame_p99_ms`. These distinguish late
+position anchors from delayed presentation callbacks without a per-frame log.
+Holds and anchor gaps include genuine stops and startup; they are evidence for
+correlation, not automatic fault verdicts. High FPS alone is not motion-quality
+acceptance. Regression coverage checks per-frame distance and acceleration under
+irregular anchors, source speed changes, stop/resume and GUI stalls.
 
 The same trace record describes the rendered decision rather than reconstructing
 it afterward: feature phase, route, readiness, action distance and action id

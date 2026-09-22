@@ -76,6 +76,14 @@ void WorkoutGameVisualSmoother::reset()
     target = WorkoutGameVisualSnapshot();
     fixedStepHistory.clear();
     courseAnchorHistory.clear();
+    coursePresentationStarted = false;
+    courseHolding = false;
+    courseCursorMs = 0.0;
+    courseBufferMs = DistanceCoursePresentationDelayMs;
+    courseSpeedMetersPerSecond = 0.0;
+    courseVelocityMetersPerSecond = 0.0;
+    courseLastSampleMs = 0;
+    courseTiming = DistanceTiming();
     terrainTransition.reset();
 }
 
@@ -94,13 +102,11 @@ void WorkoutGameVisualSmoother::setTarget(
     if (visualDiscontinuity || courseDiscontinuity) {
         terrainTransition.reset();
     }
-    const std::int64_t terrainPresentationDelayMs = fixedStepTarget
-            && snapshot.distanceAnchoredPresentation
-            && !visualDiscontinuity && !courseDiscontinuity
-            ? DistanceCoursePresentationDelayMs : 0;
-    terrainTransition.setTarget(
-            snapshot.world,
-            monotonicTimeMs + terrainPresentationDelayMs);
+    // Buffered distance motion owns its terrain transition at the displayed
+    // boundary, not at an assumed arrival+200 ms wall-clock deadline.
+    if (!fixedStepTarget || !snapshot.distanceAnchoredPresentation) {
+        terrainTransition.setTarget(snapshot.world, monotonicTimeMs);
+    }
     if (fixedStepTarget) {
         const std::int64_t presentationTimeMs = snapshot.presentationTimeMs;
         if (!initialized || !fixedStepSnapshots
@@ -117,6 +123,14 @@ void WorkoutGameVisualSmoother::setTarget(
             fixedStepHistory.clear();
             fixedStepHistory.push_back(snapshot);
             courseAnchorHistory.clear();
+            coursePresentationStarted = false;
+            courseHolding = false;
+            courseBufferMs = DistanceCoursePresentationDelayMs;
+            courseSpeedMetersPerSecond = std::max(
+                    snapshot.world.speedMetersPerSecond,
+                    snapshot.simulation.speedKph / 3.6);
+            courseVelocityMetersPerSecond = 0.0;
+            courseTiming = DistanceTiming();
             if (snapshot.distanceAnchoredPresentation) {
                 courseAnchorHistory.push_back(snapshot);
             }
@@ -136,18 +150,66 @@ void WorkoutGameVisualSmoother::setTarget(
                 && (courseAnchorHistory.empty()
                 || coursePositionChanged(
                     courseAnchorHistory.back(), snapshot))) {
-            if (!courseAnchorHistory.empty()
-                    && presentationTimeMs
-                        - courseAnchorHistory.back().presentationTimeMs
-                        > DistanceCoursePresentationDelayMs * 2) {
-                WorkoutGameVisualSnapshot bridge = courseAnchorHistory.back();
-                bridge.presentationTimeMs = presentationTimeMs
-                        - DistanceCoursePresentationDelayMs;
-                courseAnchorHistory.push_back(bridge);
+            if (!courseAnchorHistory.empty()) {
+                const auto &last = courseAnchorHistory.back();
+                const auto gapMs = presentationTimeMs - last.presentationTimeMs;
+                const double distance = snapshot.world.rider.distanceMeters
+                        - last.world.rider.distanceMeters;
+                courseTiming.maximumAnchorGapMs = std::max(
+                        courseTiming.maximumAnchorGapMs, gapMs);
+                double motionIntervalMs = double(gapMs);
+                // A true stop need not replay seconds of zero-distance history.
+                // Unlike the former fixed 200 ms bridge, preserve enough time
+                // for all confirmed distance at the observed moving speed.
+                if (gapMs > 1000 && courseSpeedMetersPerSecond > 0.0) {
+                    motionIntervalMs = std::min(double(gapMs), std::max(
+                            200.0, distance / courseSpeedMetersPerSecond * 1000.0));
+                    if (motionIntervalMs < gapMs) {
+                        auto bridge = last;
+                        bridge.presentationTimeMs = presentationTimeMs
+                                - std::int64_t(std::ceil(motionIntervalMs));
+                        courseAnchorHistory.push_back(bridge);
+                    }
+                }
+                if (motionIntervalMs > 0.0 && distance > 0.0) {
+                    courseSpeedMetersPerSecond = distance * 1000.0
+                            / std::max(20.0, motionIntervalMs);
+                    const double measuredSpeed = std::max(
+                            snapshot.world.speedMetersPerSecond,
+                            snapshot.simulation.speedKph / 3.6);
+                    if (measuredSpeed > 0.0) {
+                        courseSpeedMetersPerSecond = std::min(
+                                courseSpeedMetersPerSecond, measuredSpeed * 1.25);
+                    }
+                }
+                const double observedBufferMs = motionIntervalMs > 200.0
+                        ? std::min(1000.0, motionIntervalMs + 40.0) : 200.0;
+                // Learn larger gaps immediately; shed excess buffering slowly.
+                courseBufferMs = std::max(observedBufferMs,
+                        courseBufferMs - double(gapMs) * 0.005);
             }
             courseAnchorHistory.push_back(snapshot);
-            while (courseAnchorHistory.size() > 8) {
-                courseAnchorHistory.pop_front();
+            pruneCourseHistory();
+            if (courseAnchorHistory.size() > MaximumCourseAnchors) {
+                // Bounded degradation after prolonged missing presentation:
+                // decimate intermediate visual samples, retaining the actual
+                // displayed origin and newest confirmation. Some intermediate
+                // visual boundaries may be omitted, never authoritative events.
+                // Crucially, do not teleport/reset the cursor to the latest.
+                auto origin = coursePresentationStarted
+                        ? courseAt(courseCursorMs) : courseAnchorHistory.front();
+                if (coursePresentationStarted) {
+                    origin.presentationTimeMs = std::int64_t(courseCursorMs);
+                    courseCursorMs = double(origin.presentationTimeMs);
+                }
+                std::deque<WorkoutGameVisualSnapshot> compacted;
+                compacted.push_back(origin);
+                for (std::size_t i = 1; i + 1 < courseAnchorHistory.size(); i += 2) {
+                    compacted.push_back(courseAnchorHistory[i]);
+                }
+                compacted.push_back(courseAnchorHistory.back());
+                courseAnchorHistory.swap(compacted);
+                ++courseTiming.historyCompactions;
             }
         }
         return;
@@ -223,7 +285,7 @@ void WorkoutGameVisualSmoother::setTarget(
 }
 
 WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
-        std::int64_t monotonicTimeMs) const
+        std::int64_t monotonicTimeMs)
 {
     if (!initialized) return WorkoutGameVisualSnapshot();
     if (fixedStepSnapshots) {
@@ -300,38 +362,8 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
                     : 1.0;
             result = interpolate(from, to, amount);
         }
-        if (target.distanceAnchoredPresentation
-                && courseAnchorHistory.size() >= 2) {
-            const std::int64_t courseRenderTimeMs = monotonicTimeMs
-                    - DistanceCoursePresentationDelayMs;
-            std::size_t courseUpperIndex = 0;
-            while (courseUpperIndex < courseAnchorHistory.size()
-                    && courseAnchorHistory[courseUpperIndex].presentationTimeMs
-                        <= courseRenderTimeMs) {
-                ++courseUpperIndex;
-            }
-
-            WorkoutGameVisualSnapshot motion;
-            if (courseUpperIndex == 0) {
-                motion = courseAnchorHistory.front();
-            } else if (courseUpperIndex >= courseAnchorHistory.size()) {
-                motion = courseAnchorHistory.back();
-            } else {
-                const WorkoutGameVisualSnapshot &from =
-                        courseAnchorHistory[courseUpperIndex - 1];
-                const WorkoutGameVisualSnapshot &to =
-                        courseAnchorHistory[courseUpperIndex];
-                const std::int64_t intervalMs = to.presentationTimeMs
-                        - from.presentationTimeMs;
-                const double amount = intervalMs > 0
-                        ? std::clamp(
-                            double(courseRenderTimeMs - from.presentationTimeMs)
-                                / double(intervalMs),
-                            0.0, 1.0)
-                        : 1.0;
-                motion = interpolateCourseMotion(from, to, amount);
-            }
-            applyCourseMotion(result, motion);
+        if (target.distanceAnchoredPresentation && !courseAnchorHistory.empty()) {
+            applyCourseMotion(result, sampleCourse(monotonicTimeMs));
         }
         result.terrainTransition = terrainTransition.sample(monotonicTimeMs);
         return result;
@@ -395,6 +427,135 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
                 predictionMs, sourceIntervalMs);
     }
     return result;
+}
+
+void WorkoutGameVisualSmoother::pruneCourseHistory()
+{
+    if (!coursePresentationStarted) return;
+    while (courseAnchorHistory.size() > 1
+            && courseAnchorHistory[1].presentationTimeMs <= courseCursorMs) {
+        courseAnchorHistory.pop_front();
+    }
+}
+
+WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::courseAt(double cursorMs) const
+{
+    for (std::size_t i = 1; i < courseAnchorHistory.size(); ++i) {
+        const auto &from = courseAnchorHistory[i - 1];
+        const auto &to = courseAnchorHistory[i];
+        if (cursorMs < to.presentationTimeMs) {
+            const double interval = double(to.presentationTimeMs - from.presentationTimeMs);
+            return interpolateCourseMotion(from, to, interval > 0.0
+                    ? std::clamp((cursorMs - from.presentationTimeMs) / interval, 0.0, 1.0)
+                    : 1.0);
+        }
+    }
+    return courseAnchorHistory.back();
+}
+
+WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sampleCourse(std::int64_t nowMs)
+{
+    if (!coursePresentationStarted) {
+        coursePresentationStarted = true;
+        courseCursorMs = std::clamp(double(nowMs) - courseBufferMs,
+                double(courseAnchorHistory.front().presentationTimeMs),
+                double(courseAnchorHistory.back().presentationTimeMs));
+        courseLastSampleMs = nowMs;
+        const double remaining = std::max(0.0,
+                courseAnchorHistory.back().world.rider.distanceMeters
+                - courseAt(courseCursorMs).world.rider.distanceMeters);
+        courseVelocityMetersPerSecond = std::min(courseSpeedMetersPerSecond,
+                std::sqrt(80.0 * remaining));
+    } else if (nowMs > courseLastSampleMs) {
+        const auto gapMs = nowMs - courseLastSampleMs;
+        courseTiming.maximumPresentationGapMs = std::max(
+                courseTiming.maximumPresentationGapMs, gapMs);
+        courseLastSampleMs = nowMs;
+        const double elapsedMs = double(std::min(gapMs, MaximumDistancePresentationStepMs));
+        const double dt = elapsedMs / 1000.0;
+
+        // Skip only an identical stationary bridge, never an unpresented
+        // section/feature/terrain boundary.
+        pruneCourseHistory();
+        if (courseAnchorHistory.size() > 1) {
+            const auto &from = courseAnchorHistory[0];
+            const auto &to = courseAnchorHistory[1];
+            if (from.simulation.workoutTimeMs == to.simulation.workoutTimeMs
+                    && from.world.rider.distanceMeters == to.world.rider.distanceMeters
+                    && from.world.generation == to.world.generation
+                    && from.simulation.activeSection == to.simulation.activeSection
+                    && from.feature.phase == to.feature.phase) {
+                courseCursorMs = std::max(courseCursorMs, double(to.presentationTimeMs));
+                pruneCourseHistory();
+            }
+        }
+
+        const auto current = courseAt(courseCursorMs);
+        const double desiredCursor = double(nowMs) - courseBufferMs;
+        // Allow buffering to grow smoothly. Recovery is at most 5% faster,
+        // never a rebase to wall-clock time when a late anchor arrives.
+        const double rate = std::clamp(1.0 + (desiredCursor - courseCursorMs) / 1000.0,
+                0.8, 1.05);
+        double nextCursor = std::min(courseCursorMs + elapsedMs * rate,
+                double(courseAnchorHistory.back().presentationTimeMs));
+        const auto proposed = courseAt(nextCursor);
+        const double currentDistance = current.world.rider.distanceMeters;
+        const double wantedDistance = std::max(0.0,
+                proposed.world.rider.distanceMeters - currentDistance);
+        const double remainingDistance = std::max(0.0,
+                courseAnchorHistory.back().world.rider.distanceMeters - currentDistance);
+        constexpr double MaximumAcceleration = 40.0;
+        const double desiredVelocity = std::min(wantedDistance / dt,
+                courseSpeedMetersPerSecond * 1.05);
+        double nextVelocity = std::clamp(desiredVelocity,
+                std::max(0.0, courseVelocityMetersPerSecond - MaximumAcceleration * dt),
+                courseVelocityMetersPerSecond + MaximumAcceleration * dt);
+        // Preserve a stopping envelope AFTER this step, not just before it:
+        // (v+nextV)*dt/2 + nextV^2/(2*a) <= remaining confirmed distance.
+        const double adt = MaximumAcceleration * dt;
+        const double safeVelocity = (std::sqrt(std::max(0.0,
+                adt * adt + 8.0 * MaximumAcceleration * remainingDistance
+                - 4.0 * adt * courseVelocityMetersPerSecond)) - adt) * 0.5;
+        double allowedDistance;
+        if (safeVelocity < 0.0) {
+            // Finish braking inside this frame instead of spreading the stop
+            // over its full duration and overshooting the remaining distance.
+            nextVelocity = 0.0;
+            allowedDistance = courseVelocityMetersPerSecond * courseVelocityMetersPerSecond
+                    / (2.0 * MaximumAcceleration);
+        } else {
+            nextVelocity = std::min(nextVelocity, safeVelocity);
+            allowedDistance = (courseVelocityMetersPerSecond + nextVelocity) * 0.5 * dt;
+        }
+        allowedDistance = std::clamp(allowedDistance, 0.0, remainingDistance);
+        if (std::abs(allowedDistance - wantedDistance) > 1e-12) {
+            const double distanceLimit = currentDistance + allowedDistance;
+            nextCursor = double(courseAnchorHistory.back().presentationTimeMs);
+            for (std::size_t i = 1; i < courseAnchorHistory.size(); ++i) {
+                const auto &from = courseAnchorHistory[i - 1];
+                const auto &to = courseAnchorHistory[i];
+                if (to.world.rider.distanceMeters > distanceLimit) {
+                    const double span = to.world.rider.distanceMeters - from.world.rider.distanceMeters;
+                    nextCursor = std::max(courseCursorMs,
+                            double(from.presentationTimeMs)
+                            + (to.presentationTimeMs - from.presentationTimeMs)
+                            * std::clamp((distanceLimit - from.world.rider.distanceMeters) / span, 0.0, 1.0));
+                    break;
+                }
+            }
+        }
+        courseCursorMs = nextCursor;
+        courseVelocityMetersPerSecond = nextVelocity;
+        const bool holding = allowedDistance <= 1e-9;
+        if (holding && !courseHolding) ++courseTiming.bufferHolds;
+        courseHolding = holding;
+    }
+    pruneCourseHistory();
+    // Profile changes begin only when their confirmed anchor is displayed.
+    // Do not repeatedly restart transitions with interpolated grade values.
+    terrainTransition.setTarget(courseAnchorHistory.front().world, nowMs);
+    courseTiming.lagMs = std::max(0.0, double(nowMs) - courseCursorMs);
+    return courseAt(courseCursorMs);
 }
 
 bool WorkoutGameVisualSmoother::isDiscontinuity(

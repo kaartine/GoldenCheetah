@@ -2545,6 +2545,80 @@ private slots:
         window.setSessionRunning(false);
     }
 
+    void distanceAnchorsRemainSmoothOnTheTargetGpu()
+    {
+        if (!hasInteractiveGraphicsPlatform()) {
+            QSKIP("Quick 3D rendering requires an interactive GPU platform");
+        }
+        const auto course = sampleCourse();
+        const auto road = WorkoutGameRoadCourseBuilder::build(course, FtpWatts);
+        QVERIFY(road.ready);
+        WorkoutGame3DWindow window(true);
+        window.setCourse(course, FtpWatts);
+        window.resize(960, 540);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.rendererPrewarmed(), 5000);
+        auto *model = window.findChild<WorkoutGame3DViewModel *>();
+        QVERIFY(model);
+        QElapsedTimer clock;
+        const auto epoch = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+        QTimer input;
+        input.setTimerType(Qt::PreciseTimer);
+        input.setInterval(20);
+        qint64 previousInput = 0, maximumInputGap = 0;
+        qint64 previousSample = -1, lastMotion = 0, maximumHold = 0;
+        double previousDistance = 0.0, maximumStep = 0.0;
+        int moved = 0;
+        QObject::connect(model, &WorkoutGame3DViewModel::sceneChanged, &window, [&]() {
+            const auto now = clock.elapsed();
+            if (now < 2000 || now == previousSample) return;
+            const double distance = model->distanceMeters();
+            if (previousSample >= 0) {
+                const double step = distance - previousDistance;
+                maximumStep = std::max(maximumStep, step);
+                if (step > 1e-8) { ++moved; lastMotion = now; }
+                else maximumHold = std::max(maximumHold, now - lastMotion);
+            } else lastMotion = now;
+            previousDistance = distance;
+            previousSample = now;
+        });
+        const auto publish = [&](qint64 elapsed) {
+            const qint64 anchor = elapsed / 400 * 400;
+            auto frame = frameAt(road, double(anchor) * 0.01);
+            frame.presentationTimeMs = epoch + elapsed;
+            frame.distanceAnchoredPresentation = true;
+            frame.simulation.workoutTimeMs = anchor;
+            frame.simulation.speedKph = 36.0;
+            frame.world.speedMetersPerSecond = 10.0;
+            frame.riderPedalCycles = elapsed * 0.001;
+            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+        };
+        QObject::connect(&input, &QTimer::timeout, &window, [&]() {
+            const auto elapsed = clock.elapsed();
+            maximumInputGap = std::max(maximumInputGap, elapsed - previousInput);
+            previousInput = elapsed;
+            publish(elapsed);
+        });
+        clock.start();
+        publish(0);
+        window.setSessionRunning(true);
+        input.start();
+        QTest::qWait(5000);
+        input.stop();
+        window.setSessionRunning(false);
+        qInfo("Distance GPU: moved=%d max_step_m=%.4f hold_ms=%lld input_gap_ms=%lld",
+              moved, maximumStep, static_cast<long long>(maximumHold),
+              static_cast<long long>(maximumInputGap));
+        QVERIFY(moved > 50);
+        // Received timestamp jitter may raise the estimated rate up to the
+        // measured-speed allowance: 10 * 1.25 * 1.05 * 0.040 = 0.525 m.
+        QVERIFY2(maximumStep <= 0.53, "late distance anchor bypassed the 40 ms presentation step limit");
+        QVERIFY2(maximumHold <= std::max<qint64>(100, maximumInputGap + 40),
+                 "400 ms anchors stalled the otherwise active renderer");
+    }
+
     void targetGpuProtectsPresentationAndTrainingServiceBudgets()
     {
         if (qEnvironmentVariableIntValue(
