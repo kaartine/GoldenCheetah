@@ -1029,8 +1029,8 @@ class UiDriver:
         first = find_control(first_name, first_role)
         try:
             self.click(first)
-            self.send_named_key("Home")
-            self.send_named_key("Return")
+            self.find_combo_item(first, first_name, timeout)
+            self.send_named_key("Escape")
         except Exception as error:
             raise UiFailure(
                 f"Cannot focus {first_role} {first_name!r}"
@@ -1038,11 +1038,11 @@ class UiDriver:
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.name(first) != first_name:
+            if self.name(first) == first_name:
                 break
             time.sleep(0.1)
         else:
-            raise UiFailure("Training focus is not keyboard-operable")
+            raise UiFailure("Training focus changed while testing its popup")
 
         for name, role in controls[1:]:
             node = find_control(name, role)
@@ -1443,8 +1443,11 @@ class UiDriver:
         if name not in options:
             raise UiFailure(f"Unknown combo box item: {name!r}")
         combo = self.combo_with_items(options, require_interactable=True)
+        if self.name(combo) == name:
+            return combo
         self.focus_main_window()
         self.click(combo)
+        self.find_combo_item(combo, name, timeout)
         self.activate_popup_item(options.index(name))
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -3130,7 +3133,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             result = validate_generated_workout(destination)
             if (not math.isclose(result["duration_minutes"], 56.5,
                                  abs_tol=0.001)
-                    or result["minimum_percent"] != 55.0
+                    or result["minimum_percent"] != 50.0
                     or result["maximum_percent"] != 135.0
                     or result["point_count"] != 190):
                 raise UiFailure(

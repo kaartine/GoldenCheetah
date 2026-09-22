@@ -519,14 +519,15 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertIs(selected, row)
         driver.click_named_item.assert_called_once_with("ui-test-mtb")
 
-    def test_interactive_controls_commit_a_popup_selection(self):
+    def test_interactive_controls_open_popup_without_changing_selection(self):
         focus = mock.Mock()
         driver = object.__new__(UI.UiDriver)
         driver.find = mock.Mock(return_value=focus)
         driver.focus_main_window = mock.Mock()
         driver.click = mock.Mock()
+        driver.find_combo_item = mock.Mock()
         driver.send_named_key = mock.Mock()
-        driver.name = mock.Mock(return_value="Sprint")
+        driver.name = mock.Mock(return_value="20/20 descending sets")
 
         with mock.patch.object(UI.time, "sleep"):
             driver.require_interactive_controls(
@@ -536,7 +537,10 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertEqual(driver.name.call_count, 1)
         self.assertEqual(
             driver.send_named_key.call_args_list,
-            [mock.call("Home"), mock.call("Return")],
+            [mock.call("Escape")],
+        )
+        driver.find_combo_item.assert_called_once_with(
+            focus, "20/20 descending sets", 1.0
         )
 
     def test_interactive_checkbox_uses_accessible_action(self):
@@ -548,8 +552,9 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         checkbox.queryAction.return_value = action
         driver = object.__new__(UI.UiDriver)
         driver.find = mock.Mock(side_effect=[focus, checkbox, checkbox])
-        driver.name = mock.Mock(return_value="Sprint")
+        driver.name = mock.Mock(return_value="Training focus")
         driver.click = mock.Mock()
+        driver.find_combo_item = mock.Mock()
         driver.send_named_key = mock.Mock()
         driver.checked = mock.Mock(side_effect=[False, True, False])
 
@@ -564,7 +569,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             driver.send_named_key.call_args_list,
-            [mock.call("Home"), mock.call("Return")],
+            [mock.call("Escape")],
         )
         driver.click.assert_called_once_with(focus)
         self.assertEqual(action.doAction.call_args_list,
@@ -576,8 +581,11 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         driver.combo_with_items = mock.Mock(return_value=combo)
         driver.focus_main_window = mock.Mock()
         driver.click = mock.Mock()
+        driver.find_combo_item = mock.Mock()
         driver.activate_popup_item = mock.Mock()
-        driver.name = mock.Mock(return_value="20/20 descending sets")
+        driver.name = mock.Mock(
+            side_effect=["Endurance", "20/20 descending sets"]
+        )
 
         selected = driver.select_combo_item(
             ("Endurance", "20/20 descending sets"),
@@ -586,6 +594,9 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
         self.assertIs(selected, combo)
         driver.click.assert_called_once_with(combo)
+        driver.find_combo_item.assert_called_once_with(
+            combo, "20/20 descending sets", 10.0
+        )
         driver.activate_popup_item.assert_called_once_with(1)
 
     def test_workout_generator_declares_complete_tab_order(self):
