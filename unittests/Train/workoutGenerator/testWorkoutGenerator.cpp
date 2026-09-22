@@ -20,6 +20,28 @@ class TestWorkoutGenerator : public QObject
     Q_OBJECT
 
 private slots:
+    void convertsPercentOfFtpToDisplayedWatts_data()
+    {
+        QTest::addColumn<int>("ftpWatts");
+        QTest::addColumn<double>("percentFtp");
+        QTest::addColumn<int>("expectedWatts");
+
+        QTest::newRow("recovery") << 190 << 55.0 << 105;
+        QTest::newRow("threshold") << 190 << 100.0 << 190;
+        QTest::newRow("anaerobic") << 190 << 130.0 << 247;
+        QTest::newRow("rounds-nearest") << 191 << 55.0 << 105;
+    }
+
+    void convertsPercentOfFtpToDisplayedWatts()
+    {
+        QFETCH(int, ftpWatts);
+        QFETCH(double, percentFtp);
+        QFETCH(int, expectedWatts);
+
+        QCOMPARE(WorkoutGenerator::wattsForPercent(ftpWatts, percentFtp),
+                 expectedWatts);
+    }
+
     void focusNamesMatchEverySupportedGoal()
     {
         QStringList names;
@@ -198,6 +220,8 @@ private slots:
                 WorkoutTrainingFocus::Vo2Max);
         settings.ftpWatts = 190;
         settings.warmupSeconds = 8 * 60;
+        settings.warmupStartPercentFtp = 45;
+        settings.warmupEndPercentFtp = 75;
         settings.cooldownSeconds = 7 * 60;
         settings.primerSeconds = 0;
         settings.preWorkRecoverySeconds = 0;
@@ -222,6 +246,8 @@ private slots:
         QCOMPARE(result.summary.ftpWatts, 190);
         QCOMPARE(result.intervals.front().role,
                  WorkoutGeneratedIntervalRole::Warmup);
+        QCOMPARE(result.intervals.front().startPercentFtp, 45.0);
+        QCOMPARE(result.intervals.front().endPercentFtp, 75.0);
         QCOMPARE(result.intervals.back().role,
                  WorkoutGeneratedIntervalRole::Cooldown);
     }

@@ -354,8 +354,10 @@ class GeneratedWorkoutPage : public WorkoutPage
     QSpinBox *ftpBox = nullptr;
     QSlider *workPowerSlider = nullptr;
     QSpinBox *workPowerBox = nullptr;
+    QLabel *workPowerWattsValue = nullptr;
     QSlider *recoveryPowerSlider = nullptr;
     QSpinBox *recoveryPowerBox = nullptr;
+    QLabel *recoveryPowerWattsValue = nullptr;
     QSpinBox *workSecondsBox = nullptr;
     QSpinBox *recoverySecondsBox = nullptr;
     QSpinBox *repetitionsBox = nullptr;
@@ -364,6 +366,12 @@ class GeneratedWorkoutPage : public WorkoutPage
     QSpinBox *setRecoveryBox = nullptr;
     QSpinBox *finalSetRecoveryBox = nullptr;
     QSpinBox *warmupMinutesBox = nullptr;
+    QSlider *warmupStartPowerSlider = nullptr;
+    QSpinBox *warmupStartPowerBox = nullptr;
+    QLabel *warmupStartPowerWattsValue = nullptr;
+    QSlider *warmupEndPowerSlider = nullptr;
+    QSpinBox *warmupEndPowerBox = nullptr;
+    QLabel *warmupEndPowerWattsValue = nullptr;
     QSpinBox *cooldownMinutesBox = nullptr;
     QCheckBox *recoverAfterLastBox = nullptr;
     QLabel *durationValue = nullptr;

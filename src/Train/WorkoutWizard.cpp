@@ -909,6 +909,7 @@ void GeneratedWorkoutPage::initializePage()
             const QString &name,
             QSlider *&slider,
             QSpinBox *&box,
+            QLabel *&wattsValue,
             int minimum,
             int maximum) {
         QWidget *container = new QWidget(this);
@@ -922,8 +923,14 @@ void GeneratedWorkoutPage::initializePage()
         box->setObjectName(name + QStringLiteral("Value"));
         box->setRange(minimum, maximum);
         box->setSuffix(tr(" %"));
+        wattsValue = new QLabel(container);
+        wattsValue->setObjectName(name + QStringLiteral("Watts"));
+        wattsValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        wattsValue->setMinimumWidth(
+                wattsValue->fontMetrics().horizontalAdvance(tr("1500 W")));
         layout->addWidget(slider, 1);
         layout->addWidget(box);
+        layout->addWidget(wattsValue);
         connect(slider, &QSlider::valueChanged, box, &QSpinBox::setValue);
         connect(box, QOverload<int>::of(&QSpinBox::valueChanged),
                 slider, &QSlider::setValue);
@@ -936,10 +943,11 @@ void GeneratedWorkoutPage::initializePage()
     form->addRow(tr("FTP"), ftpBox);
     form->addRow(tr("Work intensity"), createPowerControl(
             QStringLiteral("workoutGeneratorWorkPower"),
-            workPowerSlider, workPowerBox, 20, 250));
+            workPowerSlider, workPowerBox, workPowerWattsValue, 20, 250));
     form->addRow(tr("Recovery intensity"), createPowerControl(
             QStringLiteral("workoutGeneratorRecoveryPower"),
-            recoveryPowerSlider, recoveryPowerBox, 20, 100));
+            recoveryPowerSlider, recoveryPowerBox,
+            recoveryPowerWattsValue, 20, 100));
 
     workSecondsBox = new QSpinBox(this);
     workSecondsBox->setObjectName(QStringLiteral("workoutGeneratorWorkSeconds"));
@@ -1004,6 +1012,18 @@ void GeneratedWorkoutPage::initializePage()
     form->addRow(tr("Recovery between sets"), setRecoveryBox);
     form->addRow(tr("Recovery before final set"), finalSetRecoveryBox);
     form->addRow(tr("Warm-up"), warmupMinutesBox);
+    form->addRow(tr("Warm-up start"), createPowerControl(
+            QStringLiteral("workoutGeneratorWarmupStartPower"),
+            warmupStartPowerSlider, warmupStartPowerBox,
+            warmupStartPowerWattsValue, 20, 150));
+    form->addRow(tr("Warm-up end"), createPowerControl(
+            QStringLiteral("workoutGeneratorWarmupEndPower"),
+            warmupEndPowerSlider, warmupEndPowerBox,
+            warmupEndPowerWattsValue, 20, 150));
+    warmupStartPowerSlider->setAccessibleName(tr("Warm-up start slider"));
+    warmupStartPowerBox->setAccessibleName(tr("Warm-up start"));
+    warmupEndPowerSlider->setAccessibleName(tr("Warm-up end slider"));
+    warmupEndPowerBox->setAccessibleName(tr("Warm-up end"));
     form->addRow(tr("Cool-down"), cooldownMinutesBox);
     form->addRow(QString(), recoverAfterLastBox);
 
@@ -1064,7 +1084,8 @@ void GeneratedWorkoutPage::initializePage()
         ftpBox, workPowerBox, recoveryPowerBox, workSecondsBox,
         recoverySecondsBox, repetitionsBox, setsBox, repetitionDeltaBox,
         setRecoveryBox, finalSetRecoveryBox,
-        warmupMinutesBox, cooldownMinutesBox
+        warmupMinutesBox, warmupStartPowerBox, warmupEndPowerBox,
+        cooldownMinutesBox
     };
     for (QSpinBox *box : boxes) {
         connect(box, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -1080,7 +1101,10 @@ void GeneratedWorkoutPage::initializePage()
         workSecondsBox, recoverySecondsBox,
         repetitionsBox, setsBox, repetitionDeltaBox,
         setRecoveryBox, finalSetRecoveryBox,
-        warmupMinutesBox, cooldownMinutesBox,
+        warmupMinutesBox,
+        warmupStartPowerSlider, warmupStartPowerBox,
+        warmupEndPowerSlider, warmupEndPowerBox,
+        cooldownMinutesBox,
         recoverAfterLastBox
     };
     for (int index = 1; index < tabOrder.size(); ++index) {
@@ -1114,6 +1138,8 @@ WorkoutGenerationSettings GeneratedWorkoutPage::settingsFromControls() const
     value.blockRecoverySeconds = setRecoveryBox->value();
     value.lastBlockRecoverySeconds = finalSetRecoveryBox->value();
     value.warmupSeconds = warmupMinutesBox->value() * 60;
+    value.warmupStartPercentFtp = warmupStartPowerBox->value();
+    value.warmupEndPercentFtp = warmupEndPowerBox->value();
     value.cooldownSeconds = cooldownMinutesBox->value() * 60;
     value.includeRecoveryAfterLastRep = recoverAfterLastBox->isChecked();
     return value;
@@ -1124,10 +1150,15 @@ void GeneratedWorkoutPage::applySettings(
 {
     settings = value;
     const QList<QObject *> controls = {
-        focusBox, ftpBox, workPowerBox, recoveryPowerBox, workSecondsBox,
+        focusBox, ftpBox,
+        workPowerSlider, workPowerBox,
+        recoveryPowerSlider, recoveryPowerBox, workSecondsBox,
         recoverySecondsBox, repetitionsBox, setsBox, repetitionDeltaBox,
         setRecoveryBox, finalSetRecoveryBox,
-        warmupMinutesBox, cooldownMinutesBox,
+        warmupMinutesBox,
+        warmupStartPowerSlider, warmupStartPowerBox,
+        warmupEndPowerSlider, warmupEndPowerBox,
+        cooldownMinutesBox,
         recoverAfterLastBox
     };
     std::vector<std::unique_ptr<QSignalBlocker>> blockers;
@@ -1140,7 +1171,9 @@ void GeneratedWorkoutPage::applySettings(
     if (focusIndex >= 0) focusBox->setCurrentIndex(focusIndex);
     ftpBox->setValue(value.ftpWatts);
     workPowerBox->setValue(int(std::lround(value.workPercentFtp)));
+    workPowerSlider->setValue(workPowerBox->value());
     recoveryPowerBox->setValue(int(std::lround(value.recoveryPercentFtp)));
+    recoveryPowerSlider->setValue(recoveryPowerBox->value());
     workSecondsBox->setValue(value.workSeconds);
     recoverySecondsBox->setValue(value.recoverySeconds);
     repetitionsBox->setValue(value.repetitionsPerBlock);
@@ -1149,6 +1182,12 @@ void GeneratedWorkoutPage::applySettings(
     setRecoveryBox->setValue(value.blockRecoverySeconds);
     finalSetRecoveryBox->setValue(value.lastBlockRecoverySeconds);
     warmupMinutesBox->setValue(value.warmupSeconds / 60);
+    warmupStartPowerBox->setValue(
+            int(std::lround(value.warmupStartPercentFtp)));
+    warmupStartPowerSlider->setValue(warmupStartPowerBox->value());
+    warmupEndPowerBox->setValue(
+            int(std::lround(value.warmupEndPercentFtp)));
+    warmupEndPowerSlider->setValue(warmupEndPowerBox->value());
     cooldownMinutesBox->setValue(value.cooldownSeconds / 60);
     recoverAfterLastBox->setChecked(value.includeRecoveryAfterLastRep);
     controlsChanged();
@@ -1167,6 +1206,18 @@ void GeneratedWorkoutPage::controlsChanged()
 {
     if (!focusBox) return;
     settings = settingsFromControls();
+    workPowerWattsValue->setText(tr("%1 W").arg(
+            WorkoutGenerator::wattsForPercent(
+                    settings.ftpWatts, settings.workPercentFtp)));
+    recoveryPowerWattsValue->setText(tr("%1 W").arg(
+            WorkoutGenerator::wattsForPercent(
+                    settings.ftpWatts, settings.recoveryPercentFtp)));
+    warmupStartPowerWattsValue->setText(tr("%1 W").arg(
+            WorkoutGenerator::wattsForPercent(
+                    settings.ftpWatts, settings.warmupStartPercentFtp)));
+    warmupEndPowerWattsValue->setText(tr("%1 W").arg(
+            WorkoutGenerator::wattsForPercent(
+                    settings.ftpWatts, settings.warmupEndPercentFtp)));
     generated = WorkoutGenerator::generate(settings);
     const bool ready = generated.status == WorkoutGenerationStatus::Ready;
     validationLabel->setVisible(!ready);

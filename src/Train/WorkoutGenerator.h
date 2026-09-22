@@ -107,6 +107,7 @@ public:
     static QVector<WorkoutTrainingFocus> focuses();
     static QString focusName(WorkoutTrainingFocus focus);
     static WorkoutGenerationSettings defaultsFor(WorkoutTrainingFocus focus);
+    static int wattsForPercent(int ftpWatts, double percentFtp);
     static WorkoutGenerationResult generate(
             const WorkoutGenerationSettings &settings);
     static QByteArray mrcCourseData(const WorkoutGenerationResult &result);

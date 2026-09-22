@@ -132,6 +132,11 @@ QString WorkoutGenerator::focusName(WorkoutTrainingFocus focus)
     return translated("Unknown");
 }
 
+int WorkoutGenerator::wattsForPercent(int ftpWatts, double percentFtp)
+{
+    return int(std::lround(double(ftpWatts) * percentFtp / 100.0));
+}
+
 WorkoutGenerationSettings WorkoutGenerator::defaultsFor(
         WorkoutTrainingFocus focus)
 {
