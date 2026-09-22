@@ -570,6 +570,30 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertEqual(action.doAction.call_args_list,
                          [mock.call(0), mock.call(0)])
 
+    def test_combo_item_uses_accessible_action(self):
+        action = mock.Mock()
+        action.nActions = 1
+        action.doAction.return_value = True
+        combo = mock.Mock()
+        item = mock.Mock()
+        item.queryAction.return_value = action
+        driver = object.__new__(UI.UiDriver)
+        driver.combo_with_items = mock.Mock(return_value=combo)
+        driver.focus_main_window = mock.Mock()
+        driver.click = mock.Mock()
+        driver.find_combo_item = mock.Mock(return_value=item)
+        driver.name = mock.Mock(return_value="20/20 descending sets")
+        driver.selected = mock.Mock(return_value=False)
+
+        selected = driver.select_combo_item(
+            ("Endurance", "20/20 descending sets"),
+            "20/20 descending sets",
+        )
+
+        self.assertIs(selected, combo)
+        driver.click.assert_called_once_with(combo)
+        action.doAction.assert_called_once_with(0)
+
     def test_workout_generator_declares_complete_tab_order(self):
         source = WORKOUT_WIZARD_SOURCE_PATH.read_text(encoding="utf-8")
         tab_order = source[source.index("const QList<QWidget *> tabOrder") :]

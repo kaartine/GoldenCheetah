@@ -1443,7 +1443,14 @@ class UiDriver:
         self.focus_main_window()
         self.click(combo)
         item = self.find_combo_item(combo, name, timeout)
-        self.click(item)
+        try:
+            action = item.queryAction()
+            if action.nActions < 1 or not action.doAction(0):
+                raise UiFailure("accessible list item rejected action")
+        except Exception as error:
+            raise UiFailure(
+                f"Cannot activate combo box item {name!r}"
+            ) from error
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.name(combo) == name or self.selected(item):
