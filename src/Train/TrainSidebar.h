@@ -199,6 +199,9 @@ class TrainSidebar : public GcWindow
 
     private:
         void showWorkoutPopup(const QPoint &globalPosition);
+        QStringList selectedWorkoutPaths() const;
+        void selectWorkoutPathsSilently(
+                const QStringList &paths, const QString &currentPath);
         void selectWorkoutPathSilently(const QString &path);
 
     public slots:

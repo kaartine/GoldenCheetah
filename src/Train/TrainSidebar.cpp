@@ -43,6 +43,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QShortcut>
+#include <QItemSelectionModel>
 
 #include <QEvent>
 #include <QInputEvent>
@@ -418,12 +419,17 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
             this, SLOT(workoutTreeMenuPopup(const QPoint &)));
     connect(workoutSearch, &QLineEdit::textChanged, this,
             [this](const QString &text) {
+        QStringList selectedPaths = selectedWorkoutPaths();
+        if (!workoutfile.isEmpty() && !selectedPaths.contains(workoutfile)) {
+            selectedPaths.append(workoutfile);
+        }
         const QSignalBlocker blockSelection(workoutTree->selectionModel());
         sortModel->setSearchText(text);
-        selectWorkoutPathSilently(workoutfile);
+        selectWorkoutPathsSilently(selectedPaths, workoutfile);
     });
     connect(workoutSort, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int index) {
+        const QStringList selectedPaths = selectedWorkoutPaths();
         const QSignalBlocker blockSelection(workoutTree->selectionModel());
         switch (index) {
         case 1:
@@ -437,7 +443,7 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
                     TdbWorkoutModelIdx::sortdummy, Qt::AscendingOrder);
             break;
         }
-        selectWorkoutPathSilently(workoutfile);
+        selectWorkoutPathsSilently(selectedPaths, workoutfile);
     });
     QShortcut *deleteWorkoutShortcut = new QShortcut(
             QKeySequence::Delete, workoutTree);
@@ -1149,21 +1155,55 @@ TrainSidebar::devices()
  * Workout Selected
  *--------------------------------------------------------------------*/
 void
-TrainSidebar::selectWorkoutPathSilently(const QString &path)
+TrainSidebar::selectWorkoutPathsSilently(
+        const QStringList &paths, const QString &currentPath)
 {
-    QSignalBlocker blockSelection(workoutTree->selectionModel());
-    workoutTree->clearSelection();
-    workoutTree->setCurrentIndex(QModelIndex());
+    QItemSelectionModel *selection = workoutTree->selectionModel();
+    QSignalBlocker blockSelection(selection);
+    selection->clearSelection();
+    selection->setCurrentIndex(QModelIndex(), QItemSelectionModel::NoUpdate);
+    QModelIndex current;
     for (int row = 0; row < workoutModel->rowCount(); ++row) {
         const QModelIndex source = workoutModel->index(
                 row, TdbWorkoutModelIdx::filepath);
-        if (workoutModel->data(source, Qt::DisplayRole).toString() != path) {
-            continue;
+        const QString path = workoutModel->data(
+                source, Qt::DisplayRole).toString();
+        const QModelIndex proxy = sortModel->mapFromSource(
+                workoutModel->index(row, 0));
+        if (!proxy.isValid()) continue;
+        if (paths.contains(path)) {
+            selection->select(
+                    proxy, QItemSelectionModel::Select
+                           | QItemSelectionModel::Rows);
         }
-        workoutTree->setCurrentIndex(sortModel->mapFromSource(
-                workoutModel->index(row, 0)));
-        break;
+        if (path == currentPath) current = proxy;
     }
+    if (!current.isValid()) return;
+    selection->setCurrentIndex(current, QItemSelectionModel::NoUpdate);
+    workoutTree->scrollTo(current);
+}
+
+QStringList
+TrainSidebar::selectedWorkoutPaths() const
+{
+    QStringList paths;
+    const QModelIndexList selected =
+            workoutTree->selectionModel()->selectedRows();
+    for (const QModelIndex &index : selected) {
+        const QModelIndex source = sortModel->mapToSource(index);
+        if (!source.isValid()) continue;
+        paths.append(workoutModel->data(
+                workoutModel->index(
+                        source.row(), TdbWorkoutModelIdx::filepath),
+                Qt::DisplayRole).toString());
+    }
+    return paths;
+}
+
+void
+TrainSidebar::selectWorkoutPathSilently(const QString &path)
+{
+    selectWorkoutPathsSilently({path}, path);
 }
 
 void
@@ -1189,13 +1229,15 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
         // Prevent re-loading if the prior element is the same the new one
         return;
     }
+    QStringList selectedPaths = selectedWorkoutPaths();
+    if (!selectedPaths.contains(filename)) selectedPaths.append(filename);
     if (!context->prepareErgFileSelection()) {
         selectWorkoutPathSilently(workoutfile);
         return;
     }
     // Saving an untitled workout can synchronously import and select it.
     // Restore the user's original target before the outer transition resumes.
-    selectWorkoutPathSilently(filename);
+    selectWorkoutPathsSilently(selectedPaths, filename);
     ErgFile *prior = const_cast<ErgFile*>(ergFileQueryAdapter.getErgFile());
     workoutfile = filename;
     workoutGameCourseRuntime.reset();

@@ -1060,6 +1060,15 @@ class UiDriver:
                 continue
 
             if role == "check box":
+                try:
+                    if not node.queryComponent().grabFocus():
+                        raise UiFailure("accessible control rejected focus")
+                    time.sleep(0.1)
+                    node = find_control(name, role)
+                except Exception as error:
+                    raise UiFailure(
+                        f"Cannot focus {role} {name!r}"
+                    ) from error
                 before = self.checked(node)
                 self.click(node)
                 deadline = time.monotonic() + timeout
