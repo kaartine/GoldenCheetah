@@ -2475,6 +2475,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     "Decrease intensity",
                     "Increase intensity",
                     "Workout intensity",
+                    "Filter workouts",
+                    "Workout order",
                 ]
             )
             driver.combo_with_items(["Standard ERG", "Workout Ride"])
@@ -2838,6 +2840,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     "Sets",
                     "Recovery between sets",
                     "Recovery before final set",
+                    "Warm-up start",
+                    "Warm-up end",
                 ],
                 timeout=15.0,
             )
@@ -2857,6 +2861,10 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     ("Recovery between sets", "spin button"),
                     ("Recovery before final set", "spin button"),
                     ("Warm-up", "spin button"),
+                    ("Warm-up start slider", "slider"),
+                    ("Warm-up start", "spin button"),
+                    ("Warm-up end slider", "slider"),
+                    ("Warm-up end", "spin button"),
                     ("Cool-down", "spin button"),
                     ("Recovery after the last repetition", "check box"),
                 ],
@@ -2877,6 +2885,8 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 showing=True,
                 timeout=10.0,
             )
+            driver.find("247 W", "label", showing=True, timeout=10.0)
+            driver.find("105 W", "label", showing=True, timeout=10.0)
             ftp = driver.find("FTP", "spin button", showing=True)
             work_power = driver.find(
                 "Work intensity", "spin button", showing=True
@@ -2889,10 +2899,22 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                 "spin button",
                 showing=True,
             )
+            warmup_start = driver.find(
+                "Warm-up start", "spin button", showing=True
+            )
+            warmup_end = driver.find(
+                "Warm-up end", "spin button", showing=True
+            )
             driver.set_value(ftp, 200)
             driver.set_value(work_power, 135)
             driver.set_value(work_seconds, 25)
             driver.set_value(final_set_recovery, 150)
+            driver.set_value(warmup_start, 50)
+            driver.set_value(warmup_end, 75)
+            driver.find("270 W", "label", showing=True, timeout=10.0)
+            driver.find("110 W", "label", showing=True, timeout=10.0)
+            driver.find("100 W", "label", showing=True, timeout=10.0)
+            driver.find("150 W", "label", showing=True, timeout=10.0)
             driver.find("0:56:30", showing=True, timeout=10.0)
             driver.find(
                 "14 / 12 / 10 / 8 efforts; set recovery "

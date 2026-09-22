@@ -38,6 +38,9 @@ public:
     virtual void setFilters(QList<ModelFilter*> filters);
     void removeFilters(bool invalidate = true);
     virtual QList<ModelFilter*> filters() const;
+    void setSearchColumn(int column);
+    void setSearchText(const QString &text);
+    QString searchText() const;
 
 protected:
     virtual bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
@@ -46,6 +49,8 @@ protected:
 private:
     QList<ModelFilter*> _filters;
     QCollator _collator;
+    int _searchColumn = -1;
+    QString _searchText;
 };
 
 #endif // MultiFilterProxyModel_H

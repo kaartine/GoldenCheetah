@@ -50,6 +50,7 @@ exists(unittests.pri) {
 			   Train/workoutDeletionService \
 			   Train/workoutDeletionTrainDb \
 			   Train/workoutGenerator \
+			   Train/multiFilterProxyModel \
 				   Core/measuresAtomicSave \
 				   Core/plannedActivityFileStager \
 				   Core/linkedActivitySaveCleanup \

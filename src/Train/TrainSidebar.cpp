@@ -41,11 +41,14 @@
 #include <QStyleFactory>
 #include <QScrollBar>
 #include <QLabel>
+#include <QLineEdit>
+#include <QShortcut>
 
 #include <QEvent>
 #include <QInputEvent>
 #include <QKeyEvent>
 #include <QComboBox>
+#include <QHBoxLayout>
 #include <QMutexLocker>
 #include <QSoundEffect>
 #include <QFile>
@@ -234,10 +237,13 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     workoutModel->setParent(this);
     sortModel->setDynamicSortFilter(true);
     sortModel->setSortCaseSensitivity(Qt::CaseInsensitive);
+    sortModel->setSearchColumn(TdbWorkoutModelIdx::fulltext);
     sortModel->sort(TdbWorkoutModelIdx::sortdummy, Qt::AscendingOrder); //sort by sortdummy-field
 
     workoutTree = new QTreeView;
     workoutTree->setModel(sortModel);
+    workoutTree->setSelectionBehavior(QAbstractItemView::SelectRows);
+    workoutTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
 
     // hide unwanted columns and header
     for(int i=0; i<workoutTree->header()->count(); i++)
@@ -301,6 +307,25 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     trainSplitter->addWidget(deviceItem);
 
 
+    QWidget *workoutListControls = new QWidget(workoutItem);
+    QHBoxLayout *workoutListControlsLayout = new QHBoxLayout(
+            workoutListControls);
+    workoutListControlsLayout->setContentsMargins(0, 0, 0, 0);
+    workoutListControlsLayout->setSpacing(6);
+    workoutSearch = new QLineEdit(workoutListControls);
+    workoutSearch->setObjectName(QStringLiteral("workoutListSearch"));
+    workoutSearch->setAccessibleName(tr("Filter workouts"));
+    workoutSearch->setPlaceholderText(tr("Filter workouts..."));
+    workoutSearch->setClearButtonEnabled(true);
+    workoutSort = new QComboBox(workoutListControls);
+    workoutSort->setObjectName(QStringLiteral("workoutListSort"));
+    workoutSort->setAccessibleName(tr("Workout order"));
+    workoutSort->addItem(tr("Name"));
+    workoutSort->addItem(tr("Recently used"));
+    workoutSort->addItem(tr("Newest"));
+    workoutListControlsLayout->addWidget(workoutSearch, 1);
+    workoutListControlsLayout->addWidget(workoutSort);
+    workoutItem->addWidget(workoutListControls);
     workoutItem->addWidget(workoutTree);
     HelpWhatsThis *helpWorkoutTree = new HelpWhatsThis(workoutTree);
     workoutTree->setWhatsThis(helpWorkoutTree->getWhatsThisText(HelpWhatsThis::SideBarTrainView_Workouts));
@@ -391,6 +416,33 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     connect(workoutTree->selectionModel(), SIGNAL(selectionChanged(QItemSelection, QItemSelection)), this, SLOT(workoutTreeWidgetSelectionChanged()));
     connect(workoutTree, SIGNAL(customContextMenuRequested(const QPoint &)),
             this, SLOT(workoutTreeMenuPopup(const QPoint &)));
+    connect(workoutSearch, &QLineEdit::textChanged, this,
+            [this](const QString &text) {
+        const QSignalBlocker blockSelection(workoutTree->selectionModel());
+        sortModel->setSearchText(text);
+        selectWorkoutPathSilently(workoutfile);
+    });
+    connect(workoutSort, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+        const QSignalBlocker blockSelection(workoutTree->selectionModel());
+        switch (index) {
+        case 1:
+            sortModel->sort(TdbWorkoutModelIdx::lastRun, Qt::DescendingOrder);
+            break;
+        case 2:
+            sortModel->sort(TdbWorkoutModelIdx::created, Qt::DescendingOrder);
+            break;
+        default:
+            sortModel->sort(
+                    TdbWorkoutModelIdx::sortdummy, Qt::AscendingOrder);
+            break;
+        }
+        selectWorkoutPathSilently(workoutfile);
+    });
+    QShortcut *deleteWorkoutShortcut = new QShortcut(
+            QKeySequence::Delete, workoutTree);
+    connect(deleteWorkoutShortcut, &QShortcut::activated,
+            this, &TrainSidebar::deleteWorkouts);
 
     videosyncFile = NULL;
     calibrating = false;
@@ -1576,7 +1628,8 @@ TrainSidebar::deleteWorkouts()
             msgBox.setText(tr("Are you sure you want to delete this Workout?"));
         }
         else {
-            msgBox.setText(QString(tr("Are you sure you want to delete this %1 workouts?")).arg(nameList.count()));
+            msgBox.setText(tr("Are you sure you want to delete these %1 workouts?")
+                    .arg(nameList.count()));
         }
         QString info;
         for (int i=0;i<nameList.count() && i<21;i++) {

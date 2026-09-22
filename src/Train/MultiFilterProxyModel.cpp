@@ -57,6 +57,35 @@ MultiFilterProxyModel::filters
 
 
 void
+MultiFilterProxyModel::setSearchColumn
+(int column)
+{
+    if (_searchColumn == column) return;
+    _searchColumn = column;
+    invalidateFilter();
+}
+
+
+void
+MultiFilterProxyModel::setSearchText
+(const QString &text)
+{
+    const QString simplified = text.simplified();
+    if (_searchText == simplified) return;
+    _searchText = simplified;
+    invalidateFilter();
+}
+
+
+QString
+MultiFilterProxyModel::searchText
+() const
+{
+    return _searchText;
+}
+
+
+void
 MultiFilterProxyModel::removeFilters
 (bool invalidate)
 {
@@ -74,6 +103,19 @@ bool
 MultiFilterProxyModel::filterAcceptsRow
 (int source_row, const QModelIndex &source_parent) const
 {
+    if (!_searchText.isEmpty()) {
+        if (_searchColumn < 0
+                || _searchColumn >= sourceModel()->columnCount()) {
+            return false;
+        }
+        const QString searchable = sourceModel()->index(
+                source_row, _searchColumn, source_parent).data().toString();
+        const QStringList terms = _searchText.split(
+                QLatin1Char(' '), Qt::SkipEmptyParts);
+        for (const QString &term : terms) {
+            if (!searchable.contains(term, Qt::CaseInsensitive)) return false;
+        }
+    }
     for (auto &filter : _filters) {
         if (filter->modelColumn() < 0 || filter->modelColumn() > sourceModel()->columnCount()) {
             return false;

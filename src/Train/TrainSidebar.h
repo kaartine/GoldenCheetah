@@ -102,6 +102,8 @@ class MultiDeviceDialog;
 class TrainBottom;
 class DeviceTreeView;
 class RideImportWizard;
+class QComboBox;
+class QLineEdit;
 
 class TrainSidebar : public GcWindow
 {
@@ -282,6 +284,8 @@ class TrainSidebar : public GcWindow
 
         DeviceTreeView *deviceTree;
         QTreeView *workoutTree;
+        QLineEdit *workoutSearch;
+        QComboBox *workoutSort;
         QTreeView *videosyncTree;
         QTreeView *mediaTree;
         InfoWidget *workoutInfo;
