@@ -776,28 +776,92 @@ private slots:
         first.simulation.ready = true;
         first.simulation.workoutTimeMs = 1000;
         first.simulation.activeSection = 0;
+        first.simulation.previousFeatureReadiness = 0.2;
+        first.simulation.challengeAssessment.completed = false;
+        first.competition.ready = true;
+        first.competition.playerRank = 1;
+        first.competition.totalRiders = 2;
+        first.competition.competitors.push_back({
+            WorkoutGameCompetitorKind::Ai, 1, 0, 10, 0.1,
+            WorkoutGameRoute::MainLine, 0.01
+        });
         first.world.ready = true;
         first.world.generation = 1;
         first.world.terrain = WorkoutGameTerrainKind::Roots;
+        first.world.gradePercent = 3.0;
+        first.world.difficulty = 0.4;
+        first.world.terrainOffsetMeters = 0.2;
+        first.world.surfaceElevationMeters = 1.0;
         first.world.rider.distanceMeters = 10.0;
+        first.feature.ready = true;
+        first.feature.sourceSectionIndex = 0;
+        first.feature.actionId = 7;
+        first.feature.phase = WorkoutGameFeaturePhase::Approach;
+        first.feature.launchPowerReady = false;
 
         WorkoutGameVisualSnapshot second = first;
         second.presentationTimeMs = 1200;
         second.simulation.workoutTimeMs = 1200;
         second.simulation.activeSection = 1;
+        second.simulation.previousFeatureReadiness = 0.9;
+        second.simulation.challengeAssessment.completed = true;
+        second.competition.playerRank = 2;
+        second.competition.competitors[0].score = 20;
+        second.competition.competitors[0].route =
+                WorkoutGameRoute::SafeBypass;
+        second.competition.competitors[0].courseProgress = 0.2;
         second.world.generation = 2;
         second.world.terrain = WorkoutGameTerrainKind::RockGarden;
+        second.world.gradePercent = 9.0;
+        second.world.difficulty = 0.8;
+        second.world.terrainOffsetMeters = 1.0;
+        second.world.surfaceElevationMeters = 4.0;
         second.world.rider.distanceMeters = 12.0;
+        second.feature.phase = WorkoutGameFeaturePhase::Action;
+        second.feature.launchPowerReady = true;
 
         WorkoutGameVisualSmoother smoother;
         smoother.setTarget(first, 1000);
         smoother.setTarget(second, 1200);
-        QCOMPARE(smoother.sample(1390).simulation.activeSection, 0);
-        QCOMPARE(smoother.sample(1390).world.terrain,
+        const WorkoutGameVisualSnapshot beforeBoundary = smoother.sample(1390);
+        QCOMPARE(beforeBoundary.simulation.activeSection, 0);
+        QCOMPARE(beforeBoundary.simulation.previousFeatureReadiness, 0.2);
+        QCOMPARE(beforeBoundary.simulation.challengeAssessment.completed,
+                 false);
+        QCOMPARE(beforeBoundary.competition.playerRank, 1);
+        QCOMPARE(beforeBoundary.competition.competitors[0].score,
+                 std::uint64_t(10));
+        QCOMPARE(beforeBoundary.competition.competitors[0].route,
+                 WorkoutGameRoute::MainLine);
+        QCOMPARE(beforeBoundary.world.generation, std::uint64_t(1));
+        QCOMPARE(beforeBoundary.world.terrain,
                  WorkoutGameTerrainKind::Roots);
-        QCOMPARE(smoother.sample(1400).simulation.activeSection, 1);
-        QCOMPARE(smoother.sample(1400).world.terrain,
+        QCOMPARE(beforeBoundary.world.terrainOffsetMeters, 0.2);
+        QCOMPARE(beforeBoundary.world.surfaceElevationMeters, 1.0);
+        QCOMPARE(beforeBoundary.feature.phase,
+                 WorkoutGameFeaturePhase::Approach);
+        QCOMPARE(beforeBoundary.feature.launchPowerReady, false);
+        QVERIFY(beforeBoundary.terrainTransition.active);
+        QCOMPARE(beforeBoundary.terrainTransition.progress, 0.0);
+
+        const WorkoutGameVisualSnapshot atBoundary = smoother.sample(1400);
+        QCOMPARE(atBoundary.simulation.activeSection, 1);
+        QCOMPARE(atBoundary.simulation.previousFeatureReadiness, 0.9);
+        QCOMPARE(atBoundary.simulation.challengeAssessment.completed, true);
+        QCOMPARE(atBoundary.competition.playerRank, 2);
+        QCOMPARE(atBoundary.competition.competitors[0].score,
+                 std::uint64_t(20));
+        QCOMPARE(atBoundary.competition.competitors[0].route,
+                 WorkoutGameRoute::SafeBypass);
+        QCOMPARE(atBoundary.world.generation, std::uint64_t(2));
+        QCOMPARE(atBoundary.world.terrain,
                  WorkoutGameTerrainKind::RockGarden);
+        QCOMPARE(atBoundary.world.terrainOffsetMeters, 1.0);
+        QCOMPARE(atBoundary.world.surfaceElevationMeters, 4.0);
+        QCOMPARE(atBoundary.feature.phase, WorkoutGameFeaturePhase::Action);
+        QCOMPARE(atBoundary.feature.launchPowerReady, true);
+        QCOMPARE(atBoundary.terrainTransition.progress, 0.0);
+        QVERIFY(smoother.sample(1500).terrainTransition.progress > 0.0);
 
         WorkoutGameVisualSnapshot timeWorkout = second;
         timeWorkout.presentationTimeMs = 1220;

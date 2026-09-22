@@ -83,17 +83,29 @@ void WorkoutGameVisualSmoother::setTarget(
         const WorkoutGameVisualSnapshot &snapshot,
         std::int64_t monotonicTimeMs)
 {
-    terrainTransition.setTarget(snapshot.world, monotonicTimeMs);
     const bool fixedStepTarget = snapshot.presentationTimeMs > 0;
+    const bool visualDiscontinuity = initialized
+            && isDiscontinuity(target, snapshot);
+    const bool courseDiscontinuity = fixedStepTarget
+            && snapshot.distanceAnchoredPresentation
+            && !courseAnchorHistory.empty()
+            && isCoursePositionDiscontinuity(
+                courseAnchorHistory.back(), snapshot);
+    if (visualDiscontinuity || courseDiscontinuity) {
+        terrainTransition.reset();
+    }
+    const std::int64_t terrainPresentationDelayMs = fixedStepTarget
+            && snapshot.distanceAnchoredPresentation
+            && !visualDiscontinuity && !courseDiscontinuity
+            ? DistanceCoursePresentationDelayMs : 0;
+    terrainTransition.setTarget(
+            snapshot.world,
+            monotonicTimeMs + terrainPresentationDelayMs);
     if (fixedStepTarget) {
         const std::int64_t presentationTimeMs = snapshot.presentationTimeMs;
-        const bool courseDiscontinuity = snapshot.distanceAnchoredPresentation
-                && !courseAnchorHistory.empty()
-                && isCoursePositionDiscontinuity(
-                    courseAnchorHistory.back(), snapshot);
         if (!initialized || !fixedStepSnapshots
                 || presentationTimeMs <= targetPresentationTimeMs
-                || isDiscontinuity(target, snapshot)
+                || visualDiscontinuity
                 || courseDiscontinuity) {
             initialized = true;
             fixedStepSnapshots = true;
@@ -462,52 +474,98 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolateCourseMotion(
         const WorkoutGameVisualSnapshot &to,
         double amount)
 {
-    WorkoutGameVisualSnapshot result = interpolate(from, to, amount);
-    if (amount >= 1.0) return result;
+    const WorkoutGameVisualSnapshot continuous = interpolate(from, to, amount);
+    if (amount >= 1.0) return continuous;
 
-    result.simulation.finished = from.simulation.finished;
-    result.simulation.droppedCatchupMs = from.simulation.droppedCatchupMs;
-    result.simulation.activeSection = from.simulation.activeSection;
-    result.simulation.score = from.simulation.score;
-    result.simulation.featureOutcome = from.simulation.featureOutcome;
-    result.simulation.previousFeatureSection =
-            from.simulation.previousFeatureSection;
-    result.simulation.previousFeatureOutcome =
-            from.simulation.previousFeatureOutcome;
-    result.simulation.route = from.simulation.route;
-    result.simulation.challenge = from.simulation.challenge;
-    result.simulation.challengeMeasurementActive =
-            from.simulation.challengeMeasurementActive;
+    WorkoutGameVisualSnapshot result = from;
+    result.simulation.workoutTimeMs =
+            continuous.simulation.workoutTimeMs;
+    result.simulation.courseProgress =
+            continuous.simulation.courseProgress;
+    result.simulation.speedKph = continuous.simulation.speedKph;
+    if (from.simulation.activeSection == to.simulation.activeSection) {
+        result.simulation.sectionProgress =
+                continuous.simulation.sectionProgress;
+        result.simulation.adherence = continuous.simulation.adherence;
+        result.simulation.streakSeconds = continuous.simulation.streakSeconds;
+        result.simulation.challengeMetrics =
+                continuous.simulation.challengeMetrics;
+        result.simulation.challengeAssessment =
+                continuous.simulation.challengeAssessment;
+        result.simulation.challengeAssessment.completed =
+                from.simulation.challengeAssessment.completed;
+        result.simulation.challengeReadiness =
+                continuous.simulation.challengeReadiness;
+    }
 
-    result.world.generation = from.world.generation;
-    result.world.terrain = from.world.terrain;
-    result.world.seed = from.world.seed;
-    result.world.rider.rearWheelGrounded =
-            from.world.rider.rearWheelGrounded;
-    result.world.rider.frontWheelGrounded =
-            from.world.rider.frontWheelGrounded;
-    result.world.rider.airborne = from.world.rider.airborne;
-    result.world.rider.walking = from.world.rider.walking;
-    result.camera.mode = from.camera.mode;
+    result.competition = from.competition;
+    if (result.competition.competitors.size()
+            == continuous.competition.competitors.size()) {
+        for (std::size_t index = 0;
+             index < result.competition.competitors.size(); ++index) {
+            result.competition.competitors[index].courseProgress =
+                    continuous.competition.competitors[index].courseProgress;
+            result.competition.competitors[index].relativeProgress =
+                    continuous.competition.competitors[index].relativeProgress;
+        }
+    }
 
-    if (from.feature.sourceSectionIndex != to.feature.sourceSectionIndex
-            || from.feature.actionId != to.feature.actionId) {
-        result.feature = from.feature;
-    } else {
-        result.feature.terrain = from.feature.terrain;
-        result.feature.phase = from.feature.phase;
-        result.feature.motion = from.feature.motion;
-        result.feature.outcome = from.feature.outcome;
-        result.feature.route = from.feature.route;
-        result.feature.provisionalGapLine = from.feature.provisionalGapLine;
-        result.feature.lockedGapLine = from.feature.lockedGapLine;
-        result.feature.steeringGapLine = from.feature.steeringGapLine;
-        result.feature.launchWindowActive = from.feature.launchWindowActive;
-        result.feature.launchSpeedReady = from.feature.launchSpeedReady;
-        result.feature.launchPowerReady = from.feature.launchPowerReady;
-        result.feature.gapLineReachable = from.feature.gapLineReachable;
-        result.feature.gapLineLocked = from.feature.gapLineLocked;
-        result.feature.triggerJump = from.feature.triggerJump;
+    result.world.speedMetersPerSecond =
+            continuous.world.speedMetersPerSecond;
+    result.world.landingImpact = continuous.world.landingImpact;
+    if (from.world.generation == to.world.generation) {
+        result.world.gradePercent = continuous.world.gradePercent;
+        result.world.difficulty = continuous.world.difficulty;
+        result.world.terrainOffsetMeters =
+                continuous.world.terrainOffsetMeters;
+        result.world.surfaceElevationMeters =
+                continuous.world.surfaceElevationMeters;
+    }
+    result.world.rider.distanceMeters =
+            continuous.world.rider.distanceMeters;
+    result.world.rider.elevationMeters =
+            continuous.world.rider.elevationMeters;
+    result.world.rider.pitchDegrees =
+            continuous.world.rider.pitchDegrees;
+    result.world.rider.rollDegrees = continuous.world.rider.rollDegrees;
+    result.world.rider.rearSuspension =
+            continuous.world.rider.rearSuspension;
+    result.world.rider.frontSuspension =
+            continuous.world.rider.frontSuspension;
+    result.world.rider.rearWheelRadians =
+            continuous.world.rider.rearWheelRadians;
+    result.world.rider.frontWheelRadians =
+            continuous.world.rider.frontWheelRadians;
+    result.world.rider.clearanceMeters =
+            continuous.world.rider.clearanceMeters;
+
+    result.camera.centerDistanceMeters =
+            continuous.camera.centerDistanceMeters;
+    result.camera.centerElevationMeters =
+            continuous.camera.centerElevationMeters;
+    result.camera.lookAheadMeters = continuous.camera.lookAheadMeters;
+    result.camera.zoom = continuous.camera.zoom;
+    result.camera.yawDegrees = continuous.camera.yawDegrees;
+    result.camera.pitchDegrees = continuous.camera.pitchDegrees;
+
+    result.feature = from.feature;
+    if (from.feature.sourceSectionIndex == to.feature.sourceSectionIndex
+            && from.feature.actionId == to.feature.actionId) {
+        result.feature.visualDistanceMeters =
+                continuous.feature.visualDistanceMeters;
+        result.feature.distanceToObstacleMeters =
+                continuous.feature.distanceToObstacleMeters;
+        result.feature.readiness = continuous.feature.readiness;
+        result.feature.bermLineBias = continuous.feature.bermLineBias;
+        result.feature.lateralOffsetMeters =
+                continuous.feature.lateralOffsetMeters;
+        result.feature.verticalOffsetMeters =
+                continuous.feature.verticalOffsetMeters;
+        result.feature.flightDurationSeconds =
+                continuous.feature.flightDurationSeconds;
+        result.feature.pitchDegrees = continuous.feature.pitchDegrees;
+        result.feature.vibration = continuous.feature.vibration;
+        result.feature.landingImpact = continuous.feature.landingImpact;
     }
     return result;
 }

@@ -607,6 +607,8 @@ void WorkoutGameWindow::updateAtWorkoutPosition(
     }
     if (discontinuity) {
         ++presentationDiscontinuityGeneration;
+        hasFrame = false;
+        lastFrame = WorkoutGameEngineFrame();
         runner.setAnchor(currentWorkoutTimeMs, currentAnchorRate);
     } else {
         runner.synchronizeAnchor(currentWorkoutTimeMs, currentAnchorRate);
