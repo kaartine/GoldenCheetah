@@ -3860,16 +3860,19 @@ void TrainSidebar::FFwd()
     }
     else {
         // Otherwise Seek is of Distance.
-        double stepSize = 1.; // jump forward a kilometer in the workout
+        double targetDistance =
+                TrainSidebarRuntime::distanceSeekTargetKilometers(
+                    workoutGameCourseRuntime.enabled(),
+                    displayWorkoutDistance, true);
         if (context->currentVideoSyncFile()) {
             // If step would take us past the end then step to end.
-            double videoDistance = context->currentVideoSyncFile()->distance();
-            if ((displayWorkoutDistance + stepSize) > videoDistance) {
-                stepSize = videoDistance - displayWorkoutDistance;
-            }
+            const double videoDistance =
+                    context->currentVideoSyncFile()->distance();
+            targetDistance = std::min(targetDistance, videoDistance);
+            const double stepSize = targetDistance - displayWorkoutDistance;
             context->notifySeek(stepSize); // in case of video with RLV file synchronisation just ask to go forward
         }
-        seekWorkoutDistance(displayWorkoutDistance + stepSize);
+        seekWorkoutDistance(targetDistance);
     }
 
     resetTextAudioEmitTracking(TrainSidebarRuntime::CueTimelineReset::Seek);
@@ -3894,18 +3897,17 @@ void TrainSidebar::Rewind()
     }
     else {
         // Otherwise Seek is of distance.
-        double stepSize = -1.; // jump back a kilometer
-
-        // If step would take us before the start then step to the start.
-        if ((displayWorkoutDistance + stepSize) < 0) {
-            stepSize = -displayWorkoutDistance;
-        }
+        const double targetDistance =
+                TrainSidebarRuntime::distanceSeekTargetKilometers(
+                    workoutGameCourseRuntime.enabled(),
+                    displayWorkoutDistance, false);
 
         if (context->currentVideoSyncFile()) {
+            const double stepSize = targetDistance - displayWorkoutDistance;
             context->notifySeek(stepSize);
         }
 
-        seekWorkoutDistance(displayWorkoutDistance + stepSize);
+        seekWorkoutDistance(targetDistance);
     }
 
     resetTextAudioEmitTracking(TrainSidebarRuntime::CueTimelineReset::Seek);

@@ -114,6 +114,20 @@ inline double workoutLapPositionMeters(
     return generatedCourse ? timelinePositionMeters : visualPositionMeters;
 }
 
+inline double distanceSeekTargetKilometers(
+        bool generatedCourse,
+        double currentDistanceKilometers,
+        bool forward)
+{
+    constexpr double GeneratedCourseStepKilometers = 0.1;
+    constexpr double OrdinaryCourseStepKilometers = 1.0;
+    const double current = std::isfinite(currentDistanceKilometers)
+            ? std::max(0.0, currentDistanceKilometers) : 0.0;
+    const double step = generatedCourse
+            ? GeneratedCourseStepKilometers : OrdinaryCourseStepKilometers;
+    return std::max(0.0, current + (forward ? step : -step));
+}
+
 template<typename AddLap>
 int insertManualLap(bool generatedCourse,
                     double timelinePositionMeters,

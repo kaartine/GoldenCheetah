@@ -321,6 +321,29 @@ private slots:
                  125.0);
     }
 
+    void generatedCourseSeekMovesOneHundredMeters()
+    {
+        QCOMPARE(TrainSidebarRuntime::distanceSeekTargetKilometers(
+                         true, 3.25, true),
+                 3.35);
+        QCOMPARE(TrainSidebarRuntime::distanceSeekTargetKilometers(
+                         true, 3.25, false),
+                 3.15);
+        QCOMPARE(TrainSidebarRuntime::distanceSeekTargetKilometers(
+                         true, 0.04, false),
+                 0.0);
+    }
+
+    void ordinarySlopeSeekRetainsOneKilometerStep()
+    {
+        QCOMPARE(TrainSidebarRuntime::distanceSeekTargetKilometers(
+                         false, 3.25, true),
+                 4.25);
+        QCOMPARE(TrainSidebarRuntime::distanceSeekTargetKilometers(
+                         false, 3.25, false),
+                 2.25);
+    }
+
     void generatedCourseManualLapPersistsWorkoutTimelinePosition()
     {
         double persistedPosition = -1.0;
