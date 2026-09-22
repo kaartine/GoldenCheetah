@@ -1439,21 +1439,16 @@ class UiDriver:
         raise UiFailure(f"Combo box item did not appear: {name!r}")
 
     def select_combo_item(self, expected, name, timeout=10.0):
-        combo = self.combo_with_items(expected, require_interactable=True)
+        options = tuple(expected)
+        if name not in options:
+            raise UiFailure(f"Unknown combo box item: {name!r}")
+        combo = self.combo_with_items(options, require_interactable=True)
         self.focus_main_window()
         self.click(combo)
-        item = self.find_combo_item(combo, name, timeout)
-        try:
-            action = item.queryAction()
-            if action.nActions < 1 or not action.doAction(0):
-                raise UiFailure("accessible list item rejected action")
-        except Exception as error:
-            raise UiFailure(
-                f"Cannot activate combo box item {name!r}"
-            ) from error
+        self.activate_popup_item(options.index(name))
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.name(combo) == name or self.selected(item):
+            if self.name(combo) == name:
                 return combo
             time.sleep(0.1)
         self.screenshot("combo-selection-failed")
