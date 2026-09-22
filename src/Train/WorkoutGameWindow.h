@@ -19,6 +19,7 @@
 #include "WorkoutGameRunner.h"
 #include "WorkoutGameSessionState.h"
 
+#include <cstdint>
 #include <optional>
 #include <QString>
 
@@ -108,6 +109,7 @@ private:
     std::int64_t currentWorkoutTimeMs = 0;
     double currentWorkoutDistanceMeters = 0.0;
     std::int64_t lastTelemetryMonotonicTimeMs = -1;
+    std::uint64_t presentationDiscontinuityGeneration = 0;
     double currentAnchorRate = 1.0;
     double ftpWatts = 0.0;
 };

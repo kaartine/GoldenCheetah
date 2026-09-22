@@ -75,6 +75,7 @@ void WorkoutGameVisualSmoother::reset()
     predictionOrigin = WorkoutGameVisualSnapshot();
     target = WorkoutGameVisualSnapshot();
     fixedStepHistory.clear();
+    courseAnchorHistory.clear();
     terrainTransition.reset();
 }
 
@@ -86,9 +87,14 @@ void WorkoutGameVisualSmoother::setTarget(
     const bool fixedStepTarget = snapshot.presentationTimeMs > 0;
     if (fixedStepTarget) {
         const std::int64_t presentationTimeMs = snapshot.presentationTimeMs;
+        const bool courseDiscontinuity = snapshot.distanceAnchoredPresentation
+                && !courseAnchorHistory.empty()
+                && isCoursePositionDiscontinuity(
+                    courseAnchorHistory.back(), snapshot);
         if (!initialized || !fixedStepSnapshots
                 || presentationTimeMs <= targetPresentationTimeMs
-                || isDiscontinuity(target, snapshot)) {
+                || isDiscontinuity(target, snapshot)
+                || courseDiscontinuity) {
             initialized = true;
             fixedStepSnapshots = true;
             sourceAdvancing = false;
@@ -98,6 +104,10 @@ void WorkoutGameVisualSmoother::setTarget(
             targetPresentationTimeMs = presentationTimeMs;
             fixedStepHistory.clear();
             fixedStepHistory.push_back(snapshot);
+            courseAnchorHistory.clear();
+            if (snapshot.distanceAnchoredPresentation) {
+                courseAnchorHistory.push_back(snapshot);
+            }
             return;
         }
         previous = target;
@@ -109,6 +119,24 @@ void WorkoutGameVisualSmoother::setTarget(
         fixedStepHistory.push_back(snapshot);
         while (fixedStepHistory.size() > 8) {
             fixedStepHistory.pop_front();
+        }
+        if (snapshot.distanceAnchoredPresentation
+                && (courseAnchorHistory.empty()
+                || coursePositionChanged(
+                    courseAnchorHistory.back(), snapshot))) {
+            if (!courseAnchorHistory.empty()
+                    && presentationTimeMs
+                        - courseAnchorHistory.back().presentationTimeMs
+                        > DistanceCoursePresentationDelayMs * 2) {
+                WorkoutGameVisualSnapshot bridge = courseAnchorHistory.back();
+                bridge.presentationTimeMs = presentationTimeMs
+                        - DistanceCoursePresentationDelayMs;
+                courseAnchorHistory.push_back(bridge);
+            }
+            courseAnchorHistory.push_back(snapshot);
+            while (courseAnchorHistory.size() > 8) {
+                courseAnchorHistory.pop_front();
+            }
         }
         return;
     }
@@ -260,6 +288,39 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
                     : 1.0;
             result = interpolate(from, to, amount);
         }
+        if (target.distanceAnchoredPresentation
+                && courseAnchorHistory.size() >= 2) {
+            const std::int64_t courseRenderTimeMs = monotonicTimeMs
+                    - DistanceCoursePresentationDelayMs;
+            std::size_t courseUpperIndex = 0;
+            while (courseUpperIndex < courseAnchorHistory.size()
+                    && courseAnchorHistory[courseUpperIndex].presentationTimeMs
+                        <= courseRenderTimeMs) {
+                ++courseUpperIndex;
+            }
+
+            WorkoutGameVisualSnapshot motion;
+            if (courseUpperIndex == 0) {
+                motion = courseAnchorHistory.front();
+            } else if (courseUpperIndex >= courseAnchorHistory.size()) {
+                motion = courseAnchorHistory.back();
+            } else {
+                const WorkoutGameVisualSnapshot &from =
+                        courseAnchorHistory[courseUpperIndex - 1];
+                const WorkoutGameVisualSnapshot &to =
+                        courseAnchorHistory[courseUpperIndex];
+                const std::int64_t intervalMs = to.presentationTimeMs
+                        - from.presentationTimeMs;
+                const double amount = intervalMs > 0
+                        ? std::clamp(
+                            double(courseRenderTimeMs - from.presentationTimeMs)
+                                / double(intervalMs),
+                            0.0, 1.0)
+                        : 1.0;
+                motion = interpolateCourseMotion(from, to, amount);
+            }
+            applyCourseMotion(result, motion);
+        }
         result.terrainTransition = terrainTransition.sample(monotonicTimeMs);
         return result;
     }
@@ -338,7 +399,117 @@ bool WorkoutGameVisualSmoother::isDiscontinuity(
             || from.world.ready != to.world.ready
             || worldReset
             || from.camera.ready != to.camera.ready
+            || from.distanceAnchoredPresentation
+                != to.distanceAnchoredPresentation
+            || from.presentationDiscontinuityGeneration
+                != to.presentationDiscontinuityGeneration
             || !sameCompetitors(from.competition, to.competition);
+}
+
+bool WorkoutGameVisualSmoother::coursePositionChanged(
+        const WorkoutGameVisualSnapshot &from,
+        const WorkoutGameVisualSnapshot &to)
+{
+    return from.simulation.workoutTimeMs != to.simulation.workoutTimeMs
+            || std::abs(from.world.rider.distanceMeters
+                        - to.world.rider.distanceMeters) > 1e-9;
+}
+
+bool WorkoutGameVisualSmoother::isCoursePositionDiscontinuity(
+        const WorkoutGameVisualSnapshot &from,
+        const WorkoutGameVisualSnapshot &to)
+{
+    const std::int64_t presentationIntervalMs =
+            to.presentationTimeMs - from.presentationTimeMs;
+    const std::int64_t workoutIntervalMs =
+            to.simulation.workoutTimeMs - from.simulation.workoutTimeMs;
+    const double distanceDelta = to.world.rider.distanceMeters
+            - from.world.rider.distanceMeters;
+    if (presentationIntervalMs <= 0 || workoutIntervalMs < 0
+            || distanceDelta < -1e-6) {
+        return true;
+    }
+
+    const double intervalSeconds = double(presentationIntervalMs) / 1000.0;
+    const double speedMetersPerSecond = std::max({
+            0.0,
+            from.world.speedMetersPerSecond,
+            to.world.speedMetersPerSecond,
+            from.simulation.speedKph / 3.6,
+            to.simulation.speedKph / 3.6
+    });
+    const double maximumContinuousDistance = std::max(
+            10.0, speedMetersPerSecond * intervalSeconds * 4.0 + 2.0);
+    const std::int64_t maximumContinuousWorkoutInterval = std::max<std::int64_t>(
+            5000, presentationIntervalMs * 8);
+    return distanceDelta > maximumContinuousDistance
+            || workoutIntervalMs > maximumContinuousWorkoutInterval;
+}
+
+void WorkoutGameVisualSmoother::applyCourseMotion(
+        WorkoutGameVisualSnapshot &result,
+        const WorkoutGameVisualSnapshot &motion)
+{
+    result.simulation = motion.simulation;
+    result.competition = motion.competition;
+    result.world = motion.world;
+    result.camera = motion.camera;
+    result.feature = motion.feature;
+}
+
+WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolateCourseMotion(
+        const WorkoutGameVisualSnapshot &from,
+        const WorkoutGameVisualSnapshot &to,
+        double amount)
+{
+    WorkoutGameVisualSnapshot result = interpolate(from, to, amount);
+    if (amount >= 1.0) return result;
+
+    result.simulation.finished = from.simulation.finished;
+    result.simulation.droppedCatchupMs = from.simulation.droppedCatchupMs;
+    result.simulation.activeSection = from.simulation.activeSection;
+    result.simulation.score = from.simulation.score;
+    result.simulation.featureOutcome = from.simulation.featureOutcome;
+    result.simulation.previousFeatureSection =
+            from.simulation.previousFeatureSection;
+    result.simulation.previousFeatureOutcome =
+            from.simulation.previousFeatureOutcome;
+    result.simulation.route = from.simulation.route;
+    result.simulation.challenge = from.simulation.challenge;
+    result.simulation.challengeMeasurementActive =
+            from.simulation.challengeMeasurementActive;
+
+    result.world.generation = from.world.generation;
+    result.world.terrain = from.world.terrain;
+    result.world.seed = from.world.seed;
+    result.world.rider.rearWheelGrounded =
+            from.world.rider.rearWheelGrounded;
+    result.world.rider.frontWheelGrounded =
+            from.world.rider.frontWheelGrounded;
+    result.world.rider.airborne = from.world.rider.airborne;
+    result.world.rider.walking = from.world.rider.walking;
+    result.camera.mode = from.camera.mode;
+
+    if (from.feature.sourceSectionIndex != to.feature.sourceSectionIndex
+            || from.feature.actionId != to.feature.actionId) {
+        result.feature = from.feature;
+    } else {
+        result.feature.terrain = from.feature.terrain;
+        result.feature.phase = from.feature.phase;
+        result.feature.motion = from.feature.motion;
+        result.feature.outcome = from.feature.outcome;
+        result.feature.route = from.feature.route;
+        result.feature.provisionalGapLine = from.feature.provisionalGapLine;
+        result.feature.lockedGapLine = from.feature.lockedGapLine;
+        result.feature.steeringGapLine = from.feature.steeringGapLine;
+        result.feature.launchWindowActive = from.feature.launchWindowActive;
+        result.feature.launchSpeedReady = from.feature.launchSpeedReady;
+        result.feature.launchPowerReady = from.feature.launchPowerReady;
+        result.feature.gapLineReachable = from.feature.gapLineReachable;
+        result.feature.gapLineLocked = from.feature.gapLineLocked;
+        result.feature.triggerJump = from.feature.triggerJump;
+    }
+    return result;
 }
 
 WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(

@@ -606,6 +606,7 @@ void WorkoutGameWindow::updateAtWorkoutPosition(
                         latestTelemetry.getWatts(), MaximumPowerWatts) : 0.0);
     }
     if (discontinuity) {
+        ++presentationDiscontinuityGeneration;
         runner.setAnchor(currentWorkoutTimeMs, currentAnchorRate);
     } else {
         runner.synchronizeAnchor(currentWorkoutTimeMs, currentAnchorRate);
@@ -694,22 +695,26 @@ void WorkoutGameWindow::displayFrame(const WorkoutGameEngineFrame &frame)
     if (sessionActive && !paused && isVisible()) {
         audioFeedback.update(frame.audioEvents);
     }
+    WorkoutGameVisualSnapshot visual = frame.visual;
+    visual.distanceAnchoredPresentation = distanceRuntime.enabled();
+    visual.presentationDiscontinuityGeneration =
+            presentationDiscontinuityGeneration;
     QWidget *renderer = renderStack->currentWidget();
     if (renderer == painterCanvas) {
         painterCanvas->setFrame(
-                frame.visual, frame.watts, frame.targetWatts,
+                visual, frame.watts, frame.targetWatts,
                 frame.cadenceRpm, frame.heartRate, frame.virtualGear);
     } else if (renderer == openGLCanvas) {
         openGLCanvas->setFrame(
-                frame.visual, frame.watts, frame.targetWatts,
+                visual, frame.watts, frame.targetWatts,
                 frame.cadenceRpm, frame.heartRate, frame.virtualGear);
     } else if (renderer == sceneGraphContainer) {
         sceneGraphWindow->setFrame(
-                frame.visual, frame.watts, frame.targetWatts,
+                visual, frame.watts, frame.targetWatts,
                 frame.cadenceRpm, frame.heartRate, frame.virtualGear);
     } else if (renderer == threeDContainer) {
         threeDWindow->setFrame(
-                frame.visual, frame.watts, frame.targetWatts,
+                visual, frame.watts, frame.targetWatts,
                 frame.cadenceRpm, frame.heartRate, frame.virtualGear);
     }
 }

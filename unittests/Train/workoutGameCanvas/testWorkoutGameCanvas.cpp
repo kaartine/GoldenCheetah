@@ -546,6 +546,268 @@ private slots:
         }
     }
 
+    void fixedStepCoarseCourseAnchorsKeepPresentationMoving()
+    {
+        WorkoutGameVisualSmoother smoother;
+        double previousDistance = 0.0;
+        double previousPedalCycles = 0.0;
+        bool presentationStarted = false;
+
+        for (std::int64_t nowMs = 1000; nowMs <= 1800; nowMs += 10) {
+            if ((nowMs - 1000) % 20 == 0) {
+                const std::int64_t anchorTimeMs =
+                        1000 + ((nowMs - 1000) / 200) * 200;
+                WorkoutGameVisualSnapshot frame;
+                frame.presentationTimeMs = nowMs;
+                frame.distanceAnchoredPresentation = true;
+                frame.simulation.ready = true;
+                frame.simulation.workoutTimeMs = anchorTimeMs;
+                frame.simulation.speedKph = 36.0;
+                frame.world.ready = true;
+                frame.world.generation = 1;
+                frame.world.speedMetersPerSecond = 10.0;
+                frame.world.rider.distanceMeters =
+                        10.0 + double(anchorTimeMs - 1000) * 0.01;
+                frame.camera.ready = true;
+                frame.camera.centerDistanceMeters =
+                        frame.world.rider.distanceMeters + 6.0;
+                frame.riderPedalCycles = double(nowMs - 1000) * 0.001;
+                smoother.setTarget(frame, nowMs);
+            }
+
+            const WorkoutGameVisualSnapshot rendered = smoother.sample(nowMs);
+            if (nowMs < 1210) continue;
+            if (presentationStarted) {
+                QVERIFY2(rendered.world.rider.distanceMeters
+                                > previousDistance + 1e-9,
+                         "200 ms course anchors stalled high-rate presentation");
+                QVERIFY2(rendered.riderPedalCycles
+                                > previousPedalCycles + 1e-9,
+                         "distance smoothing stalled the high-rate pedal clock");
+            }
+            const double latestConfirmedDistance =
+                    10.0 + double(((nowMs - 1000) / 200) * 200) * 0.01;
+            QVERIFY2(rendered.world.rider.distanceMeters
+                            <= latestConfirmedDistance + 1e-9,
+                     "presentation advanced beyond confirmed course position");
+            presentationStarted = true;
+            previousDistance = rendered.world.rider.distanceMeters;
+            previousPedalCycles = rendered.riderPedalCycles;
+        }
+    }
+
+    void fixedStepCoarseCourseAnchorsStopAtConfirmedPosition()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.presentationTimeMs = 1000;
+        first.distanceAnchoredPresentation = true;
+        first.simulation.ready = true;
+        first.simulation.workoutTimeMs = 1000;
+        first.simulation.speedKph = 36.0;
+        first.world.ready = true;
+        first.world.generation = 1;
+        first.world.speedMetersPerSecond = 10.0;
+        first.world.rider.distanceMeters = 10.0;
+        first.camera.ready = true;
+        first.camera.centerDistanceMeters = 16.0;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.presentationTimeMs = 1200;
+        second.simulation.workoutTimeMs = 1200;
+        second.world.rider.distanceMeters = 12.0;
+        second.camera.centerDistanceMeters = 18.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 1200);
+        for (std::int64_t nowMs = 1220; nowMs <= 1600; nowMs += 20) {
+            WorkoutGameVisualSnapshot repeated = second;
+            repeated.presentationTimeMs = nowMs;
+            smoother.setTarget(repeated, nowMs);
+        }
+
+        const WorkoutGameVisualSnapshot stopped = smoother.sample(1800);
+        QCOMPARE(stopped.simulation.workoutTimeMs, std::int64_t(1200));
+        QCOMPARE(stopped.world.rider.distanceMeters, 12.0);
+        QCOMPARE(stopped.camera.centerDistanceMeters, 18.0);
+    }
+
+    void fixedStepCourseSeekCutsBufferedMotion()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.presentationTimeMs = 1000;
+        first.distanceAnchoredPresentation = true;
+        first.simulation.ready = true;
+        first.simulation.workoutTimeMs = 1000;
+        first.simulation.speedKph = 18.0;
+        first.world.ready = true;
+        first.world.generation = 1;
+        first.world.speedMetersPerSecond = 5.0;
+        first.world.rider.distanceMeters = 10.0;
+        first.camera.ready = true;
+        first.camera.centerDistanceMeters = 16.0;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.presentationTimeMs = 1200;
+        second.simulation.workoutTimeMs = 1200;
+        second.world.rider.distanceMeters = 11.0;
+        second.camera.centerDistanceMeters = 17.0;
+
+        WorkoutGameVisualSnapshot seek = second;
+        seek.presentationTimeMs = 1220;
+        seek.presentationDiscontinuityGeneration = 1;
+        seek.simulation.workoutTimeMs = 2200;
+        seek.world.rider.distanceMeters = 16.0;
+        seek.camera.centerDistanceMeters = 22.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 1200);
+        smoother.setTarget(seek, 1220);
+
+        const WorkoutGameVisualSnapshot rendered = smoother.sample(1220);
+        QCOMPARE(rendered.simulation.workoutTimeMs, std::int64_t(2200));
+        QCOMPARE(rendered.world.rider.distanceMeters, 16.0);
+        QCOMPARE(rendered.camera.centerDistanceMeters, 22.0);
+
+        WorkoutGameVisualSnapshot rewind = seek;
+        rewind.presentationTimeMs = 1240;
+        rewind.presentationDiscontinuityGeneration = 2;
+        rewind.simulation.workoutTimeMs = 1000;
+        rewind.world.rider.distanceMeters = 11.0;
+        rewind.camera.centerDistanceMeters = 17.0;
+        smoother.setTarget(rewind, 1240);
+
+        const WorkoutGameVisualSnapshot rewound = smoother.sample(1240);
+        QCOMPARE(rewound.simulation.workoutTimeMs, std::int64_t(1000));
+        QCOMPARE(rewound.world.rider.distanceMeters, 11.0);
+        QCOMPARE(rewound.camera.centerDistanceMeters, 17.0);
+    }
+
+    void fixedStepDistanceAnchorJitterNeverMovesBackward()
+    {
+        const std::vector<std::int64_t> anchorTimes = {
+            1000, 1160, 1400, 1580, 1800
+        };
+        WorkoutGameVisualSmoother smoother;
+        double previousDistance = 0.0;
+        bool presentationStarted = false;
+
+        for (std::int64_t nowMs = 1000; nowMs <= 1980; nowMs += 10) {
+            if ((nowMs - 1000) % 20 == 0) {
+                const auto upper = std::upper_bound(
+                        anchorTimes.begin(), anchorTimes.end(), nowMs);
+                const std::int64_t anchorTimeMs = *(upper - 1);
+                WorkoutGameVisualSnapshot frame;
+                frame.presentationTimeMs = nowMs;
+                frame.distanceAnchoredPresentation = true;
+                frame.simulation.ready = true;
+                frame.simulation.workoutTimeMs = anchorTimeMs;
+                frame.simulation.speedKph = 36.0;
+                frame.world.ready = true;
+                frame.world.generation = 1;
+                frame.world.speedMetersPerSecond = 10.0;
+                frame.world.rider.distanceMeters =
+                        10.0 + double(anchorTimeMs - 1000) * 0.01;
+                frame.camera.ready = true;
+                frame.camera.centerDistanceMeters =
+                        frame.world.rider.distanceMeters + 6.0;
+                smoother.setTarget(frame, nowMs);
+            }
+
+            const WorkoutGameVisualSnapshot rendered = smoother.sample(nowMs);
+            if (nowMs < 1200) continue;
+            if (presentationStarted) {
+                QVERIFY2(rendered.world.rider.distanceMeters + 1e-9
+                                >= previousDistance,
+                         "jittering distance anchors moved presentation backward");
+            }
+            presentationStarted = true;
+            previousDistance = rendered.world.rider.distanceMeters;
+        }
+    }
+
+    void fixedStepDistanceResumeUsesBoundedPresentationRamp()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.presentationTimeMs = 1000;
+        first.distanceAnchoredPresentation = true;
+        first.simulation.ready = true;
+        first.simulation.workoutTimeMs = 1000;
+        first.world.ready = true;
+        first.world.generation = 1;
+        first.world.rider.distanceMeters = 10.0;
+        first.camera.ready = true;
+        first.camera.centerDistanceMeters = 16.0;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.presentationTimeMs = 1200;
+        second.simulation.workoutTimeMs = 1200;
+        second.world.rider.distanceMeters = 12.0;
+        second.camera.centerDistanceMeters = 18.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 1200);
+        for (std::int64_t nowMs = 1220; nowMs < 6200; nowMs += 20) {
+            WorkoutGameVisualSnapshot repeated = second;
+            repeated.presentationTimeMs = nowMs;
+            smoother.setTarget(repeated, nowMs);
+        }
+
+        WorkoutGameVisualSnapshot resumed = second;
+        resumed.presentationTimeMs = 6200;
+        resumed.simulation.workoutTimeMs = 1400;
+        resumed.world.rider.distanceMeters = 14.0;
+        resumed.camera.centerDistanceMeters = 20.0;
+        smoother.setTarget(resumed, 6200);
+
+        QCOMPARE(smoother.sample(6200).world.rider.distanceMeters, 12.0);
+        QVERIFY(std::abs(smoother.sample(6300).world.rider.distanceMeters
+                         - 13.0) < 1e-9);
+        QCOMPARE(smoother.sample(6400).world.rider.distanceMeters, 14.0);
+    }
+
+    void fixedStepDistanceModeAndSectionChangesCutAtBoundaries()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.presentationTimeMs = 1000;
+        first.distanceAnchoredPresentation = true;
+        first.simulation.ready = true;
+        first.simulation.workoutTimeMs = 1000;
+        first.simulation.activeSection = 0;
+        first.world.ready = true;
+        first.world.generation = 1;
+        first.world.terrain = WorkoutGameTerrainKind::Roots;
+        first.world.rider.distanceMeters = 10.0;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.presentationTimeMs = 1200;
+        second.simulation.workoutTimeMs = 1200;
+        second.simulation.activeSection = 1;
+        second.world.generation = 2;
+        second.world.terrain = WorkoutGameTerrainKind::RockGarden;
+        second.world.rider.distanceMeters = 12.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 1200);
+        QCOMPARE(smoother.sample(1390).simulation.activeSection, 0);
+        QCOMPARE(smoother.sample(1390).world.terrain,
+                 WorkoutGameTerrainKind::Roots);
+        QCOMPARE(smoother.sample(1400).simulation.activeSection, 1);
+        QCOMPARE(smoother.sample(1400).world.terrain,
+                 WorkoutGameTerrainKind::RockGarden);
+
+        WorkoutGameVisualSnapshot timeWorkout = second;
+        timeWorkout.presentationTimeMs = 1220;
+        timeWorkout.distanceAnchoredPresentation = false;
+        timeWorkout.simulation.workoutTimeMs = 1220;
+        timeWorkout.world.rider.distanceMeters = 20.0;
+        smoother.setTarget(timeWorkout, 1220);
+        QCOMPARE(smoother.sample(1220).world.rider.distanceMeters, 20.0);
+    }
+
     void visualStateCutsOnlyWhenCoursePositionResets()
     {
         WorkoutGameVisualSnapshot first;

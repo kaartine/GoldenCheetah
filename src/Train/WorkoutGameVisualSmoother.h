@@ -32,6 +32,8 @@ struct WorkoutGameVisualSnapshot
     std::int64_t presentationTimeMs = 0;
     std::size_t skippedSimulationTicks = 0;
     double riderPedalCycles = 0.0;
+    bool distanceAnchoredPresentation = false;
+    std::uint64_t presentationDiscontinuityGeneration = 0;
 };
 
 class WorkoutGameVisualSmoother
@@ -47,6 +49,7 @@ public:
     // Presentation-only prediction bridges brief GUI drain jitter. It never
     // advances the runner, trainer control, or recorded workout state.
     static constexpr std::int64_t FixedStepMaximumPredictionMs = 60;
+    static constexpr std::int64_t DistanceCoursePresentationDelayMs = 200;
 
     void reset();
     void setTarget(
@@ -62,6 +65,19 @@ private:
             const WorkoutGameVisualSnapshot &from,
             const WorkoutGameVisualSnapshot &to,
             double amount);
+    static WorkoutGameVisualSnapshot interpolateCourseMotion(
+            const WorkoutGameVisualSnapshot &from,
+            const WorkoutGameVisualSnapshot &to,
+            double amount);
+    static bool coursePositionChanged(
+            const WorkoutGameVisualSnapshot &from,
+            const WorkoutGameVisualSnapshot &to);
+    static bool isCoursePositionDiscontinuity(
+            const WorkoutGameVisualSnapshot &from,
+            const WorkoutGameVisualSnapshot &to);
+    static void applyCourseMotion(
+            WorkoutGameVisualSnapshot &result,
+            const WorkoutGameVisualSnapshot &motion);
 
     bool initialized = false;
     bool sourceAdvancing = false;
@@ -75,6 +91,7 @@ private:
     WorkoutGameVisualSnapshot predictionOrigin;
     WorkoutGameVisualSnapshot target;
     std::deque<WorkoutGameVisualSnapshot> fixedStepHistory;
+    std::deque<WorkoutGameVisualSnapshot> courseAnchorHistory;
     WorkoutGameTerrainTransition terrainTransition;
 };
 
