@@ -551,7 +551,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         driver.name = mock.Mock(return_value="Sprint")
         driver.click = mock.Mock()
         driver.send_named_key = mock.Mock()
-        driver.checked = mock.Mock(side_effect=[False, True])
+        driver.checked = mock.Mock(side_effect=[False, True, False])
 
         with mock.patch.object(UI.time, "sleep"):
             driver.require_interactive_controls(

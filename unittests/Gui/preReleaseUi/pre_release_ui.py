@@ -1079,6 +1079,13 @@ class UiDriver:
                     raise UiFailure(f"Cannot operate {role} {name!r}")
                 if not node.queryAction().doAction(0):
                     raise UiFailure(f"Cannot restore {role} {name!r}")
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    if self.checked(node) == before:
+                        break
+                    time.sleep(0.05)
+                else:
+                    raise UiFailure(f"Cannot restore {role} {name!r}")
                 continue
 
             raise UiFailure(f"Unsupported keyboard-control role: {role}")
