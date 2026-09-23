@@ -870,19 +870,46 @@ class UiDriver:
         self.root_path = root
         self.artifacts = artifacts
         self.app_pgid = app_pgid
+        self.pruned_accessible_paths = {}
         self.app = self.wait_for_application()
 
-    def all_nodes(self, node=None):
+    def nodes_with_names(self, node=None):
         node = self.app if node is None else node
-        yield node
-        if self.name(node) == "Workout game 3D canvas":
+        try:
+            pruned_name = getattr(
+                self, "pruned_accessible_paths", {}
+            ).get(node.path)
+        except Exception:
+            pruned_name = None
+        if pruned_name is not None:
+            yield node, pruned_name
+            return
+        try:
+            node_name = node.name or ""
+        except Exception:
+            return
+        yield node, node_name
+        if node_name == "Workout game 3D canvas":
             return
         try:
             children = list(node)
         except Exception:
             return
         for child in children:
-            yield from self.all_nodes(child)
+            yield from self.nodes_with_names(child)
+
+    def all_nodes(self, node=None):
+        for accessible, unused_name in self.nodes_with_names(node):
+            yield accessible
+
+    def prune_descendants(self, node, name):
+        try:
+            path = node.path
+        except Exception as error:
+            raise UiFailure("accessible object path is unavailable") from error
+        if not path:
+            raise UiFailure("accessible object path is empty")
+        self.pruned_accessible_paths[path] = name
 
     @staticmethod
     def role(node) -> str:
@@ -958,8 +985,8 @@ class UiDriver:
 
     def find_all(self, name=None, role=None, showing=None):
         matches = []
-        for node in self.all_nodes():
-            if name is not None and self.name(node) != name:
+        for node, node_name in self.nodes_with_names():
+            if name is not None and node_name != name:
                 continue
             if role is not None and self.role(node) != role:
                 continue
@@ -992,10 +1019,22 @@ class UiDriver:
             "Accessible object not found with any name: " + ", ".join(names)
         )
 
-    def find_enabled(self, name, role=None, showing=True, timeout=10.0):
+    def find_enabled(
+        self, name, role=None, showing=True, timeout=10.0, scope=None
+    ):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            for node in reversed(self.find_all(name, role, showing)):
+            if scope is None:
+                matches = self.find_all(name, role, showing)
+            else:
+                matches = [
+                    node
+                    for node, node_name in self.nodes_with_names(scope)
+                    if node_name == name
+                    and (role is None or self.role(node) == role)
+                    and (showing is None or self.showing(node) == showing)
+                ]
+            for node in reversed(matches):
                 if self.enabled(node):
                     return node
             time.sleep(0.1)
@@ -1905,6 +1944,7 @@ class WorkoutGameUiWorkflow:
         self.first_frame = None
         self.initial_gear = 0.0
         self.stop_training_button = None
+        self.stop_training_scope = None
         self.workout_names = tuple(workout_names)
         run_seconds = game_run_seconds_from_environment()
         self.run_delays = (
@@ -2009,8 +2049,15 @@ class WorkoutGameUiWorkflow:
                 WORKOUT_GAME_CANVAS_NAMES, showing=True
             )
             self.canvas_accessible_name = self.driver.name(self.canvas)
+            self.driver.prune_descendants(
+                self.canvas, self.canvas_accessible_name
+            )
         else:
             self.canvas_accessible_name = "no game chart"
+        try:
+            self.stop_training_scope = self.stop_training_button.parent
+        except Exception as error:
+            raise UiFailure("Stop training toolbar is unavailable") from error
         self.existing_records = set(self.records.glob("*.csv"))
         self.existing_activities = set(self.activities.glob("*.json"))
 
@@ -2023,12 +2070,11 @@ class WorkoutGameUiWorkflow:
         recording = self.driver.wait_new_file(
             self.records, self.existing_records, "*.csv"
         )
-        # Starting training changes the toolbar state and invalidates the
-        # pre-start AT-SPI object on some Qt/X11 combinations. Capture the
-        # live Stop control now, before the 3D scene makes a full tree scan
-        # expensive.
+        # Starting training replaces the Stop AT-SPI object on some Qt/X11
+        # combinations. Reacquire it inside the stable toolbar subtree.
         self.stop_training_button = self.driver.find_enabled(
-            "Stop training", "push button", showing=True, timeout=10.0
+            "Stop training", "push button", showing=True, timeout=10.0,
+            scope=getattr(self, "stop_training_scope", None),
         )
         record_renderer_canvas_name(self.root, self.canvas_accessible_name)
         self.initial_gear = self.driver.current_value(self.gear)
@@ -2114,7 +2160,8 @@ class WorkoutGameUiWorkflow:
         paused_size = recording.stat().st_size
         self.activate_stop_dialog_button("Continue Training")
         self.stop_training_button = self.driver.find_enabled(
-            "Stop training", "push button", showing=True, timeout=10.0
+            "Stop training", "push button", showing=True, timeout=10.0,
+            scope=getattr(self, "stop_training_scope", None),
         )
         self.driver.wait_file_growth(recording, paused_size)
         if self.capture_screenshots:

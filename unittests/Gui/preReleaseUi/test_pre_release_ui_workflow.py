@@ -1159,6 +1159,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             workflow.canvas_accessible_name = "Workout game 3D canvas"
             workflow.gear = gear
             workflow.stop_training_button = pre_start_stop
+            workflow.stop_training_scope = "train toolbar"
             workflow.capture_screenshots = False
 
             result = workflow.start()
@@ -1169,7 +1170,8 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             self.assertIs(workflow.canvas, stale_canvas)
             self.assertIs(workflow.stop_training_button, live_stop)
             driver.find_enabled.assert_called_once_with(
-                "Stop training", "push button", showing=True, timeout=10.0
+                "Stop training", "push button", showing=True, timeout=10.0,
+                scope="train toolbar",
             )
             self.assertEqual(
                 (root / UI.RENDERER_CANVAS_NAME_FILE).read_text(
@@ -1266,6 +1268,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             workflow.capture_screenshots = False
             workflow.run_delays = (0.0, 0.0, 0.0)
             workflow.stop_training_button = stop
+            workflow.stop_training_scope = "train toolbar"
 
             with mock.patch.object(UI.time, "sleep"):
                 workflow.stop_and_continue(recording)
@@ -1288,7 +1291,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             )
             driver.find_enabled.assert_called_once_with(
                 "Stop training", "push button",
-                showing=True, timeout=10.0,
+                showing=True, timeout=10.0, scope="train toolbar",
             )
             self.assertIs(workflow.stop_training_button, resumed_stop)
             driver.wait_file_growth.assert_called_once_with(
@@ -1398,6 +1401,60 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
         self.assertEqual(list(driver.all_nodes(canvas)), [canvas])
 
         canvas.__iter__.assert_not_called()
+
+    def test_all_nodes_skips_a_stale_accessible_without_descending(self):
+        stale = mock.MagicMock()
+        type(stale).name = mock.PropertyMock(
+            side_effect=RuntimeError("stale accessible")
+        )
+        driver = object.__new__(UI.UiDriver)
+
+        self.assertEqual(list(driver.all_nodes(stale)), [])
+
+        stale.__iter__.assert_not_called()
+
+    def test_pruned_canvas_path_never_queries_a_stale_name(self):
+        canvas = mock.MagicMock()
+        canvas.path = "/org/a11y/atspi/accessible/42"
+        driver = object.__new__(UI.UiDriver)
+        driver.pruned_accessible_paths = {}
+        driver.prune_descendants(canvas, "Workout game 3D canvas")
+        type(canvas).name = mock.PropertyMock(
+            side_effect=AssertionError("stale name must not be queried")
+        )
+
+        self.assertEqual(list(driver.all_nodes(canvas)), [canvas])
+
+        canvas.__iter__.assert_not_called()
+
+    def test_find_enabled_can_limit_search_to_a_toolbar(self):
+        toolbar = object()
+        stop = object()
+        unrelated = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.nodes_with_names = mock.Mock(
+            return_value=iter(
+                (
+                    (toolbar, "Train toolbar"),
+                    (unrelated, "Start or pause training"),
+                    (stop, "Stop training"),
+                )
+            )
+        )
+        driver.role = mock.Mock(return_value="push button")
+        driver.showing = mock.Mock(return_value=True)
+        driver.enabled = mock.Mock(side_effect=lambda node: node is stop)
+        driver.find_all = mock.Mock(
+            side_effect=AssertionError("global tree must not be scanned")
+        )
+
+        result = driver.find_enabled(
+            "Stop training", "push button", scope=toolbar
+        )
+
+        self.assertIs(result, stop)
+        driver.nodes_with_names.assert_called_once_with(toolbar)
+        driver.find_all.assert_not_called()
 
     def test_stop_training_resolves_missing_button_and_invalidates_it(self):
         replacement = object()
