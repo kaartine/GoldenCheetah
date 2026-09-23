@@ -516,9 +516,11 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         selection.selectChild.assert_called_once_with(2)
         selection.isChildSelected.assert_called_once_with(2)
 
-    def test_combo_selection_accepts_selected_item_when_name_is_stale(self):
+    def test_combo_selection_accepts_popup_item_when_name_is_stale(self):
         combo = object()
-        item = object()
+        item = mock.Mock()
+        item.getIndexInParent.return_value = 2
+        selected = False
         driver = object.__new__(UI.UiDriver)
         driver.combo_with_items = mock.Mock(return_value=combo)
         driver.focus_main_window = mock.Mock()
@@ -526,22 +528,29 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         driver.find_combo_item = mock.Mock(return_value=item)
         driver.name = mock.Mock(
             side_effect=lambda node: (
-                "Workout Editor" if node is item else "Workout Game"
+                "Workout Editor"
+                if node is item or selected
+                else "Workout Game"
             )
         )
-        driver.selected = mock.Mock(return_value=True)
+        driver.activate_popup_item = mock.Mock()
 
-        selected = driver.select_combo_item(
+        def activate_popup_item(index):
+            nonlocal selected
+            self.assertEqual(index, 2)
+            selected = True
+
+        driver.activate_popup_item.side_effect = activate_popup_item
+
+        result = driver.select_combo_item(
             ["Workout Game", "Workout Editor"],
             "Workout Editor",
             timeout=0.01,
         )
 
-        self.assertIs(selected, combo)
-        self.assertEqual(
-            driver.click.call_args_list,
-            [mock.call(combo), mock.call(item)],
-        )
+        self.assertIs(result, combo)
+        driver.click.assert_called_once_with(combo)
+        driver.activate_popup_item.assert_called_once_with(2)
         driver.focus_main_window.assert_called_once_with()
 
     def test_combo_selects_accepts_selected_item_when_name_is_accessible_label(self):
@@ -573,7 +582,9 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
 
     def test_combo_selection_uses_its_own_item_instead_of_global_duplicate(self):
         combo = object()
-        own_item = object()
+        own_item = mock.Mock()
+        own_item.getIndexInParent.return_value = 1
+        selected = False
         driver = object.__new__(UI.UiDriver)
         driver.combo_with_items = mock.Mock(return_value=combo)
         driver.focus_main_window = mock.Mock()
@@ -587,25 +598,30 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         )
         driver.name = mock.Mock(
             side_effect=lambda node: (
-                "Workout Editor" if node is own_item else "Workout Game"
+                "Workout Editor"
+                if node is own_item or selected
+                else "Workout Game"
             )
         )
         driver.showing = mock.Mock(return_value=True)
-        driver.selected = mock.Mock(
-            side_effect=lambda node: node is own_item
-        )
+        driver.activate_popup_item = mock.Mock()
 
-        selected = driver.select_combo_item(
+        def activate_popup_item(index):
+            nonlocal selected
+            self.assertEqual(index, 1)
+            selected = True
+
+        driver.activate_popup_item.side_effect = activate_popup_item
+
+        result = driver.select_combo_item(
             ["Workout Game", "Workout Editor"],
             "Workout Editor",
             timeout=0.01,
         )
 
-        self.assertIs(selected, combo)
-        self.assertEqual(
-            driver.click.call_args_list,
-            [mock.call(combo), mock.call(own_item)],
-        )
+        self.assertIs(result, combo)
+        driver.click.assert_called_once_with(combo)
+        driver.activate_popup_item.assert_called_once_with(1)
         driver.focus_main_window.assert_called_once_with()
         driver.find.assert_not_called()
 
