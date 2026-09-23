@@ -1447,8 +1447,16 @@ class UiDriver:
             return combo
         self.focus_main_window()
         self.click(combo)
-        self.find_combo_item(combo, name, timeout)
-        self.activate_popup_item(options.index(name))
+        item = self.find_combo_item(combo, name, timeout)
+        try:
+            popup_index = item.getIndexInParent()
+        except Exception as error:
+            raise UiFailure(
+                f"Cannot determine combo box item index for {name!r}"
+            ) from error
+        if popup_index < 0:
+            raise UiFailure(f"Combo box item has invalid index: {name!r}")
+        self.activate_popup_item(popup_index)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.name(combo) == name:
@@ -2015,6 +2023,13 @@ class WorkoutGameUiWorkflow:
         recording = self.driver.wait_new_file(
             self.records, self.existing_records, "*.csv"
         )
+        # Starting training changes the toolbar state and invalidates the
+        # pre-start AT-SPI object on some Qt/X11 combinations. Capture the
+        # live Stop control now, before the 3D scene makes a full tree scan
+        # expensive.
+        self.stop_training_button = self.driver.find_enabled(
+            "Stop training", "push button", showing=True, timeout=10.0
+        )
         record_renderer_canvas_name(self.root, self.canvas_accessible_name)
         self.initial_gear = self.driver.current_value(self.gear)
         if self.capture_screenshots:
@@ -2060,17 +2075,14 @@ class WorkoutGameUiWorkflow:
         self.driver.wait_value(self.gear, self.initial_gear)
 
     def activate_stop_training(self) -> None:
-        cached = getattr(self, "stop_training_button", None)
-        if cached is not None:
-            try:
-                self.driver.activate(cached)
-                return
-            except UiFailure:
-                self.stop_training_button = None
-        self.stop_training_button = self.driver.find(
-            "Stop training", "push button", showing=True
-        )
-        self.driver.activate(self.stop_training_button)
+        button = getattr(self, "stop_training_button", None)
+        if button is None:
+            button = self.driver.find_enabled(
+                "Stop training", "push button", showing=True, timeout=10.0
+            )
+        self.driver.click(button)
+        # The button is replaced when the stop dialog changes session state.
+        self.stop_training_button = None
 
     def stop_and_continue(self, recording: Path) -> None:
         time.sleep(self.run_delays[2])

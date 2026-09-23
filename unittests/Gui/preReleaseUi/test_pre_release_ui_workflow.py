@@ -577,27 +577,29 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
     def test_combo_item_uses_keyboard_selection(self):
         combo = mock.Mock()
+        item = mock.Mock()
+        item.getIndexInParent.return_value = 2
         driver = object.__new__(UI.UiDriver)
         driver.combo_with_items = mock.Mock(return_value=combo)
         driver.focus_main_window = mock.Mock()
         driver.click = mock.Mock()
-        driver.find_combo_item = mock.Mock()
+        driver.find_combo_item = mock.Mock(return_value=item)
         driver.activate_popup_item = mock.Mock()
         driver.name = mock.Mock(
-            side_effect=["Endurance", "20/20 descending sets"]
+            side_effect=["Erg Workout", "Workout Game"]
         )
 
         selected = driver.select_combo_item(
-            ("Endurance", "20/20 descending sets"),
-            "20/20 descending sets",
+            ("Workout Game", "Workout Editor"),
+            "Workout Game",
         )
 
         self.assertIs(selected, combo)
         driver.click.assert_called_once_with(combo)
         driver.find_combo_item.assert_called_once_with(
-            combo, "20/20 descending sets", 10.0
+            combo, "Workout Game", 10.0
         )
-        driver.activate_popup_item.assert_called_once_with(1)
+        driver.activate_popup_item.assert_called_once_with(2)
 
     def test_workout_generator_declares_complete_tab_order(self):
         source = WORKOUT_WIZARD_SOURCE_PATH.read_text(encoding="utf-8")
@@ -1141,8 +1143,11 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             start_button = object()
             stale_canvas = object()
             gear = object()
+            pre_start_stop = object()
+            live_stop = object()
             driver = mock.Mock()
             driver.find.return_value = start_button
+            driver.find_enabled.return_value = live_stop
             driver.wait_new_file.return_value = recording
             driver.current_value.return_value = 7.0
             workflow = object.__new__(UI.WorkoutGameUiWorkflow)
@@ -1153,6 +1158,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             workflow.canvas = stale_canvas
             workflow.canvas_accessible_name = "Workout game 3D canvas"
             workflow.gear = gear
+            workflow.stop_training_button = pre_start_stop
             workflow.capture_screenshots = False
 
             result = workflow.start()
@@ -1161,6 +1167,10 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             driver.find_named_any.assert_not_called()
             driver.name.assert_not_called()
             self.assertIs(workflow.canvas, stale_canvas)
+            self.assertIs(workflow.stop_training_button, live_stop)
+            driver.find_enabled.assert_called_once_with(
+                "Stop training", "push button", showing=True, timeout=10.0
+            )
             self.assertEqual(
                 (root / UI.RENDERER_CANVAS_NAME_FILE).read_text(
                     encoding="utf-8"
@@ -1246,9 +1256,11 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             recording = Path(directory) / "recording.csv"
             recording.write_text("secs,watts\n0,190\n", encoding="ascii")
             stop = object()
+            resumed_stop = object()
             continue_button = object()
             driver = mock.Mock()
             driver.find.side_effect = [continue_button]
+            driver.find_enabled.return_value = resumed_stop
             workflow = object.__new__(UI.WorkoutGameUiWorkflow)
             workflow.driver = driver
             workflow.capture_screenshots = False
@@ -1269,17 +1281,16 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
                     ),
                 ],
             )
+            driver.activate.assert_not_called()
             self.assertEqual(
-                driver.activate.call_args_list,
-                [mock.call(stop)],
+                driver.click.call_args_list,
+                [mock.call(stop), mock.call(continue_button)],
             )
-            driver.click.assert_called_once_with(continue_button)
             driver.find_enabled.assert_called_once_with(
-                "Stop training",
-                "push button",
-                showing=True,
-                timeout=10.0,
+                "Stop training", "push button",
+                showing=True, timeout=10.0,
             )
+            self.assertIs(workflow.stop_training_button, resumed_stop)
             driver.wait_file_growth.assert_called_once_with(
                 recording, recording.stat().st_size
             )
@@ -1388,24 +1399,22 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
 
         canvas.__iter__.assert_not_called()
 
-    def test_stop_training_recovers_from_a_stale_cached_button(self):
-        stale = object()
+    def test_stop_training_resolves_missing_button_and_invalidates_it(self):
         replacement = object()
         driver = mock.Mock()
-        driver.activate.side_effect = [UI.UiFailure("stale"), None]
-        driver.find.return_value = replacement
+        driver.find_enabled.return_value = replacement
         workflow = object.__new__(UI.WorkoutGameUiWorkflow)
         workflow.driver = driver
-        workflow.stop_training_button = stale
+        workflow.stop_training_button = None
 
         workflow.activate_stop_training()
 
-        driver.find.assert_called_once_with(
-            "Stop training", "push button", showing=True
+        driver.find_enabled.assert_called_once_with(
+            "Stop training", "push button", showing=True, timeout=10.0
         )
-        self.assertEqual(driver.activate.call_args_list,
-                         [mock.call(stale), mock.call(replacement)])
-        self.assertIs(workflow.stop_training_button, replacement)
+        driver.click.assert_called_once_with(replacement)
+        driver.activate.assert_not_called()
+        self.assertIsNone(workflow.stop_training_button)
 
     def test_suite_captures_a_best_effort_failure_screenshot(self):
         with tempfile.TemporaryDirectory() as directory:
