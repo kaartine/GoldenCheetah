@@ -532,6 +532,9 @@ void WorkoutGame3DViewModel::setCourse(
     cameraPresentationSnapshot = {
         WorkoutGame3DCameraPresentationMode::OpeningSide, 1.0
     };
+    displayedFrameGenerationInitialized = false;
+    displayedSessionGeneration = 0;
+    displayedDiscontinuityGeneration = 0;
     cameraPoseInitialized = false;
     cameraYawRadians = 0.0;
     cameraYawVelocityRadiansPerSecond = 0.0;
@@ -592,6 +595,18 @@ void WorkoutGame3DViewModel::setFrame(
     const WorkoutGameRoadSample sample = WorkoutGameRoadCourseBuilder::sample(
             roadCourse, distanceMeters);
     if (!sample.ready) return;
+    // Cut the camera with the displayed seek, including forward and same-time
+    // seeks. Ordinary terrain generations retain the continuous chase pose.
+    if (displayedFrameGenerationInitialized
+            && (displayedSessionGeneration != frame.sessionGeneration
+                || displayedDiscontinuityGeneration
+                    != frame.presentationDiscontinuityGeneration)) {
+        cameraPoseInitialized = false;
+        cameraYawVelocityRadiansPerSecond = 0.0;
+    }
+    displayedFrameGenerationInitialized = true;
+    displayedSessionGeneration = frame.sessionGeneration;
+    displayedDiscontinuityGeneration = frame.presentationDiscontinuityGeneration;
     const double requestedLateral = finiteOrZero(
             frame.feature.lateralOffsetMeters);
     const double lateral = selectedRouteLateralMeters(

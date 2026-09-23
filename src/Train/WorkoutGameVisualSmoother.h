@@ -108,6 +108,7 @@ private:
     std::deque<WorkoutGameVisualSnapshot> fixedStepHistory;
     std::deque<WorkoutGameVisualSnapshot> courseAnchorHistory;
     bool coursePresentationStarted = false;
+    bool courseHasMovement = false;
     bool courseHolding = false;
     double courseCursorMs = 0.0;
     double courseBufferMs = DistanceCoursePresentationDelayMs;

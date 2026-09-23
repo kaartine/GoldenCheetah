@@ -4111,6 +4111,113 @@ private slots:
                  "camera smoothing stopped following the turning route");
     }
 
+    void cameraCutsToDisplayedSeekWithoutRestartingOpening_data()
+    {
+        QTest::addColumn<bool>("throughSmoother");
+        QTest::newRow("displayed-frame") << false;
+        QTest::newRow("distance-smoother") << true;
+    }
+
+    void cameraCutsToDisplayedSeekWithoutRestartingOpening()
+    {
+        constexpr double Pi = 3.14159265358979323846;
+        QFETCH(bool, throughSmoother);
+        const WorkoutGameCourse course = longFlowingMtbCourse();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+        QVERIFY(road.ready);
+        WorkoutGame3DViewModel viewModel;
+        viewModel.setCourse(course, 250.0);
+        WorkoutGameVisualSmoother smoother;
+        std::int64_t monotonicMs = 0;
+        const auto display = [&](WorkoutGameVisualSnapshot frame) {
+            frame.distanceAnchoredPresentation = true;
+            frame.presentationTimeMs = monotonicMs;
+            if (throughSmoother) {
+                smoother.setTarget(frame, monotonicMs);
+                frame = smoother.sample(monotonicMs);
+            }
+            monotonicMs += 16;
+            viewModel.setFrame(frame, 225.0, 225.0, 88, 150, 7);
+            return frame;
+        };
+        const auto pose = [&]() {
+            return std::array<double, 6>{{
+                viewModel.cameraX(), viewModel.cameraY(), viewModel.cameraZ(),
+                viewModel.cameraTargetX(), viewModel.cameraTargetY(),
+                viewModel.cameraTargetZ()
+            }};
+        };
+        for (int index = 0; index <= 375; ++index) {
+            WorkoutGameVisualSnapshot frame = frameAt(road, 30.0);
+            frame.simulation.workoutTimeMs = index * 16;
+            display(frame);
+        }
+        QCOMPARE(viewModel.cameraPresentation(), QStringLiteral("chase"));
+        QCOMPARE(viewModel.cameraPresentationBlend(), 0.0);
+
+        struct Seek {
+            double distanceMeters;
+            std::int64_t workoutTimeMs;
+            std::uint64_t discontinuity;
+            std::uint64_t session;
+        };
+        const std::array<Seek, 6> seeks = {{
+            {130.0, 16000, 1, 0},
+            {630.0, 66000, 2, 0},
+            {130.0, 16000, 3, 0},
+            {430.0, 16016, 4, 0},
+            {230.0, 16032, 5, 0},
+            {730.0, 16048, 5, 1}
+        }};
+        for (const Seek &seek : seeks) {
+            WorkoutGameVisualSnapshot frame = frameAt(road, seek.distanceMeters);
+            frame.simulation.workoutTimeMs = seek.workoutTimeMs;
+            frame.presentationDiscontinuityGeneration = seek.discontinuity;
+            frame.sessionGeneration = seek.session;
+            const WorkoutGameVisualSnapshot displayed = display(frame);
+            QCOMPARE(displayed.world.rider.distanceMeters, seek.distanceMeters);
+            QCOMPARE(displayed.presentationDiscontinuityGeneration,
+                     seek.discontinuity);
+            QCOMPARE(displayed.sessionGeneration, seek.session);
+            QCOMPARE(viewModel.cameraPresentation(), QStringLiteral("chase"));
+            QCOMPARE(viewModel.cameraPresentationBlend(), 0.0);
+
+            const QVector3D camera(float(viewModel.cameraX()),
+                                   float(viewModel.cameraY()),
+                                   float(viewModel.cameraZ()));
+            const QVector3D rider(float(viewModel.riderX()),
+                                  float(viewModel.riderY() + 0.9),
+                                  float(viewModel.riderZ()));
+            const QVector3D target(float(viewModel.cameraTargetX()),
+                                   float(viewModel.cameraTargetY()),
+                                   float(viewModel.cameraTargetZ()));
+            const double separation = (rider - camera).length();
+            QVERIFY2(separation < 12.0,
+                     qPrintable(QStringLiteral("seek to %1 m left camera %2 m away")
+                         .arg(seek.distanceMeters).arg(separation)));
+            const double facing = QVector3D::dotProduct(
+                    (rider - camera).normalized(), (target - camera).normalized());
+            QVERIFY2(facing > std::cos(23.0 * Pi / 180.0),
+                     "seek left the rider outside the 47-degree camera view");
+            QVERIFY(viewModel.cameraY() - viewModel.cameraTerrainY() >= 2.54);
+
+            const auto cutPose = pose();
+            for (int repeat = 0; repeat < 3; ++repeat) {
+                viewModel.setFrame(displayed, 225.0, 225.0, 88, 150, 7);
+                QVERIFY(pose() == cutPose);
+            }
+            WorkoutGameVisualSnapshot following = frame;
+            following.world.rider.distanceMeters += 3.0;
+            following.simulation.workoutTimeMs += 16;
+            // Terrain generation changes are ordinary riding, not seeks.
+            ++following.world.generation;
+            viewModel.setFrame(following, 225.0, 225.0, 88, 150, 7);
+            QVERIFY(std::hypot(viewModel.cameraX() - cutPose[0],
+                               viewModel.cameraZ() - cutPose[2]) <= 0.256001);
+        }
+    }
+
     void cameraDoesNotAdvanceWithoutSimulationTime()
     {
         const WorkoutGameCourse course = longFlowingMtbCourse();

@@ -21,6 +21,8 @@
 #include <QSignalSpy>
 #include <QTest>
 
+#include <limits>
+
 namespace {
 
 QImage render(WorkoutGameCanvas &canvas)
@@ -821,6 +823,118 @@ private slots:
         QCOMPARE(smoother.distanceTiming().maximumPresentationGapMs, std::int64_t(gapMs));
         QCOMPARE(smoother.distanceTiming().maximumAnchorGapMs, std::int64_t(anchorMs));
         if (anchorMs == 20) QVERIFY(smoother.distanceTiming().historyCompactions > 0);
+    }
+
+    void fixedStepDistanceFirstMotionDoesNotReplayStartupWait_data()
+    {
+        QTest::addColumn<int>("waitMs");
+        QTest::addColumn<int>("resetMode");
+        QTest::newRow("short-start") << 160 << 0;
+        QTest::newRow("ten-second-zero-speed-start") << 10000 << 0;
+        QTest::newRow("short-start-after-reset") << 160 << 1;
+        QTest::newRow("long-start-after-reset") << 10000 << 1;
+        QTest::newRow("short-start-after-seek") << 160 << 2;
+        QTest::newRow("long-start-after-seek") << 10000 << 2;
+    }
+
+    void fixedStepDistanceFirstMotionDoesNotReplayStartupWait()
+    {
+        QFETCH(int, waitMs);
+        QFETCH(int, resetMode);
+        WorkoutGameVisualSmoother smoother;
+        if (resetMode != 0) {
+            WorkoutGameVisualSnapshot prior;
+            prior.distanceAnchoredPresentation = true;
+            prior.simulation.ready = prior.world.ready = true;
+            prior.world.generation = 1;
+            prior.world.speedMetersPerSecond = 4.0;
+            prior.simulation.speedKph = 14.4;
+            for (int i = 1; i <= 2; ++i) {
+                prior.presentationTimeMs = i * 200;
+                prior.simulation.workoutTimeMs = i * 250;
+                prior.world.rider.distanceMeters = i;
+                smoother.setTarget(prior, prior.presentationTimeMs);
+                smoother.sample(prior.presentationTimeMs);
+            }
+            if (resetMode == 1) smoother.reset();
+        }
+        double previousDistance = 0.0;
+        double confirmed = 0.0;
+        for (int elapsed = 0; elapsed <= waitMs + 2400; elapsed += 10) {
+            if (elapsed % 20 == 0) {
+                const bool moving = elapsed >= waitMs;
+                const int movingAnchor = moving ? (elapsed - waitMs) / 200 * 200 : 0;
+                WorkoutGameVisualSnapshot frame;
+                frame.presentationTimeMs = 1000 + elapsed;
+                frame.presentationDiscontinuityGeneration = resetMode == 2 ? 1 : 0;
+                frame.distanceAnchoredPresentation = true;
+                frame.simulation.ready = true;
+                frame.world.ready = true;
+                frame.world.generation = 1;
+                frame.world.rider.distanceMeters = moving ? 0.242 + movingAnchor * 0.004 : 0.0;
+                frame.simulation.workoutTimeMs = std::llround(frame.world.rider.distanceMeters * 250.0);
+                frame.simulation.speedKph = moving ? (movingAnchor == 0 ? 0.4 : 14.4) : 0.0;
+                frame.world.speedMetersPerSecond = frame.simulation.speedKph / 3.6;
+                frame.riderPedalCycles = elapsed * 0.001;
+                confirmed = frame.world.rider.distanceMeters;
+                smoother.setTarget(frame, frame.presentationTimeMs);
+            }
+            const auto rendered = smoother.sample(1000 + elapsed);
+            const double distance = rendered.world.rider.distanceMeters;
+            QVERIFY(distance + 1e-9 >= previousDistance);
+            QVERIFY(distance <= confirmed + 1e-9);
+            QVERIFY(distance - previousDistance <= 0.042 + 1e-8);
+            if (elapsed < waitMs) QCOMPARE(distance, 0.0);
+            if (elapsed >= waitMs + 1000) {
+                QVERIFY2(smoother.distanceTiming().lagMs < 700.0,
+                         qPrintable(QString("startup wait leaked into motion: lag=%1 ms")
+                                    .arg(smoother.distanceTiming().lagMs)));
+                QVERIFY2(confirmed - distance < 2.0, "rider remained behind after first confirmed motion");
+            }
+            previousDistance = distance;
+        }
+    }
+
+    void fixedStepDistanceStartupRequiresUsableSpeed_data()
+    {
+        QTest::addColumn<double>("speed");
+        QTest::newRow("zero") << 0.0;
+        QTest::newRow("negative") << -1.0;
+        QTest::newRow("nan") << std::numeric_limits<double>::quiet_NaN();
+        QTest::newRow("infinity") << std::numeric_limits<double>::infinity();
+    }
+
+    void fixedStepDistanceStartupRequiresUsableSpeed()
+    {
+        QFETCH(double, speed);
+        WorkoutGameVisualSmoother smoother;
+        WorkoutGameVisualSnapshot frame;
+        frame.distanceAnchoredPresentation = true;
+        frame.simulation.ready = frame.world.ready = true;
+        frame.world.generation = 1;
+        frame.presentationTimeMs = 1000;
+        smoother.setTarget(frame, 1000);
+        smoother.sample(1000);
+        frame.presentationTimeMs = 11000;
+        frame.simulation.workoutTimeMs = 60;
+        frame.world.rider.distanceMeters = 0.242;
+        frame.world.speedMetersPerSecond = speed;
+        frame.simulation.speedKph = speed * 3.6;
+        smoother.setTarget(frame, 11000);
+        double previousDistance = 0.0;
+        for (int now = 11000; now <= 11400; now += 10) {
+            const double distance = smoother.sample(now).world.rider.distanceMeters;
+            QVERIFY(std::isfinite(distance));
+            QVERIFY(distance >= previousDistance);
+            QVERIFY(distance <= 0.242);
+            // The first callback has the normal 40 ms integration ceiling;
+            // subsequent callbacks integrate only their actual 10 ms step.
+            const double stepSeconds = now == 11000 ? 0.04 : 0.01;
+            QVERIFY(distance - previousDistance <= 0.0242 * 1.05 * stepSeconds + 1e-9);
+            previousDistance = distance;
+        }
+        // Unusable speed is not permission to retime the first distance anchor.
+        QVERIFY(smoother.distanceTiming().lagMs > 8000.0);
     }
 
     void fixedStepDistanceMixedGapsBrakeWithoutVelocityJumps()

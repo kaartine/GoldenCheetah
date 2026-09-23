@@ -567,6 +567,9 @@ private:
     double cameraTargetPositionY = 0.85;
     double cameraTargetPositionZ = 12.0;
     double cameraTerrainPositionY = 0.0;
+    bool displayedFrameGenerationInitialized = false;
+    std::uint64_t displayedSessionGeneration = 0;
+    std::uint64_t displayedDiscontinuityGeneration = 0;
     bool cameraPoseInitialized = false;
     double cameraYawRadians = 0.0;
     double cameraYawVelocityRadiansPerSecond = 0.0;

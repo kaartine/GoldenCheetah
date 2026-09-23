@@ -77,6 +77,7 @@ void WorkoutGameVisualSmoother::reset()
     fixedStepHistory.clear();
     courseAnchorHistory.clear();
     coursePresentationStarted = false;
+    courseHasMovement = false;
     courseHolding = false;
     courseCursorMs = 0.0;
     courseBufferMs = DistanceCoursePresentationDelayMs;
@@ -124,6 +125,7 @@ void WorkoutGameVisualSmoother::setTarget(
             fixedStepHistory.push_back(snapshot);
             courseAnchorHistory.clear();
             coursePresentationStarted = false;
+            courseHasMovement = false;
             courseHolding = false;
             courseBufferMs = DistanceCoursePresentationDelayMs;
             courseSpeedMetersPerSecond = std::max(
@@ -158,10 +160,28 @@ void WorkoutGameVisualSmoother::setTarget(
                 courseTiming.maximumAnchorGapMs = std::max(
                         courseTiming.maximumAnchorGapMs, gapMs);
                 double motionIntervalMs = double(gapMs);
+                const double incomingSpeed = std::max(
+                        snapshot.world.speedMetersPerSecond,
+                        snapshot.simulation.speedKph / 3.6);
+                // Before first movement, the zero-speed origin may include
+                // session waiting rather than a measured motion interval.
+                // Bootstrap presentation once from the first confirmation;
+                // keep the identical origin and all distance/speed bounds.
+                // This is not evidence of fresh stationary trainer telemetry.
+                if (!courseHasMovement && distance > 0.0
+                        && courseSpeedMetersPerSecond == 0.0
+                        && gapMs > DistanceCoursePresentationDelayMs
+                        && std::isfinite(incomingSpeed) && incomingSpeed > 0.0) {
+                    motionIntervalMs = double(DistanceCoursePresentationDelayMs);
+                    auto bridge = last;
+                    bridge.presentationTimeMs = presentationTimeMs
+                            - DistanceCoursePresentationDelayMs;
+                    courseAnchorHistory.push_back(bridge);
+                }
                 // A true stop need not replay seconds of zero-distance history.
                 // Unlike the former fixed 200 ms bridge, preserve enough time
                 // for all confirmed distance at the observed moving speed.
-                if (gapMs > 1000 && courseSpeedMetersPerSecond > 0.0) {
+                else if (gapMs > 1000 && courseSpeedMetersPerSecond > 0.0) {
                     motionIntervalMs = std::min(double(gapMs), std::max(
                             200.0, distance / courseSpeedMetersPerSecond * 1000.0));
                     if (motionIntervalMs < gapMs) {
@@ -171,6 +191,7 @@ void WorkoutGameVisualSmoother::setTarget(
                         courseAnchorHistory.push_back(bridge);
                     }
                 }
+                if (distance > 0.0) courseHasMovement = true;
                 if (motionIntervalMs > 0.0 && distance > 0.0) {
                     courseSpeedMetersPerSecond = distance * 1000.0
                             / std::max(20.0, motionIntervalMs);

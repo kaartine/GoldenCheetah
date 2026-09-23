@@ -460,6 +460,23 @@ correlation, not automatic fault verdicts. High FPS alone is not motion-quality
 acceptance. Regression coverage checks per-frame distance and acceleration under
 irregular anchors, source speed changes, stop/resume and GUI stalls.
 
+Before the first positive distance change after initialization or a presentation
+cut, the smoother may bootstrap a long zero-speed origin interval to 200 ms.
+This requires a finite positive incoming speed and a previously zero speed
+estimate. It is a one-time presentation heuristic, not evidence that repeated
+zero-speed snapshots represent fresh stationary trainer telemetry. The origin
+position stays unchanged, confirmed-distance and physical velocity/acceleration
+bounds remain in force, and authoritative workout progress is untouched.
+Regression tests cover a ten-second startup wait, unusable initial speeds,
+and reinitialization after reset or seek.
+
+The Quick 3D camera consumes session and presentation-discontinuity generations
+from the displayed snapshot, after its road sample is ready. A changed marker
+cuts the camera to that rider pose, including forward and same-time seeks;
+normal terrain changes retain bounded following. This does not restart the
+opening-camera sequence. Regressions check rider distance and frustum inclusion
+both directly and through the smoother, rather than checking FPS alone.
+
 The same trace record describes the rendered decision rather than reconstructing
 it afterward: feature phase, route, readiness, action distance and action id
 come from the presented immutable snapshot; camera position and target come
