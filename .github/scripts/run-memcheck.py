@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 
 
 MAX_REPORT_BYTES = 64 * 1024 * 1024
+MAX_MEMCHECK_REPORT_BYTES = 256 * 1024 * 1024
 
 
 def timeout_seconds(value):
@@ -37,27 +38,75 @@ def read_xml(path, expected_root):
     return root
 
 
+class LimitedXmlReader:
+    def __init__(self, stream, limit, name):
+        self.stream = stream
+        self.limit = limit
+        self.name = name
+        self.consumed = 0
+
+    def read(self, size=-1):
+        remaining = self.limit - self.consumed
+        request = remaining + 1 if size < 0 else min(size, remaining + 1)
+        data = self.stream.read(request)
+        self.consumed += len(data)
+        if self.consumed > self.limit:
+            raise ValueError(f"oversized XML report while reading: {self.name}")
+        return data
+
+
 def memcheck_evidence(path, pid):
-    root = read_xml(path, "valgrindoutput")
-    if root.findtext("protocoltool") != "memcheck" or root.findtext("pid") != str(pid):
-        raise ValueError("Memcheck report tool or process ID does not match this run")
-    states = root.findall("status/state")
-    if not states or states[-1].text != "FINISHED":
-        raise ValueError("Memcheck report is incomplete (no final FINISHED status)")
-    if root.find("fatal_signal") is not None:
-        raise ValueError("Memcheck report contains a fatal signal")
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular XML report: {path.name}")
+    if not 0 < path.stat().st_size <= MAX_MEMCHECK_REPORT_BYTES:
+        raise ValueError(f"empty or oversized XML report: {path.name}")
+    identifiers = {}
+    final_state = None
+    fatal_signal = False
     kinds = Counter()
-    for error in root.findall("error"):
-        kind = error.findtext("kind")
-        if not kind:
-            raise ValueError("Memcheck error is missing its kind")
-        kinds[kind] += 1
     suppressed = []
-    for pair in root.findall("suppcounts/pair"):
-        count, name = pair.findtext("count"), pair.findtext("name")
-        if count is None or not count.isdigit() or not name:
-            raise ValueError("malformed Memcheck suppression count")
-        suppressed.append({"name": name, "count": int(count)})
+    depth = 0
+    root = None
+    with path.open("rb") as stream:
+        reader = LimitedXmlReader(stream, MAX_MEMCHECK_REPORT_BYTES, path.name)
+        for event, element in ET.iterparse(reader, events=("start", "end")):
+            if event == "start":
+                depth += 1
+                if depth == 1:
+                    root = element
+                    if root.tag != "valgrindoutput":
+                        raise ValueError(f"unexpected XML root in {path.name}: {root.tag}")
+                continue
+            if depth == 2:
+                if element.tag in {"protocoltool", "pid"}:
+                    identifiers.setdefault(element.tag, element.text or "")
+                elif element.tag == "status":
+                    for state in element.findall("state"):
+                        final_state = state.text
+                elif element.tag == "fatal_signal":
+                    fatal_signal = True
+                elif element.tag == "error":
+                    kind = element.findtext("kind")
+                    if not kind:
+                        raise ValueError("Memcheck error is missing its kind")
+                    kinds[kind] += 1
+                elif element.tag == "suppcounts":
+                    for pair in element.findall("pair"):
+                        count, name = pair.findtext("count"), pair.findtext("name")
+                        if count is None or not count.isdigit() or not name:
+                            raise ValueError("malformed Memcheck suppression count")
+                        suppressed.append({"name": name, "count": int(count)})
+                # Discard processed top-level records instead of retaining their
+                # stacks or ignored data. Parsing still runs to EOF.
+                root.remove(element)
+                element.clear()
+            depth -= 1
+    if identifiers.get("protocoltool") != "memcheck" or identifiers.get("pid") != str(pid):
+        raise ValueError("Memcheck report tool or process ID does not match this run")
+    if final_state != "FINISHED":
+        raise ValueError("Memcheck report is incomplete (no final FINISHED status)")
+    if fatal_signal:
+        raise ValueError("Memcheck report contains a fatal signal")
     return {"error_records": dict(kinds), "suppressed": suppressed,
             "blocking_error_records": sum(v for k, v in kinds.items() if k != "Leak_StillReachable")}
 

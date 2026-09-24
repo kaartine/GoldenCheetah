@@ -109,6 +109,10 @@ interruptions terminate the owned process group and fail the gate. The wrapper
 ignores user Valgrind options/rc files; installation-default suppressions and
 their match counts remain recorded. It accepts `--valgrind /path/to/valgrind`
 and inherits `VALGRIND_LIB` for a locally extracted distribution package.
+Memcheck XML is parsed incrementally with a 256 MiB limit, including bytes
+actually read; QtTest and UI XML retain a 64 MiB limit. A complete parse through
+EOF is required even after a `FINISHED` record. Oversized or malformed reports
+fail the gate rather than discarding findings.
 The instrumented child uses a private `077` umask so synthetic credential
 fixtures do not inherit group-writable defaults from a developer's shell.
 For `tst_credentialSettings`, place the output under a private `/tmp` parent

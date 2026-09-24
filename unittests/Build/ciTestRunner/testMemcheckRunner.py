@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Contract tests using synthetic reports, without requiring Valgrind or Qt."""
 
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -10,10 +11,15 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 
 RUNNER = Path(__file__).resolve().parents[3] / ".github/scripts/run-memcheck.py"
+sys.dont_write_bytecode = True
+SPEC = importlib.util.spec_from_file_location("memcheck_runner", RUNNER)
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
 FAKE_VALGRIND = r'''
 import json
 import os
@@ -57,7 +63,7 @@ if mode == "malformed":
     xml_path.write_text("<valgrindoutput>")
 if mode == "oversized":
     with xml_path.open("r+b") as stream:
-        stream.truncate(64 * 1024 * 1024 + 1)
+        stream.truncate(256 * 1024 * 1024 + 1)
 test = '<TestFunction name="actualTest"><Incident type="pass"/></TestFunction>'
 if mode == "zero":
     test = ""
@@ -89,6 +95,90 @@ if mode == "crash":
     os.kill(os.getpid(), signal.SIGKILL)
 sys.exit(97 if mode == "nonzero" else 0)
 '''
+
+
+class MemcheckEvidenceTests(unittest.TestCase):
+    HEADER = b'<valgrindoutput><protocoltool>memcheck</protocoltool><pid>123</pid>'
+    FINISHED = b'<status><state>FINISHED</state></status>'
+    FOOTER = b'</valgrindoutput>'
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="gc-memcheck-evidence-")
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "report.xml"
+
+    def test_aggregate_matches_report_records_and_ignores_nested_lookalikes(self):
+        body = (b'<status><state>RUNNING</state></status>'
+                b'<error><kind>InvalidRead</kind><stack><frame><fn>example</fn></frame></stack></error>'
+                b'<error><kind>Leak_StillReachable</kind></error>'
+                b'<ignored><error><kind>InvalidWrite</kind></error><status><state>OTHER</state></status></ignored>'
+                + self.FINISHED
+                + b'<error><kind>InvalidRead</kind></error><error><kind>FutureKind</kind></error>'
+                b'<suppcounts><pair><count>2</count><name>first</name></pair>'
+                b'<pair><count>0</count><name>second</name></pair></suppcounts>')
+        self.path.write_bytes(self.HEADER + body + self.FOOTER)
+        self.assertEqual(MODULE.memcheck_evidence(self.path, 123), {
+            "error_records": {"InvalidRead": 2, "Leak_StillReachable": 1, "FutureKind": 1},
+            "blocking_error_records": 3,
+            "suppressed": [{"name": "first", "count": 2}, {"name": "second", "count": 0}],
+        })
+
+    def test_valid_memcheck_report_larger_than_64_mib(self):
+        record = b'<ignored>' + b'x' * 4096 + b'</ignored>'
+        with self.path.open("wb") as stream:
+            stream.write(self.HEADER)
+            for _ in range(17 * 1024):
+                stream.write(record)
+            stream.write(b'<error><kind>Leak_StillReachable</kind></error>')
+            stream.write(self.FINISHED + self.FOOTER)
+        self.assertGreater(self.path.stat().st_size, 64 * 1024 * 1024)
+        evidence = MODULE.memcheck_evidence(self.path, 123)
+        self.assertEqual(evidence["error_records"], {"Leak_StillReachable": 1})
+        self.assertEqual(evidence["blocking_error_records"], 0)
+
+    def test_256_mib_limit_rejects_sparse_oversized_report(self):
+        with self.path.open("wb") as stream:
+            stream.truncate(256 * 1024 * 1024 + 1)
+        with self.assertRaisesRegex(ValueError, "oversized"):
+            MODULE.memcheck_evidence(self.path, 123)
+
+    def test_consumed_bytes_limit_catches_growth_after_stat(self):
+        self.path.write_bytes(self.HEADER + b'<ignored>' + b'x' * 1024
+                              + b'</ignored>' + self.FINISHED + self.FOOTER)
+        stale_stat = mock.Mock(st_size=1, st_mode=self.path.stat().st_mode)
+        with mock.patch.object(MODULE, "MAX_MEMCHECK_REPORT_BYTES", 256), \
+                mock.patch.object(Path, "stat", return_value=stale_stat):
+            with self.assertRaisesRegex(ValueError, "oversized XML report while reading"):
+                MODULE.memcheck_evidence(self.path, 123)
+
+    def test_finished_status_does_not_skip_trailing_xml_validation(self):
+        for suffix in (b'<unclosed>', self.FOOTER + b'not XML'):
+            with self.subTest(suffix=suffix):
+                self.path.write_bytes(self.HEADER + self.FINISHED + suffix)
+                with self.assertRaises(ET.ParseError):
+                    MODULE.memcheck_evidence(self.path, 123)
+        self.path.write_bytes(self.HEADER + self.FINISHED
+                              + b'<status><state>RUNNING</state></status>' + self.FOOTER)
+        with self.assertRaisesRegex(ValueError, "no final FINISHED"):
+            MODULE.memcheck_evidence(self.path, 123)
+
+    def test_small_report_validation_contracts_remain_strict(self):
+        for body in (b'<error/>', b'<fatal_signal/>',
+                     b'<suppcounts><pair><count>-1</count><name>invalid</name></pair></suppcounts>'):
+            with self.subTest(body=body):
+                self.path.write_bytes(self.HEADER + self.FINISHED + body + self.FOOTER)
+                with self.assertRaises(ValueError):
+                    MODULE.memcheck_evidence(self.path, 123)
+        self.path.write_bytes(b'<other><protocoltool>memcheck</protocoltool><pid>123</pid>'
+                              + self.FINISHED + b'</other>')
+        with self.assertRaisesRegex(ValueError, "unexpected XML root"):
+            MODULE.memcheck_evidence(self.path, 123)
+
+    def test_qttest_report_limit_is_still_64_mib(self):
+        with self.path.open("wb") as stream:
+            stream.truncate(64 * 1024 * 1024 + 1)
+        with self.assertRaisesRegex(ValueError, "oversized"):
+            MODULE.qttest_evidence(self.path)
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Memcheck runner is Linux-only")
@@ -199,6 +289,8 @@ class MemcheckRunnerTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertEqual(self.summary()["status"], "failed")
                 self.assertTrue(self.summary()["problems"])
+                if mode == "nonzero":
+                    self.assertEqual(self.summary()["returncode"], 97)
                 self.assertEqual(ET.parse(self.output / "junit.xml").getroot().get("failures"), "1")
 
     def test_reachable_is_informational(self):
