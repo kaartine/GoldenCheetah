@@ -75,6 +75,99 @@ acceptance. Existing-display runs share the selected desktop's D-Bus and
 `XDG_RUNTIME_DIR` while keeping the athlete library and persistent XDG paths
 isolated; prefer a dedicated test login for that hardware gate.
 
+## Opt-in memory checks (Linux)
+
+Memcheck is a separate correctness gate, not a frame-time benchmark. Build the
+selected QtTest project in a task-owned shadow directory with the matching Qt
+qmake, `CONFIG+=force_debug_info`, and no sanitizer instrumentation. Keep the
+ordinary native test run as a separate prerequisite. ASan/UBSan and Memcheck
+complement each other; an ASan run with leak checking disabled is not leak
+verification.
+
+The additional Debian/Ubuntu packages are kept in one installable list:
+
+```bash
+sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' .github/scripts/memcheck-packages.txt |
+  xargs sudo apt-get install --no-install-recommends -y
+```
+
+Run an already-built native QtTest binary, optionally selecting test functions:
+
+```bash
+QT_IM_MODULE=compose python3 .github/scripts/run-memcheck.py \
+  --output /path/to/new/memcheck-results --timeout 600 \
+  -- /path/to/build/testWorkoutGameCanvas
+```
+
+The output directory must not already exist. Logs, QtTest and Memcheck XML,
+`summary.json`, and `junit.xml` remain available on failure. Passing requires
+normal process exit, completed reports, successful test initialization and
+cleanup, at least one passing non-lifecycle test, and no memory errors or
+definite/indirect/possible leaks. Reachable allocations remain visible but are
+not classified as leaks. Child executables are not instrumented. Timeouts and
+interruptions terminate the owned process group and fail the gate. The wrapper
+ignores user Valgrind options/rc files; installation-default suppressions and
+their match counts remain recorded. It accepts `--valgrind /path/to/valgrind`
+and inherits `VALGRIND_LIB` for a locally extracted distribution package.
+
+For `testWorkoutGameRunner`, `GC_TEST_TIMEOUT_SCALE=20` may extend asynchronous
+frame waits under instrumentation; the accepted integer range is 1–60 and the
+default is 1. Polling cadence and simulation timing do not change. The native
+throughput case `publishesLatestFixedStepFrameWithoutGuiDrivenSimulation` must
+still run uninstrumented; do not loosen it to accommodate Memcheck. Likewise,
+select bounded ViewModel cases rather than claiming that a timed-out long-course
+or GPU-performance test passed. The wrapper records passed and skipped coverage.
+
+`QT_IM_MODULE=compose` excludes the desktop ibus input-method integration from
+these rendering tests. It is an explicit coverage choice, not a fix for ibus.
+
+### Memcheck exceptions
+
+The default run has no project suppressions. Qt 6.8.3 on Ubuntu 24.04/glibc 2.39
+with Valgrind 3.22.0 can leave 368 bytes of private GUI-pool thread-local storage
+classified as possibly lost at Canvas shutdown. A controlled comparison using
+the same Canvas objects and 63 passing tests retained the report with ordinary
+teardown and public global-pool joining; joining the **private** GUI pool before
+QApplication destruction removed it. That private Qt API is diagnostic only and
+must not become a production dependency. This does not identify a lost
+GoldenCheetah allocation or justify suppressing unrelated leaks.
+
+After preserving the unsuppressed report, that exact TLS allocation path can be
+excepted explicitly with
+`--suppressions .github/scripts/qt-6.8.3-gui-tls.supp`. The filter matches only
+possible leaks through the full TLS/thread-pool chain into this QtGui version;
+invalid accesses and definite/indirect leaks still fail. Report such a run as
+**passed with a reviewed Qt exception**, not zero findings. The file is versioned
+in Git; its path and actual matched names/counts are retained in the report.
+Re-run without it after changing Qt, libc or Valgrind. Do not add broad Qt,
+thread, Python or system-library suppression patterns.
+
+### Packaged application memory checks
+
+The isolated UI runner supports `GC_UI_MEMCHECK=1` and optional
+`GC_UI_VALGRIND=/path/to/valgrind`. Extract the AppImage to a dedicated directory,
+set `GC_UI_APPDIR` to that runtime, and pass its native `GoldenCheetah` ELF to
+`run-pre-release-ui.sh`. Do not instrument the AppImage launcher, shell, or
+accessibility Python process. Select the training lifecycle plus
+`graceful_shutdown_request`; the import prerequisite is added automatically.
+The new `artifacts/memcheck` directory contains the application memory gate in
+addition to the ordinary UI reports. Both must pass, including a reaped normal
+application exit and completed Memcheck report. Killed/incomplete application
+runs are diagnostic evidence, never leak-free acceptance. Normal UI timeouts
+can expire under instrumentation; preserve that failure instead of treating
+absence of a report as success. Never run these fixtures on a real athlete or
+trainer, and distinguish reduced startup configurations from normal packaged
+application coverage.
+
+The runner/helper regression tests are part of the existing
+`unittests/Build/ciTestRunner` qmake `make check` target. They exercise malformed
+and missing reports, memory/test failures, empty/skipped coverage, stale output,
+process-group cleanup and signals. These orchestration tests do not mean every
+CI job runs the expensive native Memcheck gate.
+
+Reference: [Valgrind core manual](https://valgrind.org/docs/manual/manual-core.html)
+and [Memcheck manual](https://valgrind.org/docs/manual/mc-manual.html).
+
 ## Build and artifact ownership
 
 - Give every build and test run a task- or revision-specific output directory.

@@ -18,6 +18,27 @@
 
 namespace {
 
+std::optional<int> testTimeoutScale(const QByteArray &value)
+{
+    if (value.isNull()) return 1;
+    bool valid = false;
+    const int scale = value.toInt(&valid);
+    if (!valid || scale < 1 || scale > 60) return std::nullopt;
+    return scale;
+}
+
+int asynchronousTimeoutMs(int milliseconds)
+{
+    // Instrumentation may make thread startup slow. This does not scale the
+    // simulation clock, polling cadence, or the native throughput assertions.
+    static const int scale = [] {
+        const auto configured = testTimeoutScale(qgetenv("GC_TEST_TIMEOUT_SCALE"));
+        if (!configured) qFatal("GC_TEST_TIMEOUT_SCALE must be an integer from 1 to 60");
+        return *configured;
+    }();
+    return milliseconds * scale;
+}
+
 bool waitForFrame(
         WorkoutGameRunner &runner,
         WorkoutGameEngineFrame &frame,
@@ -25,7 +46,7 @@ bool waitForFrame(
 {
     QElapsedTimer timeout;
     timeout.start();
-    while (timeout.elapsed() < timeoutMs) {
+    while (timeout.elapsed() < asynchronousTimeoutMs(timeoutMs)) {
         if (runner.takeLatest(frame)) return true;
         QTest::qWait(2);
     }
@@ -50,7 +71,7 @@ bool waitForFrameAtOrAfter(
 {
     QElapsedTimer timeout;
     timeout.start();
-    while (timeout.elapsed() < timeoutMs) {
+    while (timeout.elapsed() < asynchronousTimeoutMs(timeoutMs)) {
         if (runner.takeLatest(frame)
                 && frame.visual.simulation.workoutTimeMs >= workoutTimeMs) {
             return true;
@@ -67,6 +88,35 @@ class TestWorkoutGameRunner : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase()
+    {
+        // Reject invalid instrumentation configuration before exercising code.
+        QVERIFY(asynchronousTimeoutMs(1) >= 1);
+    }
+
+    void asynchronousTimeoutScaleIsBounded_data()
+    {
+        QTest::addColumn<QByteArray>("setting");
+        QTest::addColumn<int>("expected");
+        QTest::newRow("unset") << QByteArray() << 1;
+        QTest::newRow("normal") << QByteArray("1") << 1;
+        QTest::newRow("instrumented") << QByteArray("20") << 20;
+        QTest::newRow("maximum") << QByteArray("60") << 60;
+        QTest::newRow("empty") << QByteArray("") << 0;
+        QTest::newRow("zero") << QByteArray("0") << 0;
+        QTest::newRow("negative") << QByteArray("-1") << 0;
+        QTest::newRow("too-large") << QByteArray("61") << 0;
+        QTest::newRow("fractional") << QByteArray("1.5") << 0;
+        QTest::newRow("invalid") << QByteArray("nonsense") << 0;
+    }
+
+    void asynchronousTimeoutScaleIsBounded()
+    {
+        QFETCH(QByteArray, setting);
+        QFETCH(int, expected);
+        QCOMPARE(testTimeoutScale(setting).value_or(0), expected);
+    }
+
     void fixedStepPresentationKeepsLockedGapMergeContinuous()
     {
         constexpr double FtpWatts = 190.0;

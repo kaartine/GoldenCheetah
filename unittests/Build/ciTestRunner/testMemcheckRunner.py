@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Contract tests using synthetic reports, without requiring Valgrind or Qt."""
+
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+import xml.etree.ElementTree as ET
+
+
+RUNNER = Path(__file__).resolve().parents[3] / ".github/scripts/run-memcheck.py"
+FAKE_VALGRIND = r'''
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+mode = os.environ.get("GC_FAKE_MEMCHECK", "success")
+arguments = sys.argv[1:]
+xml_path = Path(next(a.split("=", 1)[1] for a in arguments if a.startswith("--xml-file=")).replace("%p", str(os.getpid())))
+output = xml_path.parent
+report = Path(arguments[arguments.index("-o") + 1].removesuffix(",xml"))
+Path(next(a.split("=", 1)[1] for a in arguments if a.startswith("--log-file=")).replace("%p", str(os.getpid()))).write_text("Memcheck text log\n")
+print("application output", flush=True)
+(output / "environment.json").write_text(json.dumps({key: os.environ.get(key) for key in (
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
+    "XDG_RUNTIME_DIR", "TMPDIR", "QT_QPA_PLATFORM", "VALGRIND_LIB")}))
+(output / "arguments.json").write_text(json.dumps(arguments))
+if mode in {"timeout", "interrupt", "orphan"}:
+    child = subprocess.Popen([sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"])
+    (output / "child.pid").write_text(str(child.pid))
+    if mode != "orphan":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        time.sleep(30)
+if mode == "missing":
+    sys.exit(0)
+pid = os.getpid() + (1 if mode == "wrong-pid" else 0)
+tool = "other" if mode == "wrong-tool" else "memcheck"
+state = "RUNNING" if mode == "incomplete" else "FINISHED"
+error = ""
+if mode.startswith("error:"):
+    error = "<error><kind>" + mode.split(":", 1)[1] + "</kind></error>"
+if mode == "signal-report":
+    error = "<fatal_signal><signo>11</signo></fatal_signal>"
+xml_path.write_text(f"<valgrindoutput><protocoltool>{tool}</protocoltool><pid>{pid}</pid><status><state>{state}</state></status>{error}<suppcounts><pair><count>2</count><name>known-default</name></pair></suppcounts></valgrindoutput>")
+if mode == "malformed":
+    xml_path.write_text("<valgrindoutput>")
+if mode == "oversized":
+    with xml_path.open("r+b") as stream:
+        stream.truncate(64 * 1024 * 1024 + 1)
+test = '<TestFunction name="actualTest"><Incident type="pass"/></TestFunction>'
+if mode == "zero":
+    test = ""
+if mode == "skip":
+    test = '<TestFunction name="actualTest"><Incident type="skip"/></TestFunction>'
+if mode == "qt-fail":
+    test = '<TestFunction name="actualTest"><Incident type="fail"/></TestFunction>'
+if mode == "qt-unknown":
+    test = '<TestFunction name="actualTest"><Incident type="unknown"/></TestFunction>'
+if mode == "qt-empty-function":
+    test = '<TestFunction name="actualTest"/>'
+init = '<TestFunction name="initTestCase"><Incident type="pass"/></TestFunction>'
+cleanup = '<TestFunction name="cleanupTestCase"><Incident type="pass"/></TestFunction>'
+if mode == "qt-no-cleanup":
+    cleanup = ""
+if mode == "qt-missing-init":
+    init = ""
+if mode == "qt-cleanup-skip":
+    cleanup = cleanup.replace('type="pass"', 'type="skip"')
+if mode == "qt-init-skip":
+    init = init.replace('type="pass"', 'type="skip"')
+body = init + test + cleanup
+if mode == "qt-cleanup-not-last":
+    body = init + cleanup + test
+report.write_text('<TestCase name="FakeTest">' + body + '</TestCase>')
+if mode == "qt-malformed":
+    report.write_text("<TestCase>")
+if mode == "crash":
+    os.kill(os.getpid(), signal.SIGKILL)
+sys.exit(97 if mode == "nonzero" else 0)
+'''
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "Memcheck runner is Linux-only")
+class MemcheckRunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="gc-memcheck-test-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.fake = self.root / "fake-valgrind"
+        self.fake.write_text(f"#!{sys.executable}\n" + FAKE_VALGRIND, encoding="utf-8")
+        self.fake.chmod(0o700)
+        self.output = self.root / "result"
+
+    def invocation(self, mode="success", timeout="5", binary=None, extra=(), valgrind=None,
+                   suppressions=()):
+        environment = os.environ.copy()
+        environment.pop("QT_QPA_PLATFORM", None)
+        environment["GC_FAKE_MEMCHECK"] = mode
+        environment["VALGRIND_LIB"] = "/fixture/valgrind-lib"
+        environment["QT_IM_MODULE"] = "compose"
+        environment["QSG_RHI_BACKEND"] = "opengl"
+        environment["QT_QUICK_BACKEND"] = "software"
+        environment["LIBGL_ALWAYS_SOFTWARE"] = "1"
+        environment["GC_FAKE_PRIVATE_VALUE"] = "do-not-record-this-value"
+        suppression_options = [value for path in suppressions for value in ("--suppressions", str(path))]
+        return ([sys.executable, str(RUNNER), "--valgrind", str(valgrind or self.fake),
+                 "--output", str(self.output), "--timeout", timeout, *suppression_options, "--",
+                 str(binary or Path(sys.executable).resolve()), *extra], environment)
+
+    def run_fixture(self, mode="success", **kwargs):
+        command, environment = self.invocation(mode, **kwargs)
+        return subprocess.run(command, env=environment, capture_output=True, text=True, timeout=10)
+
+    def summary(self):
+        return json.loads((self.output / "summary.json").read_text())
+
+    def assert_child_stopped(self):
+        pid = int((self.output / "child.pid").read_text())
+        for _ in range(50):
+            status = Path(f"/proc/{pid}/stat")
+            if not status.exists() or status.read_text().split(")", 1)[1].strip().startswith("Z"):
+                return
+            time.sleep(0.02)
+        self.fail(f"runner left child {pid} alive")
+
+    def test_success_artifacts_options_and_isolation(self):
+        result = self.run_fixture(extra=("actualTest:data",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = self.summary()
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(summary["qttest"]["passed"], 1)
+        self.assertEqual(summary["environment"], {
+            "QT_QPA_PLATFORM": "offscreen", "QT_IM_MODULE": "compose",
+            "QSG_RHI_BACKEND": "opengl", "QT_QUICK_BACKEND": "software",
+            "LIBGL_ALWAYS_SOFTWARE": "1", "VALGRIND_LIB": "/fixture/valgrind-lib",
+            "GC_TEST_TIMEOUT_SCALE": os.environ.get("GC_TEST_TIMEOUT_SCALE"),
+        })
+        self.assertNotIn("do-not-record-this-value", json.dumps(summary))
+        self.assertEqual(summary["memcheck"]["suppressed"], [{"name": "known-default", "count": 2}])
+        self.assertIn("application output", (self.output / "application.log").read_text())
+        self.assertEqual(ET.parse(self.output / "junit.xml").getroot().get("failures"), "0")
+        options = json.loads((self.output / "arguments.json").read_text())
+        self.assertFalse(any(option.startswith("--suppressions=") for option in options))
+        self.assertEqual(summary["suppression_policy"]["explicit_paths"], [])
+        for option in ("--command-line-only=yes", "--tool=memcheck", "--leak-check=full",
+                       "--show-leak-kinds=all", "--errors-for-leak-kinds=definite,indirect,possible",
+                       "--error-exitcode=97", "--track-origins=yes", "--num-callers=30", "--trace-children=no",
+                       "--child-silent-after-fork=yes", "actualTest:data"):
+            self.assertIn(option, options)
+        environment = json.loads((self.output / "environment.json").read_text())
+        self.assertEqual(environment.pop("QT_QPA_PLATFORM"), "offscreen")
+        self.assertEqual(environment.pop("VALGRIND_LIB"), "/fixture/valgrind-lib")
+        for directory in environment.values():
+            self.assertEqual(Path(directory).parent, self.output)
+            self.assertEqual(Path(directory).stat().st_mode & 0o777, 0o700)
+
+    def test_failure_evidence(self):
+        modes = ("missing", "malformed", "incomplete", "oversized", "wrong-pid", "wrong-tool",
+                 "signal-report", "zero", "skip", "qt-fail", "qt-unknown", "qt-empty-function",
+                 "qt-malformed", "nonzero", "crash", "error:InvalidRead", "error:Leak_DefinitelyLost",
+                 "error:Leak_IndirectlyLost", "error:Leak_PossiblyLost", "error:UninitCondition",
+                 "qt-no-cleanup", "qt-cleanup-not-last", "qt-missing-init",
+                 "qt-cleanup-skip", "qt-init-skip")
+        for index, mode in enumerate(modes):
+            with self.subTest(mode=mode):
+                self.output = self.root / f"result-{index}"
+                result = self.run_fixture(mode)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(self.summary()["status"], "failed")
+                self.assertTrue(self.summary()["problems"])
+                self.assertEqual(ET.parse(self.output / "junit.xml").getroot().get("failures"), "1")
+
+    def test_reachable_is_informational(self):
+        result = self.run_fixture("error:Leak_StillReachable")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.summary()["memcheck"]["error_records"], {"Leak_StillReachable": 1})
+
+    def test_explicit_suppressions_are_forwarded_and_disclosed(self):
+        paths = [self.root / "reviewed-one.supp", self.root / "reviewed-two.supp"]
+        for path in paths:
+            path.write_text("# synthetic test fixture\n")
+        result = self.run_fixture(suppressions=paths)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Memcheck passed with explicit suppressions:", result.stdout)
+        self.assertEqual(self.summary()["suppression_policy"]["explicit_paths"],
+                         [str(path.resolve()) for path in paths])
+        arguments = json.loads((self.output / "arguments.json").read_text())
+        for path in paths:
+            self.assertIn(f"--suppressions={path.resolve()}", arguments)
+
+    def test_missing_or_nonfile_suppression_fails_before_launch(self):
+        for index, path in enumerate((self.root / "missing.supp", self.root)):
+            with self.subTest(path=path):
+                self.output = self.root / f"invalid-suppression-{index}"
+                result = self.run_fixture(suppressions=(path,))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.summary()["status"], "failed")
+                self.assertFalse((self.output / "arguments.json").exists())
+
+    def test_existing_directory_is_not_reused(self):
+        self.output.mkdir()
+        sentinel = self.output / "summary.json"
+        sentinel.write_text("old result")
+        result = self.run_fixture()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(sentinel.read_text(), "old result")
+        self.assertEqual(list(self.output.iterdir()), [sentinel])
+
+    def test_invalid_inputs(self):
+        script = self.root / "test-script"
+        script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o700)
+        asan = self.root / "asan-binary"
+        asan.write_bytes(b"\x7fELFfake ELF with __asan_init symbol")
+        asan.chmod(0o700)
+        cases = ({"binary": script}, {"binary": asan}, {"valgrind": self.root / "missing"},
+                 {"binary": self.root / "missing"}, {"extra": ("-o", "other.xml,xml")},
+                 {"extra": ("-xml",)}, {"timeout": "nan"}, {"timeout": "0"}, {"timeout": "86401"})
+        for index, arguments in enumerate(cases):
+            with self.subTest(arguments=arguments):
+                self.output = self.root / f"invalid-{index}"
+                result = self.run_fixture(**arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.output / "arguments.json").exists())
+
+    def test_timeout_stops_entire_group(self):
+        result = self.run_fixture("timeout", timeout="0.5")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("test run timed out", self.summary()["problems"])
+        self.assert_child_stopped()
+
+    def test_interrupt_stops_entire_group(self):
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=signum):
+                self.output = self.root / f"signal-{signum}"
+                command, environment = self.invocation("interrupt")
+                process = subprocess.Popen(command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    deadline = time.monotonic() + 5
+                    while not (self.output / "child.pid").exists() and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue((self.output / "child.pid").exists())
+                    process.send_signal(signum)
+                    process.communicate(timeout=5)
+                    self.assertNotEqual(process.returncode, 0)
+                    self.assertIn(f"interrupted by signal {signum}", self.summary()["problems"])
+                    self.assert_child_stopped()
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate()
+
+    def test_child_is_stopped_after_leader_exits(self):
+        result = self.run_fixture("orphan")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_child_stopped()
+
+
+if __name__ == "__main__":
+    unittest.main()

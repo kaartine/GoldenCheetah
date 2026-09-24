@@ -10,6 +10,11 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 source "$SCRIPT_DIR/ui-test-environment.sh"
 IMAGE=$(cd -- "$(dirname -- "$1")" && pwd -P)/$(basename -- "$1")
 ARTIFACT_DIR=${2:-$PWD/ui-test-artifacts}
+MEMCHECK=${GC_UI_MEMCHECK:-0}
+case "$MEMCHECK" in
+    0|1) ;;
+    *) echo "GC_UI_MEMCHECK must be 0 or 1" >&2; exit 2 ;;
+esac
 
 [ -f "$IMAGE" ] && [ -x "$IMAGE" ] || {
     echo "AppImage is missing or not executable: $IMAGE" >&2
@@ -94,10 +99,19 @@ fi
 
 mkdir -p -- "$ARTIFACT_DIR"
 ARTIFACT_DIR=$(cd -- "$ARTIFACT_DIR" && pwd -P)
+MEMCHECK_PREFIX=()
+if [ "$MEMCHECK" = 1 ]; then
+    python3 "$SCRIPT_DIR/ui_memcheck.py" prepare \
+        --image "$IMAGE" --appdir "${GC_UI_APPDIR:-}" \
+        --artifacts "$ARTIFACT_DIR" --valgrind "${GC_UI_VALGRIND:-valgrind}"
+    mapfile -d '' -t MEMCHECK_PREFIX <"$ARTIFACT_DIR/memcheck/command-prefix.nul"
+fi
 TEST_ROOT=$(mktemp -d)
 DISPLAY_NUMBER=
 APP_PID=
 APP_PGID=
+APP_EXIT_STATUS=
+MEMCHECK_FINALIZED=0
 XVFB_PID=
 VIDEO_PID=
 
@@ -105,22 +119,62 @@ stop_app_group()
 {
     [ -n "$APP_PGID" ] || return
     if kill -0 -- "-$APP_PGID" 2>/dev/null; then
-        kill -TERM -- "-$APP_PGID" 2>/dev/null
+        kill -TERM -- "-$APP_PGID" 2>/dev/null || true
         for unused in $(seq 1 30); do
             kill -0 -- "-$APP_PGID" 2>/dev/null || break
             sleep 0.1
         done
-        kill -0 -- "-$APP_PGID" 2>/dev/null && \
-            kill -KILL -- "-$APP_PGID" 2>/dev/null
+        if kill -0 -- "-$APP_PGID" 2>/dev/null; then
+            kill -KILL -- "-$APP_PGID" 2>/dev/null || true
+        fi
     fi
-    [ -z "$APP_PID" ] || wait "$APP_PID" 2>/dev/null
+    if [ -n "$APP_PID" ] && [ -z "$APP_EXIT_STATUS" ]; then
+        if wait "$APP_PID" 2>/dev/null; then
+            APP_EXIT_STATUS=0
+        else
+            APP_EXIT_STATUS=$?
+        fi
+    fi
+}
+
+finalize_memcheck()
+{
+    local workflow_status=$1
+    local gate_status
+    [ "$MEMCHECK" = 1 ] && [ -n "$APP_PID" ] && \
+        [ "$MEMCHECK_FINALIZED" = 0 ] || return 0
+    if [ "$workflow_status" -ne 0 ]; then
+        stop_app_group
+    fi
+    if [ -z "$APP_EXIT_STATUS" ]; then
+        if wait "$APP_PID"; then
+            APP_EXIT_STATUS=0
+        else
+            APP_EXIT_STATUS=$?
+        fi
+    fi
+    if python3 "$SCRIPT_DIR/ui_memcheck.py" validate \
+        --artifacts "$ARTIFACT_DIR" --pid "$APP_PID" \
+        --app-status "$APP_EXIT_STATUS" --ui-status "$workflow_status"; then
+        gate_status=0
+    else
+        gate_status=$?
+    fi
+    MEMCHECK_FINALIZED=1
+    return "$gate_status"
 }
 
 cleanup()
 {
+    local cleanup_status=$?
     set +e
     [ -z "$VIDEO_PID" ] || kill -INT "$VIDEO_PID" 2>/dev/null
     stop_app_group
+    if [ "$MEMCHECK" = 1 ] && [ -n "$APP_PID" ] && [ "$MEMCHECK_FINALIZED" = 0 ]; then
+        # An EXIT caused by set -e or a signal must retain failed evidence too.
+        [ "$cleanup_status" -ne 0 ] || cleanup_status=1
+        finalize_memcheck "$cleanup_status" || true
+    fi
     [ -z "$XVFB_PID" ] || kill "$XVFB_PID" 2>/dev/null
     [ -z "$VIDEO_PID" ] || wait "$VIDEO_PID" 2>/dev/null
     [ -z "$XVFB_PID" ] || wait "$XVFB_PID" 2>/dev/null
@@ -129,11 +183,22 @@ cleanup()
         # session exits. Preserve this small synthetic fixture for inspection;
         # do not recursively remove a still-mounted runtime directory.
         printf '%s\n' "$TEST_ROOT" >"$ARTIFACT_DIR/fixture-root.txt"
+        if [ "$MEMCHECK" = 1 ]; then
+            exit "$cleanup_status"
+        fi
         return
     fi
     rm -rf -- "$TEST_ROOT"
+    if [ "$MEMCHECK" = 1 ]; then
+        exit "$cleanup_status"
+    fi
 }
 trap cleanup EXIT HUP INT TERM
+if [ "$MEMCHECK" = 1 ]; then
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+fi
 
 python3 "$SCRIPT_DIR/pre_release_ui.py" prepare "$TEST_ROOT"
 if [ -n "${GC_UI_TRAINING_FAILURE_CASE:-}" ]; then
@@ -291,7 +356,7 @@ if [ "${GC_UI_RECORD_VIDEO:-0}" = 1 ] && command -v ffmpeg >/dev/null; then
     VIDEO_PID=$!
 fi
 
-setsid "${APP_ENV[@]}" "$IMAGE" "$TEST_ROOT/library" UiTestAthlete --debug \
+setsid "${APP_ENV[@]}" "${MEMCHECK_PREFIX[@]}" "$IMAGE" "$TEST_ROOT/library" UiTestAthlete --debug \
     >"$ARTIFACT_DIR/application.log" 2>&1 &
 APP_PID=$!
 APP_PGID=$APP_PID
@@ -401,6 +466,12 @@ if [ "$STATUS" -eq 0 ]; then
     done
     if kill -0 -- "-$APP_PGID" 2>/dev/null; then
         echo "GoldenCheetah did not exit after the UI shutdown request" >&2
+        STATUS=1
+    fi
+fi
+
+if [ "$MEMCHECK" = 1 ]; then
+    if ! finalize_memcheck "$STATUS" && [ "$STATUS" -eq 0 ]; then
         STATUS=1
     fi
 fi
