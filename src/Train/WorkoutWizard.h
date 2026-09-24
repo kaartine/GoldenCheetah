@@ -372,6 +372,11 @@ class GeneratedWorkoutPage : public WorkoutPage
     QSlider *warmupEndPowerSlider = nullptr;
     QSpinBox *warmupEndPowerBox = nullptr;
     QLabel *warmupEndPowerWattsValue = nullptr;
+    QSpinBox *primerSecondsBox = nullptr;
+    QSlider *primerPowerSlider = nullptr;
+    QSpinBox *primerPowerBox = nullptr;
+    QLabel *primerPowerWattsValue = nullptr;
+    QSpinBox *preWorkRecoverySecondsBox = nullptr;
     QSpinBox *cooldownMinutesBox = nullptr;
     QCheckBox *recoverAfterLastBox = nullptr;
     QLabel *durationValue = nullptr;

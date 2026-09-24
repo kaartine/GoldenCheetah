@@ -377,6 +377,7 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             self.assertEqual(result["minimum_percent"], 55.0)
             self.assertEqual(result["maximum_percent"], 135.0)
             self.assertEqual(result["point_count"], 4)
+            self.assertEqual(result["percent_values"], [55.0, 135.0])
 
     def test_generated_workout_validator_rejects_time_reversal(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -609,7 +610,11 @@ class PreReleaseUiWorkflowTests(unittest.TestCase):
             "recoveryPowerSlider", "recoveryPowerBox", "workSecondsBox",
             "recoverySecondsBox", "repetitionsBox", "setsBox",
             "repetitionDeltaBox", "setRecoveryBox", "finalSetRecoveryBox",
-            "warmupMinutesBox", "cooldownMinutesBox", "recoverAfterLastBox",
+            "warmupMinutesBox", "warmupStartPowerSlider",
+            "warmupStartPowerBox", "warmupEndPowerSlider",
+            "warmupEndPowerBox", "primerSecondsBox", "primerPowerSlider",
+            "primerPowerBox", "preWorkRecoverySecondsBox",
+            "cooldownMinutesBox", "recoverAfterLastBox",
         )
 
         positions = [tab_order.index(control) for control in controls]

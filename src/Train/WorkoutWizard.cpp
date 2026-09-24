@@ -1024,6 +1024,32 @@ void GeneratedWorkoutPage::initializePage()
     warmupStartPowerBox->setAccessibleName(tr("Warm-up start"));
     warmupEndPowerSlider->setAccessibleName(tr("Warm-up end slider"));
     warmupEndPowerBox->setAccessibleName(tr("Warm-up end"));
+    primerSecondsBox = new QSpinBox(this);
+    primerSecondsBox->setObjectName(
+            QStringLiteral("workoutGeneratorPrimerSeconds"));
+    primerSecondsBox->setAccessibleName(tr("Warm-up primer"));
+    primerSecondsBox->setRange(0, 20 * 60);
+    primerSecondsBox->setSingleStep(15);
+    primerSecondsBox->setAccelerated(true);
+    primerSecondsBox->setSuffix(tr(" s"));
+    form->addRow(tr("Warm-up primer"), primerSecondsBox);
+    form->addRow(tr("Primer intensity"), createPowerControl(
+            QStringLiteral("workoutGeneratorPrimerPower"),
+            primerPowerSlider, primerPowerBox,
+            primerPowerWattsValue, 20, 250));
+    primerPowerSlider->setAccessibleName(tr("Primer intensity slider"));
+    primerPowerBox->setAccessibleName(tr("Primer intensity"));
+    preWorkRecoverySecondsBox = new QSpinBox(this);
+    preWorkRecoverySecondsBox->setObjectName(
+            QStringLiteral("workoutGeneratorPreWorkRecoverySeconds"));
+    preWorkRecoverySecondsBox->setAccessibleName(
+            tr("Recovery before main set"));
+    preWorkRecoverySecondsBox->setRange(0, 30 * 60);
+    preWorkRecoverySecondsBox->setSingleStep(15);
+    preWorkRecoverySecondsBox->setAccelerated(true);
+    preWorkRecoverySecondsBox->setSuffix(tr(" s"));
+    form->addRow(tr("Recovery before main set"),
+                 preWorkRecoverySecondsBox);
     form->addRow(tr("Cool-down"), cooldownMinutesBox);
     form->addRow(QString(), recoverAfterLastBox);
 
@@ -1085,6 +1111,7 @@ void GeneratedWorkoutPage::initializePage()
         recoverySecondsBox, repetitionsBox, setsBox, repetitionDeltaBox,
         setRecoveryBox, finalSetRecoveryBox,
         warmupMinutesBox, warmupStartPowerBox, warmupEndPowerBox,
+        primerSecondsBox, primerPowerBox, preWorkRecoverySecondsBox,
         cooldownMinutesBox
     };
     for (QSpinBox *box : boxes) {
@@ -1104,6 +1131,9 @@ void GeneratedWorkoutPage::initializePage()
         warmupMinutesBox,
         warmupStartPowerSlider, warmupStartPowerBox,
         warmupEndPowerSlider, warmupEndPowerBox,
+        primerSecondsBox,
+        primerPowerSlider, primerPowerBox,
+        preWorkRecoverySecondsBox,
         cooldownMinutesBox,
         recoverAfterLastBox
     };
@@ -1140,6 +1170,9 @@ WorkoutGenerationSettings GeneratedWorkoutPage::settingsFromControls() const
     value.warmupSeconds = warmupMinutesBox->value() * 60;
     value.warmupStartPercentFtp = warmupStartPowerBox->value();
     value.warmupEndPercentFtp = warmupEndPowerBox->value();
+    value.primerSeconds = primerSecondsBox->value();
+    value.primerPercentFtp = primerPowerBox->value();
+    value.preWorkRecoverySeconds = preWorkRecoverySecondsBox->value();
     value.cooldownSeconds = cooldownMinutesBox->value() * 60;
     value.includeRecoveryAfterLastRep = recoverAfterLastBox->isChecked();
     return value;
@@ -1158,6 +1191,9 @@ void GeneratedWorkoutPage::applySettings(
         warmupMinutesBox,
         warmupStartPowerSlider, warmupStartPowerBox,
         warmupEndPowerSlider, warmupEndPowerBox,
+        primerSecondsBox,
+        primerPowerSlider, primerPowerBox,
+        preWorkRecoverySecondsBox,
         cooldownMinutesBox,
         recoverAfterLastBox
     };
@@ -1188,6 +1224,10 @@ void GeneratedWorkoutPage::applySettings(
     warmupEndPowerBox->setValue(
             int(std::lround(value.warmupEndPercentFtp)));
     warmupEndPowerSlider->setValue(warmupEndPowerBox->value());
+    primerSecondsBox->setValue(value.primerSeconds);
+    primerPowerBox->setValue(int(std::lround(value.primerPercentFtp)));
+    primerPowerSlider->setValue(primerPowerBox->value());
+    preWorkRecoverySecondsBox->setValue(value.preWorkRecoverySeconds);
     cooldownMinutesBox->setValue(value.cooldownSeconds / 60);
     recoverAfterLastBox->setChecked(value.includeRecoveryAfterLastRep);
     controlsChanged();
@@ -1218,6 +1258,9 @@ void GeneratedWorkoutPage::controlsChanged()
     warmupEndPowerWattsValue->setText(tr("%1 W").arg(
             WorkoutGenerator::wattsForPercent(
                     settings.ftpWatts, settings.warmupEndPercentFtp)));
+    primerPowerWattsValue->setText(tr("%1 W").arg(
+            WorkoutGenerator::wattsForPercent(
+                    settings.ftpWatts, settings.primerPercentFtp)));
     generated = WorkoutGenerator::generate(settings);
     const bool ready = generated.status == WorkoutGenerationStatus::Ready;
     validationLabel->setVisible(!ready);

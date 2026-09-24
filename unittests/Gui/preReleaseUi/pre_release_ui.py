@@ -680,6 +680,7 @@ def validate_generated_workout(path: Path) -> dict:
         "minimum_percent": min(point[1] for point in points),
         "maximum_percent": max(point[1] for point in points),
         "point_count": len(points),
+        "percent_values": sorted({point[1] for point in points}),
     }
 
 
@@ -3027,6 +3028,9 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     "Recovery before final set",
                     "Warm-up start",
                     "Warm-up end",
+                    "Warm-up primer",
+                    "Primer intensity",
+                    "Recovery before main set",
                 ],
                 timeout=15.0,
             )
@@ -3050,6 +3054,10 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     ("Warm-up start", "spin button"),
                     ("Warm-up end slider", "slider"),
                     ("Warm-up end", "spin button"),
+                    ("Warm-up primer", "spin button"),
+                    ("Primer intensity slider", "slider"),
+                    ("Primer intensity", "spin button"),
+                    ("Recovery before main set", "spin button"),
                     ("Cool-down", "spin button"),
                     ("Recovery after the last repetition", "check box"),
                 ],
@@ -3090,17 +3098,30 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             warmup_end = driver.find(
                 "Warm-up end", "spin button", showing=True
             )
+            primer_seconds = driver.find(
+                "Warm-up primer", "spin button", showing=True
+            )
+            primer_power = driver.find(
+                "Primer intensity", "spin button", showing=True
+            )
+            pre_work_recovery = driver.find(
+                "Recovery before main set", "spin button", showing=True
+            )
             driver.set_value(ftp, 200)
             driver.set_value(work_power, 135)
             driver.set_value(work_seconds, 25)
             driver.set_value(final_set_recovery, 150)
             driver.set_value(warmup_start, 50)
             driver.set_value(warmup_end, 75)
+            driver.set_value(primer_seconds, 90)
+            driver.set_value(primer_power, 95)
+            driver.set_value(pre_work_recovery, 75)
             driver.find("270 W", "label", showing=True, timeout=10.0)
             driver.find("110 W", "label", showing=True, timeout=10.0)
             driver.find("100 W", "label", showing=True, timeout=10.0)
             driver.find("150 W", "label", showing=True, timeout=10.0)
-            driver.find("0:56:30", showing=True, timeout=10.0)
+            driver.find("190 W", "label", showing=True, timeout=10.0)
+            driver.find("0:53:15", showing=True, timeout=10.0)
             driver.find(
                 "14 / 12 / 10 / 8 efforts; set recovery "
                 "4:00 / 4:00 / 2:30",
@@ -3142,6 +3163,21 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             if driver.current_value(final_set_recovery) != 150:
                 raise UiFailure(
                     "Workout generator lost final-set recovery after Back/Next"
+                )
+            primer_seconds = driver.find(
+                "Warm-up primer", "spin button", showing=True
+            )
+            primer_power = driver.find(
+                "Primer intensity", "spin button", showing=True
+            )
+            pre_work_recovery = driver.find(
+                "Recovery before main set", "spin button", showing=True
+            )
+            if (driver.current_value(primer_seconds) != 90
+                    or driver.current_value(primer_power) != 95
+                    or driver.current_value(pre_work_recovery) != 75):
+                raise UiFailure(
+                    "Workout generator lost warm-up edits after Back/Next"
                 )
 
             repetitions = driver.find(
@@ -3190,11 +3226,12 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             driver.click(driver.find("Save", "push button", showing=True))
             driver.wait_file(destination)
             result = validate_generated_workout(destination)
-            if (not math.isclose(result["duration_minutes"], 56.5,
+            if (not math.isclose(result["duration_minutes"], 53.25,
                                  abs_tol=0.001)
                     or result["minimum_percent"] != 50.0
                     or result["maximum_percent"] != 135.0
-                    or result["point_count"] != 190):
+                    or result["point_count"] != 190
+                    or 95.0 not in result["percent_values"]):
                 raise UiFailure(
                     f"Generated workout did not preserve controls: {result!r}"
                 )

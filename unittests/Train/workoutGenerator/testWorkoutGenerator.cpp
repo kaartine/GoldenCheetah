@@ -252,6 +252,41 @@ private slots:
                  WorkoutGeneratedIntervalRole::Cooldown);
     }
 
+    void customPrimerBuildsAnOrderedWarmupSequence()
+    {
+        WorkoutGenerationSettings settings = WorkoutGenerator::defaultsFor(
+                WorkoutTrainingFocus::Endurance);
+        settings.warmupSeconds = 8 * 60;
+        settings.warmupStartPercentFtp = 45.0;
+        settings.warmupEndPercentFtp = 70.0;
+        settings.primerSeconds = 90;
+        settings.primerPercentFtp = 95.0;
+        settings.preWorkRecoverySeconds = 75;
+        settings.recoveryPercentFtp = 50.0;
+
+        const WorkoutGenerationResult result =
+                WorkoutGenerator::generate(settings);
+
+        QCOMPARE(result.status, WorkoutGenerationStatus::Ready);
+        QVERIFY(result.intervals.size() >= std::size_t(4));
+        QCOMPARE(result.intervals.at(0).role,
+                 WorkoutGeneratedIntervalRole::Warmup);
+        QCOMPARE(result.intervals.at(0).durationSeconds, 8 * 60);
+        QCOMPARE(result.intervals.at(0).startPercentFtp, 45.0);
+        QCOMPARE(result.intervals.at(0).endPercentFtp, 70.0);
+        QCOMPARE(result.intervals.at(1).role,
+                 WorkoutGeneratedIntervalRole::Primer);
+        QCOMPARE(result.intervals.at(1).durationSeconds, 90);
+        QCOMPARE(result.intervals.at(1).startPercentFtp, 95.0);
+        QCOMPARE(result.intervals.at(1).endPercentFtp, 95.0);
+        QCOMPARE(result.intervals.at(2).role,
+                 WorkoutGeneratedIntervalRole::Recovery);
+        QCOMPARE(result.intervals.at(2).durationSeconds, 75);
+        QCOMPARE(result.intervals.at(2).startPercentFtp, 50.0);
+        QCOMPARE(result.intervals.at(3).role,
+                 WorkoutGeneratedIntervalRole::Work);
+    }
+
     void serializesContinuousMrcCourseData()
     {
         WorkoutGenerationSettings settings = WorkoutGenerator::defaultsFor(
