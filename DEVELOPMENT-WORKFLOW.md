@@ -153,9 +153,14 @@ accessibility Python process. Select the training lifecycle plus
 The new `artifacts/memcheck` directory contains the application memory gate in
 addition to the ordinary UI reports. Both must pass, including a reaped normal
 application exit and completed Memcheck report. Killed/incomplete application
-runs are diagnostic evidence, never leak-free acceptance. Normal UI timeouts
-can expire under instrumentation; preserve that failure instead of treating
-absence of a report as success. Never run these fixtures on a real athlete or
+runs are diagnostic evidence, never leak-free acceptance. Set
+`GC_UI_TIMEOUT_SCALE=20` to extend asynchronous UI waits under instrumentation
+(startup 30 to 600 seconds, shutdown 8 to 160 seconds). The accepted integer
+range is 1–60; unset means 1, and invalid values fail early. Polling, game run
+duration and performance thresholds are unchanged. Keep an overall process
+timeout too: nested operations/retries are not a single end-to-end deadline.
+Normal UI timeouts can expire under instrumentation; preserve that failure
+instead of treating absence of a report as success. Never run these fixtures on a real athlete or
 trainer, and distinguish reduced startup configurations from normal packaged
 application coverage.
 
