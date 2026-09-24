@@ -9,7 +9,7 @@ state before acting; the parallel memory investigation is moving independently.
 | Actor | Work and current ownership | Checkpoint status |
 | --- | --- | --- |
 | `remote-agent` (this ASUSBOX session) | Implemented the Workout Generator warm-up controls and their C++/Python/UI tests; built and verified the `d444f1f2` AppImage on Lastu; pushed the commit to fork `master`; promoted the verified image locally; wrote this handover. | Delivered and tested. No source-code write-set retained. |
-| `lastu-root` (agent on Lastu) | Runs the separate `codex/valgrind-regressions` investigation: Memcheck harness, bounded credential read, chart/overview/widget ownership fixes and targeted regressions. Its current write-set includes chart and Train widget files; ask it for the exact live list before editing. | Local, unpublished work. Full application Memcheck is still red; Lastu owns its branch and evidence. |
+| `lastu-root` (agent on Lastu) | Runs the separate `codex/valgrind-regressions` investigation: Memcheck harness, bounded credential read, chart/overview/widget ownership fixes and targeted regressions. It confirmed `src/Charts/OverviewItems.cpp` and `src/Train/FilterEditor.cpp` in its current write-set; ask for the exact live list before editing adjacent files. | Local, unpublished work. Targeted ownership tests pass, but full application Memcheck is still red; Lastu owns its branch and evidence. |
 | `claude-gc-e9` (third agent) | Independent review and triage of memory findings, including a proposed collaboration/ledger process. It has said it will not edit the contested chart files without a write-set agreement. | Review/proposal work; no implementation from it has been integrated by this handover. |
 | Next agent | Continue the user's requested workout selector filters/ordering and multiselect deletion, or take an explicitly assigned nonoverlapping task after checking the live bus. | Unassigned at this checkpoint. Create a separate branch/worktree and announce its files. |
 
@@ -98,6 +98,11 @@ Verification on that source and exact packaged image:
 4. `AUDIT_FINDINGS.md` tracks earlier security, durability, thread and
    performance work. Low-severity items are explicitly deferred. Its old
    verification baseline is historical, not proof of a new branch's tests.
+5. `src/Charts/LTMPlot.cpp` is **not assigned** to Lastu's current repair
+   batch. A prior report mentioned CurveColors/LTMPlot stacks, while Lastu's
+   later attribution placed those particular allocations in AllPlot. Recheck
+   the latest complete stack report for an independent LTMPlot defect before
+   assigning or editing this file.
 
 ## Coordination and resources
 
