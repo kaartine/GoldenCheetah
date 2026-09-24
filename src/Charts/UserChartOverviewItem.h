@@ -26,6 +26,7 @@
 #include "UserChart.h"
 
 #include <QGraphicsProxyWidget>
+#include <QPointer>
 
 class QLineEdit;
 class UserChartOverviewItem : public ChartSpaceItem
@@ -43,7 +44,7 @@ class UserChartOverviewItem : public ChartSpaceItem
         void setData(RideItem *item) override;
         void setDateRange(DateRange) override;
         QColor color() override;
-        QWidget *config()  override { return chart->settingsTool(); }
+        QWidget *config()  override { return configwidget.data(); }
 
         // create a blank one
         static ChartSpaceItem *create(ChartSpace *parent) { return new UserChartOverviewItem(parent, "User Chart",
@@ -68,6 +69,7 @@ class UserChartOverviewItem : public ChartSpaceItem
     private:
         // embedding
         UserChart *chart;
+        QPointer<UserChartSettings> configwidget;
         ChartSpace *space_;
 
         // we need to edit the tile name since we use a

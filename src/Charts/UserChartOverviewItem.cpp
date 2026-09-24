@@ -31,6 +31,7 @@ UserChartOverviewItem::UserChartOverviewItem(ChartSpace *parent, QString name, Q
     // create the chart and place on scene
     chart = new UserChart(NULL, parent->context, parent->scope & (OverviewScope::TRENDS | OverviewScope::PLAN), StandardColor(CCARDBACKGROUND).name());
     chart->hide();
+    configwidget = chart->settingsTool();
     proxy = parent->getScene()->addWidget(chart);
     proxy->setParent(this);
     proxy->setZValue(20); // tile is 10, dragging is 100
@@ -49,7 +50,13 @@ UserChartOverviewItem::UserChartOverviewItem(ChartSpace *parent, QString name, Q
     connect(nameEdit, SIGNAL(textEdited(QString)), this, SLOT(nameChanged()));
 }
 
-UserChartOverviewItem::~UserChartOverviewItem() { }
+UserChartOverviewItem::~UserChartOverviewItem()
+{
+    // UserChart creates the settings tool without a parent and dialogs only
+    // borrow it, so the tile owns it. Don't touch chart: the scene may have
+    // deleted its proxy already. QPointer is defensive only.
+    delete configwidget.data();
+}
 
 QColor
 UserChartOverviewItem::color()

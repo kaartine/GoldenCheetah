@@ -19,6 +19,23 @@ Coverage:
   assigns its counting markers before reading these formerly uninitialized fields.
 - `GcChartWindow`: both animations and its timer are direct children, and their
   `QPointer`s clear when the actual chart is destroyed.
+- `FilterEditor`: its completer/model are owned and reused, and repeated filter
+  setup does not duplicate update connections.
+
+The same make fragment also accepts `CHART_FIXTURE_TEST_NAME` to select a
+separate production-object fixture; give each build its own output directory.
+
+| Test source stem | Additional ownership coverage |
+|---|---|
+| `testWidgetOwnership` | RideEditor model/delegate, Cloud animation, TagBar completion model |
+| `testViewOwnership` | Overview actions and ChartSpace animations |
+| `testOverviewConfigOwnership` | Real RPE config lifetime, dialog close/destruction/remove, external tile removal |
+| `testLibraryOwnership` | Shared Library initialization, final cleanup, idempotence, reinitialization and parsed libraries |
+
+Overview's RPE fixture does not by itself verify all other tile subclasses or
+shown/export dialogs. The widget fixture creates an isolated synthetic TrainDB;
+none of these fixtures loads an athlete. Library cleanup must stay at final
+application exit, not per-window or per-restart, because the registry is shared.
 
 The charts remain unshown. There is no ride, athlete, chart window for interval
 selection, rendering exercise or UI shutdown simulation. These are ownership
@@ -39,6 +56,11 @@ make -rR -f Makefile \
   -o Makefile CHART_FIXTURE_OUT=/absolute/new-chart-fixture \
   CHART_FIXTURE_MAIN=/absolute/source/src/Core/main.cpp chart-ownership
 ```
+
+For another fixture, add for example
+`CHART_FIXTURE_TEST_NAME=testOverviewConfigOwnership` to that make command.
+The default output binary name remains `tst_chartOwnership`; override
+`CHART_FIXTURE_BINARY` if desired.
 
 The fragment uses the cached `CXXFLAGS`, `INCPATH`, `OBJECTS`, `LIBS`, `QMAKE`
 and link flags. It does not invoke application-object build rules. It compiles
