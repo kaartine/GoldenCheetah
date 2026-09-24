@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 
@@ -71,7 +72,7 @@ class UiMemcheckTests(unittest.TestCase):
         self.assertEqual(prefix[0], self.valgrind)
         for option in ("--command-line-only=yes", "--tool=memcheck", "--leak-check=full",
                        "--show-leak-kinds=all", "--errors-for-leak-kinds=definite,indirect,possible",
-                       "--track-origins=yes", "--num-callers=30", "--error-exitcode=97",
+                       "--track-origins=yes", "--num-callers=30", "--smc-check=all", "--error-exitcode=97",
                        "--xml=yes", "--trace-children=no", "--child-silent-after-fork=yes"):
             self.assertIn(option, prefix)
         self.assertFalse(any(arg.startswith("--suppressions") for arg in prefix))
@@ -108,6 +109,16 @@ class UiMemcheckTests(unittest.TestCase):
                 summary = json.loads((self.artifacts / "memcheck/summary.json").read_text())
                 self.assertEqual(summary["status"], "passed")
                 self.assertEqual(summary["ui"]["passed"], 2)
+
+    def test_regexp_jit_setting_is_recorded_not_changed(self):
+        self.reports()
+        for value in (None, "0", "1"):
+            environment = {} if value is None else {"QT_ENABLE_REGEXP_JIT": value}
+            with self.subTest(value=value), mock.patch.dict(os.environ, environment, clear=True):
+                self.assertEqual(self.validate(), 0)
+                summary = json.loads((self.artifacts / "memcheck/summary.json").read_text())
+                self.assertEqual(summary["environment"]["QT_ENABLE_REGEXP_JIT"], value)
+                self.assertEqual(os.environ.get("QT_ENABLE_REGEXP_JIT"), value)
 
     def test_failed_exit_or_workflow_cannot_pass(self):
         self.reports()
@@ -242,6 +253,7 @@ while :; do sleep 0.02; done
         environment = os.environ.copy()
         environment.pop("GC_UI_TRAINING_FAILURE_CASE", None)
         environment["GC_UI_TIMEOUT_SCALE"] = "20"
+        environment["QT_ENABLE_REGEXP_JIT"] = "0"
         for event, expected in ((signal.SIGHUP, 129), (signal.SIGINT, 130),
                                 (signal.SIGTERM, 143), ("error", 23)):
             with self.subTest(event=event):
@@ -271,6 +283,7 @@ while :; do sleep 0.02; done
                     self.assertEqual(summary["ui_returncode"], expected)
                     self.assertEqual(summary["app_returncode"], 99)
                     self.assertEqual(summary["environment"]["GC_UI_TIMEOUT_SCALE"], "20")
+                    self.assertEqual(summary["environment"]["QT_ENABLE_REGEXP_JIT"], "0")
                     report = ET.parse(self.artifacts / "memcheck/junit.xml").getroot()
                     self.assertEqual(report.get("failures"), "1")
                     with self.assertRaises(ProcessLookupError):

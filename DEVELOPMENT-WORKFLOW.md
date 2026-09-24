@@ -109,6 +109,12 @@ interruptions terminate the owned process group and fail the gate. The wrapper
 ignores user Valgrind options/rc files; installation-default suppressions and
 their match counts remain recorded. It accepts `--valgrind /path/to/valgrind`
 and inherits `VALGRIND_LIB` for a locally extracted distribution package.
+The instrumented child uses a private `077` umask so synthetic credential
+fixtures do not inherit group-writable defaults from a developer's shell.
+For `tst_credentialSettings`, place the output under a private `/tmp` parent
+created with `mktemp -d`; workspace ancestors may be group-writable and are
+intentionally rejected by the existing credential-directory checks. Do not
+relax those checks to make the tests pass.
 
 For `testWorkoutGameRunner`, `GC_TEST_TIMEOUT_SCALE=20` may extend asynchronous
 frame waits under instrumentation; the accepted integer range is 1–60 and the
@@ -120,6 +126,14 @@ or GPU-performance test passed. The wrapper records passed and skipped coverage.
 
 `QT_IM_MODULE=compose` excludes the desktop ibus input-method integration from
 these rendering tests. It is an explicit coverage choice, not a fix for ibus.
+
+Both wrappers use `--smc-check=all` for generated/self-modifying code. Qt's
+regexp JIT can also produce symbol-less conditional-jump reports; an explicit
+`QT_ENABLE_REGEXP_JIT=0` diagnostic run excludes that JIT backend, not regexp
+matching itself. The wrappers record this setting but never set it implicitly.
+Preserve the original failure and compare runs before attributing findings to
+JIT. See the [Valgrind Qt FAQ, section 5.4](https://valgrind.org/docs/manual/faq.html)
+and [Qt regexp debugging guidance](https://doc.qt.io/qt-6.8/qregularexpression.html#debugging-code-that-uses-qregularexpression).
 
 ### Memcheck exceptions
 

@@ -47,7 +47,7 @@ def prepare(image, appdir, artifacts, valgrind):
     prefix = [str(Path(executable).resolve()), "--command-line-only=yes", "--tool=memcheck",
               "--leak-check=full", "--show-leak-kinds=all",
               "--errors-for-leak-kinds=definite,indirect,possible", "--track-origins=yes",
-              "--num-callers=30", "--error-exitcode=97", "--trace-children=no",
+              "--num-callers=30", "--smc-check=all", "--error-exitcode=97", "--trace-children=no",
               "--child-silent-after-fork=yes", "--xml=yes",
               f"--xml-file={output / 'memcheck-%p.xml'}",
               f"--log-file={output / 'memcheck-%p.log'}"]
@@ -85,7 +85,7 @@ def validate(artifacts, pid, app_status, ui_status):
                    name: os.environ.get(name) for name in (
                        "QT_QPA_PLATFORM", "QT_IM_MODULE", "QSG_RHI_BACKEND",
                        "QT_QUICK_BACKEND", "LIBGL_ALWAYS_SOFTWARE", "VALGRIND_LIB",
-                       "GC_UI_TIMEOUT_SCALE")}}
+                       "GC_UI_TIMEOUT_SCALE", "QT_ENABLE_REGEXP_JIT")}}
     if app_status != 0:
         summary["problems"].append(f"application exited with status {app_status}")
     if ui_status != 0:

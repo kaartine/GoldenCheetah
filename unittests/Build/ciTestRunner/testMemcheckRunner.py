@@ -33,6 +33,8 @@ print("application output", flush=True)
 (output / "environment.json").write_text(json.dumps({key: os.environ.get(key) for key in (
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
     "XDG_RUNTIME_DIR", "TMPDIR", "QT_QPA_PLATFORM", "VALGRIND_LIB")}))
+(output / "private-fixture.txt").write_text("synthetic test fixture")
+(output / "regexp-jit.json").write_text(json.dumps(os.environ.get("QT_ENABLE_REGEXP_JIT")))
 (output / "arguments.json").write_text(json.dumps(arguments))
 if mode in {"timeout", "interrupt", "orphan"}:
     child = subprocess.Popen([sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"])
@@ -107,6 +109,7 @@ class MemcheckRunnerTests(unittest.TestCase):
         environment["GC_FAKE_MEMCHECK"] = mode
         environment["VALGRIND_LIB"] = "/fixture/valgrind-lib"
         environment["QT_IM_MODULE"] = "compose"
+        environment["QT_ENABLE_REGEXP_JIT"] = "0"
         environment["QSG_RHI_BACKEND"] = "opengl"
         environment["QT_QUICK_BACKEND"] = "software"
         environment["LIBGL_ALWAYS_SOFTWARE"] = "1"
@@ -143,8 +146,11 @@ class MemcheckRunnerTests(unittest.TestCase):
             "QSG_RHI_BACKEND": "opengl", "QT_QUICK_BACKEND": "software",
             "LIBGL_ALWAYS_SOFTWARE": "1", "VALGRIND_LIB": "/fixture/valgrind-lib",
             "GC_TEST_TIMEOUT_SCALE": os.environ.get("GC_TEST_TIMEOUT_SCALE"),
+            "QT_ENABLE_REGEXP_JIT": "0",
         })
         self.assertNotIn("do-not-record-this-value", json.dumps(summary))
+        self.assertEqual((self.output / "private-fixture.txt").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads((self.output / "regexp-jit.json").read_text()), "0")
         self.assertEqual(summary["memcheck"]["suppressed"], [{"name": "known-default", "count": 2}])
         self.assertIn("application output", (self.output / "application.log").read_text())
         self.assertEqual(ET.parse(self.output / "junit.xml").getroot().get("failures"), "0")
@@ -153,7 +159,7 @@ class MemcheckRunnerTests(unittest.TestCase):
         self.assertEqual(summary["suppression_policy"]["explicit_paths"], [])
         for option in ("--command-line-only=yes", "--tool=memcheck", "--leak-check=full",
                        "--show-leak-kinds=all", "--errors-for-leak-kinds=definite,indirect,possible",
-                       "--error-exitcode=97", "--track-origins=yes", "--num-callers=30", "--trace-children=no",
+                       "--error-exitcode=97", "--track-origins=yes", "--num-callers=30", "--smc-check=all", "--trace-children=no",
                        "--child-silent-after-fork=yes", "actualTest:data"):
             self.assertIn(option, options)
         environment = json.loads((self.output / "environment.json").read_text())
@@ -162,6 +168,22 @@ class MemcheckRunnerTests(unittest.TestCase):
         for directory in environment.values():
             self.assertEqual(Path(directory).parent, self.output)
             self.assertEqual(Path(directory).stat().st_mode & 0o777, 0o700)
+
+    def test_regexp_jit_setting_is_preserved_not_defaulted(self):
+        for index, value in enumerate((None, "0", "1")):
+            with self.subTest(value=value):
+                self.output = self.root / f"jit-{index}"
+                command, environment = self.invocation()
+                if value is None:
+                    environment.pop("QT_ENABLE_REGEXP_JIT", None)
+                else:
+                    environment["QT_ENABLE_REGEXP_JIT"] = value
+                result = subprocess.run(command, env=environment, capture_output=True,
+                                        text=True, timeout=10, umask=0o002)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.summary()["environment"]["QT_ENABLE_REGEXP_JIT"], value)
+                self.assertEqual(json.loads((self.output / "regexp-jit.json").read_text()), value)
+                self.assertEqual((self.output / "private-fixture.txt").stat().st_mode & 0o777, 0o600)
 
     def test_failure_evidence(self):
         modes = ("missing", "malformed", "incomplete", "oversized", "wrong-pid", "wrong-tool",

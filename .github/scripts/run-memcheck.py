@@ -171,7 +171,7 @@ def main():
             name: environment.get(name)
             for name in ("QT_QPA_PLATFORM", "QT_IM_MODULE", "QSG_RHI_BACKEND",
                          "QT_QUICK_BACKEND", "LIBGL_ALWAYS_SOFTWARE", "VALGRIND_LIB",
-                         "GC_TEST_TIMEOUT_SCALE")
+                         "GC_TEST_TIMEOUT_SCALE", "QT_ENABLE_REGEXP_JIT")
         }
         for variable, directory in (("XDG_CONFIG_HOME", "config"), ("XDG_DATA_HOME", "data"),
                                     ("XDG_CACHE_HOME", "cache"), ("XDG_STATE_HOME", "state"),
@@ -185,7 +185,7 @@ def main():
         invocation = [valgrind, "--command-line-only=yes", "--tool=memcheck",
                       "--leak-check=full", "--show-leak-kinds=all",
                       "--errors-for-leak-kinds=definite,indirect,possible", "--track-origins=yes",
-                      "--num-callers=30",
+                      "--num-callers=30", "--smc-check=all",
                       "--error-exitcode=97", "--trace-children=no", "--child-silent-after-fork=yes",
                       "--xml=yes", f"--xml-file={output / 'memcheck-%p.xml'}",
                       f"--log-file={output / 'memcheck-%p.log'}",
@@ -200,7 +200,7 @@ def main():
         with (output / "application.log").open("wb") as application_log:
             process = subprocess.Popen(invocation, cwd=work, env=environment,
                                        stdout=application_log, stderr=subprocess.STDOUT,
-                                       start_new_session=True)
+                                       start_new_session=True, umask=0o077)
             summary["pid"] = process.pid
             deadline = time.monotonic() + args.timeout
             while process.poll() is None and not interrupted and time.monotonic() < deadline:
