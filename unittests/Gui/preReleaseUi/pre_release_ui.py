@@ -1459,7 +1459,8 @@ class UiDriver:
         raise UiFailure(f"Cannot context-click selectable item {name!r}")
 
     def combo_with_items(
-            self, expected, timeout=15.0, require_interactable=False):
+            self, expected, timeout=15.0, require_interactable=False,
+            match_current_name=True):
         expected = set(expected)
         deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
@@ -1469,7 +1470,7 @@ class UiDriver:
                     continue
                 if require_interactable and not self.enabled(combo):
                     continue
-                if self.name(combo) in expected:
+                if match_current_name and self.name(combo) in expected:
                     named_candidates.append(combo)
                 descendants = {
                     self.name(node)
@@ -2618,8 +2619,14 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     "Increase intensity",
                     "Workout intensity",
                     "Filter workouts",
-                    "Workout order",
                 ]
+            )
+            # On Linux Qt exposes a QComboBox's name as its current item, not
+            # its accessibleName, so identify the workout order combo by items.
+            driver.combo_with_items(
+                ["Name", "Recently used", "Newest"],
+                require_interactable=True,
+                match_current_name=False,
             )
             driver.combo_with_items(["Standard ERG", "Workout Ride"])
             driver.find("Data Generator", "table cell")

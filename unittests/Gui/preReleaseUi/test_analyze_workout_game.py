@@ -692,6 +692,25 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 require_interactable=True,
             )
 
+    def test_combo_with_items_can_require_items_not_current_name(self):
+        combo = object()
+        driver = object.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[combo])
+        driver.all_nodes = mock.Mock(return_value=[combo])
+        driver.role = mock.Mock(return_value="combo box")
+        driver.name = mock.Mock(return_value="Name")
+        driver.showing = mock.Mock(return_value=True)
+        driver.enabled = mock.Mock(return_value=True)
+
+        self.assertIs(
+            driver.combo_with_items(["Name", "Newest"], timeout=0.01),
+            combo,
+        )
+        with self.assertRaisesRegex(UI.UiFailure, "Perspective selector lacks"):
+            driver.combo_with_items(
+                ["Name", "Newest"], timeout=0.01, match_current_name=False
+            )
+
     def test_combo_with_items_rejects_a_hidden_named_selector(self):
         combo = object()
         driver = object.__new__(UI.UiDriver)
