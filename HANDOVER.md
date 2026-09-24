@@ -9,8 +9,8 @@ state before acting; the parallel memory investigation is moving independently.
 | Actor | Work and current ownership | Checkpoint status |
 | --- | --- | --- |
 | `remote-agent` (this ASUSBOX session) | Implemented the Workout Generator warm-up controls and their C++/Python/UI tests; built and verified the `d444f1f2` AppImage on Lastu; pushed the commit to fork `master`; promoted the verified image locally; wrote this handover. | Delivered and tested. No source-code write-set retained. |
-| `lastu-root` (agent on Lastu) | Runs the separate `codex/valgrind-regressions` investigation: Memcheck harness, bounded credential read, chart/overview/widget ownership fixes and targeted regressions. It confirmed `src/Charts/OverviewItems.cpp` and `src/Train/FilterEditor.cpp` in its current write-set; ask for the exact live list before editing adjacent files. | Local, unpublished work. Targeted ownership tests pass, but full application Memcheck is still red; Lastu owns its branch and evidence. |
-| `claude-gc-e9` (third agent) | Independent review and triage of memory findings, including a proposed collaboration/ledger process. It has said it will not edit the contested chart files without a write-set agreement. | Review/proposal work; no implementation from it has been integrated by this handover. |
+| `lastu-root` (agent on Lastu) | Investigated Memcheck failures in `codex/valgrind-regressions`: harness, bounded credential read, chart/overview/widget and final-exit ownership fixes, with targeted regressions. It confirmed `src/Charts/OverviewItems.cpp` and `src/Train/FilterEditor.cpp` in its write-set. | Paused at the user's request after writing its own handover. Its branch has intentional uncommitted changes; full application Memcheck is still red. No push or release from that work. |
+| `claude-gc-e9` (third agent) | Reviewed and triaged memory findings, proposed a collaboration/ledger process and prepared a narrow UserChart ownership proposal for Lastu. It has said it will not edit contested chart files without a write-set agreement. | Review/proposal work; the UserChart production fix has not been applied or integrated by this handover. |
 | Next agent | Continue the user's requested workout selector filters/ordering and multiselect deletion, or take an explicitly assigned nonoverlapping task after checking the live bus. | Unassigned at this checkpoint. Create a separate branch/worktree and announce its files. |
 
 The roles above describe observed work, not a permanent hierarchy or an
@@ -76,18 +76,22 @@ Verification on that source and exact packaged image:
    Preserve the existing transactional deletion/rollback behavior. Add a real
    UI workflow that selects multiple synthetic workouts, deletes them, checks
    persistence after restart and checks that cancellation changes nothing.
-2. Lastu is independently investigating GoldenCheetah memory errors. As of
-   2026-09-24 13:06 EEST, its `codex/valgrind-regressions` work is local to
-   Lastu, based on `d444f1f2`; it is **not** in fork `master`, the local latest
-   AppImage or an accepted release. Lastu reported a private current-tool
-   shutdown Memcheck run still failing, despite targeted ownership fixes and a
-   passing native three-case import/training/shutdown lifecycle. Full training
-   Memcheck, default regexp-JIT findings, intermittent QtTest TLS reports and
-   a Python-enabled application link/runtime check remain open. Read the live
-   report on Lastu before making claims or integrating:
+2. Lastu's paused `codex/valgrind-regressions` work is based on `d444f1f2` and
+   is **not** in fork `master`, the local latest AppImage or an accepted release.
+   Its latest native three-case import/training/shutdown lifecycle passed, but
+   the complete Valgrind gate remains red. The latest staged Overview, Library,
+   MainWindow and RideNavigator fixes have not yet had a complete post-fix UI
+   Memcheck run. Two new UserChart ownership regressions are RED and their
+   production fix is pending. Full training Memcheck and a Python-enabled
+   application link/runtime check are also open. Read Lastu's own checkpoint
+   first: `/home/kaartine/.goldencheetah/test-builds/VALGRIND-HANDOVER-20260924.md`
+   on Lastu, then the longer evidence log
    `/home/kaartine/.goldencheetah/test-builds/MEMCHECK-VERIFICATION-20260924.md`.
-   Lastu's main `GoldenCheetah-src` checkout is a separate, dirty build
-   maintenance branch. Do not clean, reset or reuse it.
+   Its working source is
+   `/home/kaartine/.goldencheetah/test-builds/distance-stutter/source` on Lastu;
+   inspect its intentional uncommitted files before any edits. Lastu's main
+   `GoldenCheetah-src` checkout is a separate, dirty build maintenance branch.
+   Do not clean, reset or reuse either worktree.
 3. The workout game/MTB course has substantial prior feature and visual work.
    `doc/design/WORKOUT_GAME_3D_RELEASE_CHECKLIST.md` records its gates and
    historical evidence. Verify the current implementation and packaged UI
