@@ -46,6 +46,7 @@
 
 #include "UserData.h"
 #include "RideFile.h"
+#include "SharedStyle.h"
 
 class QwtPlotCurve;
 class QwtPlotGappedCurve;
@@ -85,7 +86,7 @@ class CurveColors : public QObject
             // BUG in QMacStyle and painting of spanSlider
             // so we use a plain style to avoid it, but only
             // on a MAC, since win and linux are fine
-            QStyle *style = QStyleFactory::create("fusion");
+            QStyle *style = sharedFusionStyle();
             slider->setStyle(style);
 #endif
             slider->hide();

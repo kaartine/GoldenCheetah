@@ -24,6 +24,7 @@
 #include "AllPlot.h"
 #include "Context.h"
 #include "Settings.h"
+#include "FilterEditor.h"
 
 // Access only; construction and destruction are the real production methods.
 class InspectableAllPlot final : public AllPlot
@@ -139,6 +140,37 @@ private slots:
         plot.reset();
         QCOMPARE(firstDestructions, 1);
         QCOMPARE(secondDestructions, 1);
+    }
+
+    void filterEditorReusesAndDeletesCompletionObjects()
+    {
+        auto editor = std::make_unique<FilterEditor>();
+        QSignalSpy textChanges(editor.get(), &QLineEdit::textChanged);
+        editor->setFilterCommands({"distance", "power"});
+        QPointer<QCompleter> completer(editor->completer());
+        QVERIFY(completer);
+        QPointer<QStringListModel> model(
+            qobject_cast<QStringListModel *>(completer->model()));
+        QVERIFY(model);
+        QCOMPARE(completer->parent(), editor.get());
+        QCOMPARE(model->parent(), editor.get());
+
+        const QStringList replacement {"cadence", "speed"};
+        completer->setCompletionPrefix("ca");
+        editor->setFilterCommands(replacement);
+        editor->setFilterCommands(replacement);
+        QCOMPARE(editor->completer(), completer.data());
+        QCOMPARE(editor->completer()->model(), model.data());
+        QCOMPARE(completer->completionPrefix(), QString("ca"));
+        QCOMPARE(model->stringList(), replacement);
+        QCOMPARE(textChanges.count(), 0);
+        QSignalSpy modelResets(model.data(), &QAbstractItemModel::modelReset);
+        editor->setText("cad");
+        QCOMPARE(textChanges.count(), 1);
+        QCOMPARE(modelResets.count(), 1);
+        editor.reset();
+        QVERIFY(completer.isNull());
+        QVERIFY(model.isNull());
     }
 
 };

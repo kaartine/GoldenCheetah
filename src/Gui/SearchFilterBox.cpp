@@ -39,6 +39,7 @@ SearchFilterBox::SearchFilterBox(QWidget *parent, Context *context, bool nochoos
     contents->addWidget(searchbox);
 
     freeSearch = new FreeSearch();
+    freeSearch->setParent(this);
     datafilter = new DataFilter(this,context);
 
     // text searching

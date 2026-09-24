@@ -51,10 +51,14 @@ FilterEditor::setFilterCommands
 (const QStringList &commands)
 {
     if (_completerModel == nullptr) {
-        _completerModel = new QStringListModel();
+        _completerModel = new QStringListModel(this);
     }
     _completerModel->setStringList(commands);
-    setCompleter(new QCompleter(_completerModel));
+    if (_completer == nullptr) {
+        setCompleter(new QCompleter(_completerModel, this));
+    } else if (_completer->model() != _completerModel) {
+        _completer->setModel(_completerModel);
+    }
     _origCmds.clear();
     _origCmds << commands;
     _origCmds.sort(Qt::CaseInsensitive);
@@ -63,7 +67,7 @@ FilterEditor::setFilterCommands
     _completer->setFilterMode(Qt::MatchContains);
     _completer->setCompletionMode(QCompleter::PopupCompletion);
     _completer->setWrapAround(false);
-    connect(this, SIGNAL(textChanged(QString)), this, SLOT(updateCompleterModel(QString)));
+    connect(this, SIGNAL(textChanged(QString)), this, SLOT(updateCompleterModel(QString)), Qt::UniqueConnection);
 }
 
 

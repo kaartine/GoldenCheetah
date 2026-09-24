@@ -91,6 +91,7 @@
 
 #include "TrainDB.h"
 #include "Library.h"
+#include "SharedStyle.h"
 
 #if defined(GC_HAVE_VLC)||defined(GC_VIDEO_QT6) // RLV currently only support for VLC
 #define USE_RLV
@@ -168,7 +169,7 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     mediaTree->setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     mediaTree->verticalScrollBar()->setStyle(cde);
 #endif
 
@@ -205,7 +206,7 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     videosyncTree->setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-    QStyle *cdevideosync = QStyleFactory::create(OS_STYLE);
+    QStyle *cdevideosync = sharedFusionStyle();
     videosyncTree->verticalScrollBar()->setStyle(cdevideosync);
 #endif
 
@@ -227,7 +228,7 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     deviceTree->setContextMenuPolicy(Qt::CustomContextMenu);
     deviceTree->setRootIsDecorated(false);
 #ifdef Q_OS_WIN
-    QStyle *xde = QStyleFactory::create(OS_STYLE);
+    QStyle *xde = sharedFusionStyle();
     deviceTree->verticalScrollBar()->setStyle(xde);
 #endif
 
@@ -267,7 +268,7 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     workoutTree->setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-    xde = QStyleFactory::create(OS_STYLE);
+    xde = sharedFusionStyle();
     workoutTree->verticalScrollBar()->setStyle(xde);
 #endif
 
@@ -350,7 +351,7 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     workoutInfoScroller->setFrameStyle(QFrame::NoFrame);
     workoutInfoScroller->setWidget(workoutInfo);
 #ifdef Q_OS_WIN
-    xde = QStyleFactory::create(OS_STYLE);
+    xde = sharedFusionStyle();
     workoutInfoScroller->verticalScrollBar()->setStyle(xde);
 #endif
     workoutInfoItem = new GcSplitterItem(tr("Workout Info"), iconFromPNG(":images/sidebar/charts.png"), this);
@@ -554,10 +555,11 @@ TrainSidebar::~TrainSidebar
     context->mainWindow->removeEventFilter(this);
 
     for (DeviceConfiguration &device : Devices) {
-        if (device.type == DEV_ANTLOCAL)
+        if (device.type == DEV_ANTLOCAL || device.type == DEV_NULL)
             TrainingControllerLifecycle::stopAndDelete(device.controller);
     }
     activeDevices.clear();
+    delete remote;
 
 #if !defined GC_VIDEO_NONE
     if (videoModel != nullptr) {

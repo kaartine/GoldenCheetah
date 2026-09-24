@@ -44,6 +44,7 @@
 #include "Units.h"
 #include "HelpWhatsThis.h"
 #include "IconManager.h"
+#include "SharedStyle.h"
 
 #define MANDATORY " *"
 #define TRADEMARK "<sup>TM</sup>"
@@ -554,7 +555,7 @@ ManualActivityPageWorkout::ManualActivityPageWorkout
     workoutTree->setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-    QStyle *xde = QStyleFactory::create(OS_STYLE);
+    QStyle *xde = sharedFusionStyle();
     workoutTree->verticalScrollBar()->setStyle(xde);
 #endif
 

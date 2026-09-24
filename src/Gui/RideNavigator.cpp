@@ -29,6 +29,7 @@
 #include "SpecialFields.h"
 #include "HelpWhatsThis.h"
 #include "IconManager.h"
+#include "SharedStyle.h"
 
 #include <QtGui>
 #include <QString>
@@ -276,7 +277,7 @@ RideNavigator::RideNavigator(Context *context, bool mainwindow) : GcChartWindow(
 
     // get setup
     tableView = new ActivityTreeView(this);
-    delegate = new ActivityItemDelegate(this);
+    delegate = new ActivityItemDelegate(this, tableView);
     tableView->setItemDelegate(delegate);
     tableView->setAnimated(true);
     tableView->setModel(sortModel);
@@ -291,7 +292,7 @@ RideNavigator::RideNavigator(Context *context, bool mainwindow) : GcChartWindow(
     tableView->header()->setMinimumSectionSize(0);
     tableView->header()->setFocusPolicy(Qt::NoFocus);
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     tableView->verticalScrollBar()->setStyle(cde);
 #endif
 #ifdef Q_OS_MAC

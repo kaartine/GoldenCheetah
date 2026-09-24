@@ -63,6 +63,7 @@
 // overlay helper
 #include "GcOverlayWidget.h"
 #include "IntervalSummaryWindow.h"
+#include "SharedStyle.h"
 
 static const int stackZoomWidth[8] = { 5, 10, 15, 20, 30, 45, 60, 120 };
 
@@ -525,7 +526,7 @@ AllPlotWindow::AllPlotWindow(Context *context) :
 
     stackFrame = new QScrollArea(this);
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     stackFrame->setStyle(cde);
 #endif
     stackFrame->hide();
@@ -549,7 +550,7 @@ AllPlotWindow::AllPlotWindow(Context *context) :
 
     seriesstackFrame = new QScrollArea(this);
 #ifdef Q_OS_WIN
-    cde = QStyleFactory::create(OS_STYLE);
+    cde = sharedFusionStyle();
     seriesstackFrame->setStyle(cde);
 #endif
     seriesstackFrame->hide();
@@ -573,7 +574,7 @@ AllPlotWindow::AllPlotWindow(Context *context) :
 
     comparePlotFrame = new QScrollArea(this);
 #ifdef Q_OS_WIN
-    cde = QStyleFactory::create(OS_STYLE);
+    cde = sharedFusionStyle();
     comparePlotWidget->setStyle(cde);
 #endif
     comparePlotFrame->hide();
@@ -594,7 +595,7 @@ AllPlotWindow::AllPlotWindow(Context *context) :
     allPlotLayout->setContentsMargins(0,0,0,0);
     allPlotFrame = new QScrollArea(this);
 #ifdef Q_OS_WIN
-    cde = QStyleFactory::create(OS_STYLE);
+    cde = sharedFusionStyle();
     allPlotFrame->setStyle(cde);
 #endif
     allPlotFrame->setFrameStyle(QFrame::NoFrame);
@@ -628,7 +629,7 @@ AllPlotWindow::AllPlotWindow(Context *context) :
     // BUG in QMacStyle and painting of spanSlider
     // so we use a plain style to avoid it, but only
     // on a MAC, since win and linux are fine
-    QStyle *style = QStyleFactory::create("fusion");
+    QStyle *style = sharedFusionStyle();
     spanSlider->setStyle(style);
     scrollLeft->setStyle(style);
     scrollRight->setStyle(style);
@@ -928,6 +929,16 @@ AllPlotWindow::getUserData() const
         returning += x->settings();
 
     return returning;
+}
+
+AllPlotWindow::~AllPlotWindow()
+{
+    // These collections own non-widget data. Delete compare curves while
+    // their child plots still exist; QWidget will destroy the plots afterward.
+    qDeleteAll(compareIntervalCurves);
+    for (const auto &series : compareUserDataSeries)
+        qDeleteAll(series);
+    qDeleteAll(userDataSeries);
 }
 
 void

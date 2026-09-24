@@ -262,7 +262,11 @@ TagBar::setCompletionList
         completionTagLabels.removeAll(i);
     }
     completionTagLabels.sort(Qt::CaseInsensitive);
-    edit->completer()->setModel(new QStringListModel(completionTagLabels));
+    // The QStringList QCompleter constructor creates and owns this model.
+    // Refresh it rather than replacing it with a parentless allocation.
+    auto *model = qobject_cast<QStringListModel *>(edit->completer()->model());
+    Q_ASSERT(model);
+    if (model) model->setStringList(completionTagLabels);
 }
 
 

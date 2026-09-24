@@ -17,6 +17,7 @@
  */
 
 #include "Athlete.h"
+#include "SharedStyle.h"
 #include "Context.h"
 #include "AthleteTab.h"
 #include "AbstractView.h"
@@ -151,7 +152,7 @@ Perspective::Perspective(Context *context, QString title, int type) :
 
     tileArea = new QScrollArea(this);
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     tileArea->setStyle(cde);
 #endif
     tileArea->setAutoFillBackground(false);

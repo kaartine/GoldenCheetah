@@ -27,6 +27,7 @@
 #include "Settings.h"
 #include "TimeUtils.h"
 #include "Colors.h"
+#include "SharedStyle.h"
 #include <QStyle>
 #include <QStyleFactory>
 #include <QScrollBar>
@@ -38,7 +39,7 @@ IntervalSummaryWindow::IntervalSummaryWindow(Context *context) : context(context
     //XXXsetEnabled(false); // stop the fucking thing grabbing keyboard focus FFS.
     setFrameStyle(QFrame::NoFrame);
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     verticalScrollBar()->setStyle(cde);
 #endif
 
