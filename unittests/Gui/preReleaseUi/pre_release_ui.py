@@ -894,8 +894,14 @@ class UiDriver:
         self.pruned_accessible_paths = {}
         self.app = self.wait_for_application()
 
-    def nodes_with_names(self, node=None):
+    def nodes_with_names(self, node=None, showing_only=False):
+        root = node is None
         node = self.app if node is None else node
+        # A showing search skips hidden subtrees: GC keeps thousands of hidden
+        # widgets. This is stricter than per-node SHOWING, since Qt item-view
+        # cells can report SHOWING inside a hidden view; those are not on screen.
+        if showing_only and not root and not self.showing(node):
+            return
         try:
             pruned_name = getattr(
                 self, "pruned_accessible_paths", {}
@@ -917,7 +923,7 @@ class UiDriver:
         except Exception:
             return
         for child in children:
-            yield from self.nodes_with_names(child)
+            yield from self.nodes_with_names(child, showing_only)
 
     def all_nodes(self, node=None):
         for accessible, unused_name in self.nodes_with_names(node):
@@ -1006,7 +1012,7 @@ class UiDriver:
 
     def find_all(self, name=None, role=None, showing=None):
         matches = []
-        for node, node_name in self.nodes_with_names():
+        for node, node_name in self.nodes_with_names(showing_only=showing is True):
             if name is not None and node_name != name:
                 continue
             if role is not None and self.role(node) != role:

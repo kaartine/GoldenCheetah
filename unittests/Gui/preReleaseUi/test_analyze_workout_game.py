@@ -692,6 +692,34 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 require_interactable=True,
             )
 
+    def test_showing_search_skips_hidden_subtrees_only(self):
+        class Node:
+            def __init__(self, name, showing, children=()):
+                self.name, self.is_showing, self.children = name, showing, list(children)
+                self.path = "/" + name
+                self.visits = 0
+
+            def __iter__(self):
+                self.visits += 1
+                return iter(self.children)
+
+        hidden_leaf = Node("target", False)
+        ghost_cell = Node("target", True)  # Qt cells can claim SHOWING in a hidden view
+        hidden = Node("hidden-view", False, [hidden_leaf, ghost_cell, Node("deep", False)])
+        visible_leaf = Node("target", True)
+        visible = Node("dialog", True, [visible_leaf])
+        app = Node("app", False, [hidden, visible])
+        driver = object.__new__(UI.UiDriver)
+        driver.app = app
+        driver.pruned_accessible_paths = {}
+        driver.showing = lambda node: node.is_showing
+        driver.role = mock.Mock(return_value="label")
+
+        self.assertEqual(driver.find_all("target", showing=True), [visible_leaf])
+        self.assertEqual(hidden.visits, 0, "hidden subtree must not be walked")
+        self.assertEqual(driver.find_all("target", showing=False), [hidden_leaf])
+        self.assertEqual(driver.find_all("target"), [hidden_leaf, ghost_cell, visible_leaf])
+
     def test_combo_with_items_can_require_items_not_current_name(self):
         combo = object()
         driver = object.__new__(UI.UiDriver)
