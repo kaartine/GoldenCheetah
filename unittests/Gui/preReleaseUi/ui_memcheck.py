@@ -42,6 +42,8 @@ def prepare(image, appdir, artifacts, valgrind):
     executable = shutil.which(valgrind)
     if not executable:
         raise ValueError(f"Valgrind executable unavailable: {valgrind}")
+    requested_debuginfo = os.environ.get("GC_UI_MEMCHECK_DEBUGINFO_PATH")
+    debuginfo_path = RUNNER.resolve_debuginfo_path(requested_debuginfo)
     output = Path(artifacts).resolve() / "memcheck"
     output.mkdir(mode=0o700, exist_ok=False)
     prefix = [str(Path(executable).resolve()), "--command-line-only=yes", "--tool=memcheck",
@@ -51,9 +53,13 @@ def prepare(image, appdir, artifacts, valgrind):
               "--child-silent-after-fork=yes", "--xml=yes",
               f"--xml-file={output / 'memcheck-%p.xml'}",
               f"--log-file={output / 'memcheck-%p.log'}"]
+    if debuginfo_path is not None:
+        prefix.append(f"--extra-debuginfo-path={debuginfo_path}")
     (output / "command-prefix.nul").write_bytes(b"\0".join(os.fsencode(arg) for arg in prefix) + b"\0")
     (output / "invocation.json").write_text(json.dumps({
         "binary": str(binary), "appdir": str(runtime), "prefix": prefix,
+        "debuginfo_path": debuginfo_path,
+        "environment": {"GC_UI_MEMCHECK_DEBUGINFO_PATH": requested_debuginfo},
         "child_instrumentation": False,
         "suppression_policy": "Valgrind installation defaults only; user rc/options ignored",
     }, indent=2) + "\n", encoding="utf-8")
@@ -85,7 +91,8 @@ def validate(artifacts, pid, app_status, ui_status):
                    name: os.environ.get(name) for name in (
                        "QT_QPA_PLATFORM", "QT_IM_MODULE", "QSG_RHI_BACKEND",
                        "QT_QUICK_BACKEND", "LIBGL_ALWAYS_SOFTWARE", "VALGRIND_LIB",
-                       "GC_UI_TIMEOUT_SCALE", "QT_ENABLE_REGEXP_JIT")}}
+                       "GC_UI_TIMEOUT_SCALE", "QT_ENABLE_REGEXP_JIT",
+                       "GC_UI_MEMCHECK_DEBUGINFO_PATH")}}
     if app_status != 0:
         summary["problems"].append(f"application exited with status {app_status}")
     if ui_status != 0:

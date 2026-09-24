@@ -27,6 +27,17 @@ def timeout_seconds(value):
     return seconds
 
 
+def resolve_debuginfo_path(value):
+    if value is None:
+        return None
+    if not value:
+        raise ValueError("debuginfo path must be a nonempty existing directory")
+    path = Path(value).resolve(strict=True)
+    if not path.is_dir():
+        raise ValueError(f"debuginfo path must be an existing directory: {path}")
+    return str(path)
+
+
 def read_xml(path, expected_root):
     if not path.is_file() or path.is_symlink():
         raise ValueError(f"missing regular XML report: {path.name}")
@@ -161,6 +172,7 @@ def main():
     parser.add_argument("--valgrind", default="valgrind", help="Valgrind executable (VALGRIND_LIB is inherited)")
     parser.add_argument("--suppressions", action="append", default=[], type=Path,
                         help="explicit reviewed suppression file; repeat for additional files")
+    parser.add_argument("--debuginfo-path", help="existing directory for Valgrind's extra debug-symbol lookup")
     parser.add_argument("--output", required=True, type=Path, help="new directory; existing paths are never reused")
     parser.add_argument("--timeout", type=timeout_seconds, default=600.0)
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- BINARY [TEST_FUNCTION[:DATA_TAG] ...]")
@@ -178,6 +190,7 @@ def main():
         return 1
     summary = {"status": "failed", "problems": [], "command": [],
                "timeout_seconds": args.timeout, "child_instrumentation": False,
+               "debuginfo_path": None,
                "suppression_policy": {
                    "defaults": "Valgrind installation defaults; user rc/options ignored",
                    "explicit_paths": []}}
@@ -214,6 +227,8 @@ def main():
                 raise ValueError(f"suppression path must be a regular file: {path}")
             suppression_paths.append(str(path))
         summary["suppression_policy"]["explicit_paths"] = suppression_paths
+        debuginfo_path = resolve_debuginfo_path(args.debuginfo_path)
+        summary["debuginfo_path"] = debuginfo_path
         environment = os.environ.copy()
         environment.setdefault("QT_QPA_PLATFORM", "offscreen")
         summary["environment"] = {
@@ -239,6 +254,7 @@ def main():
                       "--xml=yes", f"--xml-file={output / 'memcheck-%p.xml'}",
                       f"--log-file={output / 'memcheck-%p.log'}",
                       *(f"--suppressions={path}" for path in suppression_paths),
+                      *([f"--extra-debuginfo-path={debuginfo_path}"] if debuginfo_path is not None else []),
                       str(binary), *command[1:],
                       "-o", f"{output / 'qttest.xml'},xml"]
         summary["command"] = invocation

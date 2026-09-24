@@ -68,7 +68,8 @@ class UiMemcheckTests(unittest.TestCase):
             return UI.validate(self.artifacts, 123, app_status, ui_status)
 
     def test_prepare_prefix_and_stale_rejection(self):
-        prefix = self.prepare()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            prefix = self.prepare()
         self.assertEqual(prefix[0], self.valgrind)
         for option in ("--command-line-only=yes", "--tool=memcheck", "--leak-check=full",
                        "--show-leak-kinds=all", "--errors-for-leak-kinds=definite,indirect,possible",
@@ -76,14 +77,46 @@ class UiMemcheckTests(unittest.TestCase):
                        "--xml=yes", "--trace-children=no", "--child-silent-after-fork=yes"):
             self.assertIn(option, prefix)
         self.assertFalse(any(arg.startswith("--suppressions") for arg in prefix))
+        self.assertFalse(any(arg.startswith("--extra-debuginfo-path=") for arg in prefix))
         output = self.artifacts / "memcheck"
         self.assertEqual((output / "command-prefix.nul").read_bytes().split(b"\0")[:-1],
                          [os.fsencode(arg) for arg in prefix])
         invocation = json.loads((output / "invocation.json").read_text())
         self.assertEqual(invocation["binary"], str(self.binary))
         self.assertEqual(invocation["appdir"], str(self.runtime))
+        self.assertIsNone(invocation["debuginfo_path"])
+        self.assertIsNone(invocation["environment"]["GC_UI_MEMCHECK_DEBUGINFO_PATH"])
         with self.assertRaises(FileExistsError):
             self.prepare()
+
+    def test_explicit_debuginfo_directory_is_forwarded_and_recorded(self):
+        directory = self.root / "debug symbols"
+        directory.mkdir()
+        alias = self.root / "debug-alias"
+        alias.symlink_to(directory, target_is_directory=True)
+        with mock.patch.dict(os.environ, {"GC_UI_MEMCHECK_DEBUGINFO_PATH": str(alias)}):
+            prefix = self.prepare()
+            option = f"--extra-debuginfo-path={directory.resolve()}"
+            self.assertEqual(prefix.count(option), 1)
+            output = self.artifacts / "memcheck"
+            self.assertIn(os.fsencode(option), (output / "command-prefix.nul").read_bytes().split(b"\0"))
+            invocation = json.loads((output / "invocation.json").read_text())
+            self.assertEqual(invocation["prefix"], prefix)
+            self.assertEqual(invocation["debuginfo_path"], str(directory.resolve()))
+            self.assertEqual(invocation["environment"]["GC_UI_MEMCHECK_DEBUGINFO_PATH"], str(alias))
+            self.assertFalse(any(arg.startswith("--suppressions") for arg in prefix))
+            self.reports()
+            self.assertEqual(self.validate(), 0)
+            summary = json.loads((output / "summary.json").read_text())
+            self.assertEqual(summary["environment"]["GC_UI_MEMCHECK_DEBUGINFO_PATH"], str(alias))
+
+    def test_missing_file_or_empty_debuginfo_path_rejected_before_preparation(self):
+        for path in (self.root / "missing-debug", self.binary, ""):
+            with self.subTest(path=path), mock.patch.dict(
+                    os.environ, {"GC_UI_MEMCHECK_DEBUGINFO_PATH": str(path)}):
+                with self.assertRaises((OSError, ValueError)):
+                    self.prepare()
+                self.assertFalse((self.artifacts / "memcheck").exists())
 
     def test_requires_matching_runtime_native_elf(self):
         outside = self.root / "GoldenCheetah"

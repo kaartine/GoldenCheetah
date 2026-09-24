@@ -193,7 +193,7 @@ class MemcheckRunnerTests(unittest.TestCase):
         self.output = self.root / "result"
 
     def invocation(self, mode="success", timeout="5", binary=None, extra=(), valgrind=None,
-                   suppressions=()):
+                   suppressions=(), debuginfo_path=None):
         environment = os.environ.copy()
         environment.pop("QT_QPA_PLATFORM", None)
         environment["GC_FAKE_MEMCHECK"] = mode
@@ -205,8 +205,10 @@ class MemcheckRunnerTests(unittest.TestCase):
         environment["LIBGL_ALWAYS_SOFTWARE"] = "1"
         environment["GC_FAKE_PRIVATE_VALUE"] = "do-not-record-this-value"
         suppression_options = [value for path in suppressions for value in ("--suppressions", str(path))]
+        debuginfo_options = [] if debuginfo_path is None else ["--debuginfo-path", str(debuginfo_path)]
         return ([sys.executable, str(RUNNER), "--valgrind", str(valgrind or self.fake),
-                 "--output", str(self.output), "--timeout", timeout, *suppression_options, "--",
+                 "--output", str(self.output), "--timeout", timeout, *suppression_options,
+                 *debuginfo_options, "--",
                  str(binary or Path(sys.executable).resolve()), *extra], environment)
 
     def run_fixture(self, mode="success", **kwargs):
@@ -246,6 +248,8 @@ class MemcheckRunnerTests(unittest.TestCase):
         self.assertEqual(ET.parse(self.output / "junit.xml").getroot().get("failures"), "0")
         options = json.loads((self.output / "arguments.json").read_text())
         self.assertFalse(any(option.startswith("--suppressions=") for option in options))
+        self.assertFalse(any(option.startswith("--extra-debuginfo-path=") for option in options))
+        self.assertIsNone(summary["debuginfo_path"])
         self.assertEqual(summary["suppression_policy"]["explicit_paths"], [])
         for option in ("--command-line-only=yes", "--tool=memcheck", "--leak-check=full",
                        "--show-leak-kinds=all", "--errors-for-leak-kinds=definite,indirect,possible",
@@ -310,6 +314,29 @@ class MemcheckRunnerTests(unittest.TestCase):
         arguments = json.loads((self.output / "arguments.json").read_text())
         for path in paths:
             self.assertIn(f"--suppressions={path.resolve()}", arguments)
+
+    def test_explicit_debuginfo_directory_is_forwarded_and_recorded(self):
+        directory = self.root / "debug symbols"
+        directory.mkdir()
+        alias = self.root / "debug-alias"
+        alias.symlink_to(directory, target_is_directory=True)
+        result = self.run_fixture(debuginfo_path=alias)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        option = f"--extra-debuginfo-path={directory.resolve()}"
+        arguments = json.loads((self.output / "arguments.json").read_text())
+        self.assertEqual(arguments.count(option), 1)
+        self.assertIn(option, self.summary()["command"])
+        self.assertEqual(self.summary()["debuginfo_path"], str(directory.resolve()))
+        self.assertEqual(self.summary()["suppression_policy"]["explicit_paths"], [])
+
+    def test_missing_file_or_empty_debuginfo_path_fails_before_launch(self):
+        for index, path in enumerate((self.root / "missing-debug", self.fake, "")):
+            with self.subTest(path=path):
+                self.output = self.root / f"invalid-debuginfo-{index}"
+                result = self.run_fixture(debuginfo_path=path)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.summary()["status"], "failed")
+                self.assertFalse((self.output / "arguments.json").exists())
 
     def test_missing_or_nonfile_suppression_fails_before_launch(self):
         for index, path in enumerate((self.root / "missing.supp", self.root)):

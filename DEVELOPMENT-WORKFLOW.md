@@ -109,6 +109,14 @@ interruptions terminate the owned process group and fail the gate. The wrapper
 ignores user Valgrind options/rc files; installation-default suppressions and
 their match counts remain recorded. It accepts `--valgrind /path/to/valgrind`
 and inherits `VALGRIND_LIB` for a locally extracted distribution package.
+For libraries stripped of debug information, optional `--debuginfo-path DIR`
+passes an existing directory to Valgrind's extra debug-symbol lookup. The UI
+equivalent is `GC_UI_MEMCHECK_DEBUGINFO_PATH=DIR`. Use symbols whose Build-IDs
+match the actual loaded binaries, with debuglink paths matching the runtime
+container layout. This only improves attribution: it changes neither failure
+criteria nor suppressions. The selected path is recorded in the run metadata;
+verify resolved function/source frames in the real report before claiming the
+symbols loaded successfully.
 Memcheck XML is parsed incrementally with a 256 MiB limit, including bytes
 actually read; QtTest and UI XML retain a 64 MiB limit. A complete parse through
 EOF is required even after a `FINISHED` record. Oversized or malformed reports
