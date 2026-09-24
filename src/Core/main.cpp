@@ -25,6 +25,7 @@
 #include "StravaSettingsCommit.h"
 #include "CloudService.h"
 #include "LocalFileStoreProcess.h"
+#include "Library.h"
 #include "TrainDB.h"
 #include "Colors.h"
 #include "GcUpgrade.h"
@@ -1043,6 +1044,9 @@ main(int argc, char *argv[])
         }
 
     } while (restarting);
+
+    // Shared across windows and application restarts; release only on final exit.
+    Library::releaseAll();
 
     if (!LocalFileStoreProcess::shutdownReaper()) {
         qWarning() << "Local Store helper reaper did not stop cleanly";

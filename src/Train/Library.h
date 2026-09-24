@@ -114,6 +114,7 @@ class Library : QObject
         QList<QString> refs;    // array of drag-n-dropped files referenced not copied
 
         static void initialise(QDir gcRoot); // init
+        static void releaseAll(); // final application shutdown, after all library users
         static Library *findLibrary(QString);
         static LibraryImportResult importFiles(Context *context, QStringList files, LibraryBatchImportConfirmation dialog=LibraryBatchImportConfirmation::optionalDialog);
         static bool refreshWorkout(Context *context, const QString &path);
