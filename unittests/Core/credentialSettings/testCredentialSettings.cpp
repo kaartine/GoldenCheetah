@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -105,6 +106,39 @@ struct FakeStoreState
     std::function<void()> beforeCreateIfAbsent;
     std::function<void()> beforeWrite;
     std::function<void()> beforeRemove;
+};
+
+class CredentialReadTestFile : public QFile
+{
+public:
+    using QFile::QFile;
+    std::function<void()> afterSizeQuery;
+    bool shortRead = false;
+    bool failRead = false;
+    int readCalls = 0;
+    mutable bool sizeQueryTriggered = false;
+
+    qint64 size() const override
+    {
+        const qint64 observed = QFile::size();
+        if (!sizeQueryTriggered && afterSizeQuery) {
+            sizeQueryTriggered = true;
+            afterSizeQuery();
+        }
+        return observed;
+    }
+
+protected:
+    qint64 readData(char *data, qint64 maximumSize) override
+    {
+        ++readCalls;
+        if (failRead) return -1;
+        if (shortRead) {
+            if (readCalls > 1) return 0;
+            return QFile::readData(data, std::min(qint64(2), maximumSize));
+        }
+        return QFile::readData(data, maximumSize);
+    }
 };
 
 class FakeCredentialStore : public CredentialStore
@@ -1901,6 +1935,15 @@ private slots:
     void plaintextCleanupIdentitySeparatesNewlineTuples();
     void plaintextCleanupSurvivesLiveSettingsCache();
     void plaintextCleanupUsesFreshDiskSnapshot();
+    void credentialReadRequestSize_data();
+    void credentialReadRequestSize();
+    void boundedCredentialContents_data();
+    void boundedCredentialContents();
+    void boundedCredentialContentsChangingSize_data();
+    void boundedCredentialContentsChangingSize();
+    void boundedCredentialContentsReadFault_data();
+    void boundedCredentialContentsReadFault();
+    void boundedCredentialContentsActualFileError();
     void plaintextCleanupBypassesStaleNegativeCache();
     void plaintextRemovalBypassesStaleNegativeCache();
     void plaintextSnapshotCrashLeavesNoCopy();
@@ -7344,6 +7387,157 @@ plaintextCleanupSurvivesLiveSettingsCache()
         verified.value(
             QStringLiteral("normal/after")).toString(),
         QStringLiteral("keep-after"));
+}
+
+void TestCredentialSettings::credentialReadRequestSize_data()
+{
+    QTest::addColumn<qint64>("observedSize");
+    QTest::addColumn<qint64>("maximumSize");
+    QTest::addColumn<qint64>("expected");
+    const qint64 limit = 64LL * 1024LL * 1024LL + 1;
+    const qint64 largest = std::numeric_limits<qint64>::max();
+    QTest::newRow("empty") << qint64(0) << limit << qint64(1);
+    QTest::newRow("tiny") << qint64(128) << limit << qint64(129);
+    QTest::newRow("limit-minus-one") << limit - 1 << limit << limit;
+    QTest::newRow("limit") << limit << limit << limit;
+    QTest::newRow("over-limit") << limit + 1 << limit << limit;
+    QTest::newRow("negative-observed") << qint64(-1) << limit << qint64(-1);
+    QTest::newRow("negative-maximum") << qint64(0) << qint64(-1) << qint64(-1);
+    QTest::newRow("zero-maximum-empty") << qint64(0) << qint64(0) << qint64(0);
+    QTest::newRow("zero-maximum-nonempty") << qint64(1) << qint64(0) << qint64(0);
+    QTest::newRow("largest-observed") << largest << limit << limit;
+    QTest::newRow("largest-maximum") << qint64(0) << largest << qint64(1);
+    QTest::newRow("largest-minus-one") << largest - 1 << largest << largest;
+    QTest::newRow("largest-both") << largest << largest << largest;
+}
+
+void TestCredentialSettings::credentialReadRequestSize()
+{
+    QFETCH(qint64, observedSize);
+    QFETCH(qint64, maximumSize);
+    QFETCH(qint64, expected);
+    QCOMPARE(CredentialSettingsDetail::credentialReadRequestSizeForTest(
+                 observedSize, maximumSize), expected);
+}
+
+void TestCredentialSettings::boundedCredentialContents_data()
+{
+    QTest::addColumn<QByteArray>("input");
+    QTest::addColumn<qint64>("maximumSize");
+    QTest::addColumn<bool>("expectedSuccess");
+    QTest::newRow("empty") << QByteArray() << qint64(16) << true;
+    QTest::newRow("tiny") << QByteArray("tiny") << qint64(16) << true;
+    QTest::newRow("exact-limit") << QByteArray(16, 'x') << qint64(16) << true;
+    QTest::newRow("over-limit") << QByteArray(17, 'x') << qint64(16) << false;
+    QTest::newRow("empty-zero-limit") << QByteArray() << qint64(0) << true;
+    QTest::newRow("nonempty-zero-limit") << QByteArray("x") << qint64(0) << false;
+    QTest::newRow("negative-limit") << QByteArray("x") << qint64(-1) << false;
+}
+
+void TestCredentialSettings::boundedCredentialContents()
+{
+    QFETCH(QByteArray, input);
+    QFETCH(qint64, maximumSize);
+    QFETCH(bool, expectedSuccess);
+    PrivateCredentialTestDirectory temporary;
+    QVERIFY(temporary.isValid());
+    const QString path = temporary.filePath(QStringLiteral("synthetic-read.dat"));
+    QVERIFY(writePrivateStateFile(path, input));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray sentinel("unchanged output");
+    QByteArray contents = sentinel;
+    QCOMPARE(CredentialSettingsDetail::readCredentialContentsForTest(
+                 file, maximumSize, &contents), expectedSuccess);
+    QCOMPARE(contents, expectedSuccess ? input : sentinel);
+    QVERIFY(!CredentialSettingsDetail::readCredentialContentsForTest(
+        file, maximumSize, nullptr));
+}
+
+void TestCredentialSettings::boundedCredentialContentsChangingSize_data()
+{
+    QTest::addColumn<QByteArray>("before");
+    QTest::addColumn<QByteArray>("after");
+    QTest::addColumn<bool>("expectedSuccess");
+    QTest::newRow("growth-exceeds-probe") << QByteArray("four") << QByteArray("fourmore") << false;
+    QTest::newRow("growth-one-byte") << QByteArray("four") << QByteArray("four!") << true;
+    QTest::newRow("coherent-truncation") << QByteArray("fourmore") << QByteArray("four") << true;
+    QTest::newRow("truncated-empty") << QByteArray("fourmore") << QByteArray() << true;
+}
+
+void TestCredentialSettings::boundedCredentialContentsChangingSize()
+{
+    QFETCH(QByteArray, before);
+    QFETCH(QByteArray, after);
+    QFETCH(bool, expectedSuccess);
+    PrivateCredentialTestDirectory temporary;
+    QVERIFY(temporary.isValid());
+    const QString path = temporary.filePath(QStringLiteral("changing-read.dat"));
+    QVERIFY(writePrivateStateFile(path, before));
+    CredentialReadTestFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Unbuffered));
+    bool changed = false;
+    file.afterSizeQuery = [&] { changed = writePrivateStateFile(path, after); };
+    const QByteArray sentinel("unchanged output");
+    QByteArray contents = sentinel;
+    const bool succeeded = CredentialSettingsDetail::readCredentialContentsForTest(
+        file, 16, &contents);
+    QVERIFY(file.sizeQueryTriggered);
+    QVERIFY(changed);
+    QCOMPARE(succeeded, expectedSuccess);
+    QCOMPARE(contents, expectedSuccess ? after : sentinel);
+    // A complete shortened/grown read is not an atomic snapshot guarantee.
+    // The outer fingerprint and second-read checks enforce snapshot consistency.
+}
+
+void TestCredentialSettings::boundedCredentialContentsReadFault_data()
+{
+    QTest::addColumn<bool>("errorResult");
+    QTest::newRow("partial-read") << false;
+    QTest::newRow("read-data-error") << true;
+}
+
+void TestCredentialSettings::boundedCredentialContentsReadFault()
+{
+    QFETCH(bool, errorResult);
+    PrivateCredentialTestDirectory temporary;
+    QVERIFY(temporary.isValid());
+    const QString path = temporary.filePath(QStringLiteral("faulted-read.dat"));
+    QVERIFY(writePrivateStateFile(path, QByteArray("synthetic contents")));
+    CredentialReadTestFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Unbuffered));
+    file.shortRead = !errorResult;
+    file.failRead = errorResult;
+    QByteArray contents("unchanged output");
+    QVERIFY(!CredentialSettingsDetail::readCredentialContentsForTest(
+        file, 32, &contents));
+    QVERIFY(file.readCalls > 0);
+    QCOMPARE(contents, QByteArray("unchanged output"));
+}
+
+void TestCredentialSettings::boundedCredentialContentsActualFileError()
+{
+#ifdef Q_OS_UNIX
+    PrivateCredentialTestDirectory temporary;
+    QVERIFY(temporary.isValid());
+    // A directory descriptor deterministically makes the native read fail.
+    // Exercise a real QFile read error and verify helper rejection; the separate
+    // regular-file admission check is not bypassed or modified.
+    const int descriptor = ::open(QFile::encodeName(temporary.path()).constData(), O_RDONLY);
+    QVERIFY(descriptor >= 0);
+    QFile file;
+    const bool opened = file.open(descriptor, QIODevice::ReadOnly,
+                                  QFileDevice::AutoCloseHandle);
+    if (!opened) ::close(descriptor);
+    QVERIFY(opened);
+    QByteArray contents("unchanged output");
+    QVERIFY(!CredentialSettingsDetail::readCredentialContentsForTest(
+        file, 32, &contents));
+    QCOMPARE(file.error(), QFileDevice::ReadError);
+    QCOMPARE(contents, QByteArray("unchanged output"));
+#else
+    QSKIP("Native directory read-error fixture requires Unix");
+#endif
 }
 
 void TestCredentialSettings::

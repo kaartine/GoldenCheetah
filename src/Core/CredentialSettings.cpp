@@ -2284,6 +2284,37 @@ bool replaceCredentialFile(
     return true;
 }
 
+qint64 credentialReadRequestSize(
+    qint64 observedSize, qint64 maximumSize)
+{
+    if (observedSize < 0 || maximumSize < 0)
+        return -1;
+    // Allow one extra byte without overflowing or allocating the entire allowed
+    // maximum for a small file. Size is only an allocation hint; keep the
+    // end/error checks and the caller's snapshot validation.
+    return observedSize < maximumSize
+        ? observedSize + 1
+        : maximumSize;
+}
+
+bool readCredentialContents(
+    QFile &file, qint64 maximumSize, QByteArray *contents)
+{
+    if (!contents)
+        return false;
+    const qint64 requestSize =
+        credentialReadRequestSize(file.size(), maximumSize);
+    if (requestSize < 0)
+        return false;
+    const QByteArray read = file.read(requestSize);
+    if (!file.atEnd()
+        || file.error() != QFileDevice::NoError) {
+        return false;
+    }
+    *contents = read;
+    return true;
+}
+
 bool readCredentialFile(
     const QString &path,
     qint64 maximumSize,
@@ -2337,13 +2368,7 @@ bool readCredentialFile(
     if (!file.open(QIODevice::ReadOnly))
         return false;
 #endif
-    const QByteArray read = file.read(maximumSize);
-    if (!file.atEnd()
-        || file.error() != QFileDevice::NoError) {
-        return false;
-    }
-    *contents = read;
-    return true;
+    return readCredentialContents(file, maximumSize, contents);
 }
 
 QByteArray credentialSourceFingerprint(
@@ -4324,6 +4349,18 @@ bool CredentialSettingsDetail::recoverBackendMutationMarker(
 }
 
 #ifdef GC_CREDENTIAL_TEST_HOOKS
+qint64 CredentialSettingsDetail::credentialReadRequestSizeForTest(
+    qint64 observedSize, qint64 maximumSize)
+{
+    return credentialReadRequestSize(observedSize, maximumSize);
+}
+
+bool CredentialSettingsDetail::readCredentialContentsForTest(
+    QFile &file, qint64 maximumSize, QByteArray *contents)
+{
+    return readCredentialContents(file, maximumSize, contents);
+}
+
 void CredentialSettingsDetail::setCredentialCacheNowForTest(
     qint64 nowMs)
 {
