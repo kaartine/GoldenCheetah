@@ -139,6 +139,14 @@ Preserve the original failure and compare runs before attributing findings to
 JIT. See the [Valgrind Qt FAQ, section 5.4](https://valgrind.org/docs/manual/faq.html)
 and [Qt regexp debugging guidance](https://doc.qt.io/qt-6.8/qregularexpression.html#debugging-code-that-uses-qregularexpression).
 
+For direct production-chart ownership assertions against an already completed,
+matching native application build, see the opt-in
+[chartOwnership fixture](unittests/Charts/chartOwnership/README.md). It reuses
+production objects without entering application `main()`, checks actual object
+destruction, and keeps its outputs separate from the application build. Run it
+in the documented disposable runtime; it does not replace the full UI lifecycle
+or graceful-shutdown Memcheck gates.
+
 ### Memcheck exceptions
 
 The default run has no project suppressions. Qt 6.8.3 on Ubuntu 24.04/glibc 2.39

@@ -372,8 +372,8 @@ class AllPlotObject : public QObject
     QVector<QwtPlotMarker*> d_mrk;
     QVector<QwtPlotMarker*> cal_mrk;
     QwtPlotMarker curveTitle;
-    QwtPlotMarker *allMarker1;
-    QwtPlotMarker *allMarker2;
+    QwtPlotMarker *allMarker1 = nullptr;
+    QwtPlotMarker *allMarker2 = nullptr;
 
     // reference lines
     QVector<QwtPlotCurve*> referenceLines;

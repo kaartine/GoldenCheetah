@@ -3588,14 +3588,14 @@ AllPlotWindow::setupSeriesStackPlots()
 {
     if (!isCompare() && (!showStack->isChecked() || !showBySeries->isChecked() || setupSeriesStack)) return;
 
-    QVBoxLayout *newLayout = new QVBoxLayout;
-
     // this is NOT a memory leak (see ZZZ below)
     seriesPlots.clear();
 
     bool addHeadwind = false;
     RideItem* rideItem = current;
     if (!rideItem || !rideItem->ride() || rideItem->ride()->dataPoints().isEmpty()) return;
+
+    QVBoxLayout *newLayout = new QVBoxLayout;
 
     // the refresh takes a while and is prone
     // to lots of flicker, we turn off updates
@@ -3750,8 +3750,6 @@ AllPlotWindow::setupStackPlots()
     // FOR SCREEN FLICKER. IT IS A LITTLE
     // COMPLICATED
     // ************************************
-    QVBoxLayout *newLayout = new QVBoxLayout;
-
     // this is NOT a memory leak (see ZZZ below)
     allPlots.clear();
 
@@ -3762,6 +3760,8 @@ AllPlotWindow::setupStackPlots()
 
     // don't try and plot for null files
     if (!rideItem || !rideItem->ride() || rideItem->ride()->dataPoints().isEmpty()) return;
+
+    QVBoxLayout *newLayout = new QVBoxLayout;
 
     double duration = rideItem->ride()->dataPoints().last()->secs;
     double distance =  (GlobalContext::context()->useMetricUnits ? 1 : MILES_PER_KM) * rideItem->ride()->dataPoints().last()->km;
