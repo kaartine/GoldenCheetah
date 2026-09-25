@@ -754,7 +754,7 @@ HEADERS += Gui/AboutDialog.h Gui/AddIntervalDialog.h Gui/AnalysisSidebar.h Gui/C
            Gui/MetricOverrideDialog.h Gui/ModalWorkflowGuard.h Gui/PlanWizards.h \
            Gui/Calendar.h Gui/Agenda.h Gui/CalendarData.h Gui/CalendarItemDelegates.h \
            Gui/PlanAdherence.h \
-           Gui/IconManager.h Gui/FilterSimilarDialog.h
+           Gui/IconManager.h Gui/FilterSimilarDialog.h Gui/SharedStyle.h
 
 # metrics and models
 HEADERS += Metrics/Banister.h Metrics/CPSolver.h Metrics/Estimator.h Metrics/ExtendedCriticalPower.h Metrics/HrZones.h Metrics/PaceZones.h \

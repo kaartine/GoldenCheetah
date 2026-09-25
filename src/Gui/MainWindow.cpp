@@ -35,6 +35,7 @@
 
 // DATA STRUCTURES
 #include "MainWindow.h"
+#include "SharedStyle.h"
 #include "CacheWriteWarning.h"
 #include "GuiStartupPolicy.h"
 #include "OpenGLVersionProbe.h"
@@ -281,7 +282,7 @@ MainWindow::MainWindow(const QDir &home)
     splash->showMessage(tr("Setting up GUI: Toolbar..."));
     head = new GcToolBar(this);
 
-    QStyle *toolStyle = QStyleFactory::create("fusion");
+    QStyle *toolStyle = sharedFusionStyle();
 
     // get those icons
     sidebarIcon = iconFromPNG(":images/titlebar/sidebar.png");
@@ -557,9 +558,9 @@ MainWindow::MainWindow(const QDir &home)
     rideMenu->addAction(tr("&Download from device..."), QKeySequence("Ctrl+D"), this, SLOT(downloadRide()));
     rideMenu->addAction(tr("&Import from file..."), QKeySequence("Ctrl+I"), this, SLOT (importFile()));
     rideMenu->addAction(tr("&Manual entry..."), QKeySequence("Ctrl+M"), this, SLOT(manualRide()));
-    QAction *actionPlan = new QAction(tr("&Plan activity..."));
-    connect(GlobalContext::context(), &GlobalContext::start, this, [actionPlan]() { actionPlan->setEnabled(false); }); // The dialog can change the contexts workout
-    connect(GlobalContext::context(), &GlobalContext::stop, this, [actionPlan]() { actionPlan->setEnabled(true); });   // temporarily which might cause unwanted effect
+    QAction *actionPlan = new QAction(tr("&Plan activity..."), rideMenu);
+    connect(GlobalContext::context(), &GlobalContext::start, actionPlan, [actionPlan]() { actionPlan->setEnabled(false); }); // The dialog can change the contexts workout
+    connect(GlobalContext::context(), &GlobalContext::stop, actionPlan, [actionPlan]() { actionPlan->setEnabled(true); });   // temporarily which might cause unwanted effect
     connect(actionPlan, &QAction::triggered, this, [this]() { planActivity(); });
     rideMenu->addAction(actionPlan);
     rideMenu->addSeparator ();

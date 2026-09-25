@@ -11,6 +11,9 @@
 #include <memory>
 
 class QSettings;
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+class QFile;
+#endif
 
 namespace CredentialSettingsDetail {
 
@@ -52,6 +55,10 @@ bool recoverBackendMutationMarker(
     const QString &mutationLockPath);
 
 #ifdef GC_CREDENTIAL_TEST_HOOKS
+qint64 credentialReadRequestSizeForTest(
+    qint64 observedSize, qint64 maximumSize);
+bool readCredentialContentsForTest(
+    QFile &file, qint64 maximumSize, QByteArray *contents);
 void setCredentialCacheNowForTest(qint64 nowMs);
 void resetCredentialCacheNowForTest();
 qint64 credentialCacheLifetimeMsForTest();

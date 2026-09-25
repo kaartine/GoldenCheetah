@@ -159,7 +159,7 @@ CriticalPowerWindow::CriticalPowerWindow(Context *context, bool rangemode) :
 
     // add additional menu items before setting
     // controls since the menu is SET from setControls
-    QAction *showsettings = new QAction(tr("Chart Settings..."));
+    QAction *showsettings = new QAction(tr("Chart Settings..."), this);
     addAction(showsettings);
     QAction *exportData = new QAction(tr("Export Chart Data..."), this);
     addAction(exportData);

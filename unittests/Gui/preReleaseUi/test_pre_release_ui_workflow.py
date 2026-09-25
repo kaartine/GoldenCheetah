@@ -29,6 +29,114 @@ WORKOUT_WIZARD_SOURCE_PATH = (
 )
 
 
+class UiTimeoutScaleTests(unittest.TestCase):
+    def test_scale_defaults_and_bounds(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(UI.ui_timeout_scale_from_environment(), 1)
+            with mock.patch.object(UI.time, "monotonic", return_value=100.0):
+                self.assertEqual(UI.ui_wait_deadline(8.0), 108.0)
+            for value in ("1", "20", "60"):
+                os.environ["GC_UI_TIMEOUT_SCALE"] = value
+                self.assertEqual(UI.ui_timeout_scale_from_environment(), int(value))
+            for value in ("", " ", "0", "-1", "61", "1.5", "nan", "inf", "1e2", "invalid"):
+                with self.subTest(value=value):
+                    os.environ["GC_UI_TIMEOUT_SCALE"] = value
+                    with self.assertRaisesRegex(ValueError, "GC_UI_TIMEOUT_SCALE"):
+                        UI.ui_timeout_scale_from_environment()
+
+    def test_invalid_scale_rejected_before_prepare_or_exercise_writes(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.dict(os.environ, {"GC_UI_TIMEOUT_SCALE": ""}, clear=True):
+            root = Path(temporary) / "fixture"
+            artifacts = Path(temporary) / "artifacts"
+            with self.assertRaisesRegex(ValueError, "GC_UI_TIMEOUT_SCALE"):
+                UI.prepare(root)
+            with self.assertRaisesRegex(ValueError, "GC_UI_TIMEOUT_SCALE"):
+                UI.exercise(root, artifacts, 123)
+            self.assertFalse(root.exists())
+            self.assertFalse(artifacts.exists())
+            for arguments in (["prepare", str(root)],
+                              ["exercise", str(root), str(artifacts), "123"]):
+                with mock.patch.object(UI.sys, "argv", ["pre_release_ui.py", *arguments]), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(UI.main(), 2)
+
+    def test_find_scales_deadline_without_changing_poll_cadence(self):
+        driver = UI.UiDriver.__new__(UI.UiDriver)
+        driver.find_all = mock.Mock(return_value=[])
+        for scale in (1, 20):
+            with self.subTest(scale=scale), \
+                    mock.patch.dict(os.environ, {"GC_UI_TIMEOUT_SCALE": str(scale)}, clear=True), \
+                    mock.patch.object(UI.time, "monotonic", side_effect=[100, 100 + 10 * scale - 1, 100 + 10 * scale]), \
+                    mock.patch.object(UI.time, "sleep") as sleep:
+                driver.find_all.reset_mock()
+                with self.assertRaisesRegex(UI.UiFailure, "Accessible object not found"):
+                    driver.find("missing")
+                driver.find_all.assert_called_once()
+                sleep.assert_called_once_with(0.15)
+
+    def test_application_startup_scales_deadline_without_wall_wait(self):
+        driver = UI.UiDriver.__new__(UI.UiDriver)
+        driver.pyatspi = mock.Mock()
+        driver.pyatspi.Registry.getDesktop.return_value = []
+        for scale in (1, 20):
+            with self.subTest(scale=scale), \
+                    mock.patch.dict(os.environ, {"GC_UI_TIMEOUT_SCALE": str(scale)}, clear=True), \
+                    mock.patch.object(UI.time, "monotonic", side_effect=[100, 100 + 30 * scale - 1, 100 + 30 * scale]), \
+                    mock.patch.object(UI.time, "sleep") as sleep:
+                driver.pyatspi.Registry.getDesktop.reset_mock()
+                with self.assertRaisesRegex(UI.UiFailure, "main window did not appear"):
+                    driver.wait_for_application()
+                driver.pyatspi.Registry.getDesktop.assert_called_once_with(0)
+                sleep.assert_called_once_with(0.2)
+
+    def test_shutdown_scales_deadline_without_wall_wait(self):
+        callbacks = {}
+        suite = mock.Mock()
+        suite.run.side_effect = lambda name, callback: callbacks.update({name: callback})
+        suite.write_junit.return_value = 0
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.dict(os.environ, {"GC_UI_TESTS": "graceful_shutdown_request"}, clear=True), \
+                mock.patch.object(UI, "UiDriver"), mock.patch.object(UI, "Suite", return_value=suite):
+            self.assertEqual(UI.exercise(Path(temporary), Path(temporary) / "artifacts", 123), 0)
+        for scale in (1, 20):
+            with self.subTest(scale=scale), \
+                    mock.patch.dict(os.environ, {"GC_UI_TIMEOUT_SCALE": str(scale)}, clear=True), \
+                    mock.patch.object(UI.time, "monotonic", side_effect=[100, 100 + 8 * scale - 1, 100 + 8 * scale]), \
+                    mock.patch.object(UI.time, "sleep") as sleep, \
+                    mock.patch.object(UI, "process_group_exists", return_value=True) as exists:
+                with self.assertRaisesRegex(UI.UiFailure, "did not exit after Quit"):
+                    callbacks["graceful_shutdown_request"]()
+                exists.assert_called_once_with(123)
+                sleep.assert_called_once_with(0.1)
+
+    def test_nested_find_does_not_scale_remaining_wall_time_twice(self):
+        driver = UI.UiDriver.__new__(UI.UiDriver)
+        child_deadlines = []
+
+        def find(**arguments):
+            child_deadlines.append(UI.ui_wait_deadline(arguments["timeout"]))
+            return object()
+
+        driver.find = find
+        driver.activate = mock.Mock()
+        with mock.patch.dict(os.environ, {"GC_UI_TIMEOUT_SCALE": "20"}, clear=True), \
+                mock.patch.object(UI.time, "monotonic", side_effect=[100, 299.5, 299.5, 299.5]):
+            driver.activate_named("almost-ready", timeout=10.0)
+        self.assertEqual(child_deadlines, [300.0])
+        driver.activate.assert_called_once()
+
+    def test_game_duration_and_observation_delays_are_not_scaled(self):
+        for scale in ("1", "20", "60"):
+            with self.subTest(scale=scale), \
+                    mock.patch.dict(os.environ, {"GC_UI_TIMEOUT_SCALE": scale}, clear=True):
+                self.assertEqual(UI.game_run_seconds_from_environment(), 11.8)
+                workflow = UI.WorkoutGameUiWorkflow(
+                    mock.Mock(), Path("unused"), Path("unused"), False, lambda: None)
+                self.assertEqual(workflow.run_delays, (2.95, 2.95, 5.9))
+                self.assertEqual(UI.trainer_acceptance_shift_delays(12.0), (3.0, 3.0, 6.0))
+
+
 class PreReleaseUiWorkflowTests(unittest.TestCase):
     @staticmethod
     def training_course(start=100, end=100):

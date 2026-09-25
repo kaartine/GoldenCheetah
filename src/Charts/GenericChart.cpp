@@ -22,6 +22,7 @@
 #include "AbstractView.h"
 #include "RideFileCommand.h"
 #include "Utils.h"
+#include "SharedStyle.h"
 
 #include <limits>
 #include <QScrollArea>
@@ -69,7 +70,7 @@ GenericChart::GenericChart(QWidget *parent, Context *context) : QWidget(parent),
     // put everything inside a scrollarea
     stackFrame = new QScrollArea(this);
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     stackFrame->setStyle(cde);
 #endif
     stackFrame->setAutoFillBackground(false);

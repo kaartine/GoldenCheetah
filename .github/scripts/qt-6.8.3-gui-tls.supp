@@ -1,0 +1,21 @@
+# Opt-in only: Qt 6.8.3 private GUI-pool TLS at process shutdown.
+# Reproduced on Ubuntu 24.04/glibc 2.39 with Valgrind 3.22.0.
+# See DEVELOPMENT-WORKFLOW.md, "Memcheck exceptions". Not a GC memory fix.
+# Exact TLS allocation chain plus QtGui version; no invalid accesses or
+# definite/indirect leaks are suppressed. Recheck without this after Qt updates.
+{
+   qt-6.8.3-private-gui-pool-tls-at-exit
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:calloc
+   fun:calloc
+   fun:allocate_dtv
+   fun:_dl_allocate_tls
+   fun:allocate_stack
+   fun:pthread_create@@GLIBC_2.34
+   fun:_ZN7QThread5startENS_8PriorityE
+   fun:_ZN18QThreadPoolPrivate11startThreadEP9QRunnable
+   fun:_ZN18QThreadPoolPrivate8tryStartEP9QRunnable
+   fun:_ZN11QThreadPool5startEP9QRunnablei
+   obj:*/libQt6Gui.so.6.8.3
+}

@@ -17,6 +17,7 @@
  */
 
 #include "Context.h"
+#include <memory>
 #include "Athlete.h"
 #include "MainWindow.h"
 #include "GuiSmokeShutdown.h"
@@ -24,6 +25,7 @@
 #include "StravaSettingsCommit.h"
 #include "CloudService.h"
 #include "LocalFileStoreProcess.h"
+#include "Library.h"
 #include "TrainDB.h"
 #include "Colors.h"
 #include "GcUpgrade.h"
@@ -667,8 +669,10 @@ main(int argc, char *argv[])
 #ifdef GC_WANT_PYTHON
         bool embed = appsettings->value(NULL, GC_EMBED_PYTHON, true).toBool();
         if (embed && noPy == false && python == NULL) {
-            python = new PythonEmbed(); // initialise python in this thread ?
-            if (python->loaded == false) python=NULL;
+            // Publish only a loaded interpreter. Failed initialization must
+            // still destroy the wrapper and its C++ members.
+            auto candidate = std::make_unique<PythonEmbed>();
+            if (candidate->loaded) python = candidate.release();
         }
 #endif
 
@@ -1040,6 +1044,9 @@ main(int argc, char *argv[])
         }
 
     } while (restarting);
+
+    // Shared across windows and application restarts; release only on final exit.
+    Library::releaseAll();
 
     if (!LocalFileStoreProcess::shutdownReaper()) {
         qWarning() << "Local Store helper reaper did not stop cleanly";

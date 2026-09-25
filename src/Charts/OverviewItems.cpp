@@ -109,6 +109,7 @@ RPEOverviewItem::RPEOverviewItem(ChartSpace *parent, QString name) : ChartSpaceI
 
 RPEOverviewItem::~RPEOverviewItem()
 {
+    delete configwidget;
     delete rperating;
     delete sparkline;
 }
@@ -131,6 +132,7 @@ KPIOverviewItem::KPIOverviewItem(ChartSpace *parent, QString name, double start,
 
 KPIOverviewItem::~KPIOverviewItem()
 {
+    delete configwidget;
     // delete progress bar; //XXX todo
     delete progressbar;
 }
@@ -163,6 +165,7 @@ DataOverviewItem::DataOverviewItem(ChartSpace *parent, QString name, QString pro
 
 DataOverviewItem::~DataOverviewItem()
 {
+    delete configwidget;
 }
 
 #define DATA_TABLE_TOTALS      1
@@ -589,6 +592,7 @@ RouteOverviewItem::RouteOverviewItem(ChartSpace *parent, QString name) : ChartSp
 
 RouteOverviewItem::~RouteOverviewItem()
 {
+    delete configwidget;
     delete routeline;
 }
 
@@ -776,7 +780,9 @@ ZoneOverviewItem::configChanged(qint32)
     // previously removing default one to simulte setAxisX
     QList<QAbstractAxis*> horizontalAxes = chart->axes(Qt::Horizontal, barseries);
     if (horizontalAxes.size() == 1) {
-        chart->removeAxis(horizontalAxes.first());
+        QAbstractAxis *defaultAxis = horizontalAxes.first();
+        chart->removeAxis(defaultAxis);
+        delete defaultAxis; // removeAxis releases ownership to the caller.
     } else {
         qDebug() << "Expecting one horizontal axis: " << horizontalAxes.size();
     }
@@ -800,6 +806,7 @@ ZoneOverviewItem::configChanged(qint32)
 
 ZoneOverviewItem::~ZoneOverviewItem()
 {
+    delete configwidget;
     delete chart;
 }
 
@@ -830,6 +837,7 @@ DonutOverviewItem::DonutOverviewItem(ChartSpace *parent, QString name, QString s
 
 DonutOverviewItem::~DonutOverviewItem()
 {
+    delete configwidget;
     delete chart;
 }
 
@@ -856,6 +864,7 @@ MetricOverviewItem::MetricOverviewItem(ChartSpace *parent, QString name, QString
 
 MetricOverviewItem::~MetricOverviewItem()
 {
+    delete configwidget;
     delete sparkline;
 }
 
@@ -935,6 +944,7 @@ TopNOverviewItem::configChanged(qint32)
 
 TopNOverviewItem::~TopNOverviewItem()
 {
+    delete configwidget;
     animator->stop();
     delete animator;
 }
@@ -952,6 +962,7 @@ PMCOverviewItem::PMCOverviewItem(ChartSpace *parent, QString symbol) : ChartSpac
 
 PMCOverviewItem::~PMCOverviewItem()
 {
+    delete configwidget;
 }
 
 MetaOverviewItem::MetaOverviewItem(ChartSpace *parent, QString name, QString symbol) : ChartSpaceItem(parent, name)
@@ -1028,6 +1039,7 @@ void MetaOverviewItem::metadataChanged()
 
 MetaOverviewItem::~MetaOverviewItem()
 {
+    delete configwidget;
     if (sparkline) delete sparkline;
 }
 
@@ -1062,6 +1074,7 @@ IntervalOverviewItem::IntervalOverviewItem(ChartSpace *parent, QString name, QSt
 
 IntervalOverviewItem::~IntervalOverviewItem()
 {
+    delete configwidget;
     delete bubble;
 }
 

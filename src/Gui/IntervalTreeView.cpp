@@ -23,6 +23,7 @@
 #include "Context.h"
 #include "Settings.h"
 #include "Colors.h"
+#include "SharedStyle.h"
 #include <QStyle>
 #include <QStyleFactory>
 #include <QScrollBar>
@@ -39,7 +40,7 @@ IntervalTreeView::IntervalTreeView(Context *context) : context(context)
     setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     verticalScrollBar()->setStyle(cde);
 #endif
     setStyleSheet("QTreeView::item:hover { background: lightGray; }");

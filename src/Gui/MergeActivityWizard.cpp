@@ -29,6 +29,7 @@
 #include "MergeActivityRidePreparation.h"
 #include "MergeActivityTimeOffset.h"
 #include "MergeActivityXData.h"
+#include "SharedStyle.h"
 
 #include <utility>
 
@@ -1151,7 +1152,7 @@ MergeAdjust::MergeAdjust(MergeActivityWizard *parent) : QWizardPage(parent), wiz
     // BUG in QMacStyle and painting of spanSlider
     // so we use a plain style to avoid it, but only
     // on a MAC, since win and linux are fine
-    QStyle *style = QStyleFactory::create("fusion");
+    QStyle *style = sharedFusionStyle();
     spanSlider->setStyle(style);
 #endif
 

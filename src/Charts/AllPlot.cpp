@@ -665,6 +665,10 @@ AllPlotObject::setColor(QColor color)
 // wipe those curves
 AllPlotObject::~AllPlotObject()
 {
+    delete allMarker1;
+    delete allMarker2;
+    intervalHighlighterCurve->detach(); delete intervalHighlighterCurve;
+    intervalHoverCurve->detach(); delete intervalHoverCurve;
     grid->detach(); delete grid;
     mCurve->detach(); delete mCurve;
     wCurve->detach(); delete wCurve;
@@ -1037,6 +1041,11 @@ AllPlot::AllPlot(QWidget *parent, AllPlotWindow *window, Context *context, RideF
 
 AllPlot::~AllPlot()
 {
+    // CurveColors owns a slider parented to this plot. Dispose of the helper
+    // while its widgets and curves are still alive, before QWidget teardown.
+    delete curveColors;
+    bg->detach(); delete bg;
+
     // wipe compare curves if there are any
     foreach(QwtPlotCurve *compare, compares) {
         compare->detach(); delete compare;

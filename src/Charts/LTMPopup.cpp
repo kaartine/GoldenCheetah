@@ -24,6 +24,7 @@
 #include "RideFileCache.h" // for RideBest
 #include "Utils.h"
 #include "Colors.h"
+#include "SharedStyle.h"
 
 LTMPopup::LTMPopup(Context *context) : QWidget(context->mainWindow), context(context)
 {
@@ -55,7 +56,7 @@ LTMPopup::LTMPopup(Context *context) : QWidget(context->mainWindow), context(con
     // ride list...
     rides = new QTableWidget(this);
 #ifdef Q_OS_LINUX // QT 4.7 bug on Linux, selection-background-color is ignored (no transparency)
-    QStyle *style = QStyleFactory::create("fusion");
+    QStyle *style = sharedFusionStyle();
     rides->setStyle(style);
 #endif
     rides->setFrameStyle(QFrame::NoFrame);

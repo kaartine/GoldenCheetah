@@ -99,6 +99,13 @@ Library::initialise(QDir gcRoot)
         }
     }
 }
+
+void
+Library::releaseAll()
+{
+    qDeleteAll(libraries);
+    libraries.clear();
+}
 #endif
 
 namespace {

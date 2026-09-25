@@ -29,6 +29,7 @@
 #include "HrZones.h"
 #include "XDataDialog.h"
 #include "XDataTableModel.h"
+#include "SharedStyle.h"
 
 #include <QtGui>
 #include <QString>
@@ -188,6 +189,7 @@ RideEditor::RideEditor(Context *context) : QWidget(context->mainWindow), data(NU
 
     // empty model
     model = new RideFileTableModel(NULL);
+    model->setParent(this);
 
     // set up the table
     table = new QTableView(this);
@@ -196,11 +198,11 @@ RideEditor::RideEditor(Context *context) : QWidget(context->mainWindow), data(NU
     stack->setCurrentIndex(0);
 
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     table->verticalScrollBar()->setStyle(cde);
     table->horizontalScrollBar()->setStyle(cde);
 #endif
-    table->setItemDelegate(new CellDelegate(this));
+    table->setItemDelegate(new CellDelegate(this, this));
     table->verticalHeader()->setDefaultSectionSize(20 *dpiYFactor);
     table->setModel(model);
     table->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -3028,7 +3030,7 @@ XDataEditor::XDataEditor(QWidget *parent, QString xdata) : QTableView(parent), x
     _model = new XDataTableModel(NULL, xdata);
 
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     verticalScrollBar()->setStyle(cde);
     horizontalScrollBar()->setStyle(cde);
 #endif
@@ -3472,6 +3474,5 @@ XDataEditor::paste()
     }
     _model->ride->command->endLUW();
 }
-
 
 

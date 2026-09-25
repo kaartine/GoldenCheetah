@@ -93,6 +93,25 @@ def generator_mode_from_environment() -> str:
     return mode
 
 
+def ui_timeout_scale_from_environment() -> int:
+    value = os.environ.get("GC_UI_TIMEOUT_SCALE", "1")
+    if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 60:
+        raise ValueError("GC_UI_TIMEOUT_SCALE must be an integer between 1 and 60")
+    return int(value)
+
+
+def ui_wait_deadline(seconds: float) -> float:
+    """Scale asynchronous wait budgets, leaving polling and simulation time intact."""
+    return time.monotonic() + seconds * ui_timeout_scale_from_environment()
+
+
+def ui_nested_wait_timeout(deadline: float) -> float:
+    # The outer deadline already includes the scale. Convert its remaining
+    # wall time back to a duration before a child wait creates its own deadline.
+    return min(1.0, max(0.1, deadline - time.monotonic())
+               / ui_timeout_scale_from_environment())
+
+
 def training_failure_case_from_environment() -> str | None:
     case = os.environ.get("GC_UI_TRAINING_FAILURE_CASE", "")
     if not case:
@@ -245,6 +264,7 @@ def x11_bgrx_to_rgb(data: bytes) -> bytes:
 
 
 def prepare(root: Path) -> None:
+    ui_timeout_scale_from_environment()
     home = root / "home"
     library = root / "library"
     athlete = library / ATHLETE
@@ -874,8 +894,14 @@ class UiDriver:
         self.pruned_accessible_paths = {}
         self.app = self.wait_for_application()
 
-    def nodes_with_names(self, node=None):
+    def nodes_with_names(self, node=None, showing_only=False):
+        root = node is None
         node = self.app if node is None else node
+        # A showing search skips hidden subtrees: GC keeps thousands of hidden
+        # widgets. This is stricter than per-node SHOWING, since Qt item-view
+        # cells can report SHOWING inside a hidden view; those are not on screen.
+        if showing_only and not root and not self.showing(node):
+            return
         try:
             pruned_name = getattr(
                 self, "pruned_accessible_paths", {}
@@ -897,7 +923,7 @@ class UiDriver:
         except Exception:
             return
         for child in children:
-            yield from self.nodes_with_names(child)
+            yield from self.nodes_with_names(child, showing_only)
 
     def all_nodes(self, node=None):
         for accessible, unused_name in self.nodes_with_names(node):
@@ -964,7 +990,7 @@ class UiDriver:
             return False
 
     def wait_for_application(self, timeout=30.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             desktop = self.pyatspi.Registry.getDesktop(0)
             for app in desktop:
@@ -986,7 +1012,7 @@ class UiDriver:
 
     def find_all(self, name=None, role=None, showing=None):
         matches = []
-        for node, node_name in self.nodes_with_names():
+        for node, node_name in self.nodes_with_names(showing_only=showing is True):
             if name is not None and node_name != name:
                 continue
             if role is not None and self.role(node) != role:
@@ -997,7 +1023,7 @@ class UiDriver:
         return matches
 
     def find(self, name=None, role=None, showing=None, timeout=10.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             matches = self.find_all(name, role, showing)
             if matches:
@@ -1009,7 +1035,7 @@ class UiDriver:
         )
 
     def find_named_any(self, names, role=None, showing=None, timeout=10.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             for name in names:
                 matches = self.find_all(name, role, showing)
@@ -1023,7 +1049,7 @@ class UiDriver:
     def find_enabled(
         self, name, role=None, showing=True, timeout=10.0, scope=None
     ):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             if scope is None:
                 matches = self.find_all(name, role, showing)
@@ -1050,7 +1076,7 @@ class UiDriver:
                 return self.find(
                     name, role, showing=True, timeout=timeout
                 )
-            deadline = time.monotonic() + timeout
+            deadline = ui_wait_deadline(timeout)
             while time.monotonic() < deadline:
                 matches = [
                     node for node in self.all_nodes(scope)
@@ -1076,7 +1102,7 @@ class UiDriver:
                 f"Cannot focus {first_role} {first_name!r}"
             ) from error
 
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             if self.name(first) == first_name:
                 break
@@ -1110,7 +1136,7 @@ class UiDriver:
                     raise UiFailure(
                         f"Cannot activate {role} {name!r}"
                     ) from error
-                deadline = time.monotonic() + timeout
+                deadline = ui_wait_deadline(timeout)
                 while time.monotonic() < deadline:
                     if self.checked(node) != before:
                         break
@@ -1119,7 +1145,7 @@ class UiDriver:
                     raise UiFailure(f"Cannot operate {role} {name!r}")
                 if not node.queryAction().doAction(0):
                     raise UiFailure(f"Cannot restore {role} {name!r}")
-                deadline = time.monotonic() + timeout
+                deadline = ui_wait_deadline(timeout)
                 while time.monotonic() < deadline:
                     if self.checked(node) == before:
                         break
@@ -1131,7 +1157,7 @@ class UiDriver:
             raise UiFailure(f"Unsupported keyboard-control role: {role}")
 
     def require_names(self, names, role=None, timeout=10.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         missing = list(names)
         while missing and time.monotonic() < deadline:
             found = {
@@ -1146,7 +1172,7 @@ class UiDriver:
             raise UiFailure(f"Missing accessible controls: {', '.join(missing)}")
 
     def require_visible_names(self, names, timeout=10.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         missing = list(names)
         while missing and time.monotonic() < deadline:
             missing = [
@@ -1163,7 +1189,7 @@ class UiDriver:
     def refresh_accessible(self, node, name, role, showing, timeout=1.0):
         if not name and not role:
             return node
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             matches = self.find_all(
                 name=name or None,
@@ -1279,7 +1305,7 @@ class UiDriver:
         self.display.sync()
 
     def activate_named(self, name, role=None, showing=None, timeout=30.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         last_error = None
         while time.monotonic() < deadline:
             try:
@@ -1287,7 +1313,7 @@ class UiDriver:
                     name=name,
                     role=role,
                     showing=showing,
-                    timeout=min(1.0, max(0.1, deadline - time.monotonic())),
+                    timeout=ui_nested_wait_timeout(deadline),
                 )
                 self.activate(node)
                 return
@@ -1297,7 +1323,7 @@ class UiDriver:
         raise UiFailure(f"Cannot activate {role or 'control'} {name!r}") from last_error
 
     def activate_view(self, name, timeout=30.0, ready_names=None):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         last_error = None
         ready_names = tuple(ready_names or (name,))
         while time.monotonic() < deadline:
@@ -1333,7 +1359,7 @@ class UiDriver:
         raise UiFailure(f"Cannot open view {name!r}") from last_error
 
     def select_named(self, name, timeout=10.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         nodes = [
             node for node in self.find_all(name=name, showing=True)
             if self.role(node) in ("list item", "table cell")
@@ -1343,7 +1369,7 @@ class UiDriver:
             try:
                 self.select_accessible_item(
                     node,
-                    timeout=min(1.0, max(0.1, deadline - time.monotonic())),
+                    timeout=ui_nested_wait_timeout(deadline),
                 )
                 return
             except UiFailure as error:
@@ -1357,7 +1383,7 @@ class UiDriver:
                 selection = parent.querySelection()
                 self.click(node)
                 confirmation_deadline = min(
-                    deadline, time.monotonic() + 1.0
+                    deadline, ui_wait_deadline(1.0)
                 )
                 while time.monotonic() < confirmation_deadline:
                     if selection.isChildSelected(index):
@@ -1385,7 +1411,7 @@ class UiDriver:
                 timeout=timeout,
             )
             self.activate(item)
-            deadline = time.monotonic() + timeout
+            deadline = ui_wait_deadline(timeout)
             while time.monotonic() < deadline:
                 if self.name(combo) == name:
                     return
@@ -1405,7 +1431,7 @@ class UiDriver:
                 selection = parent.querySelection()
                 if index < 0 or not selection.selectChild(index):
                     raise UiFailure("accessible container rejected selection")
-                deadline = time.monotonic() + timeout
+                deadline = ui_wait_deadline(timeout)
                 while time.monotonic() < deadline:
                     if selection.isChildSelected(index):
                         return
@@ -1439,9 +1465,10 @@ class UiDriver:
         raise UiFailure(f"Cannot context-click selectable item {name!r}")
 
     def combo_with_items(
-            self, expected, timeout=15.0, require_interactable=False):
+            self, expected, timeout=15.0, require_interactable=False,
+            match_current_name=True):
         expected = set(expected)
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             named_candidates = []
             for combo in self.find_all(role="combo box"):
@@ -1449,7 +1476,7 @@ class UiDriver:
                     continue
                 if require_interactable and not self.enabled(combo):
                     continue
-                if self.name(combo) in expected:
+                if match_current_name and self.name(combo) in expected:
                     named_candidates.append(combo)
                 descendants = {
                     self.name(node)
@@ -1464,7 +1491,7 @@ class UiDriver:
         raise UiFailure(f"Perspective selector lacks: {sorted(expected)!r}")
 
     def find_combo_item(self, combo, name, timeout=10.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             matches = [
                 node
@@ -1497,7 +1524,7 @@ class UiDriver:
         if popup_index < 0:
             raise UiFailure(f"Combo box item has invalid index: {name!r}")
         self.activate_popup_item(popup_index)
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             if self.name(combo) == name:
                 return combo
@@ -1631,7 +1658,7 @@ class UiDriver:
         return changed
 
     def wait_value(self, node, expected, timeout=5.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             if self.current_value(node) == expected:
                 return
@@ -1642,7 +1669,7 @@ class UiDriver:
         )
 
     def wait_file(self, path: Path, timeout=8.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             if path.is_file() and path.stat().st_size > 40:
                 return
@@ -1652,7 +1679,7 @@ class UiDriver:
     def wait_new_file(
         self, directory: Path, existing: set[Path], pattern: str, timeout=8.0
     ) -> Path:
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             candidates = {
                 path for path in directory.glob(pattern)
@@ -1669,7 +1696,7 @@ class UiDriver:
         raise UiFailure(f"No new {pattern} file appeared in {directory}")
 
     def wait_file_growth(self, path: Path, initial_size: int, timeout=8.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             if path.is_file() and path.stat().st_size > initial_size:
                 return
@@ -1677,7 +1704,7 @@ class UiDriver:
         raise UiFailure(f"Recording did not resume: {path}")
 
     def wait_file_removed(self, path: Path, timeout=8.0):
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             if not path.exists():
                 return
@@ -1715,7 +1742,7 @@ class UiDriver:
                 return expected_description
             return ""
 
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         while time.monotonic() < deadline:
             selected_activity = matching_activity_description()
             if selected_activity:
@@ -1736,7 +1763,7 @@ class UiDriver:
                     self.activate(node)
                 except UiFailure:
                     continue
-                selected_deadline = min(deadline, time.monotonic() + 2.0)
+                selected_deadline = min(deadline, ui_wait_deadline(2.0))
                 while time.monotonic() < selected_deadline:
                     if self.selected(node):
                         selected_activity = matching_activity_description()
@@ -1859,7 +1886,7 @@ class MtbCourseUiWorkflow:
             raise UiFailure(f"Unsupported MTB course preset: {preset}") from error
         control = self.driver.find(control_name, showing=True, timeout=30.0)
         self.driver.click(control)
-        deadline = time.monotonic() + 8.0
+        deadline = ui_wait_deadline(8.0)
         while time.monotonic() < deadline:
             if self.driver.checked(control):
                 return
@@ -1905,7 +1932,7 @@ class MtbCourseUiWorkflow:
                 "Save Course", "push button", showing=True, timeout=30.0
             )
         )
-        deadline = time.monotonic() + 20.0
+        deadline = ui_wait_deadline(20.0)
         while time.monotonic() < deadline:
             try:
                 if self.sidecar_path.read_bytes() != before:
@@ -1963,7 +1990,7 @@ class WorkoutGameUiWorkflow:
         return self.stop_save_and_reopen(recording)
 
     def select_prepared_workout(self, timeout=20.0) -> None:
-        deadline = time.monotonic() + timeout
+        deadline = ui_wait_deadline(timeout)
         requested = getattr(self, "workout_names", ())
         workout_names = requested or (
             "Pre-release UI test", "ui-test.erg", "ui-test"
@@ -2020,7 +2047,7 @@ class WorkoutGameUiWorkflow:
                     f"Workout Ride should be {availability} for this MTB preset"
                 )
             if workout_ride_expected:
-                deadline = time.monotonic() + 5.0
+                deadline = ui_wait_deadline(5.0)
                 while (not self.driver.combo_selects(ride_mode, "Workout Ride")
                        and time.monotonic() < deadline):
                     time.sleep(0.1)
@@ -2037,7 +2064,7 @@ class WorkoutGameUiWorkflow:
         else:
             self.driver.select_combo_item(["Workout Editor"], "Workout Editor")
         if workout_ride_expected:
-            deadline = time.monotonic() + 5.0
+            deadline = ui_wait_deadline(5.0)
             while (not self.driver.combo_selects(ride_mode, "Workout Ride")
                    and time.monotonic() < deadline):
                 time.sleep(0.1)
@@ -2205,7 +2232,7 @@ class WorkoutGameUiWorkflow:
             "Continue Training", "push button", showing=True, timeout=30.0
         )
         self.activate_stop_dialog_button("Save")
-        deadline = time.monotonic() + 10.0
+        deadline = ui_wait_deadline(10.0)
         while time.monotonic() < deadline:
             try:
                 stop = self.driver.find(
@@ -2287,7 +2314,7 @@ class TrainingFailureUiWorkflow(WorkoutGameUiWorkflow):
         self.finish_evidence(recording)
 
     def wait_initial_evidence(self, recording):
-        deadline = time.monotonic() + 15.0
+        deadline = ui_wait_deadline(15.0)
         while time.monotonic() < deadline:
             text = recording.read_text(encoding="utf-8")
             try:
@@ -2315,7 +2342,7 @@ class TrainingFailureUiWorkflow(WorkoutGameUiWorkflow):
             if "gc-test-game event=constructed" in self.log_text():
                 raise UiFailure("Absent-game baseline instantiated a hidden game chart")
             return
-        deadline = time.monotonic() + 15.0
+        deadline = ui_wait_deadline(15.0)
         while time.monotonic() < deadline:
             if "gc-test-game " + marker in self.log_text():
                 return
@@ -2514,6 +2541,7 @@ def observe_renderer_canvas(output: Path, app_pgid: int) -> int:
 
 
 def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
+    ui_timeout_scale_from_environment()
     artifacts.mkdir(parents=True, exist_ok=True)
     suite = None
     try:
@@ -2525,7 +2553,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
 
         def enter_train():
             driver.activate_named("Train", "menu item")
-            deadline = time.monotonic() + 30.0
+            deadline = ui_wait_deadline(30.0)
             while time.monotonic() < deadline:
                 controls = driver.find_all(
                     name="Connect training devices",
@@ -2597,8 +2625,14 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     "Increase intensity",
                     "Workout intensity",
                     "Filter workouts",
-                    "Workout order",
                 ]
+            )
+            # On Linux Qt exposes a QComboBox's name as its current item, not
+            # its accessibleName, so identify the workout order combo by items.
+            driver.combo_with_items(
+                ["Name", "Recently used", "Newest"],
+                require_interactable=True,
+                match_current_name=False,
             )
             driver.combo_with_items(["Standard ERG", "Workout Ride"])
             driver.find("Data Generator", "table cell")
@@ -2659,7 +2693,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
 
             driver.click(alpha)
             driver.ctrl_click(beta)
-            deadline = time.monotonic() + 10.0
+            deadline = ui_wait_deadline(10.0)
             while time.monotonic() < deadline:
                 alpha = driver.find(
                     "ui-bulk-alpha", "table cell", showing=True, timeout=1.0
@@ -2924,7 +2958,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             editor = driver.find(
                 "Workout code", "text", showing=True, timeout=10.0
             )
-            deadline = time.monotonic() + 10.0
+            deadline = ui_wait_deadline(10.0)
             while time.monotonic() < deadline:
                 if not editor.queryText().getText(0, -1).strip():
                     return
@@ -2960,7 +2994,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             driver.click(
                 driver.find("OK", "push button", showing=True, timeout=10.0)
             )
-            deadline = time.monotonic() + 10.0
+            deadline = ui_wait_deadline(10.0)
             while time.monotonic() < deadline:
                 if not driver.find_all(name=warning_text, showing=True):
                     break
@@ -3323,7 +3357,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             selected = driver.find(
                 "ui-test", "table cell", showing=True, timeout=10.0
             )
-            deadline = time.monotonic() + 10.0
+            deadline = ui_wait_deadline(10.0)
             while time.monotonic() < deadline:
                 if driver.selected(selected):
                     break
@@ -3337,7 +3371,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             text = editor.queryText().getText(0, -1)
             dirty_marker = "\n1m@111"
             editor.queryEditableText().setTextContents(text + dirty_marker)
-            deadline = time.monotonic() + 10.0
+            deadline = ui_wait_deadline(10.0)
             while time.monotonic() < deadline:
                 if dirty_marker in editor.queryText().getText(0, -1):
                     break
@@ -3393,7 +3427,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             driver.click_named_item("ui-test")
             buttons = wait_unsaved_dialog()
             driver.click(buttons["Save"])
-            deadline = time.monotonic() + 10.0
+            deadline = ui_wait_deadline(10.0)
             while time.monotonic() < deadline:
                 if not driver.find_all(
                         name="You have unsaved changes to a workout.",
@@ -3416,7 +3450,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             driver.click(
                 driver.find("OK", "push button", showing=True, timeout=10.0)
             )
-            deadline = time.monotonic() + 10.0
+            deadline = ui_wait_deadline(10.0)
             while time.monotonic() < deadline:
                 if not driver.find_all(name=warning_text, showing=True):
                     break
@@ -3455,7 +3489,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             driver.click_named_item("ui-delete")
             buttons = wait_unsaved_dialog()
             driver.click(buttons["Save"])
-            deadline = time.monotonic() + 10.0
+            deadline = ui_wait_deadline(10.0)
             while time.monotonic() < deadline:
                 if not driver.find_all(
                         name="You have unsaved changes to a workout.",
@@ -3497,7 +3531,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
             driver.wait_file_removed(workout, timeout=20.0)
             driver.wait_file_removed(sidecar, timeout=20.0)
 
-            deadline = time.monotonic() + 20.0
+            deadline = ui_wait_deadline(20.0)
             while time.monotonic() < deadline:
                 if not driver.find_all(
                     name="ui-delete", role="table cell", showing=True
@@ -3523,7 +3557,7 @@ def exercise(root: Path, artifacts: Path, app_pgid: int) -> int:
                     os.killpg(app_pgid, signal.SIGTERM)
                 except ProcessLookupError:
                     return
-            deadline = time.monotonic() + 8.0
+            deadline = ui_wait_deadline(8.0)
             while time.monotonic() < deadline:
                 if not process_group_exists(app_pgid):
                     return
@@ -3603,6 +3637,11 @@ def main() -> int:
         )
         return 2
     command = sys.argv[1]
+    try:
+        ui_timeout_scale_from_environment()
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     if command == "prepare" and len(sys.argv) == 3:
         prepare(Path(sys.argv[2]).resolve())
         return 0

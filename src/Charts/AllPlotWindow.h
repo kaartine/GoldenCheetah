@@ -112,6 +112,7 @@ class AllPlotWindow : public GcChartWindow
     public:
 
         AllPlotWindow(Context *context);
+        ~AllPlotWindow() override;
         void setData(RideItem *ride);
 
         bool isCompare() const { return context->isCompareIntervals; }

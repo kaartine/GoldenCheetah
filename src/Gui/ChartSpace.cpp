@@ -76,11 +76,11 @@ ChartSpace::ChartSpace(Context *context, OverviewScope scope, GcWindow *window) 
 
     // for changing the view
     group = new QParallelAnimationGroup(this);
-    viewchange = new QPropertyAnimation(this, "viewRect");
+    viewchange = new QPropertyAnimation(this, "viewRect", this);
     viewchange->setEasingCurve(QEasingCurve(QEasingCurve::OutQuint));
 
     // for scrolling the view
-    scroller = new QPropertyAnimation(this, "viewY");
+    scroller = new QPropertyAnimation(this, "viewY", this);
     scroller->setEasingCurve(QEasingCurve(QEasingCurve::Linear));
 
     // watch the view for mouse events

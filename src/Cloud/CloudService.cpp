@@ -3813,7 +3813,7 @@ CloudServiceAutoDownloadWidget::CloudServiceAutoDownloadWidget(Context *context,
     hide();
 
     // animating checking
-    animator= new QPropertyAnimation(this, "transition");
+    animator= new QPropertyAnimation(this, "transition", this);
     animator->setStartValue(0);
     animator->setEndValue(100);
     animator->setDuration(1000);

@@ -25,6 +25,7 @@
 #include "Shy.h"
 #include "TrainDB.h"
 #include "Secrets.h"
+#include "SharedStyle.h"
 
 #if !defined(GC_TRAINERDAY_API_PAGESIZE)
 #define GC_TRAINERDAY_API_PAGESIZE 25
@@ -334,7 +335,7 @@ TrainerDayAPIDialog::parseWorkoutResults
             infoArea->setMinimumWidth(360 * dpiXFactor);
             infoArea->setMaximumWidth(360 * dpiXFactor);
 #ifdef Q_OS_WIN
-            QStyle *xde = QStyleFactory::create(OS_STYLE);
+            QStyle *xde = sharedFusionStyle();
             infoArea->verticalScrollBar()->setStyle(xde);
 #endif
 

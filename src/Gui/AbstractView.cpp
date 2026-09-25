@@ -77,7 +77,7 @@ AbstractView::AbstractView(Context *context, int type, const QString& view, cons
     mainSplitter->setOpaqueResize(true); // redraw when released, snappier UI
 
     // the animator
-    anim = new QPropertyAnimation(mainSplitter, "hpos");
+    anim = new QPropertyAnimation(mainSplitter, "hpos", this);
 
     connect(splitter,SIGNAL(splitterMoved(int,int)), this, SLOT(splitterMoved(int,int)));
     connect(context,SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));

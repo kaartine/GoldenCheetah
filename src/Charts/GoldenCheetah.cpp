@@ -708,21 +708,21 @@ GcChartWindow::GcChartWindow(Context *context) : GcWindow(context), context(cont
     _revealControls->setStyleSheet("background-color: rgba(100%, 100%, 100%, 80%)");
     _revealControls->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
 
-    _revealAnim = new QPropertyAnimation(_revealControls, "pos");
+    _revealAnim = new QPropertyAnimation(_revealControls, "pos", this);
     _revealAnim->setDuration(200);
     _revealAnim->setEasingCurve(QEasingCurve(QEasingCurve::InSine));
     _revealAnim->setKeyValueAt(0,QPoint(2,-50));
     _revealAnim->setKeyValueAt(0.5,QPoint(2,-5));
     _revealAnim->setKeyValueAt(1,QPoint(2,0));
 
-    _unrevealAnim = new QPropertyAnimation(_revealControls, "pos");
+    _unrevealAnim = new QPropertyAnimation(_revealControls, "pos", this);
     _unrevealAnim->setDuration(150);
     _unrevealAnim->setEasingCurve(QEasingCurve(QEasingCurve::InSine));
     _unrevealAnim->setKeyValueAt(0,QPoint(2,0));
     _unrevealAnim->setKeyValueAt(0.5,QPoint(2,-5));
     _unrevealAnim->setKeyValueAt(1,QPoint(2,-50));
 
-    _unrevealTimer = new QTimer();
+    _unrevealTimer = new QTimer(this);
     connect(_unrevealTimer, SIGNAL(timeout()), this, SLOT(hideRevealControls()));
 
     _mainLayout->addWidget(_chart);

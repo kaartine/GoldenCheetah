@@ -31,13 +31,13 @@ OverviewWindow::OverviewWindow(Context *context, OverviewScope scope, bool blank
     setShowTitle(false);
 
     // actions...
-    QAction *addTile= new QAction(tr("Add Tile..."));
+    QAction *addTile= new QAction(tr("Add Tile..."), this);
     addAction(addTile);
 
-    QAction *importChart= new QAction(tr("Import Chart..."));
+    QAction *importChart= new QAction(tr("Import Chart..."), this);
     addAction(importChart);
 
-    QAction *settings= new QAction(tr("Settings..."));
+    QAction *settings= new QAction(tr("Settings..."), this);
     addAction(settings);
 
     // settings
@@ -631,6 +631,7 @@ OverviewConfigDialog::OverviewConfigDialog(ChartSpaceItem*item, QPoint pos) : QD
 void
 OverviewConfigDialog::showEvent(QShowEvent*)
 {
+    if (!item) return;
     QSize gcWindowSize = item->parent->context->mainWindow->size();
     QPoint gcWindowPosn = item->parent->context->mainWindow->pos();
 
@@ -682,10 +683,14 @@ OverviewConfigDialog::close()
 void
 OverviewConfigDialog::removeItem()
 {
+    if (!item) {
+        accept();
+        return;
+    }
     hide(); // don't show the ugliness
 
     // remove config from our layout as about to be deleted
-    main->takeAt(0);
+    delete main->takeAt(0);
 
     // remove from the space
     ChartSpace *space = item->parent;
@@ -704,12 +709,13 @@ OverviewConfigDialog::removeItem()
 void
 OverviewConfigDialog::exportChart()
 {
+    if (!item || item->type != OverviewItemType::USERCHART) return;
     // Overview tiles that contain user charts can be exported
     // as .gchart files, but bear in mind these tiles are not
     // chart windows, so we need to emulate the normal property
     // export.
 
-    UserChartOverviewItem *chart = static_cast<UserChartOverviewItem*>(item);
+    UserChartOverviewItem *chart = static_cast<UserChartOverviewItem*>(item.data());
 
     // get the filename
     QString basename = chart->name;
@@ -720,7 +726,7 @@ OverviewConfigDialog::exportChart()
                        QDir::homePath()+"/" + basename + ".gchart",
                        ("*.gchart;;"), &suffix, QFileDialog::DontUseNativeDialog); // native dialog hangs
 
-    if (fileName.isEmpty()) return;
+    if (fileName.isEmpty() || !item) return;
 
     // open, truncate and setup a text stream to output via
     QFile outfile(fileName);

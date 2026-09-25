@@ -1,0 +1,4 @@
+# Debian/Ubuntu dependencies for the opt-in Memcheck gates.
+# Install alongside the normal native build or isolated UI-test dependencies.
+valgrind
+libc6-dbg

@@ -32,6 +32,7 @@
 #include "HelpWhatsThis.h"
 #include "Utils.h"
 #include "RideEditor.h"
+#include "SharedStyle.h"
 
 #include <QXmlDefaultHandler>
 #include <QtGui>
@@ -70,7 +71,7 @@ RideMetadata::RideMetadata(Context *context, bool singlecolumn) :
 
         // better styling on Linux with fusion controls
 #ifndef Q_OS_MAC
-        QStyle *fusion = QStyleFactory::create(OS_STYLE);
+        QStyle *fusion = sharedFusionStyle();
         tabs->setStyle(fusion);
 #endif
         mainLayout->addWidget(tabs);

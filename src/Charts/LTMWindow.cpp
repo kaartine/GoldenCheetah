@@ -35,6 +35,7 @@
 #include "HelpWhatsThis.h"
 #include "GcOverlayWidget.h"
 #include "Seasons.h"
+#include "SharedStyle.h"
 
 #include <QWebEngineSettings>
 
@@ -111,7 +112,7 @@ LTMWindow::LTMWindow(Context *context) :
     // BUG in QMacStyle and painting of spanSlider
     // so we use a plain style to avoid it, but only
     // on a MAC, since win and linux are fine
-    QStyle *style = QStyleFactory::create("fusion");
+    QStyle *style = sharedFusionStyle();
     spanSlider->setStyle(style);
     scrollLeft->setStyle(style);
     scrollRight->setStyle(style);
@@ -126,7 +127,7 @@ LTMWindow::LTMWindow(Context *context) :
 
     plotArea = new QScrollArea(this);
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     plotArea->setStyle(cde);
 #endif
     plotArea->setAutoFillBackground(false);
@@ -163,7 +164,7 @@ LTMWindow::LTMWindow(Context *context) :
 
     compareplotArea = new QScrollArea(this);
 #ifdef Q_OS_WIN
-    cde = QStyleFactory::create(OS_STYLE);
+    cde = sharedFusionStyle();
     compareplotArea->setStyle(cde);
 #endif
     compareplotArea->setAutoFillBackground(false);

@@ -60,6 +60,7 @@
 // metadata support
 #include "RideMetadata.h"
 #include "SpecialFields.h"
+#include "SharedStyle.h"
 
 
 LTMSidebar::LTMSidebar(Context *context) : QWidget(context->mainWindow), context(context), active(false),
@@ -91,7 +92,7 @@ LTMSidebar::LTMSidebar(Context *context) : QWidget(context->mainWindow), context
     dateRangeTree->setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-    QStyle *cde = QStyleFactory::create(OS_STYLE);
+    QStyle *cde = sharedFusionStyle();
     dateRangeTree->verticalScrollBar()->setStyle(cde);
 #endif
     seasonsWidget->addWidget(dateRangeTree);
@@ -124,7 +125,7 @@ LTMSidebar::LTMSidebar(Context *context) : QWidget(context->mainWindow), context
     eventTree->setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-    cde = QStyleFactory::create(OS_STYLE);
+    cde = sharedFusionStyle();
     eventTree->verticalScrollBar()->setStyle(cde);
 #endif
 
@@ -159,7 +160,7 @@ LTMSidebar::LTMSidebar(Context *context) : QWidget(context->mainWindow), context
     chartTree->setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-    cde = QStyleFactory::create(OS_STYLE);
+    cde = sharedFusionStyle();
     chartTree->verticalScrollBar()->setStyle(cde);
 #endif
     chartsWidget->addWidget(chartTree);
@@ -196,7 +197,7 @@ LTMSidebar::LTMSidebar(Context *context) : QWidget(context->mainWindow), context
     filterTree->setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-    cde = QStyleFactory::create(OS_STYLE);
+    cde = sharedFusionStyle();
     filterTree->verticalScrollBar()->setStyle(cde);
 #endif
     // we cast the filter tree and this because we use the same constructor XXX fix this!!!
@@ -769,7 +770,7 @@ LTMSidebar::autoFilterChanged()
             tree->setAttribute(Qt::WA_MacShowFocusRect, 0);
 #endif
 #ifdef Q_OS_WIN
-            QStyle *cde = QStyleFactory::create(OS_STYLE);
+            QStyle *cde = sharedFusionStyle();
             tree->verticalScrollBar()->setStyle(cde);
 #endif
             item->addWidget(tree);

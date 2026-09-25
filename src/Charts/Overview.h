@@ -30,6 +30,7 @@
 #include "RideMetric.h"
 #include "HrZones.h"
 #include <QSpinBox>
+#include <QPointer>
 
 #include "ChartSpace.h"
 #include "OverviewItems.h"
@@ -97,7 +98,7 @@ class OverviewConfigDialog : public QDialog
 
     private:
         QPoint pos;
-        ChartSpaceItem *item;
+        QPointer<ChartSpaceItem> item;
         QVBoxLayout *main;
         QPushButton *remove, *ok, *exp;
 };

@@ -75,6 +75,239 @@ acceptance. Existing-display runs share the selected desktop's D-Bus and
 `XDG_RUNTIME_DIR` while keeping the athlete library and persistent XDG paths
 isolated; prefer a dedicated test login for that hardware gate.
 
+## Opt-in memory checks (Linux)
+
+Memcheck is a separate correctness gate, not a frame-time benchmark. Build the
+selected QtTest project in a task-owned shadow directory with the matching Qt
+qmake, `CONFIG+=force_debug_info`, and no sanitizer instrumentation. Keep the
+ordinary native test run as a separate prerequisite. ASan/UBSan and Memcheck
+complement each other; an ASan run with leak checking disabled is not leak
+verification.
+
+The additional Debian/Ubuntu packages are kept in one installable list:
+
+```bash
+sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' .github/scripts/memcheck-packages.txt |
+  xargs sudo apt-get install --no-install-recommends -y
+```
+
+Run an already-built native QtTest binary, optionally selecting test functions:
+
+```bash
+QT_IM_MODULE=compose python3 .github/scripts/run-memcheck.py \
+  --output /path/to/new/memcheck-results --timeout 600 \
+  -- /path/to/build/testWorkoutGameCanvas
+```
+
+The output directory must not already exist. Logs, QtTest and Memcheck XML,
+`summary.json`, and `junit.xml` remain available on failure. Passing requires
+normal process exit, completed reports, successful test initialization and
+cleanup, at least one passing non-lifecycle test, and no memory errors or
+definite/indirect/possible leaks. Reachable allocations remain visible but are
+not classified as leaks. Child executables are not instrumented. Timeouts and
+interruptions terminate the owned process group and fail the gate. The wrapper
+ignores user Valgrind options/rc files; installation-default suppressions and
+their match counts remain recorded. It accepts `--valgrind /path/to/valgrind`
+and inherits `VALGRIND_LIB` for a locally extracted distribution package.
+For libraries stripped of debug information, optional `--debuginfo-path DIR`
+passes an existing directory to Valgrind's extra debug-symbol lookup. The UI
+equivalent is `GC_UI_MEMCHECK_DEBUGINFO_PATH=DIR`. Use symbols whose Build-IDs
+match the actual loaded binaries. Valgrind finds Qt's separate debug files by
+their `.gnu_debuglink` name at `DIR/<directory of the loaded object>/<name>`
+(Build-ID lookup only happens under `/usr/lib/debug`), so `DIR` must mirror every
+runtime directory the libraries are loaded from, e.g. the extracted AppDir's
+`lib/` at its path inside the container and `/opt/Qt/.../lib` for the QtTest
+fixtures. Otherwise frames silently stay unnamed; when suppressions are pinned,
+both runners therefore fail before launch if a pinned Qt library's debug file
+is not found that way. This only improves attribution: it changes neither
+failure criteria nor suppressions. The selected path is recorded in the run metadata;
+verify resolved function/source frames in the real report before claiming the
+symbols loaded successfully.
+Memcheck XML is parsed incrementally with a 256 MiB limit, including bytes
+actually read; QtTest and UI XML retain a 64 MiB limit. A complete parse through
+EOF is required even after a `FINISHED` record. Oversized or malformed reports
+fail the gate rather than discarding findings.
+The instrumented child uses a private `077` umask so synthetic credential
+fixtures do not inherit group-writable defaults from a developer's shell.
+For `tst_credentialSettings`, place the output under a private `/tmp` parent
+created with `mktemp -d`; workspace ancestors may be group-writable and are
+intentionally rejected by the existing credential-directory checks. Do not
+relax those checks to make the tests pass.
+
+For `testWorkoutGameRunner`, `GC_TEST_TIMEOUT_SCALE=20` may extend asynchronous
+frame waits under instrumentation; the accepted integer range is 1–60 and the
+default is 1. Polling cadence and simulation timing do not change. The native
+throughput case `publishesLatestFixedStepFrameWithoutGuiDrivenSimulation` must
+still run uninstrumented; do not loosen it to accommodate Memcheck. Likewise,
+select bounded ViewModel cases rather than claiming that a timed-out long-course
+or GPU-performance test passed. The wrapper records passed and skipped coverage.
+
+`QT_IM_MODULE=compose` excludes the desktop ibus input-method integration from
+these rendering tests. It is an explicit coverage choice, not a fix for ibus.
+
+Both wrappers use `--smc-check=all` for generated/self-modifying code and
+`--keep-debuginfo=yes`, so frames in libraries unloaded before the leak report
+(for example Mesa's `swrast_dri.so`, closed with the GL context) keep their
+object and symbol names instead of appearing as `???`. The UI runner records
+`GALLIUM_DRIVER` and `DRAW_USE_LLVM` with the other rendering settings but does
+not change the renderer. Qt's
+regexp JIT can also produce symbol-less conditional-jump reports; an explicit
+`QT_ENABLE_REGEXP_JIT=0` diagnostic run excludes that JIT backend, not regexp
+matching itself. The wrappers record this setting but never set it implicitly.
+Preserve the original failure and compare runs before attributing findings to
+JIT. See the [Valgrind Qt FAQ, section 5.4](https://valgrind.org/docs/manual/faq.html)
+and [Qt regexp debugging guidance](https://doc.qt.io/qt-6.8/qregularexpression.html#debugging-code-that-uses-qregularexpression).
+
+For direct production-chart ownership assertions against an already completed,
+matching native application build, see the opt-in
+[chartOwnership fixture](unittests/Charts/chartOwnership/README.md). It reuses
+production objects without entering application `main()`, checks actual object
+destruction, and keeps its outputs separate from the application build. Run it
+in the documented disposable runtime; it does not replace the full UI lifecycle
+or graceful-shutdown Memcheck gates.
+
+### Memcheck exceptions
+
+The default run has no project suppressions. Qt 6.8.3 on Ubuntu 24.04/glibc 2.39
+with Valgrind 3.22.0 can leave 368 bytes of private GUI-pool thread-local storage
+classified as possibly lost at Canvas shutdown. A controlled comparison using
+the same Canvas objects and 63 passing tests retained the report with ordinary
+teardown and public global-pool joining; joining the **private** GUI pool before
+QApplication destruction removed it. That private Qt API is diagnostic only and
+must not become a production dependency. This does not identify a lost
+GoldenCheetah allocation or justify suppressing unrelated leaks.
+
+After preserving the unsuppressed report, that exact TLS allocation path can be
+excepted explicitly with
+`--suppressions .github/scripts/qt-6.8.3-gui-tls.supp`. The filter matches only
+possible leaks through the full TLS/thread-pool chain into this QtGui version;
+invalid accesses and definite/indirect leaks still fail. Report such a run as
+**passed with a reviewed Qt exception**, not zero findings. The file is versioned
+in Git; its path and actual matched names/counts are retained in the report.
+Re-run without it after changing Qt, libc or Valgrind. Do not add broad Qt,
+thread, Python or system-library suppression patterns.
+
+A library exception may also cover definite/indirect leaks and library-internal
+error records (invalid accesses, uninitialised values, syscall parameters), but
+only when all of these hold (maintainer decision, 2026-09-24):
+
+1. Every record class is reproduced by a minimal Qt control program that links no
+   GoldenCheetah code, under the same Memcheck flags and runtime.
+2. Each stanza is a full, version-pinned chain inside the libraries: it is cut at
+   the first frame of the program itself or, when the allocating or erroring
+   frame is library code and at least 7 further library frames precede the cut,
+   where the stack first enters a different Qt library or directly after
+   `QEventDispatcherGlib::processEvents` (above it is only the program's
+   event-loop driver). A chain that neither reaches the program nor ends at a
+   thread or process root was truncated by `--num-callers` and counts as a cut
+   inside the libraries. It contains no GoldenCheetah or test frame and uses no
+   broad wildcards. A stanza cut inside the libraries whose frames are only
+   unnamed objects (apart from allocators and generic event delivery) may match
+   only indirectly lost blocks, whose definitely lost root is still reported;
+   stanzas for definite or possible leaks need a named frame that identifies the
+   path, or the control's full chain up to the program. Error records (invalid
+   accesses, uninitialised values, syscall parameters) are only excepted with the
+   control's full chain.
+   Stanza names state the record kind, the cut (`program`, `complete`,
+   `dispatcher`, `library` or `truncated`) and whether they are named. Library objects may be written as
+   `obj:*/<soname>*` only because the exact builds are pinned: a sidecar
+   `<file>.supp.buildids` maps each contributing soname (Qt plugins included) to
+   its GNU Build-ID, and both runners refuse to apply the file (the run fails
+   before launch) if the library the runtime would load has a different
+   Build-ID or cannot be found. The checked Build-IDs are recorded in the summary.
+   A suppression file without a sidecar is refused too, except the allow-listed
+   legacy `qt-6.8.3-gui-tls.supp`, which is recorded as `unpinned_legacy` with a
+   warning. It was only reproduced on Ubuntu 24.04 with Valgrind 3.22; pinning it
+   to other builds would claim a verification that has not been done, so it stays
+   unpinned until a control reproduces it in the pinned environment.
+3. The stanzas and their control evidence are reviewed by someone other than
+   their author.
+4. The unsuppressed report of every run is kept, and the exception is re-verified
+   with its controls after changing Qt, libc, any pinned library or Valgrind.
+
+`.github/scripts/qt-6.8.3-webengine.supp` is such an exception for Qt 6.8.3:
+global WebEngine context initialisation (including the first fontconfig
+population and WebEngineCore uninitialised-value records), the xcb `writev`
+syscall-parameter record, `QWebEngineProfile` construction and destruction,
+`QWebEngineView::setHtml` followed by deletion (including Qt's post-routines at
+`~QApplication`), the QCss parser's invalid read (Qt's AES `qHash` reads up to
+16 bytes of a short key; whether that crosses the allocation depends on heap
+layout), connection records of widgets that are still alive at exit
+(`QAbstractSpinBox::setLineEdit`, `QComboBox::insertItem`, `QMenu::addMenu`) and
+thread-local storage of Qt threads still running at exit. Some full, named
+chains match definitely **and** indirectly lost records: the two GPU information
+surfaces created with the first `QWebEngineProfile` (`newFallbackSurface`,
+`QOffscreenSurface`), and the members of the two lost mojo/ipcz structures the
+WebEngine context leaves, once per process: the GPU process-host invitation pipe (3,240 bytes, its ipcz
+`Router` created with the WebEngine context) and the UKM recorder pipe (3,400
+bytes, its `Router` created on the in-process GPU thread), both completed with
+mojo blocks in `~ProfileAdapter`. Memcheck reports as definitely lost whichever
+block of an unreachable structure its scan reaches first, which depends on block
+addresses: the pure-Qt controls report the two Routers as roots, the QtTest
+fixtures also the SimpleWatcher or the MojoTrap (3,240) or the MultiplexRouter
+(3,400). A root outside the members (the UI gate has shown the MojoTrap trigger
+vector allocated by a task) is not suppressed and stays an open record. `qt-6.8.3-webengine-control/cycle_members.py` derives
+the members from the profile-only controls: full chains ending in the profile
+constructor (Router root) or in `~ProfileAdapter` (indirect blocks), present in
+every control run, and placed by Valgrind's `block_list` of the same controls
+under the root of the same structure in every run; the list, each member's
+structure and size, and the structures' other roots are in
+`ipcz-cycle-members.json`. For every gate and fixture run, `check_widened.py`
+must confirm on the unsuppressed report that these stanzas match only the
+controls' sizes (surfaces: single blocks of 40, 168, 248 or 320 bytes; members
+and the other roots: exactly their own structure's total as root, their own size
+as indirect block), each at most once. `.github/scripts/qt-6.8.3-webengine-appdir-glib.supp`
+holds the stanzas through the AppImage's bundled glib and is pinned to that glib
+build; use it only for the extracted-AppDir UI gate, never for fixtures that load
+the system glib.
+
+The stanzas were generated with `--gen-suppressions=all` from pure-Qt controls,
+offscreen and on xcb in the gate environment; the control program, stanza
+generator and regeneration procedure are in
+`.github/scripts/qt-6.8.3-webengine-control/`. `final_supp.py` classifies and
+rejects stanzas first and then keeps a stanza only if it matches a record of the
+**unsuppressed** gate and fixture reports offline, or Valgrind credited it in a
+run with the candidate files. Never prune by Valgrind's suppression counts alone:
+Valgrind credits only the first matching stanza, so a broad stanza hides the
+specific ones it shadows. Pass the files with
+`--suppressions` to the QtTest runner or, for the UI gate,
+`GC_UI_MEMCHECK_SUPPRESSIONS=<file>` (an `os.pathsep`-separated list). Report
+such a run as **passed with a reviewed Qt exception**, with the matched
+suppression names and counts. After changing Qt, libc, any pinned library or
+Valgrind, both runners refuse the files; regenerate them from the controls, run
+the gate and fixtures with and without them, and have the result reviewed again.
+
+### Packaged application memory checks
+
+The isolated UI runner supports `GC_UI_MEMCHECK=1` and optional
+`GC_UI_VALGRIND=/path/to/valgrind`. Extract the AppImage to a dedicated directory,
+set `GC_UI_APPDIR` to that runtime, and pass its native `GoldenCheetah` ELF to
+`run-pre-release-ui.sh`. Do not instrument the AppImage launcher, shell, or
+accessibility Python process. Select the training lifecycle plus
+`graceful_shutdown_request`; the import prerequisite is added automatically.
+The new `artifacts/memcheck` directory contains the application memory gate in
+addition to the ordinary UI reports. Both must pass, including a reaped normal
+application exit and completed Memcheck report. Killed/incomplete application
+runs are diagnostic evidence, never leak-free acceptance. Set
+`GC_UI_TIMEOUT_SCALE=20` to extend asynchronous UI waits under instrumentation
+(startup 30 to 600 seconds, shutdown 8 to 160 seconds). The accepted integer
+range is 1–60; unset means 1, and invalid values fail early. Polling, game run
+duration and performance thresholds are unchanged. Keep an overall process
+timeout too: nested operations/retries are not a single end-to-end deadline.
+Normal UI timeouts can expire under instrumentation; preserve that failure
+instead of treating absence of a report as success. Never run these fixtures on a real athlete or
+trainer, and distinguish reduced startup configurations from normal packaged
+application coverage.
+
+The runner/helper regression tests are part of the existing
+`unittests/Build/ciTestRunner` qmake `make check` target. They exercise malformed
+and missing reports, memory/test failures, empty/skipped coverage, stale output,
+process-group cleanup and signals. These orchestration tests do not mean every
+CI job runs the expensive native Memcheck gate.
+
+Reference: [Valgrind core manual](https://valgrind.org/docs/manual/manual-core.html)
+and [Memcheck manual](https://valgrind.org/docs/manual/mc-manual.html).
+
 ## Build and artifact ownership
 
 - Give every build and test run a task- or revision-specific output directory.
