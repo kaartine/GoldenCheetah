@@ -50,6 +50,10 @@ class UiMemcheckTests(unittest.TestCase):
     def reports(self, state="FINISHED", kind=None, pid=123, names=None):
         output = self.artifacts / "memcheck"
         output.mkdir(exist_ok=True)
+        if not (output / "invocation.json").exists():  # prepare() always writes it
+            (output / "invocation.json").write_text(json.dumps({"suppression_policy": {
+                "defaults": "Valgrind installation defaults; user rc/options ignored",
+                "explicit_paths": [], "build_id_pins": []}}))
         root = ET.Element("valgrindoutput")
         ET.SubElement(root, "protocoltool").text = "memcheck"
         ET.SubElement(root, "pid").text = str(pid)
@@ -73,7 +77,7 @@ class UiMemcheckTests(unittest.TestCase):
         self.assertEqual(prefix[0], self.valgrind)
         for option in ("--command-line-only=yes", "--tool=memcheck", "--leak-check=full",
                        "--show-leak-kinds=all", "--errors-for-leak-kinds=definite,indirect,possible",
-                       "--track-origins=yes", "--num-callers=30", "--smc-check=all", "--error-exitcode=97",
+                       "--track-origins=yes", "--num-callers=30", "--smc-check=all", "--keep-debuginfo=yes", "--error-exitcode=97",
                        "--xml=yes", "--trace-children=no", "--child-silent-after-fork=yes"):
             self.assertIn(option, prefix)
         self.assertFalse(any(arg.startswith("--suppressions") for arg in prefix))
@@ -134,6 +138,61 @@ class UiMemcheckTests(unittest.TestCase):
                     self.prepare()
         self.assertFalse((self.artifacts / "memcheck").exists())
 
+    def pinned_suppression(self, pins):
+        path = self.root / "reviewed-library.supp"
+        path.write_text("# synthetic test fixture\n")
+        Path(str(path) + ".buildids").write_text(json.dumps(pins))
+        return path
+
+    def test_explicit_suppressions_are_pinned_forwarded_and_disclosed(self):
+        libraries = UI.RUNNER.loaded_libraries(self.binary, dict(os.environ))
+        expected = UI.RUNNER.elf_build_id(libraries["libc.so.6"])
+        suppression = self.pinned_suppression({"libc.so.6": expected})
+        with mock.patch.dict(os.environ, {"GC_UI_MEMCHECK_SUPPRESSIONS": str(suppression)}):
+            prefix = self.prepare()
+            self.assertEqual(prefix.count(f"--suppressions={suppression.resolve()}"), 1)
+            invocation = json.loads((self.artifacts / "memcheck/invocation.json").read_text())
+            policy = invocation["suppression_policy"]
+            self.assertEqual(policy["explicit_paths"], [str(suppression.resolve())])
+            self.assertEqual([(p["library"], p["actual"]) for p in policy["build_id_pins"]],
+                             [("libc.so.6", expected)])
+            self.reports()
+            self.assertEqual(self.validate(), 0)
+            summary = json.loads((self.artifacts / "memcheck/summary.json").read_text())
+            self.assertEqual(summary["suppression_policy"], policy)
+            self.assertEqual(summary["environment"]["GC_UI_MEMCHECK_SUPPRESSIONS"], str(suppression))
+
+    def test_listed_legacy_suppression_is_recorded_and_warned(self):
+        legacy = self.root / "qt-6.8.3-gui-tls.supp"
+        legacy.write_text("# synthetic test fixture\n")
+        stderr = io.StringIO()
+        with mock.patch.dict(os.environ, {"GC_UI_MEMCHECK_SUPPRESSIONS": str(legacy)}), \
+                contextlib.redirect_stderr(stderr):
+            self.prepare()
+        policy = json.loads((self.artifacts / "memcheck/invocation.json").read_text())["suppression_policy"]
+        self.assertEqual(policy["unpinned_legacy"], [str(legacy.resolve())])
+        self.assertIn("legacy suppression file without Build-ID pins", stderr.getvalue())
+
+    def test_suppression_pin_mismatch_or_missing_file_rejected_before_preparation(self):
+        unpinned = self.root / "reviewed-unpinned.supp"
+        unpinned.write_text("# synthetic test fixture\n")
+        cases = ((str(self.pinned_suppression({"libc.so.6": "0" * 40})), "re-verify"),
+                 (str(unpinned), "no Build-ID pin file"),
+                 (str(self.root / "missing.supp"), ""), ("", "existing file"))
+        for value, message in cases:
+            with self.subTest(value=value), mock.patch.dict(
+                    os.environ, {"GC_UI_MEMCHECK_SUPPRESSIONS": value}):
+                with self.assertRaisesRegex((ValueError, OSError), message):
+                    self.prepare()
+                self.assertFalse((self.artifacts / "memcheck").exists())
+
+    def test_missing_invocation_record_fails_validation(self):
+        self.reports()
+        (self.artifacts / "memcheck/invocation.json").unlink()
+        self.assertEqual(self.validate(), 1)
+        summary = json.loads((self.artifacts / "memcheck/summary.json").read_text())
+        self.assertTrue(any("invocation record" in p for p in summary["problems"]))
+
     def test_clean_and_reachable_evidence_pass(self):
         for kind in (None, "Leak_StillReachable"):
             with self.subTest(kind=kind):
@@ -152,6 +211,17 @@ class UiMemcheckTests(unittest.TestCase):
                 summary = json.loads((self.artifacts / "memcheck/summary.json").read_text())
                 self.assertEqual(summary["environment"]["QT_ENABLE_REGEXP_JIT"], value)
                 self.assertEqual(os.environ.get("QT_ENABLE_REGEXP_JIT"), value)
+
+    def test_software_gl_driver_is_recorded_not_changed(self):
+        self.reports()
+        with mock.patch.dict(os.environ, {"GALLIUM_DRIVER": "softpipe", "DRAW_USE_LLVM": "0"}, clear=True):
+            self.assertEqual(self.validate(), 0)
+        summary = json.loads((self.artifacts / "memcheck/summary.json").read_text())
+        self.assertEqual(summary["environment"]["GALLIUM_DRIVER"], "softpipe")
+        self.assertEqual(summary["environment"]["DRAW_USE_LLVM"], "0")
+        runner = (DIRECTORY / "run-pre-release-ui.sh").read_text(encoding="utf-8")
+        self.assertNotIn("GALLIUM_DRIVER", runner)
+        self.assertNotIn("DRAW_USE_LLVM", runner)
 
     def test_failed_exit_or_workflow_cannot_pass(self):
         self.reports()

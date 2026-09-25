@@ -236,7 +236,8 @@ class MemcheckRunnerTests(unittest.TestCase):
         self.assertEqual(summary["environment"], {
             "QT_QPA_PLATFORM": "offscreen", "QT_IM_MODULE": "compose",
             "QSG_RHI_BACKEND": "opengl", "QT_QUICK_BACKEND": "software",
-            "LIBGL_ALWAYS_SOFTWARE": "1", "VALGRIND_LIB": "/fixture/valgrind-lib",
+            "LIBGL_ALWAYS_SOFTWARE": "1", "GALLIUM_DRIVER": os.environ.get("GALLIUM_DRIVER"),
+            "DRAW_USE_LLVM": os.environ.get("DRAW_USE_LLVM"), "VALGRIND_LIB": "/fixture/valgrind-lib",
             "GC_TEST_TIMEOUT_SCALE": os.environ.get("GC_TEST_TIMEOUT_SCALE"),
             "QT_ENABLE_REGEXP_JIT": "0",
         })
@@ -253,7 +254,7 @@ class MemcheckRunnerTests(unittest.TestCase):
         self.assertEqual(summary["suppression_policy"]["explicit_paths"], [])
         for option in ("--command-line-only=yes", "--tool=memcheck", "--leak-check=full",
                        "--show-leak-kinds=all", "--errors-for-leak-kinds=definite,indirect,possible",
-                       "--error-exitcode=97", "--track-origins=yes", "--num-callers=30", "--smc-check=all", "--trace-children=no",
+                       "--error-exitcode=97", "--track-origins=yes", "--num-callers=30", "--smc-check=all", "--keep-debuginfo=yes", "--trace-children=no",
                        "--child-silent-after-fork=yes", "actualTest:data"):
             self.assertIn(option, options)
         environment = json.loads((self.output / "environment.json").read_text())
@@ -303,17 +304,201 @@ class MemcheckRunnerTests(unittest.TestCase):
         self.assertEqual(self.summary()["memcheck"]["error_records"], {"Leak_StillReachable": 1})
 
     def test_explicit_suppressions_are_forwarded_and_disclosed(self):
+        libraries = MODULE.loaded_libraries(Path(sys.executable).resolve(), os.environ.copy())
+        pin = json.dumps({"libc.so.6": MODULE.elf_build_id(libraries["libc.so.6"])})
         paths = [self.root / "reviewed-one.supp", self.root / "reviewed-two.supp"]
         for path in paths:
             path.write_text("# synthetic test fixture\n")
+            Path(str(path) + ".buildids").write_text(pin)
         result = self.run_fixture(suppressions=paths)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Memcheck passed with explicit suppressions:", result.stdout)
         self.assertEqual(self.summary()["suppression_policy"]["explicit_paths"],
                          [str(path.resolve()) for path in paths])
+        self.assertEqual(len(self.summary()["suppression_policy"]["build_id_pins"]), 2)
+        self.assertEqual(self.summary()["suppression_policy"]["unpinned_legacy"], [])
         arguments = json.loads((self.output / "arguments.json").read_text())
         for path in paths:
             self.assertIn(f"--suppressions={path.resolve()}", arguments)
+
+    @staticmethod
+    def synthetic_elf(path, notes):
+        """Write a minimal ELF64 LE file with one PT_NOTE holding (type, name, desc) notes."""
+        blob = b""
+        for kind, name, desc in notes:
+            blob += len(name).to_bytes(4, "little") + len(desc).to_bytes(4, "little")
+            blob += kind.to_bytes(4, "little")
+            blob += name + b"\0" * (-len(name) % 4) + desc + b"\0" * (-len(desc) % 4)
+        header = bytearray(64)
+        header[:7] = b"\x7fELF\x02\x01\x01"
+        header[0x20:0x28] = (64).to_bytes(8, "little")
+        header[0x36:0x38] = (56).to_bytes(2, "little")
+        header[0x38:0x3a] = (1).to_bytes(2, "little")
+        program = bytearray(56)
+        program[0:4] = (4).to_bytes(4, "little")
+        program[8:16] = (120).to_bytes(8, "little")
+        program[32:40] = len(blob).to_bytes(8, "little")
+        program[48:56] = (4).to_bytes(8, "little")
+        path.write_bytes(bytes(header) + bytes(program) + blob)
+        return path
+
+    def test_elf_build_id_reads_gnu_note_after_other_notes(self):
+        build_id = bytes(range(20))
+        path = self.synthetic_elf(self.root / "libnote.so", [
+            (1, b"GNU\0", b"\x01\x02\x03\x04"), (3, b"XYZ\0", b"\xff" * 8), (3, b"GNU\0", build_id)])
+        self.assertEqual(MODULE.elf_build_id(path), build_id.hex())
+
+    def test_elf_build_id_rejects_non_elf_and_missing_note(self):
+        (self.root / "text.so").write_text("not an ELF\n")
+        without = self.synthetic_elf(self.root / "libnone.so", [(1, b"GNU\0", b"\x00" * 4)])
+        for path, message in ((self.root / "text.so", "not a 64-bit"), (without, "no GNU Build-ID")):
+            with self.subTest(path=path.name), self.assertRaisesRegex(ValueError, message):
+                MODULE.elf_build_id(path)
+
+    def pinned_suppression(self, pins):
+        path = self.root / "reviewed-library.supp"
+        path.write_text("# synthetic test fixture\n")
+        Path(str(path) + ".buildids").write_text(json.dumps(pins))
+        return path
+
+    def test_build_id_pins_are_verified_and_recorded(self):
+        libraries = MODULE.loaded_libraries(Path(sys.executable).resolve(), os.environ.copy())
+        self.assertIn("libc.so.6", libraries)
+        expected = MODULE.elf_build_id(libraries["libc.so.6"])
+        suppression = self.pinned_suppression({"libc.so.6": expected.upper()})
+        result = self.run_fixture(suppressions=(suppression,))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pins = {pin["library"]: pin for pin in self.summary()["suppression_policy"]["build_id_pins"]}
+        self.assertEqual(pins["libc.so.6"]["actual"], expected)
+        self.assertEqual(pins["libc.so.6"]["expected"], expected)
+        self.assertEqual(pins["libc.so.6"]["resolved_by"], "ldd")
+
+    def test_unpinned_suppressions_fail_unless_listed_legacy(self):
+        unpinned = self.root / "reviewed-unpinned.supp"
+        unpinned.write_text("# synthetic test fixture\n")
+        result = self.run_fixture(suppressions=(unpinned,))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(any("has no Build-ID pin file" in p for p in self.summary()["problems"]),
+                        self.summary()["problems"])
+        self.assertFalse((self.output / "arguments.json").exists())
+        self.output = self.root / "legacy-run"
+        legacy = self.root / "qt-6.8.3-gui-tls.supp"
+        legacy.write_text("# synthetic test fixture\n")
+        result = self.run_fixture(suppressions=(legacy,))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.summary()["suppression_policy"]["unpinned_legacy"], [str(legacy.resolve())])
+        self.assertIn("legacy suppression file without Build-ID pins", result.stderr)
+
+    def test_unresolved_build_id_pin_fails_before_launch(self):
+        libraries = MODULE.loaded_libraries(Path(sys.executable).resolve(), os.environ.copy())
+        suppression = self.pinned_suppression({"libc.so.6": MODULE.elf_build_id(libraries["libc.so.6"]),
+                                               "libgc-not-loaded.so.1": "00"})
+        result = self.run_fixture(suppressions=(suppression,))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(any("pinned to libgc-not-loaded.so.1" in problem and "cannot verify" in problem
+                            for problem in self.summary()["problems"]), self.summary()["problems"])
+        self.assertFalse((self.output / "arguments.json").exists())
+
+    def test_build_id_pin_mismatch_fails_before_launch(self):
+        suppression = self.pinned_suppression({"libc.so.6": "0" * 40})
+        result = self.run_fixture(suppressions=(suppression,))
+        self.assertNotEqual(result.returncode, 0)
+        summary = self.summary()
+        self.assertEqual(summary["status"], "failed")
+        self.assertTrue(any("is pinned to libc.so.6 Build-ID" in problem and "re-verify" in problem
+                            for problem in summary["problems"]), summary["problems"])
+        self.assertFalse((self.output / "arguments.json").exists())
+
+    def test_plugin_pins_resolve_from_qt_plugin_path_and_qt_installation(self):
+        build_id = bytes(range(20))
+        installed = self.root / "qt" / "plugins" / "platforms"
+        installed.mkdir(parents=True)
+        self.synthetic_elf(installed / "libqxcb.so", [(3, b"GNU\0", build_id)])
+        libraries = {"libQt6Core.so.6": str(self.root / "qt" / "lib" / "libQt6Core.so.6")}
+        path, resolved_by = MODULE.resolve_pinned_library("libqxcb.so", libraries, {})
+        self.assertEqual((Path(path), resolved_by), ((installed / "libqxcb.so").resolve(), "plugin"))
+        bundled = self.root / "appdir" / "plugins" / "platforms"
+        bundled.mkdir(parents=True)
+        self.synthetic_elf(bundled / "libqxcb.so", [(3, b"GNU\0", build_id[::-1])])
+        environment = {"QT_PLUGIN_PATH": str(self.root / "appdir" / "plugins")}
+        path, resolved_by = MODULE.resolve_pinned_library("libqxcb.so", libraries, environment)
+        self.assertEqual(MODULE.elf_build_id(path), build_id[::-1].hex())
+        self.assertEqual(MODULE.resolve_pinned_library("libqnone.so", libraries, environment), (None, None))
+
+    @staticmethod
+    def synthetic_debuglink_elf(path, debuglink):
+        """Minimal ELF64 LE with section headers: null, .shstrtab, .gnu_debuglink."""
+        shstrtab = b"\0.shstrtab\0.gnu_debuglink\0"
+        link = debuglink.encode() + b"\0" * (4 - len(debuglink) % 4) + b"\x01\x02\x03\x04"
+        data_offset = 64
+        link_offset = data_offset + len(shstrtab)
+        shoff = link_offset + len(link)
+        header = bytearray(64)
+        header[:7] = b"\x7fELF\x02\x01\x01"
+        header[0x28:0x30] = shoff.to_bytes(8, "little")
+        header[0x3A:0x3C] = (64).to_bytes(2, "little")
+        header[0x3C:0x3E] = (3).to_bytes(2, "little")
+        header[0x3E:0x40] = (1).to_bytes(2, "little")
+
+        def section(name, offset, size):
+            entry = bytearray(64)
+            entry[0:4] = name.to_bytes(4, "little")
+            entry[0x18:0x20] = offset.to_bytes(8, "little")
+            entry[0x20:0x28] = size.to_bytes(8, "little")
+            return bytes(entry)
+        sections = bytes(64) + section(1, data_offset, len(shstrtab)) + section(11, link_offset, len(link))
+        path.write_bytes(bytes(header) + shstrtab + link + sections)
+        return path
+
+    def test_elf_debuglink_reads_section_name(self):
+        path = self.synthetic_debuglink_elf(self.root / "libQt6Fake.so.6", "Qt6Fake.debug")
+        self.assertEqual(MODULE.elf_debuglink(path), "Qt6Fake.debug")
+        self.assertIsNone(MODULE.elf_debuglink(self.synthetic_elf(self.root / "libnolink.so", [])))
+
+    def test_debuginfo_coverage_requires_debuglink_mirror_of_object_directory(self):
+        library = self.root / "appdir" / "lib"
+        library.mkdir(parents=True)
+        path = self.synthetic_debuglink_elf(library / "libQt6Fake.so.6", "Qt6Fake.debug")
+        debuginfo = self.root / "debuginfo"
+        debuginfo.mkdir()
+        with mock.patch.object(MODULE, "loaded_libraries", return_value={"libQt6Fake.so.6": str(path),
+                                                                         "libc.so.6": "/lib/libc.so.6"}):
+            self.assertEqual(MODULE.debuginfo_coverage("binary", {}, str(debuginfo), set()), [])
+            self.assertEqual(MODULE.debuginfo_coverage("binary", {}, str(debuginfo), {"libQt6Fake.so.6"}),
+                             ["libQt6Fake.so.6 (Qt6Fake.debug)"])
+            mirror = debuginfo / library.resolve().relative_to("/")
+            mirror.mkdir(parents=True)
+            (mirror / "Qt6Fake.debug").write_text("synthetic test fixture")
+            self.assertEqual(MODULE.debuginfo_coverage("binary", {}, str(debuginfo), {"libQt6Fake.so.6"}), [])
+
+    def test_debuginfo_coverage_includes_pinned_libraries_found_outside_ldd(self):
+        library = self.root / "appdir" / "lib"
+        library.mkdir(parents=True)
+        self.synthetic_debuglink_elf(library / "libQt6XcbFake.so.6", "Qt6XcbFake.debug")
+        debuginfo = self.root / "debuginfo"
+        debuginfo.mkdir()
+        environment = {"LD_LIBRARY_PATH": str(library)}
+        with mock.patch.object(MODULE, "loaded_libraries", return_value={}):
+            self.assertEqual(MODULE.debuginfo_coverage("binary", environment, str(debuginfo),
+                                                       {"libQt6XcbFake.so.6"}),
+                             ["libQt6XcbFake.so.6 (Qt6XcbFake.debug)"])
+
+    def test_dri_driver_pins_resolve_from_libgl_drivers_path(self):
+        drivers = self.root / "dri"
+        drivers.mkdir()
+        self.synthetic_elf(drivers / "swrast_dri.so", [(3, b"GNU\0", bytes(range(20)))])
+        path, resolved_by = MODULE.resolve_pinned_library(
+            "swrast_dri.so", {}, {"LIBGL_DRIVERS_PATH": str(drivers)})
+        self.assertEqual((Path(path), resolved_by), ((drivers / "swrast_dri.so").resolve(), "dri"))
+
+    def test_invalid_build_id_pin_file_fails_before_launch(self):
+        for index, pins in enumerate(({}, ["libc.so.6"], {"libc.so.6": ""})):
+            with self.subTest(pins=pins):
+                self.output = self.root / f"invalid-pins-{index}"
+                result = self.run_fixture(suppressions=(self.pinned_suppression(pins),))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(any("Build-ID pin file" in p for p in self.summary()["problems"]))
+                self.assertFalse((self.output / "arguments.json").exists())
 
     def test_explicit_debuginfo_directory_is_forwarded_and_recorded(self):
         directory = self.root / "debug symbols"

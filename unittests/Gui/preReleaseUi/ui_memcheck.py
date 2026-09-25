@@ -44,24 +44,51 @@ def prepare(image, appdir, artifacts, valgrind):
         raise ValueError(f"Valgrind executable unavailable: {valgrind}")
     requested_debuginfo = os.environ.get("GC_UI_MEMCHECK_DEBUGINFO_PATH")
     debuginfo_path = RUNNER.resolve_debuginfo_path(requested_debuginfo)
+    requested_suppressions = os.environ.get("GC_UI_MEMCHECK_SUPPRESSIONS")
+    suppression_paths = []
+    if requested_suppressions is not None:
+        for value in requested_suppressions.split(os.pathsep):
+            path = Path(value).resolve(strict=True) if value else None
+            if path is None or not path.is_file():
+                raise ValueError(f"GC_UI_MEMCHECK_SUPPRESSIONS entry must be an existing file: {value!r}")
+            suppression_paths.append(str(path))
+    runtime_environment = dict(os.environ)
+    runtime_environment["LD_LIBRARY_PATH"] = f"{runtime / 'lib'}:{runtime / 'usr/lib'}"
+    runtime_environment["QT_PLUGIN_PATH"] = str(runtime / "plugins")
+    pins = RUNNER.suppression_pins(suppression_paths, binary, runtime_environment)
+    legacy = RUNNER.unpinned_legacy_suppressions(suppression_paths)
+    for path in legacy:
+        print(f"warning: legacy suppression file without Build-ID pins: {path}", file=sys.stderr)
+    if debuginfo_path is not None:
+        pinned = {pin["library"] for pin in pins}
+        missing = RUNNER.debuginfo_coverage(binary, runtime_environment, debuginfo_path, pinned)
+        if missing:
+            raise ValueError("GC_UI_MEMCHECK_DEBUGINFO_PATH does not mirror the loaded Qt libraries' "
+                             f"directories ({debuginfo_path}): {', '.join(missing)}")
     output = Path(artifacts).resolve() / "memcheck"
     output.mkdir(mode=0o700, exist_ok=False)
     prefix = [str(Path(executable).resolve()), "--command-line-only=yes", "--tool=memcheck",
               "--leak-check=full", "--show-leak-kinds=all",
               "--errors-for-leak-kinds=definite,indirect,possible", "--track-origins=yes",
-              "--num-callers=30", "--smc-check=all", "--error-exitcode=97", "--trace-children=no",
+              "--num-callers=30", "--smc-check=all", "--keep-debuginfo=yes", "--error-exitcode=97", "--trace-children=no",
               "--child-silent-after-fork=yes", "--xml=yes",
               f"--xml-file={output / 'memcheck-%p.xml'}",
               f"--log-file={output / 'memcheck-%p.log'}"]
     if debuginfo_path is not None:
         prefix.append(f"--extra-debuginfo-path={debuginfo_path}")
+    prefix.extend(f"--suppressions={path}" for path in suppression_paths)
     (output / "command-prefix.nul").write_bytes(b"\0".join(os.fsencode(arg) for arg in prefix) + b"\0")
     (output / "invocation.json").write_text(json.dumps({
         "binary": str(binary), "appdir": str(runtime), "prefix": prefix,
         "debuginfo_path": debuginfo_path,
-        "environment": {"GC_UI_MEMCHECK_DEBUGINFO_PATH": requested_debuginfo},
+        "environment": {"GC_UI_MEMCHECK_DEBUGINFO_PATH": requested_debuginfo,
+                        "GC_UI_MEMCHECK_SUPPRESSIONS": requested_suppressions},
         "child_instrumentation": False,
-        "suppression_policy": "Valgrind installation defaults only; user rc/options ignored",
+        "suppression_policy": {
+            "defaults": "Valgrind installation defaults; user rc/options ignored",
+            "explicit_paths": suppression_paths,
+            "build_id_pins": pins,
+            "unpinned_legacy": legacy},
     }, indent=2) + "\n", encoding="utf-8")
     return prefix
 
@@ -90,9 +117,14 @@ def validate(artifacts, pid, app_status, ui_status):
                "ui_returncode": ui_status, "problems": [], "environment": {
                    name: os.environ.get(name) for name in (
                        "QT_QPA_PLATFORM", "QT_IM_MODULE", "QSG_RHI_BACKEND",
-                       "QT_QUICK_BACKEND", "LIBGL_ALWAYS_SOFTWARE", "VALGRIND_LIB",
+                       "QT_QUICK_BACKEND", "LIBGL_ALWAYS_SOFTWARE", "GALLIUM_DRIVER", "DRAW_USE_LLVM", "VALGRIND_LIB",
                        "GC_UI_TIMEOUT_SCALE", "QT_ENABLE_REGEXP_JIT",
-                       "GC_UI_MEMCHECK_DEBUGINFO_PATH")}}
+                       "GC_UI_MEMCHECK_DEBUGINFO_PATH", "GC_UI_MEMCHECK_SUPPRESSIONS")}}
+    try:
+        invocation = json.loads((output / "invocation.json").read_text(encoding="utf-8"))
+        summary["suppression_policy"] = invocation.get("suppression_policy")
+    except (OSError, ValueError) as error:
+        summary["problems"].append(f"missing Memcheck invocation record: {error}")
     if app_status != 0:
         summary["problems"].append(f"application exited with status {app_status}")
     if ui_status != 0:

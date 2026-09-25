@@ -250,7 +250,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
     def test_ui_runner_owns_and_cleans_the_appimage_process_group(self):
         runner = RUNNER_PATH.read_text(encoding="utf-8")
 
-        self.assertIn('setsid "${APP_ENV[@]}" "$IMAGE"', runner)
+        self.assertIn('setsid "${APP_ENV[@]}" "${MEMCHECK_PREFIX[@]}" "$IMAGE"', runner)
         self.assertIn('kill -TERM -- "-$APP_PGID"', runner)
         self.assertIn('kill -KILL -- "-$APP_PGID"', runner)
 
