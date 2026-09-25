@@ -15,6 +15,8 @@
 //   disk-noloop  disk profile exactly as ContextAthleteApplicationService creates it
 //                ("Default" + persistent cookies, no path setters), destroyed without an
 //                event loop turn (the chartOwnership fixture pattern)
+//   disk-cycles  disk-noloop eight times in one process (QtTest fixtures: one Context
+//                per test function)
 //   disk-paths-noloop  as disk-noloop plus MainWindow's setCachePath/setPersistentStoragePath
 //   view-sethtml  MainWindow's startup hack: dummy QWebEngineView, setHtml, delete at once,
 //                then run the event loop briefly like the application
@@ -206,6 +208,13 @@ int main(int argc, char **argv)
     } else if (variant == QLatin1String("disk-noloop")) {
         auto service = std::make_unique<AthleteService>();
         service.reset();
+    } else if (variant == QLatin1String("disk-cycles")) {
+        // QtTest fixtures: every test function creates and destroys its own
+        // Context, i.e. the "Default" disk profile, many times in one process.
+        for (int cycle = 0; cycle < 8; ++cycle) {
+            auto service = std::make_unique<AthleteService>();
+            service.reset();
+        }
     } else if (variant == QLatin1String("disk-paths-noloop")) {
         auto service = std::make_unique<AthleteService>(storage.path());
         service.reset();
@@ -325,7 +334,7 @@ int main(int argc, char **argv)
         app.exec();
         delete window;
     } else {
-        std::fprintf(stderr, "usage: %s baseline|default|otr|disk-noloop|disk-paths-noloop|view-sethtml|disk-exec|gc-like|gc-like-pe|gc-like-alive|a11y-label|pixmap-pool|pixmap-icon <png>|pixmap-formats <png>|gc-startup-pe|conn-alive|conn-hidden|conn-deleted\n", argv[0]);
+        std::fprintf(stderr, "usage: %s baseline|default|otr|disk-noloop|disk-cycles|disk-paths-noloop|view-sethtml|disk-exec|gc-like|gc-like-pe|gc-like-alive|a11y-label|pixmap-pool|pixmap-icon <png>|pixmap-formats <png>|gc-startup-pe|conn-alive|conn-hidden|conn-deleted\n", argv[0]);
         return 2;
     }
     std::printf("variant %s done\n", qPrintable(variant));

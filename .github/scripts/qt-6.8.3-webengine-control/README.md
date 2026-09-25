@@ -27,7 +27,7 @@ Run each variant in its own Valgrind process with the runners' Memcheck flags
 `LIBGL_ALWAYS_SOFTWARE=1`, on the default renderer:
 
 - offscreen, `/opt/Qt` and system libraries (QtTest fixtures): `baseline`,
-  `default`, `disk-noloop`, `gc-like`, `conn-alive`, `conn-hidden`,
+  `default`, `disk-noloop`, `disk-cycles`, `gc-like`, `conn-alive`, `conn-hidden`,
   `conn-deleted`, and `qcss_control layout gc-css.html` (build `qcss_control.cpp`
   the same way; `gc-css.html` is the style string `IntervalSummaryWindow`
   passes to `QTextEdit::setHtml`);
@@ -77,10 +77,37 @@ rejected. `final_supp.py` then
   `<n>-<kind>-<program|complete|dispatcher|library|truncated>-<named|objonly>`
   (a chain without a program frame is `complete` only if it ends at a thread or
   process root, otherwise `truncated`, handled like a cut inside the libraries);
+- widens the GPU surface chains and the mojo/ipcz structure members listed in
+  `ipcz-cycle-members.json` (see "Structure members") to `definite,indirect`;
 - keeps a stanza only if it matches a record of the unsuppressed reports
   (offline, like `ledger.py`) or Valgrind credited it in a run with the candidate
   files (pass those as `<candidate file>:<report.xml>`), lists the records no
   stanza matches, and fails on an unpinned soname or an object wildcard.
+
+### Structure members
+
+The members of the WebEngine context's two lost mojo/ipcz structures (3,240 and
+3,400 bytes, `DEVELOPMENT-WORKFLOW.md`) are placed by Valgrind itself. Run `disk-noloop`
+and `disk-cycles` offscreen once more each with the same flags, without
+`--xml`, plus `--vgdb=yes --vgdb-stop-at=exit --log-file=<variant>.log`; when
+the log shows `(action at exit`, send every command in one `vgdb` call (the
+process continues when `vgdb` disconnects), and stop the process after it:
+
+```sh
+vgdb --pid=<pid> leak_check full kinds definite,indirect any -c block_list 1..3780 \
+    $(for r in $(seq 3781 3830); do printf -- '-c block_list %s ' $r; done) > <variant>.blocks
+```
+
+(`block_list` of a record past the last one only answers "invalid loss record
+nr"; raise the bounds if the controls report more loss records.) Then
+
+```sh
+python3 cycle_members.py ipcz-cycle-members.json <disk-noloop and disk-cycles
+    offscreen control XMLs> -- <the .blocks files>
+```
+
+A chain whose record is not held by the same structure's root in every block
+list is listed under `unplaced` and stays unsuppressed.
 
 Pin every contributing soname's Build-ID in the `.buildids` sidecars, including Qt
 plugins such as `libqxcb.so` and Mesa's `swrast_dri.so`; the runners resolve
@@ -94,6 +121,7 @@ Run the gated scenario with and without the files on the same binary and check
 the pair with `python3 ledger.py <files> LABEL:<nosupp.xml>:<supp.xml>`: every
 removed record must correspond to a control-verified stanza, and no removed record
 may have its allocation or error start in GoldenCheetah code. For every gate and
-fixture run, also run `python3 check_widened.py ../qt-6.8.3-webengine.supp <nosupp.xml>`: the two
-definite,indirect stanzas may match only single blocks of the control sizes.
+fixture run, also run `python3 check_widened.py ../qt-6.8.3-webengine.supp <nosupp.xml>`: the
+definite,indirect stanzas may match only the sizes the controls produced (see its
+docstring), each at most once.
 Keep both reports.

@@ -2127,9 +2127,9 @@
    fun:_ZN17QWebEngineProfileC1ERK7QStringP7QObject
 }
 {
-   qt-6.8.3-webengine-080-indirect-program-named
+   qt-6.8.3-webengine-080-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
@@ -2154,9 +2154,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-081-indirect-program-named
+   qt-6.8.3-webengine-081-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
@@ -2199,9 +2199,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-082-indirect-program-named
+   qt-6.8.3-webengine-082-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:make_unique<ukm::mojom::UkmRecorderInterfaceRequestValidator>
    fun:Bind
@@ -2488,9 +2488,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-088-indirect-program-named
+   qt-6.8.3-webengine-088-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
@@ -2550,9 +2550,9 @@
    fun:_ZN17QWebEngineProfileC1ERK7QStringP7QObject
 }
 {
-   qt-6.8.3-webengine-090-indirect-program-named
+   qt-6.8.3-webengine-090-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:allocate
    fun:allocate
@@ -2586,9 +2586,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-091-indirect-program-named
+   qt-6.8.3-webengine-091-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:make_unique<metrics::UkmRecorderInterface, ukm::UkmRecorder*&>
    fun:_ZN7metrics20UkmRecorderInterface6CreateEPN3ukm11UkmRecorderEN4mojo15PendingReceiverINS1_5mojom20UkmRecorderInterfaceEEE
@@ -2803,9 +2803,9 @@
    fun:_ZN17QWebEngineProfileC1ERK7QStringP7QObject
 }
 {
-   qt-6.8.3-webengine-098-indirect-program-named
+   qt-6.8.3-webengine-098-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:Create<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
    fun:BindImpl<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
@@ -2829,9 +2829,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-099-indirect-program-named
+   qt-6.8.3-webengine-099-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:Create
    fun:_ZN4mojo13SimpleWatcher5WatchENS_6HandleEjjN4base17RepeatingCallbackIFvjRKNS_18HandleSignalsStateEEEE
@@ -3030,9 +3030,9 @@
    fun:_ZN17QWebEngineProfileC1ERK7QStringP7QObject
 }
 {
-   qt-6.8.3-webengine-104-indirect-program-named
+   qt-6.8.3-webengine-104-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:MakeRefCounted<ipcz::Box, ipcz::DriverObject>
    fun:Box
@@ -3106,9 +3106,9 @@
    fun:_ZN15QtWebEngineCore14ProfileAdapterD1Ev
 }
 {
-   qt-6.8.3-webengine-106-indirect-program-named
+   qt-6.8.3-webengine-106-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:Create<void (mojo::internal::MultiplexRouter::*)(mojo::ConnectionGroup::Ref), scoped_refptr<mojo::internal::MultiplexRouter>&>
    fun:BindImpl<void (mojo::internal::MultiplexRouter::*)(mojo::ConnectionGroup::Ref), scoped_refptr<mojo::internal::MultiplexRouter>&>
@@ -3155,9 +3155,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-107-indirect-program-named
+   qt-6.8.3-webengine-107-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:Create<void (mojo::internal::SelfOwnedReceiver<ukm::mojom::UkmRecorderInterface>::*)(unsigned int, const std::__cxx11::basic_string<char>&), base::internal::UnretainedWrapper<mojo::internal::SelfOwnedReceiver<ukm::mojom::UkmRecorderInterface>, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0> >
    fun:BindImpl<void (mojo::internal::SelfOwnedReceiver<ukm::mojom::UkmRecorderInterface>::*)(unsigned int, const std::__cxx11::basic_string<char>&), base::internal::UnretainedWrapper<mojo::internal::SelfOwnedReceiver<ukm::mojom::UkmRecorderInterface>, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0> >
@@ -3199,9 +3199,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-108-indirect-program-named
+   qt-6.8.3-webengine-108-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:Create<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
    fun:BindImpl<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
@@ -3224,9 +3224,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-109-indirect-program-named
+   qt-6.8.3-webengine-109-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:Create<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
    fun:BindImpl<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
@@ -3383,9 +3383,9 @@
    fun:_ZN17QWebEngineProfileD1Ev
 }
 {
-   qt-6.8.3-webengine-112-indirect-program-named
+   qt-6.8.3-webengine-112-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:make_unique<mojo::SimpleWatcher, base::Location, mojo::SimpleWatcher::ArmingPolicy, scoped_refptr<base::SequencedTaskRunner>&, char const*&>
    fun:_ZN4mojo9Connector14WaitToReadMoreEv
@@ -3405,9 +3405,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-113-indirect-program-named
+   qt-6.8.3-webengine-113-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:MakeRefCounted<mojo::core::ipcz_driver::MojoTrap::Trigger, mojo::core::ipcz_driver::MojoTrap*, long unsigned int&, mojo::core::ipcz_driver::DataPipe*&, unsigned int&, long unsigned int&>
    fun:_ZN4mojo4core11ipcz_driver8MojoTrap10AddTriggerEmjjm
@@ -3431,9 +3431,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-114-indirect-program-named
+   qt-6.8.3-webengine-114-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:Create
    fun:_ZN4mojo21MakeSelfOwnedReceiverIN3ukm5mojom20UkmRecorderInterfaceEN7metrics20UkmRecorderInterfaceEEEN4base7WeakPtrINS_8internal17SelfOwnedReceiverIT_EEEESt10unique_ptrIT0_St14default_deleteISE_EENS_15PendingReceiverISA_EE13scoped_refptrINS6_19SequencedTaskRunnerEE
@@ -3567,9 +3567,9 @@
    fun:_ZN24QWebEngineProfilePrivateD1Ev
 }
 {
-   qt-6.8.3-webengine-117-indirect-program-named
+   qt-6.8.3-webengine-117-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:allocate
    fun:allocate
@@ -3810,9 +3810,9 @@
    fun:_ZN15QtWebEngineCore14ProfileAdapterC1ERK7QString
 }
 {
-   qt-6.8.3-webengine-125-indirect-program-named
+   qt-6.8.3-webengine-125-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:MojoCreateTrapIpcz
    fun:_ZN4mojo10CreateTrapEPFvPK13MojoTrapEventEPNS_16ScopedHandleBaseINS_10TrapHandleEEE
@@ -3996,9 +3996,9 @@
    fun:_ZN17QWebEngineProfileC1ERK7QStringP7QObject
 }
 {
-   qt-6.8.3-webengine-132-indirect-program-named
+   qt-6.8.3-webengine-132-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, mojo::MessageReceiverWithResponderStatus*&, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>&, scoped_refptr<base::SequencedTaskRunner>, unsigned int&, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
    fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
@@ -4076,9 +4076,9 @@
    fun:_ZN17QWebEngineProfileC1ERK7QStringP7QObject
 }
 {
-   qt-6.8.3-webengine-134-indirect-program-named
+   qt-6.8.3-webengine-134-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: indirect
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
    fun:Create
@@ -4124,9 +4124,9 @@
    fun:_ZN17QWebEngineProfileD0Ev
 }
 {
-   qt-6.8.3-webengine-135-definite-program-named
+   qt-6.8.3-webengine-135-definite+indirect-program-named
    Memcheck:Leak
-   match-leak-kinds: definite
+   match-leak-kinds: definite,indirect
    fun:_Znwm
    fun:MakeRefCounted<ipcz::Router>
    fun:_ZN4ipcz6Router10CreatePairEv
@@ -16916,46 +16916,7 @@
    fun:_ZN15QtWebEngineCore18WebContentsAdapter10initializeEPN7content12SiteInstanceE
 }
 {
-   qt-6.8.3-webengine-439-definite-library-named
-   Memcheck:Leak
-   match-leak-kinds: definite
-   fun:_Znwm
-   fun:Create
-   fun:_ZN4mojo21MakeSelfOwnedReceiverIN3ukm5mojom20UkmRecorderInterfaceEN7metrics20UkmRecorderInterfaceEEEN4base7WeakPtrINS_8internal17SelfOwnedReceiverIT_EEEESt10unique_ptrIT0_St14default_deleteISE_EENS_15PendingReceiverISA_EE13scoped_refptrINS6_19SequencedTaskRunnerEE
-   fun:_ZN7metrics20UkmRecorderInterface6CreateEPN3ukm11UkmRecorderEN4mojo15PendingReceiverINS1_5mojom20UkmRecorderInterfaceEEE
-   fun:_ZN7metrics22UkmRecorderFactoryImpl17CreateUkmRecorderEN4mojo15PendingReceiverIN3ukm5mojom20UkmRecorderInterfaceEEENS1_13PendingRemoteINS4_26UkmRecorderClientInterfaceEEE
-   fun:_ZN3ukm5mojom30UkmRecorderFactoryStubDispatch6AcceptEPNS0_18UkmRecorderFactoryEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:OnHandleReadyInternal
-   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:_ZN15QtWebEngineCore16WebEngineContext13flushMessagesEv.part.0
-   fun:_ZN15QtWebEngineCore14ProfileAdapterD1Ev
-   fun:_ZN15QtWebEngineCore14ProfileAdapterD0Ev
-   fun:_ZN24QWebEngineProfilePrivateD1Ev
-   fun:~QWebEngineProfilePrivate
-   fun:cleanup
-   fun:~QScopedPointer
-   fun:_ZN17QWebEngineProfileD1Ev
-   fun:_ZN17QWebEngineProfileD0Ev
-}
-{
-   qt-6.8.3-webengine-440-definite-truncated-named
+   qt-6.8.3-webengine-439-definite-truncated-named
    Memcheck:Leak
    match-leak-kinds: definite
    fun:_Znwm
@@ -17004,7 +16965,7 @@
    fun:_ZN7content15WebContentsImpl4InitERKNS_11WebContents12CreateParamsEN5blink11FramePolicyE
 }
 {
-   qt-6.8.3-webengine-441-definite-truncated-named
+   qt-6.8.3-webengine-440-definite-truncated-named
    Memcheck:Leak
    match-leak-kinds: definite
    fun:_Znwm
@@ -17056,7 +17017,7 @@
    fun:_ZL23postEventSourceDispatchP8_GSourcePFiPvES1_
 }
 {
-   qt-6.8.3-webengine-442-definite-library-named
+   qt-6.8.3-webengine-441-definite-library-named
    Memcheck:Leak
    match-leak-kinds: definite
    fun:_Znwm
@@ -17103,7 +17064,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-443-indirect-library-named
+   qt-6.8.3-webengine-442-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17144,7 +17105,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-444-indirect-library-named
+   qt-6.8.3-webengine-443-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17191,7 +17152,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-445-indirect-truncated-named
+   qt-6.8.3-webengine-444-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17245,7 +17206,7 @@
    fun:_ZL23postEventSourceDispatchP8_GSourcePFiPvES1_
 }
 {
-   qt-6.8.3-webengine-446-indirect-library-named
+   qt-6.8.3-webengine-445-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17257,6 +17218,52 @@
    fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
    fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
    fun:_ZN4mojo8internal15MultiplexRouter6CreateENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
+   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
+   fun:ConfigureProxyIfNecessary
+   fun:instance
+   fun:Bind
+   fun:Bind
+   fun:Remote
+   fun:Remote
+   fun:make_unique<mojo::Remote<cert_verifier::mojom::URLLoaderFactoryConnector>, mojo::PendingRemote<cert_verifier::mojom::URLLoaderFactoryConnector> >
+   fun:EnableNetworkAccess
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
+   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
+   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
+   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
+   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
+   fun:OnHandleReadyInternal
+   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
+   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
+   fun:handleScheduledWork
+   fun:operator()
+   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
+}
+{
+   qt-6.8.3-webengine-446-indirect-library-named
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:_Znwm
+   fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
+   fun:WeakReferenceOwner
+   fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
+   fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
+   fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, std::nullptr_t, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>, scoped_refptr<base::SequencedTaskRunner>, unsigned int, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
    fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
    fun:ConfigureProxyIfNecessary
    fun:instance
@@ -17301,6 +17308,7 @@
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
+   fun:WeakPtrFactory
    fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
    fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, std::nullptr_t, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>, scoped_refptr<base::SequencedTaskRunner>, unsigned int, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
    fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
@@ -17348,53 +17356,6 @@
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
    fun:WeakPtrFactory
-   fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
-   fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, std::nullptr_t, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>, scoped_refptr<base::SequencedTaskRunner>, unsigned int, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
-   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
-   fun:ConfigureProxyIfNecessary
-   fun:instance
-   fun:Bind
-   fun:Bind
-   fun:Remote
-   fun:Remote
-   fun:make_unique<mojo::Remote<cert_verifier::mojom::URLLoaderFactoryConnector>, mojo::PendingRemote<cert_verifier::mojom::URLLoaderFactoryConnector> >
-   fun:EnableNetworkAccess
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
-   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:OnHandleReadyInternal
-   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:handleScheduledWork
-   fun:operator()
-   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
-}
-{
-   qt-6.8.3-webengine-449-indirect-library-named
-   Memcheck:Leak
-   match-leak-kinds: indirect
-   fun:_Znwm
-   fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
-   fun:WeakReferenceOwner
-   fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
-   fun:WeakPtrFactory
    fun:_ZN4mojo13SimpleWatcherC1ERKN4base8LocationENS0_12ArmingPolicyE13scoped_refptrINS1_19SequencedTaskRunnerEEPKc
    fun:make_unique<mojo::SimpleWatcher, base::Location, mojo::SimpleWatcher::ArmingPolicy, scoped_refptr<base::SequencedTaskRunner>&, char const*&>
    fun:_ZN4mojo9Connector14WaitToReadMoreEv
@@ -17436,7 +17397,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-450-indirect-library-named
+   qt-6.8.3-webengine-449-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17479,7 +17440,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-451-indirect-truncated-named
+   qt-6.8.3-webengine-450-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17532,7 +17493,7 @@
    fun:_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData
 }
 {
-   qt-6.8.3-webengine-452-indirect-library-named
+   qt-6.8.3-webengine-451-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17581,7 +17542,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-453-indirect-truncated-named
+   qt-6.8.3-webengine-452-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17635,7 +17596,7 @@
    fun:_ZN16QCoreApplication15notifyInternal2EP7QObjectP6QEvent
 }
 {
-   qt-6.8.3-webengine-454-indirect-library-named
+   qt-6.8.3-webengine-453-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17647,6 +17608,54 @@
    fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
    fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
    fun:_ZN4mojo8internal15MultiplexRouter6CreateENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
+   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
+   fun:ConfigureProxyIfNecessary
+   fun:instance
+   fun:Bind
+   fun:Bind
+   fun:Remote
+   fun:Remote
+   fun:_ZN13cert_verifier23CertNetFetcherURLLoader28AsyncCertNetFetcherURLLoaderC1EN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS2_15PendingReceiverIS6_EEEEE
+   fun:make_unique<cert_verifier::CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader, mojo::PendingRemote<network::mojom::URLLoaderFactory>, base::RepeatingCallback<void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> >
+   fun:_ZN13cert_verifier23CertNetFetcherURLLoader33SetURLLoaderFactoryAndReconnectorEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS1_15PendingReceiverIS5_EEEEE
+   fun:EnableNetworkAccess
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
+   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
+   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
+   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
+   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
+   fun:OnHandleReadyInternal
+   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
+   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
+   fun:handleScheduledWork
+   fun:operator()
+   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
+}
+{
+   qt-6.8.3-webengine-454-indirect-library-named
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:_Znwm
+   fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
+   fun:WeakReferenceOwner
+   fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
+   fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
+   fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, std::nullptr_t, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>, scoped_refptr<base::SequencedTaskRunner>, unsigned int, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
    fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
    fun:ConfigureProxyIfNecessary
    fun:instance
@@ -17693,54 +17702,6 @@
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
-   fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
-   fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, std::nullptr_t, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>, scoped_refptr<base::SequencedTaskRunner>, unsigned int, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
-   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
-   fun:ConfigureProxyIfNecessary
-   fun:instance
-   fun:Bind
-   fun:Bind
-   fun:Remote
-   fun:Remote
-   fun:_ZN13cert_verifier23CertNetFetcherURLLoader28AsyncCertNetFetcherURLLoaderC1EN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS2_15PendingReceiverIS6_EEEEE
-   fun:make_unique<cert_verifier::CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader, mojo::PendingRemote<network::mojom::URLLoaderFactory>, base::RepeatingCallback<void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> >
-   fun:_ZN13cert_verifier23CertNetFetcherURLLoader33SetURLLoaderFactoryAndReconnectorEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS1_15PendingReceiverIS5_EEEEE
-   fun:EnableNetworkAccess
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
-   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:OnHandleReadyInternal
-   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:handleScheduledWork
-   fun:operator()
-   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
-}
-{
-   qt-6.8.3-webengine-456-indirect-library-named
-   Memcheck:Leak
-   match-leak-kinds: indirect
-   fun:_Znwm
-   fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
-   fun:WeakReferenceOwner
-   fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
    fun:WeakPtrFactory
    fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
    fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, std::nullptr_t, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>, scoped_refptr<base::SequencedTaskRunner>, unsigned int, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
@@ -17783,7 +17744,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-457-indirect-truncated-named
+   qt-6.8.3-webengine-456-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17838,7 +17799,7 @@
    fun:_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData
 }
 {
-   qt-6.8.3-webengine-458-indirect-library-named
+   qt-6.8.3-webengine-457-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17889,7 +17850,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-459-indirect-library-named
+   qt-6.8.3-webengine-458-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17919,7 +17880,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-460-indirect-library-named
+   qt-6.8.3-webengine-459-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17951,7 +17912,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-461-indirect-library-named
+   qt-6.8.3-webengine-460-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -17985,11 +17946,52 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-462-indirect-library-named
+   qt-6.8.3-webengine-461-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
    fun:make_unique<cert_verifier::mojom::CertVerifierServiceRequestValidator>
+   fun:Bind
+   fun:Bind
+   fun:Bind
+   fun:Receiver
+   fun:Receiver
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
+   fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
+   fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
+   fun:_ZN13cert_verifier5mojom38CertVerifierServiceFactoryStubDispatch6AcceptEPNS0_26CertVerifierServiceFactoryEPN4mojo7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
+   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
+   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
+   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
+   fun:Run
+   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
+   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
+   fun:handleScheduledWork
+   fun:operator()
+   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
+}
+{
+   qt-6.8.3-webengine-462-indirect-library-named
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:_Znwm
+   fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
+   fun:WeakReferenceOwner
+   fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
+   fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
+   fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
+   fun:Create
+   fun:_ZN4mojo8internal15MultiplexRouter23CreateAndStartReceivingENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
+   fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
    fun:Bind
    fun:Bind
    fun:Bind
@@ -18026,6 +18028,8 @@
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
+   fun:WeakPtrFactory
+   fun:_ZN4mojo9ConnectorC1ENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS0_15ConnectorConfigEPKc
    fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
    fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
    fun:Create
@@ -18068,10 +18072,10 @@
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
    fun:WeakPtrFactory
-   fun:_ZN4mojo9ConnectorC1ENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS0_15ConnectorConfigEPKc
-   fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
-   fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
-   fun:Create
+   fun:_ZN4mojo13SimpleWatcherC1ERKN4base8LocationENS0_12ArmingPolicyE13scoped_refptrINS1_19SequencedTaskRunnerEEPKc
+   fun:make_unique<mojo::SimpleWatcher, base::Location, mojo::SimpleWatcher::ArmingPolicy, scoped_refptr<base::SequencedTaskRunner>&, char const*&>
+   fun:_ZN4mojo9Connector14WaitToReadMoreEv
+   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
    fun:_ZN4mojo8internal15MultiplexRouter23CreateAndStartReceivingENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
    fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
    fun:Bind
@@ -18110,12 +18114,8 @@
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
-   fun:WeakPtrFactory
-   fun:_ZN4mojo13SimpleWatcherC1ERKN4base8LocationENS0_12ArmingPolicyE13scoped_refptrINS1_19SequencedTaskRunnerEEPKc
-   fun:make_unique<mojo::SimpleWatcher, base::Location, mojo::SimpleWatcher::ArmingPolicy, scoped_refptr<base::SequencedTaskRunner>&, char const*&>
-   fun:_ZN4mojo9Connector14WaitToReadMoreEv
-   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
-   fun:_ZN4mojo8internal15MultiplexRouter23CreateAndStartReceivingENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
+   fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
+   fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, mojo::MessageReceiverWithResponderStatus*&, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>&, scoped_refptr<base::SequencedTaskRunner>, unsigned int&, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
    fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
    fun:Bind
    fun:Bind
@@ -18153,6 +18153,7 @@
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
+   fun:WeakPtrFactory
    fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
    fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, mojo::MessageReceiverWithResponderStatus*&, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>&, scoped_refptr<base::SequencedTaskRunner>, unsigned int&, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
    fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
@@ -18189,13 +18190,7 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
-   fun:WeakReferenceOwner
-   fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
-   fun:WeakPtrFactory
-   fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
-   fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, mojo::MessageReceiverWithResponderStatus*&, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>&, scoped_refptr<base::SequencedTaskRunner>, unsigned int&, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
-   fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
+   fun:make_unique<cert_verifier::mojom::CertVerifierServiceUpdaterRequestValidator>
    fun:Bind
    fun:Bind
    fun:Bind
@@ -18229,12 +18224,13 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:make_unique<cert_verifier::mojom::CertVerifierServiceUpdaterRequestValidator>
+   fun:make_unique<mojo::PassThroughFilter>
+   fun:ConfigureProxyIfNecessary
+   fun:instance
    fun:Bind
    fun:Bind
-   fun:Bind
-   fun:Receiver
-   fun:Receiver
+   fun:Remote
+   fun:Remote
    fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
    fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
    fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
@@ -18263,7 +18259,13 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:make_unique<mojo::PassThroughFilter>
+   fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
+   fun:WeakReferenceOwner
+   fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
+   fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
+   fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
+   fun:_ZN4mojo8internal15MultiplexRouter6CreateENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
+   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
    fun:ConfigureProxyIfNecessary
    fun:instance
    fun:Bind
@@ -18301,6 +18303,8 @@
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
+   fun:WeakPtrFactory
+   fun:_ZN4mojo9ConnectorC1ENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS0_15ConnectorConfigEPKc
    fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
    fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
    fun:_ZN4mojo8internal15MultiplexRouter6CreateENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
@@ -18342,11 +18346,8 @@
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
-   fun:WeakPtrFactory
-   fun:_ZN4mojo9ConnectorC1ENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS0_15ConnectorConfigEPKc
-   fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
-   fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
-   fun:_ZN4mojo8internal15MultiplexRouter6CreateENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
+   fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
+   fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, std::nullptr_t, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>, scoped_refptr<base::SequencedTaskRunner>, unsigned int, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
    fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
    fun:ConfigureProxyIfNecessary
    fun:instance
@@ -18385,46 +18386,6 @@
    fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
    fun:WeakReferenceOwner
    fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
-   fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
-   fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, std::nullptr_t, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>, scoped_refptr<base::SequencedTaskRunner>, unsigned int, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
-   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
-   fun:ConfigureProxyIfNecessary
-   fun:instance
-   fun:Bind
-   fun:Bind
-   fun:Remote
-   fun:Remote
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
-   fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
-   fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
-   fun:_ZN13cert_verifier5mojom38CertVerifierServiceFactoryStubDispatch6AcceptEPNS0_26CertVerifierServiceFactoryEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:handleScheduledWork
-   fun:operator()
-   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
-}
-{
-   qt-6.8.3-webengine-473-indirect-library-named
-   Memcheck:Leak
-   match-leak-kinds: indirect
-   fun:_Znwm
-   fun:_ZN4base14MakeRefCountedINS_8internal13WeakReference4FlagEJEEE13scoped_refptrIT_EDpOT0_
-   fun:WeakReferenceOwner
-   fun:_ZN4base8internal18WeakPtrFactoryBaseC1Em
    fun:WeakPtrFactory
    fun:_ZN4mojo23InterfaceEndpointClientC1ENS_29ScopedInterfaceEndpointHandleEPNS_34MessageReceiverWithResponderStatusESt10unique_ptrINS_15MessageReceiverESt14default_deleteIS5_EEN4base4spanIKjLm18446744073709551615EPSB_EE13scoped_refptrINS9_19SequencedTaskRunnerEEjPKcPFPFjvERNS_7MessageEEPFSI_SM_E
    fun:make_unique<mojo::InterfaceEndpointClient, mojo::ScopedInterfaceEndpointHandle, std::nullptr_t, std::unique_ptr<mojo::MessageReceiver, std::default_delete<mojo::MessageReceiver> >, base::span<unsigned int const, 18446744073709551615, unsigned int const*>, scoped_refptr<base::SequencedTaskRunner>, unsigned int, char const*&, unsigned int (* (*&)(mojo::Message&))(), char const* (*&)(mojo::Message&)>
@@ -18459,7 +18420,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-474-indirect-library-named
+   qt-6.8.3-webengine-473-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18502,7 +18463,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-475-indirect-library-named
+   qt-6.8.3-webengine-474-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18560,7 +18521,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-476-indirect-library-named
+   qt-6.8.3-webengine-475-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18602,7 +18563,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-477-indirect-truncated-named
+   qt-6.8.3-webengine-476-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18667,7 +18628,7 @@
    fun:_ZL23postEventSourceDispatchP8_GSourcePFiPvES1_
 }
 {
-   qt-6.8.3-webengine-478-indirect-library-named
+   qt-6.8.3-webengine-477-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18727,7 +18688,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-479-indirect-library-named
+   qt-6.8.3-webengine-478-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18771,7 +18732,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-480-indirect-library-named
+   qt-6.8.3-webengine-479-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18800,7 +18761,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-481-indirect-library-named
+   qt-6.8.3-webengine-480-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18830,7 +18791,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-482-indirect-library-named
+   qt-6.8.3-webengine-481-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18871,7 +18832,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-483-indirect-library-named
+   qt-6.8.3-webengine-482-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18914,7 +18875,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-484-indirect-library-named
+   qt-6.8.3-webengine-483-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -18956,7 +18917,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-485-indirect-library-named
+   qt-6.8.3-webengine-484-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19008,7 +18969,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-486-indirect-library-named
+   qt-6.8.3-webengine-485-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19060,7 +19021,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-487-indirect-library-named
+   qt-6.8.3-webengine-486-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19096,7 +19057,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-488-indirect-library-named
+   qt-6.8.3-webengine-487-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19132,7 +19093,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-489-indirect-library-named
+   qt-6.8.3-webengine-488-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19164,7 +19125,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-490-indirect-library-named
+   qt-6.8.3-webengine-489-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19192,7 +19153,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-491-indirect-library-named
+   qt-6.8.3-webengine-490-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19226,7 +19187,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-492-indirect-library-named
+   qt-6.8.3-webengine-491-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19274,7 +19235,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-493-indirect-library-named
+   qt-6.8.3-webengine-492-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19320,7 +19281,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-494-indirect-library-named
+   qt-6.8.3-webengine-493-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19357,7 +19318,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-495-indirect-library-named
+   qt-6.8.3-webengine-494-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19365,6 +19326,54 @@
    fun:BindImpl<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
    fun:Bind<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
    fun:BindRepeating<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
+   fun:Watch
+   fun:_ZN4mojo9Connector14WaitToReadMoreEv
+   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
+   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
+   fun:ConfigureProxyIfNecessary
+   fun:instance
+   fun:Bind
+   fun:Bind
+   fun:Remote
+   fun:Remote
+   fun:_ZN13cert_verifier23CertNetFetcherURLLoader28AsyncCertNetFetcherURLLoaderC1EN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS2_15PendingReceiverIS6_EEEEE
+   fun:make_unique<cert_verifier::CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader, mojo::PendingRemote<network::mojom::URLLoaderFactory>, base::RepeatingCallback<void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> >
+   fun:_ZN13cert_verifier23CertNetFetcherURLLoader33SetURLLoaderFactoryAndReconnectorEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS1_15PendingReceiverIS5_EEEEE
+   fun:EnableNetworkAccess
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
+   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
+   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
+   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
+   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
+   fun:OnHandleReadyInternal
+   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
+   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
+   fun:handleScheduledWork
+   fun:operator()
+   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
+}
+{
+   qt-6.8.3-webengine-495-indirect-library-named
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:_Znwm
+   fun:Create
+   fun:_ZN4mojo13SimpleWatcher5WatchENS_6HandleEjjN4base17RepeatingCallbackIFvjRKNS_18HandleSignalsStateEEEE
    fun:Watch
    fun:_ZN4mojo9Connector14WaitToReadMoreEv
    fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
@@ -19411,24 +19420,24 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:Create
-   fun:_ZN4mojo13SimpleWatcher5WatchENS_6HandleEjjN4base17RepeatingCallbackIFvjRKNS_18HandleSignalsStateEEEE
+   fun:Create<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
+   fun:BindImpl<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
+   fun:Bind<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
+   fun:BindRepeating<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
    fun:Watch
    fun:_ZN4mojo9Connector14WaitToReadMoreEv
    fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
-   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
-   fun:ConfigureProxyIfNecessary
-   fun:instance
+   fun:_ZN4mojo8internal15MultiplexRouter23CreateAndStartReceivingENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
+   fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
    fun:Bind
    fun:Bind
-   fun:Remote
-   fun:Remote
-   fun:_ZN13cert_verifier23CertNetFetcherURLLoader28AsyncCertNetFetcherURLLoaderC1EN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS2_15PendingReceiverIS6_EEEEE
-   fun:make_unique<cert_verifier::CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader, mojo::PendingRemote<network::mojom::URLLoaderFactory>, base::RepeatingCallback<void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> >
-   fun:_ZN13cert_verifier23CertNetFetcherURLLoader33SetURLLoaderFactoryAndReconnectorEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS1_15PendingReceiverIS5_EEEEE
-   fun:EnableNetworkAccess
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
-   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
+   fun:Bind
+   fun:Receiver
+   fun:Receiver
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
+   fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
+   fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
+   fun:_ZN13cert_verifier5mojom38CertVerifierServiceFactoryStubDispatch6AcceptEPNS0_26CertVerifierServiceFactoryEPN4mojo7MessageE
    fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
    fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
    fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
@@ -19437,12 +19446,6 @@
    fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
    fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
    fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:OnHandleReadyInternal
-   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
    fun:Run
    fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
    fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
@@ -19459,10 +19462,8 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:Create<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
-   fun:BindImpl<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
-   fun:Bind<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
-   fun:BindRepeating<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
+   fun:Create
+   fun:_ZN4mojo13SimpleWatcher5WatchENS_6HandleEjjN4base17RepeatingCallbackIFvjRKNS_18HandleSignalsStateEEEE
    fun:Watch
    fun:_ZN4mojo9Connector14WaitToReadMoreEv
    fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
@@ -19501,46 +19502,6 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:Create
-   fun:_ZN4mojo13SimpleWatcher5WatchENS_6HandleEjjN4base17RepeatingCallbackIFvjRKNS_18HandleSignalsStateEEEE
-   fun:Watch
-   fun:_ZN4mojo9Connector14WaitToReadMoreEv
-   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
-   fun:_ZN4mojo8internal15MultiplexRouter23CreateAndStartReceivingENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
-   fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
-   fun:Bind
-   fun:Bind
-   fun:Bind
-   fun:Receiver
-   fun:Receiver
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
-   fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
-   fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
-   fun:_ZN13cert_verifier5mojom38CertVerifierServiceFactoryStubDispatch6AcceptEPNS0_26CertVerifierServiceFactoryEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:handleScheduledWork
-   fun:operator()
-   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
-}
-{
-   qt-6.8.3-webengine-499-indirect-library-named
-   Memcheck:Leak
-   match-leak-kinds: indirect
-   fun:_Znwm
    fun:Create<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
    fun:BindImpl<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
    fun:Bind<void (*)(const base::RepeatingCallback<void(unsigned int)>&, unsigned int, const mojo::HandleSignalsState&), base::RepeatingCallback<void(unsigned int)> >
@@ -19579,7 +19540,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-500-indirect-library-named
+   qt-6.8.3-webengine-499-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19619,7 +19580,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-501-indirect-library-named
+   qt-6.8.3-webengine-500-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19662,7 +19623,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-502-indirect-truncated-named
+   qt-6.8.3-webengine-501-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19722,7 +19683,7 @@
    fun:_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData
 }
 {
-   qt-6.8.3-webengine-503-indirect-library-named
+   qt-6.8.3-webengine-502-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19778,7 +19739,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-504-indirect-truncated-named
+   qt-6.8.3-webengine-503-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19833,7 +19794,7 @@
    fun:_ZL23postEventSourceDispatchP8_GSourcePFiPvES1_
 }
 {
-   qt-6.8.3-webengine-505-indirect-library-named
+   qt-6.8.3-webengine-504-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19883,7 +19844,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-506-indirect-truncated-named
+   qt-6.8.3-webengine-505-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19938,7 +19899,7 @@
    fun:_ZN16QCoreApplication15notifyInternal2EP7QObjectP6QEvent
 }
 {
-   qt-6.8.3-webengine-507-indirect-library-named
+   qt-6.8.3-webengine-506-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -19990,7 +19951,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-508-indirect-library-named
+   qt-6.8.3-webengine-507-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20022,7 +19983,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-509-indirect-truncated-named
+   qt-6.8.3-webengine-508-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20071,7 +20032,7 @@
    fun:_ZL23postEventSourceDispatchP8_GSourcePFiPvES1_
 }
 {
-   qt-6.8.3-webengine-510-indirect-library-named
+   qt-6.8.3-webengine-509-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20115,7 +20076,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-511-indirect-library-named
+   qt-6.8.3-webengine-510-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20153,7 +20114,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-512-indirect-library-named
+   qt-6.8.3-webengine-511-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20197,7 +20158,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-513-indirect-library-named
+   qt-6.8.3-webengine-512-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20229,7 +20190,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-514-indirect-library-named
+   qt-6.8.3-webengine-513-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20277,7 +20238,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-515-indirect-library-named
+   qt-6.8.3-webengine-514-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20323,7 +20284,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-516-indirect-library-named
+   qt-6.8.3-webengine-515-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20370,7 +20331,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-517-indirect-library-named
+   qt-6.8.3-webengine-516-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20378,6 +20339,55 @@
    fun:BindImpl<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
    fun:Bind<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
    fun:BindOnce<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
+   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
+   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
+   fun:ConfigureProxyIfNecessary
+   fun:instance
+   fun:Bind
+   fun:Bind
+   fun:Remote
+   fun:Remote
+   fun:_ZN13cert_verifier23CertNetFetcherURLLoader28AsyncCertNetFetcherURLLoaderC1EN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS2_15PendingReceiverIS6_EEEEE
+   fun:make_unique<cert_verifier::CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader, mojo::PendingRemote<network::mojom::URLLoaderFactory>, base::RepeatingCallback<void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> >
+   fun:_ZN13cert_verifier23CertNetFetcherURLLoader33SetURLLoaderFactoryAndReconnectorEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS1_15PendingReceiverIS5_EEEEE
+   fun:EnableNetworkAccess
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
+   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
+   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
+   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
+   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
+   fun:OnHandleReadyInternal
+   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
+   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
+   fun:handleScheduledWork
+   fun:operator()
+   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
+}
+{
+   qt-6.8.3-webengine-517-indirect-library-named
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:_Znwm
+   fun:Create<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
+   fun:BindImpl<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
+   fun:Bind<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
+   fun:BindRepeating<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
+   fun:_ZN4mojo9Connector14WaitToReadMoreEv
    fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
    fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
    fun:ConfigureProxyIfNecessary
@@ -20422,25 +20432,22 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:Create<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
-   fun:BindImpl<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
-   fun:Bind<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
-   fun:BindRepeating<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
-   fun:_ZN4mojo9Connector14WaitToReadMoreEv
+   fun:Create<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
+   fun:BindImpl<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
+   fun:Bind<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
+   fun:BindOnce<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
    fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
-   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
-   fun:ConfigureProxyIfNecessary
-   fun:instance
+   fun:_ZN4mojo8internal15MultiplexRouter23CreateAndStartReceivingENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
+   fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
    fun:Bind
    fun:Bind
-   fun:Remote
-   fun:Remote
-   fun:_ZN13cert_verifier23CertNetFetcherURLLoader28AsyncCertNetFetcherURLLoaderC1EN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS2_15PendingReceiverIS6_EEEEE
-   fun:make_unique<cert_verifier::CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader, mojo::PendingRemote<network::mojom::URLLoaderFactory>, base::RepeatingCallback<void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> >
-   fun:_ZN13cert_verifier23CertNetFetcherURLLoader33SetURLLoaderFactoryAndReconnectorEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS1_15PendingReceiverIS5_EEEEE
-   fun:EnableNetworkAccess
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
-   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
+   fun:Bind
+   fun:Receiver
+   fun:Receiver
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
+   fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
+   fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
+   fun:_ZN13cert_verifier5mojom38CertVerifierServiceFactoryStubDispatch6AcceptEPNS0_26CertVerifierServiceFactoryEPN4mojo7MessageE
    fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
    fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
    fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
@@ -20449,12 +20456,6 @@
    fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
    fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
    fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:OnHandleReadyInternal
-   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
    fun:Run
    fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
    fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
@@ -20471,10 +20472,11 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:Create<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
-   fun:BindImpl<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
-   fun:Bind<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
-   fun:BindOnce<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
+   fun:Create<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
+   fun:BindImpl<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
+   fun:Bind<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
+   fun:BindRepeating<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
+   fun:_ZN4mojo9Connector14WaitToReadMoreEv
    fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
    fun:_ZN4mojo8internal15MultiplexRouter23CreateAndStartReceivingENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
    fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
@@ -20511,47 +20513,6 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:Create<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
-   fun:BindImpl<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
-   fun:Bind<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
-   fun:BindRepeating<void (mojo::Connector::*)(char const*, unsigned int), base::internal::UnretainedWrapper<mojo::Connector, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, char const*&>
-   fun:_ZN4mojo9Connector14WaitToReadMoreEv
-   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
-   fun:_ZN4mojo8internal15MultiplexRouter23CreateAndStartReceivingENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
-   fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
-   fun:Bind
-   fun:Bind
-   fun:Bind
-   fun:Receiver
-   fun:Receiver
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
-   fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
-   fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
-   fun:_ZN13cert_verifier5mojom38CertVerifierServiceFactoryStubDispatch6AcceptEPNS0_26CertVerifierServiceFactoryEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:handleScheduledWork
-   fun:operator()
-   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
-}
-{
-   qt-6.8.3-webengine-521-indirect-library-named
-   Memcheck:Leak
-   match-leak-kinds: indirect
-   fun:_Znwm
    fun:Create<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
    fun:BindImpl<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
    fun:Bind<void (mojo::internal::MultiplexRouter::*)(bool), base::internal::UnretainedWrapper<mojo::internal::MultiplexRouter, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0>, bool>
@@ -20588,7 +20549,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-522-indirect-library-named
+   qt-6.8.3-webengine-521-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20629,7 +20590,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-523-indirect-truncated-named
+   qt-6.8.3-webengine-522-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20688,7 +20649,7 @@
    fun:_ZL23postEventSourceDispatchP8_GSourcePFiPvES1_
 }
 {
-   qt-6.8.3-webengine-524-indirect-library-named
+   qt-6.8.3-webengine-523-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20713,6 +20674,60 @@
    fun:_ZN13cert_verifier23CertNetFetcherURLLoader28AsyncCertNetFetcherURLLoaderC1EN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS2_15PendingReceiverIS6_EEEEE
    fun:make_unique<cert_verifier::CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader, mojo::PendingRemote<network::mojom::URLLoaderFactory>, base::RepeatingCallback<void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> >
    fun:_ZN13cert_verifier23CertNetFetcherURLLoader33SetURLLoaderFactoryAndReconnectorEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS1_15PendingReceiverIS5_EEEEE
+   fun:EnableNetworkAccess
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
+   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
+   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
+   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
+   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
+   fun:OnHandleReadyInternal
+   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
+   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
+   fun:handleScheduledWork
+   fun:operator()
+   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
+}
+{
+   qt-6.8.3-webengine-524-indirect-library-named
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:_Znwm
+   fun:allocate
+   fun:allocate
+   fun:allocate
+   fun:_M_create
+   fun:_M_construct<char*>
+   fun:_M_construct_aux<char*>
+   fun:_M_construct<char*>
+   fun:basic_string
+   fun:_ZN4mojo22MessageHeaderValidatorC1ERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE
+   fun:_ZN4mojo9ConnectorC1ENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS0_15ConnectorConfigEPKc
+   fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
+   fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
+   fun:_ZN4mojo8internal15MultiplexRouter6CreateENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
+   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
+   fun:ConfigureProxyIfNecessary
+   fun:instance
+   fun:Bind
+   fun:Bind
+   fun:Remote
+   fun:Remote
+   fun:make_unique<mojo::Remote<cert_verifier::mojom::URLLoaderFactoryConnector>, mojo::PendingRemote<cert_verifier::mojom::URLLoaderFactoryConnector> >
    fun:EnableNetworkAccess
    fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
    fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
@@ -20766,60 +20781,6 @@
    fun:Bind
    fun:Remote
    fun:Remote
-   fun:make_unique<mojo::Remote<cert_verifier::mojom::URLLoaderFactoryConnector>, mojo::PendingRemote<cert_verifier::mojom::URLLoaderFactoryConnector> >
-   fun:EnableNetworkAccess
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
-   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:OnHandleReadyInternal
-   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:handleScheduledWork
-   fun:operator()
-   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
-}
-{
-   qt-6.8.3-webengine-526-indirect-library-named
-   Memcheck:Leak
-   match-leak-kinds: indirect
-   fun:_Znwm
-   fun:allocate
-   fun:allocate
-   fun:allocate
-   fun:_M_create
-   fun:_M_construct<char*>
-   fun:_M_construct_aux<char*>
-   fun:_M_construct<char*>
-   fun:basic_string
-   fun:_ZN4mojo22MessageHeaderValidatorC1ERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE
-   fun:_ZN4mojo9ConnectorC1ENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS0_15ConnectorConfigEPKc
-   fun:_ZN4mojo8internal15MultiplexRouterC1EN4base7PassKeyIS1_EENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrINS2_19SequencedTaskRunnerEEPKc
-   fun:_ZN4base14MakeRefCountedIN4mojo8internal15MultiplexRouterEJNS_7PassKeyIS3_EENS1_16ScopedHandleBaseINS1_17MessagePipeHandleEEERNS3_6ConfigERbR13scoped_refptrINS_19SequencedTaskRunnerEERPKcEEESC_IT_EDpOT0_.isra.0
-   fun:_ZN4mojo8internal15MultiplexRouter6CreateENS_16ScopedHandleBaseINS_17MessagePipeHandleEEENS1_6ConfigEb13scoped_refptrIN4base19SequencedTaskRunnerEEPKc
-   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
-   fun:ConfigureProxyIfNecessary
-   fun:instance
-   fun:Bind
-   fun:Bind
-   fun:Remote
-   fun:Remote
    fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
    fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
    fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
@@ -20844,7 +20805,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-527-indirect-library-named
+   qt-6.8.3-webengine-526-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20890,7 +20851,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-528-indirect-library-named
+   qt-6.8.3-webengine-527-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20942,7 +20903,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-529-indirect-library-named
+   qt-6.8.3-webengine-528-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -20988,11 +20949,59 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-530-indirect-library-named
+   qt-6.8.3-webengine-529-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
    fun:make_unique<mojo::SimpleWatcher, base::Location, mojo::SimpleWatcher::ArmingPolicy, scoped_refptr<base::SequencedTaskRunner>&, char const*&>
+   fun:_ZN4mojo9Connector14WaitToReadMoreEv
+   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
+   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
+   fun:ConfigureProxyIfNecessary
+   fun:instance
+   fun:Bind
+   fun:Bind
+   fun:Remote
+   fun:Remote
+   fun:make_unique<mojo::Remote<cert_verifier::mojom::URLLoaderFactoryConnector>, mojo::PendingRemote<cert_verifier::mojom::URLLoaderFactoryConnector> >
+   fun:EnableNetworkAccess
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
+   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
+   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
+   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
+   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
+   fun:OnHandleReadyInternal
+   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
+   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
+   fun:handleScheduledWork
+   fun:operator()
+   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
+}
+{
+   qt-6.8.3-webengine-530-indirect-library-named
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:_Znwm
+   fun:MakeRefCounted<mojo::core::ipcz_driver::MojoTrap::Trigger, mojo::core::ipcz_driver::MojoTrap*, long unsigned int&, mojo::core::ipcz_driver::DataPipe*&, unsigned int&, long unsigned int&>
+   fun:_ZN4mojo4core11ipcz_driver8MojoTrap10AddTriggerEmjjm
+   fun:Create
+   fun:_ZN4mojo13SimpleWatcher5WatchENS_6HandleEjjN4base17RepeatingCallbackIFvjRKNS_18HandleSignalsStateEEEE
+   fun:Watch
    fun:_ZN4mojo9Connector14WaitToReadMoreEv
    fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
    fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
@@ -21036,54 +21045,6 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:MakeRefCounted<mojo::core::ipcz_driver::MojoTrap::Trigger, mojo::core::ipcz_driver::MojoTrap*, long unsigned int&, mojo::core::ipcz_driver::DataPipe*&, unsigned int&, long unsigned int&>
-   fun:_ZN4mojo4core11ipcz_driver8MojoTrap10AddTriggerEmjjm
-   fun:Create
-   fun:_ZN4mojo13SimpleWatcher5WatchENS_6HandleEjjN4base17RepeatingCallbackIFvjRKNS_18HandleSignalsStateEEEE
-   fun:Watch
-   fun:_ZN4mojo9Connector14WaitToReadMoreEv
-   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
-   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
-   fun:ConfigureProxyIfNecessary
-   fun:instance
-   fun:Bind
-   fun:Bind
-   fun:Remote
-   fun:Remote
-   fun:make_unique<mojo::Remote<cert_verifier::mojom::URLLoaderFactoryConnector>, mojo::PendingRemote<cert_verifier::mojom::URLLoaderFactoryConnector> >
-   fun:EnableNetworkAccess
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
-   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:OnHandleReadyInternal
-   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:handleScheduledWork
-   fun:operator()
-   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
-}
-{
-   qt-6.8.3-webengine-532-indirect-library-named
-   Memcheck:Leak
-   match-leak-kinds: indirect
-   fun:_Znwm
    fun:make_unique<mojo::SimpleWatcher, base::Location, mojo::SimpleWatcher::ArmingPolicy, scoped_refptr<base::SequencedTaskRunner>&, char const*&>
    fun:_ZN4mojo9Connector14WaitToReadMoreEv
    fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
@@ -21126,7 +21087,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-533-indirect-truncated-named
+   qt-6.8.3-webengine-532-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21181,7 +21142,7 @@
    fun:_ZL23postEventSourceDispatchP8_GSourcePFiPvES1_
 }
 {
-   qt-6.8.3-webengine-534-indirect-library-named
+   qt-6.8.3-webengine-533-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21231,7 +21192,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-535-indirect-library-named
+   qt-6.8.3-webengine-534-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21249,6 +21210,44 @@
    fun:Bind
    fun:Receiver
    fun:Receiver
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
+   fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
+   fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
+   fun:_ZN13cert_verifier5mojom38CertVerifierServiceFactoryStubDispatch6AcceptEPNS0_26CertVerifierServiceFactoryEPN4mojo7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
+   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
+   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
+   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
+   fun:Run
+   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
+   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
+   fun:handleScheduledWork
+   fun:operator()
+   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
+}
+{
+   qt-6.8.3-webengine-535-indirect-library-named
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:_Znwm
+   fun:make_unique<mojo::SimpleWatcher, base::Location, mojo::SimpleWatcher::ArmingPolicy, scoped_refptr<base::SequencedTaskRunner>&, char const*&>
+   fun:_ZN4mojo9Connector14WaitToReadMoreEv
+   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
+   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
+   fun:ConfigureProxyIfNecessary
+   fun:instance
+   fun:Bind
+   fun:Bind
+   fun:Remote
+   fun:Remote
    fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
    fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
    fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
@@ -21277,44 +21276,6 @@
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
-   fun:make_unique<mojo::SimpleWatcher, base::Location, mojo::SimpleWatcher::ArmingPolicy, scoped_refptr<base::SequencedTaskRunner>&, char const*&>
-   fun:_ZN4mojo9Connector14WaitToReadMoreEv
-   fun:_ZN4mojo8internal15MultiplexRouter14StartReceivingEv
-   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
-   fun:ConfigureProxyIfNecessary
-   fun:instance
-   fun:Bind
-   fun:Bind
-   fun:Remote
-   fun:Remote
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImplC1ESt10unique_ptrIN3net29CertVerifierWithUpdatableProcESt14default_deleteIS4_EEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS9_INSA_26CertVerifierServiceUpdaterEEENS8_13PendingRemoteINSA_25CertVerifierServiceClientEEE13scoped_refptrINS_23CertNetFetcherURLLoaderEENS3_14CertVerifyProc14InstanceParamsE
-   fun:_ZN13cert_verifier12_GLOBAL__N_122GetNewCertVerifierImplEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEERKN3net14CertVerifyProc10ImplParamsEP13scoped_refptrINS_23CertNetFetcherURLLoaderEE
-   fun:_ZN13cert_verifier30CertVerifierServiceFactoryImpl18GetNewCertVerifierEN4mojo15PendingReceiverINS_5mojom19CertVerifierServiceEEENS2_INS3_26CertVerifierServiceUpdaterEEENS1_13PendingRemoteINS3_25CertVerifierServiceClientEEENS1_9StructPtrINS3_26CertVerifierCreationParamsEEE
-   fun:_ZN13cert_verifier5mojom38CertVerifierServiceFactoryStubDispatch6AcceptEPNS0_26CertVerifierServiceFactoryEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:handleScheduledWork
-   fun:operator()
-   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
-}
-{
-   qt-6.8.3-webengine-537-indirect-library-named
-   Memcheck:Leak
-   match-leak-kinds: indirect
-   fun:_Znwm
    fun:MakeRefCounted<mojo::core::ipcz_driver::MojoTrap::Trigger, mojo::core::ipcz_driver::MojoTrap*, long unsigned int&, mojo::core::ipcz_driver::DataPipe*&, unsigned int&, long unsigned int&>
    fun:_ZN4mojo4core11ipcz_driver8MojoTrap10AddTriggerEmjjm
    fun:Create
@@ -21353,7 +21314,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-538-indirect-truncated-named
+   qt-6.8.3-webengine-537-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21414,7 +21375,7 @@
    fun:_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData
 }
 {
-   qt-6.8.3-webengine-539-indirect-library-named
+   qt-6.8.3-webengine-538-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21471,7 +21432,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-540-indirect-truncated-named
+   qt-6.8.3-webengine-539-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21532,7 +21493,7 @@
    fun:_ZN19QApplicationPrivate13notify_helperEP7QObjectP6QEvent
 }
 {
-   qt-6.8.3-webengine-541-indirect-library-named
+   qt-6.8.3-webengine-540-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21591,7 +21552,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-542-indirect-truncated-named
+   qt-6.8.3-webengine-541-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21646,7 +21607,7 @@
    fun:_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData
 }
 {
-   qt-6.8.3-webengine-543-indirect-library-named
+   qt-6.8.3-webengine-542-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21697,7 +21658,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-544-indirect-truncated-named
+   qt-6.8.3-webengine-543-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21753,7 +21714,7 @@
    fun:_ZL23postEventSourceDispatchP8_GSourcePFiPvES1_
 }
 {
-   qt-6.8.3-webengine-545-indirect-library-named
+   qt-6.8.3-webengine-544-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21804,7 +21765,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-546-indirect-library-named
+   qt-6.8.3-webengine-545-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21839,7 +21800,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-547-indirect-library-named
+   qt-6.8.3-webengine-546-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21868,7 +21829,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-548-indirect-library-named
+   qt-6.8.3-webengine-547-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21899,7 +21860,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-549-indirect-library-named
+   qt-6.8.3-webengine-548-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21940,7 +21901,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-550-indirect-library-named
+   qt-6.8.3-webengine-549-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -21984,7 +21945,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-551-indirect-library-named
+   qt-6.8.3-webengine-550-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22030,7 +21991,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-552-indirect-library-named
+   qt-6.8.3-webengine-551-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22067,7 +22028,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-553-indirect-library-named
+   qt-6.8.3-webengine-552-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22105,7 +22066,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-554-indirect-library-named
+   qt-6.8.3-webengine-553-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22121,6 +22082,53 @@
    fun:Remote
    fun:Remote
    fun:make_unique<mojo::Remote<cert_verifier::mojom::URLLoaderFactoryConnector>, mojo::PendingRemote<cert_verifier::mojom::URLLoaderFactoryConnector> >
+   fun:EnableNetworkAccess
+   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
+   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
+   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
+   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
+   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
+   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
+   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
+   fun:OnHandleReadyInternal
+   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
+   fun:Run
+   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
+   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
+   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
+   fun:handleScheduledWork
+   fun:operator()
+   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
+   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
+}
+{
+   qt-6.8.3-webengine-554-indirect-library-named
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:_Znwm
+   fun:MakeRefCounted<mojo::ScopedInterfaceEndpointHandle::State, unsigned int&, scoped_refptr<mojo::AssociatedGroupController> >
+   fun:_ZN4mojo29ScopedInterfaceEndpointHandleC1Ej13scoped_refptrINS_25AssociatedGroupControllerEE
+   fun:_ZN4mojo25AssociatedGroupController35CreateScopedInterfaceEndpointHandleEj
+   fun:_ZN4mojo8internal15MultiplexRouter25CreateLocalEndpointHandleEj
+   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
+   fun:ConfigureProxyIfNecessary
+   fun:instance
+   fun:Bind
+   fun:Bind
+   fun:Remote
+   fun:Remote
+   fun:_ZN13cert_verifier23CertNetFetcherURLLoader28AsyncCertNetFetcherURLLoaderC1EN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS2_15PendingReceiverIS6_EEEEE
+   fun:make_unique<cert_verifier::CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader, mojo::PendingRemote<network::mojom::URLLoaderFactory>, base::RepeatingCallback<void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> >
+   fun:_ZN13cert_verifier23CertNetFetcherURLLoader33SetURLLoaderFactoryAndReconnectorEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS1_15PendingReceiverIS5_EEEEE
    fun:EnableNetworkAccess
    fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
    fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
@@ -22158,53 +22166,6 @@
    fun:_ZN4mojo29ScopedInterfaceEndpointHandleC1Ej13scoped_refptrINS_25AssociatedGroupControllerEE
    fun:_ZN4mojo25AssociatedGroupController35CreateScopedInterfaceEndpointHandleEj
    fun:_ZN4mojo8internal15MultiplexRouter25CreateLocalEndpointHandleEj
-   fun:_ZN4mojo8internal21InterfacePtrStateBase24InitializeEndpointClientEbbbSt10unique_ptrINS_15MessageReceiverESt14default_deleteIS3_EEPKcPFPFjvERNS_7MessageEEPFS8_SC_E
-   fun:ConfigureProxyIfNecessary
-   fun:instance
-   fun:Bind
-   fun:Bind
-   fun:Remote
-   fun:Remote
-   fun:_ZN13cert_verifier23CertNetFetcherURLLoader28AsyncCertNetFetcherURLLoaderC1EN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS2_15PendingReceiverIS6_EEEEE
-   fun:make_unique<cert_verifier::CertNetFetcherURLLoader::AsyncCertNetFetcherURLLoader, mojo::PendingRemote<network::mojom::URLLoaderFactory>, base::RepeatingCallback<void(mojo::PendingReceiver<network::mojom::URLLoaderFactory>)> >
-   fun:_ZN13cert_verifier23CertNetFetcherURLLoader33SetURLLoaderFactoryAndReconnectorEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEEN4base17RepeatingCallbackIFvNS1_15PendingReceiverIS5_EEEEE
-   fun:EnableNetworkAccess
-   fun:_ZN13cert_verifier8internal23CertVerifierServiceImpl19EnableNetworkAccessEN4mojo13PendingRemoteIN7network5mojom16URLLoaderFactoryEEENS3_INS_5mojom25URLLoaderFactoryConnectorEEE
-   fun:_ZN13cert_verifier5mojom31CertVerifierServiceStubDispatch6AcceptEPNS0_19CertVerifierServiceEPN4mojo7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient22HandleValidatedMessageEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo23InterfaceEndpointClient21HandleIncomingMessageEPNS_7MessageE
-   fun:_ZN4mojo8internal15MultiplexRouter22ProcessIncomingMessageEPNS1_14MessageWrapperENS1_18ClientCallBehaviorEPN4base19SequencedTaskRunnerE
-   fun:_ZN4mojo8internal15MultiplexRouter6AcceptEPNS_7MessageE
-   fun:_ZN4mojo17MessageDispatcher6AcceptEPNS_7MessageE
-   fun:_ZN4mojo9Connector15DispatchMessageENS_16ScopedHandleBaseINS_13MessageHandleEEE
-   fun:_ZN4mojo9Connector24ReadAllAvailableMessagesEv
-   fun:OnHandleReadyInternal
-   fun:_ZN4mojo9Connector20OnWatcherHandleReadyEPKcj
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher17DiscardReadyStateERKN4base17RepeatingCallbackIFvjEEEjRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4mojo13SimpleWatcher13OnHandleReadyEijRKNS_18HandleSignalsStateE
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:handleScheduledWork
-   fun:operator()
-   fun:__invoke_impl<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:__invoke_r<void, QtWebEngineCore::MessagePumpForUIQt::MessagePumpForUIQt()::<lambda()>&>
-   fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
-}
-{
-   qt-6.8.3-webengine-556-indirect-library-named
-   Memcheck:Leak
-   match-leak-kinds: indirect
-   fun:_Znwm
-   fun:MakeRefCounted<mojo::ScopedInterfaceEndpointHandle::State, unsigned int&, scoped_refptr<mojo::AssociatedGroupController> >
-   fun:_ZN4mojo29ScopedInterfaceEndpointHandleC1Ej13scoped_refptrINS_25AssociatedGroupControllerEE
-   fun:_ZN4mojo25AssociatedGroupController35CreateScopedInterfaceEndpointHandleEj
-   fun:_ZN4mojo8internal15MultiplexRouter25CreateLocalEndpointHandleEj
    fun:_ZN4mojo8internal16BindingStateBase12BindInternalEPNS0_20PendingReceiverStateE13scoped_refptrIN4base19SequencedTaskRunnerEEPKcSt10unique_ptrINS_15MessageReceiverESt14default_deleteISB_EEbNS5_4spanIKjLm18446744073709551615EPSG_EEPNS_34MessageReceiverWithResponderStatusEjPFPFjvERNS_7MessageEEPFS9_SO_E
    fun:Bind
    fun:Bind
@@ -22235,7 +22196,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-557-indirect-library-named
+   qt-6.8.3-webengine-556-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22274,7 +22235,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-558-indirect-library-named
+   qt-6.8.3-webengine-557-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22306,7 +22267,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-559-indirect-library-named
+   qt-6.8.3-webengine-558-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22333,7 +22294,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-560-indirect-library-named
+   qt-6.8.3-webengine-559-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22379,7 +22340,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-561-indirect-truncated-named
+   qt-6.8.3-webengine-560-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22432,7 +22393,7 @@
    fun:_ZL23postEventSourceDispatchP8_GSourcePFiPvES1_
 }
 {
-   qt-6.8.3-webengine-562-indirect-library-named
+   qt-6.8.3-webengine-561-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22480,7 +22441,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-563-indirect-library-named
+   qt-6.8.3-webengine-562-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22520,7 +22481,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-564-indirect-library-named
+   qt-6.8.3-webengine-563-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22560,7 +22521,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-565-indirect-library-named
+   qt-6.8.3-webengine-564-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22602,7 +22563,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-566-indirect-library-named
+   qt-6.8.3-webengine-565-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22646,7 +22607,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-567-indirect-library-named
+   qt-6.8.3-webengine-566-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22681,7 +22642,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-568-indirect-library-named
+   qt-6.8.3-webengine-567-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22717,7 +22678,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-569-indirect-library-named
+   qt-6.8.3-webengine-568-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22753,7 +22714,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-570-indirect-library-named
+   qt-6.8.3-webengine-569-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22796,7 +22757,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-571-indirect-library-named
+   qt-6.8.3-webengine-570-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22841,7 +22802,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-572-indirect-library-named
+   qt-6.8.3-webengine-571-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22878,7 +22839,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-573-indirect-library-named
+   qt-6.8.3-webengine-572-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -22915,7 +22876,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-574-definite-library-named
+   qt-6.8.3-webengine-573-definite-library-named
    Memcheck:Leak
    match-leak-kinds: definite
    fun:_Znwm
@@ -22956,7 +22917,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-575-indirect-library-named
+   qt-6.8.3-webengine-574-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -23002,7 +22963,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-576-indirect-library-named
+   qt-6.8.3-webengine-575-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -23045,7 +23006,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-577-indirect-library-named
+   qt-6.8.3-webengine-576-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -23088,7 +23049,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-578-indirect-library-named
+   qt-6.8.3-webengine-577-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -23129,7 +23090,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-579-indirect-library-named
+   qt-6.8.3-webengine-578-indirect-library-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:_Znwm
@@ -23171,7 +23132,7 @@
    fun:_ZNSt17_Function_handlerIFvvEZN15QtWebEngineCore18MessagePumpForUIQtC4EvEUlvE_E9_M_invokeERKSt9_Any_data
 }
 {
-   qt-6.8.3-webengine-580-indirect-truncated-named
+   qt-6.8.3-webengine-579-indirect-truncated-named
    Memcheck:Leak
    match-leak-kinds: indirect
    fun:calloc
@@ -23211,7 +23172,7 @@
    fun:_ZN21QWebEnginePagePrivateC1EP17QWebEngineProfile
 }
 {
-   qt-6.8.3-webengine-581-definite-truncated-named
+   qt-6.8.3-webengine-580-definite-truncated-named
    Memcheck:Leak
    match-leak-kinds: definite
    fun:malloc
@@ -23250,7 +23211,7 @@
    fun:_ZN15QtWebEngineCore18WebContentsAdapterC1Ev
 }
 {
-   qt-6.8.3-webengine-582-possible-library-named
+   qt-6.8.3-webengine-581-possible-library-named
    Memcheck:Leak
    match-leak-kinds: possible
    fun:_Znwm
@@ -23289,7 +23250,7 @@
    fun:_ZN14QWebEnginePageC1EP7QObject
 }
 {
-   qt-6.8.3-webengine-583-possible-library-named
+   qt-6.8.3-webengine-582-possible-library-named
    Memcheck:Leak
    match-leak-kinds: possible
    fun:_Znwm
@@ -23328,7 +23289,7 @@
    fun:_ZN14QWebEnginePageC1EP7QObject
 }
 {
-   qt-6.8.3-webengine-584-possible-library-named
+   qt-6.8.3-webengine-583-possible-library-named
    Memcheck:Leak
    match-leak-kinds: possible
    fun:_Znwm
@@ -23367,7 +23328,7 @@
    fun:_ZN14QWebEnginePageC1EP7QObject
 }
 {
-   qt-6.8.3-webengine-585-possible-library-named
+   qt-6.8.3-webengine-584-possible-library-named
    Memcheck:Leak
    match-leak-kinds: possible
    fun:_Znwm
@@ -23406,7 +23367,7 @@
    fun:_ZN14QWebEnginePageC1EP7QObject
 }
 {
-   qt-6.8.3-webengine-586-possible-library-named
+   qt-6.8.3-webengine-585-possible-library-named
    Memcheck:Leak
    match-leak-kinds: possible
    fun:_Znwm
@@ -23445,7 +23406,7 @@
    fun:_ZN14QWebEnginePageC1EP7QObject
 }
 {
-   qt-6.8.3-webengine-587-possible-truncated-named
+   qt-6.8.3-webengine-586-possible-truncated-named
    Memcheck:Leak
    match-leak-kinds: possible
    fun:calloc
@@ -23511,32 +23472,4 @@
    fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
    fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
    fun:_ZN4base16MessagePumpEpoll3RunEPNS_11MessagePump8DelegateE
-}
-{
-   qt-6.8.3-webengine-588-definite-library-named
-   Memcheck:Leak
-   match-leak-kinds: definite
-   fun:_Znwm
-   fun:MakeRefCounted<ipcz::Box, ipcz::DriverObject>
-   fun:Box
-   fun:_ZN4mojo4core11ipcz_driver10ObjectBase3BoxE13scoped_refptrIS2_E
-   fun:MakeBoxed<void (*&)(const MojoTrapEvent*)>
-   fun:MojoCreateTrapIpcz
-   fun:_ZN4mojo10CreateTrapEPFvPK13MojoTrapEventEPNS_16ScopedHandleBaseINS_10TrapHandleEEE
-   fun:make_unique<mojo::SimpleWatcher, base::Location, mojo::SimpleWatcher::ArmingPolicy, scoped_refptr<base::SequencedTaskRunner>&, char const*&>
-   fun:_ZN4mojo9Connector14WaitToReadMoreEv
-   fun:Run
-   fun:_ZN4base13TaskAnnotator11RunTaskImplERNS_11PendingTaskE
-   fun:RunTask<base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWorkImpl(base::LazyNow*)::<lambda(perfetto::EventContext&)> >
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl10DoWorkImplEPNS_7LazyNowE
-   fun:_ZN4base16sequence_manager8internal35ThreadControllerWithMessagePumpImpl6DoWorkEv
-   fun:_ZN15QtWebEngineCore16WebEngineContext13flushMessagesEv.part.0
-   fun:_ZN15QtWebEngineCore14ProfileAdapterD1Ev
-   fun:_ZN15QtWebEngineCore14ProfileAdapterD0Ev
-   fun:_ZN24QWebEngineProfilePrivateD1Ev
-   fun:~QWebEngineProfilePrivate
-   fun:cleanup
-   fun:~QScopedPointer
-   fun:_ZN17QWebEngineProfileD1Ev
-   fun:_ZN17QWebEngineProfileD0Ev
 }

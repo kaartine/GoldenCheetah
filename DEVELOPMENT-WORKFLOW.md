@@ -217,7 +217,9 @@ only when all of these hold (maintainer decision, 2026-09-24):
    Build-ID or cannot be found. The checked Build-IDs are recorded in the summary.
    A suppression file without a sidecar is refused too, except the allow-listed
    legacy `qt-6.8.3-gui-tls.supp`, which is recorded as `unpinned_legacy` with a
-   warning.
+   warning. It was only reproduced on Ubuntu 24.04 with Valgrind 3.22; pinning it
+   to other builds would claim a verification that has not been done, so it stays
+   unpinned until a control reproduces it in the pinned environment.
 3. The stanzas and their control evidence are reviewed by someone other than
    their author.
 4. The unsuppressed report of every run is kept, and the exception is re-verified
@@ -232,13 +234,29 @@ syscall-parameter record, `QWebEngineProfile` construction and destruction,
 16 bytes of a short key; whether that crosses the allocation depends on heap
 layout), connection records of widgets that are still alive at exit
 (`QAbstractSpinBox::setLineEdit`, `QComboBox::insertItem`, `QMenu::addMenu`) and
-thread-local storage of Qt threads still running at exit. Two chains under
-`QWebEngineProfile(const QString &)` (`newFallbackSurface`, `QOffscreenSurface`)
-match definitely **and** indirectly lost records: they are one lost structure,
-but which of its blocks Memcheck reports as the root varies between runs. For
-every gate and fixture run, `qt-6.8.3-webengine-control/check_widened.py` must
-confirm on the unsuppressed report that they match only single blocks of the
-sizes the controls produced. `.github/scripts/qt-6.8.3-webengine-appdir-glib.supp`
+thread-local storage of Qt threads still running at exit. Some full, named
+chains match definitely **and** indirectly lost records: the two GPU information
+surfaces created with the first `QWebEngineProfile` (`newFallbackSurface`,
+`QOffscreenSurface`), and the members of the two lost mojo/ipcz structures the
+WebEngine context leaves, once per process: the GPU process-host invitation pipe (3,240 bytes, its ipcz
+`Router` created with the WebEngine context) and the UKM recorder pipe (3,400
+bytes, its `Router` created on the in-process GPU thread), both completed with
+mojo blocks in `~ProfileAdapter`. Memcheck reports as definitely lost whichever
+block of an unreachable structure its scan reaches first, which depends on block
+addresses: the pure-Qt controls report the two Routers as roots, the QtTest
+fixtures also the SimpleWatcher or the MojoTrap (3,240) or the MultiplexRouter
+(3,400). A root outside the members (the UI gate has shown the MojoTrap trigger
+vector allocated by a task) is not suppressed and stays an open record. `qt-6.8.3-webengine-control/cycle_members.py` derives
+the members from the profile-only controls: full chains ending in the profile
+constructor (Router root) or in `~ProfileAdapter` (indirect blocks), present in
+every control run, and placed by Valgrind's `block_list` of the same controls
+under the root of the same structure in every run; the list, each member's
+structure and size, and the structures' other roots are in
+`ipcz-cycle-members.json`. For every gate and fixture run, `check_widened.py`
+must confirm on the unsuppressed report that these stanzas match only the
+controls' sizes (surfaces: single blocks of 40, 168, 248 or 320 bytes; members
+and the other roots: exactly their own structure's total as root, their own size
+as indirect block), each at most once. `.github/scripts/qt-6.8.3-webengine-appdir-glib.supp`
 holds the stanzas through the AppImage's bundled glib and is pinned to that glib
 build; use it only for the extracted-AppDir UI gate, never for fixtures that load
 the system glib.

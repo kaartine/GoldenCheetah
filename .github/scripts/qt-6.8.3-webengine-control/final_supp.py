@@ -31,11 +31,10 @@ from pathlib import Path
 GEN = Path(__file__).resolve().parent / "gen_supp.py"
 
 
-# Two full chains under QWebEngineProfile(const QString &) are one lost structure
-# in the controls and the gate, but whether Memcheck reports a block as its root
-# (definitely lost) or as reached from it (indirectly lost) varies between runs.
-# Only these stanzas match both kinds; never possible or reachable. check_widened.py
-# bounds their sizes and counts in every gate run.
+# Full named chains whose blocks belong to one lost structure, where whether
+# Memcheck reports a block as the root (definitely lost) or as reached from it
+# (indirectly lost) varies between runs. Only these stanzas match both kinds;
+# never possible or reachable. check_widened.py bounds their sizes and counts.
 GPU_INFO_TO_PROFILE = (
     "fun:_ZN19QRhiGles2InitParams18newFallbackSurfaceERK14QSurfaceFormat",
     "fun:_ZN15QtWebEngineCore7GPUInfoC1Ev", "fun:instance", "fun:instance", "fun:operator()",
@@ -49,6 +48,14 @@ WIDENED_CHAINS = {
     "offscreen-surface": ("fun:_Znwm", "fun:_ZN17QOffscreenSurfaceC1EP7QScreenP7QObject",
                           *GPU_INFO_TO_PROFILE),
 }
+# Two lost mojo/ipcz structures of the profile (the GPU process-host invitation
+# pipe, 3240 B, and the UKM recorder pipe, 3400 B), completed in ~ProfileAdapter:
+# Memcheck reports as a structure's root whichever of its blocks its scan reaches
+# first. Their members (cycle_members.py, placed by Valgrind's block lists of the
+# pure-Qt controls) are widened too, named by structure.
+CYCLE = json.loads((Path(__file__).resolve().parent / "ipcz-cycle-members.json").read_text())
+WIDENED_CHAINS.update({f"ipcz-{member['structure']}-{index:02d}": tuple(member["frames"])
+                       for index, member in enumerate(CYCLE["members"], 1)})
 
 
 def widen(body):
@@ -183,7 +190,11 @@ def main():
         return " ".join([next((l.split(":", 1)[1].strip() for l in body if l.startswith("match-leak-kinds:")),
                               body[0])] + [l for l in body if l.startswith(("fun:", "obj:"))][:4])
 
-    report = {"widened_chains": sorted(widened), "verification_records": len(records),
+    report = {"widened_chains": sorted(widened),
+              "ipcz_structure_members": [{"structure": m["structure"], "entry": m["entry"], "size": m["size"],
+                                          "first_frames": m["frames"][:3]} for m in CYCLE["members"]],
+              "ipcz_structures": CYCLE["structures"],
+              "verification_records": len(records),
               "rejected": [f"{cuts[b]} {summary(b)}" for b in rejected],
               "pruned": [f"{cuts[b]} {summary(b)}" for b in pruned], "open_records": len(open_records),
               "open": [list(x) for x in report_open],

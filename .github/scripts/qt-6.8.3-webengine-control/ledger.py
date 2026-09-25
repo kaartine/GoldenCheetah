@@ -57,7 +57,9 @@ def records(path):
 
 def stanzas(path):
     result = []
-    for block in re.findall(r"\{\n(.*?)\n\}", open(path).read(), re.S):
+    with open(path) as handle:
+        text = handle.read()
+    for block in re.findall(r"\{\n(.*?)\n\}", text, re.S):
         lines = [l.strip() for l in block.splitlines() if l.strip() and not l.strip().startswith("#")]
         name, skind = lines[0], lines[1]
         leak_kinds = None
@@ -68,6 +70,11 @@ def stanzas(path):
             elif line.startswith(("fun:", "obj:")) or line == "...":
                 frames.append(line)
         result.append({"name": name, "skind": skind, "leak_kinds": leak_kinds, "frames": frames})
+    return demangle(result)
+
+
+def demangle(result):
+    """Adds each stanza's frames with demangled function names ("demangled")."""
     # Reports without --gen-suppressions only carry demangled names: keep both forms.
     names = sorted({f[4:] for s in result for f in s["frames"] if f.startswith("fun:")})
     demangled = subprocess.run(["c++filt"], input="\n".join(names), capture_output=True,
