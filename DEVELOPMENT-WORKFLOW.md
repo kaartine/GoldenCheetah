@@ -112,9 +112,15 @@ and inherits `VALGRIND_LIB` for a locally extracted distribution package.
 For libraries stripped of debug information, optional `--debuginfo-path DIR`
 passes an existing directory to Valgrind's extra debug-symbol lookup. The UI
 equivalent is `GC_UI_MEMCHECK_DEBUGINFO_PATH=DIR`. Use symbols whose Build-IDs
-match the actual loaded binaries, with debuglink paths matching the runtime
-container layout. This only improves attribution: it changes neither failure
-criteria nor suppressions. The selected path is recorded in the run metadata;
+match the actual loaded binaries. Valgrind finds Qt's separate debug files by
+their `.gnu_debuglink` name at `DIR/<directory of the loaded object>/<name>`
+(Build-ID lookup only happens under `/usr/lib/debug`), so `DIR` must mirror every
+runtime directory the libraries are loaded from, e.g. the extracted AppDir's
+`lib/` at its path inside the container and `/opt/Qt/.../lib` for the QtTest
+fixtures. Otherwise frames silently stay unnamed; when suppressions are pinned,
+both runners therefore fail before launch if a pinned Qt library's debug file
+is not found that way. This only improves attribution: it changes neither
+failure criteria nor suppressions. The selected path is recorded in the run metadata;
 verify resolved function/source frames in the real report before claiming the
 symbols loaded successfully.
 Memcheck XML is parsed incrementally with a 256 MiB limit, including bytes
@@ -139,7 +145,12 @@ or GPU-performance test passed. The wrapper records passed and skipped coverage.
 `QT_IM_MODULE=compose` excludes the desktop ibus input-method integration from
 these rendering tests. It is an explicit coverage choice, not a fix for ibus.
 
-Both wrappers use `--smc-check=all` for generated/self-modifying code. Qt's
+Both wrappers use `--smc-check=all` for generated/self-modifying code and
+`--keep-debuginfo=yes`, so frames in libraries unloaded before the leak report
+(for example Mesa's `swrast_dri.so`, closed with the GL context) keep their
+object and symbol names instead of appearing as `???`. The UI runner records
+`GALLIUM_DRIVER` and `DRAW_USE_LLVM` with the other rendering settings but does
+not change the renderer. Qt's
 regexp JIT can also produce symbol-less conditional-jump reports; an explicit
 `QT_ENABLE_REGEXP_JIT=0` diagnostic run excludes that JIT backend, not regexp
 matching itself. The wrappers record this setting but never set it implicitly.
@@ -175,6 +186,78 @@ invalid accesses and definite/indirect leaks still fail. Report such a run as
 in Git; its path and actual matched names/counts are retained in the report.
 Re-run without it after changing Qt, libc or Valgrind. Do not add broad Qt,
 thread, Python or system-library suppression patterns.
+
+A library exception may also cover definite/indirect leaks and library-internal
+error records (invalid accesses, uninitialised values, syscall parameters), but
+only when all of these hold (maintainer decision, 2026-09-24):
+
+1. Every record class is reproduced by a minimal Qt control program that links no
+   GoldenCheetah code, under the same Memcheck flags and runtime.
+2. Each stanza is a full, version-pinned chain inside the libraries: it is cut at
+   the first frame of the program itself or, when the allocating or erroring
+   frame is library code and at least 7 further library frames precede the cut,
+   where the stack first enters a different Qt library or directly after
+   `QEventDispatcherGlib::processEvents` (above it is only the program's
+   event-loop driver). A chain that neither reaches the program nor ends at a
+   thread or process root was truncated by `--num-callers` and counts as a cut
+   inside the libraries. It contains no GoldenCheetah or test frame and uses no
+   broad wildcards. A stanza cut inside the libraries whose frames are only
+   unnamed objects (apart from allocators and generic event delivery) may match
+   only indirectly lost blocks, whose definitely lost root is still reported;
+   stanzas for definite or possible leaks need a named frame that identifies the
+   path, or the control's full chain up to the program. Error records (invalid
+   accesses, uninitialised values, syscall parameters) are only excepted with the
+   control's full chain.
+   Stanza names state the record kind, the cut (`program`, `complete`,
+   `dispatcher`, `library` or `truncated`) and whether they are named. Library objects may be written as
+   `obj:*/<soname>*` only because the exact builds are pinned: a sidecar
+   `<file>.supp.buildids` maps each contributing soname (Qt plugins included) to
+   its GNU Build-ID, and both runners refuse to apply the file (the run fails
+   before launch) if the library the runtime would load has a different
+   Build-ID or cannot be found. The checked Build-IDs are recorded in the summary.
+   A suppression file without a sidecar is refused too, except the allow-listed
+   legacy `qt-6.8.3-gui-tls.supp`, which is recorded as `unpinned_legacy` with a
+   warning.
+3. The stanzas and their control evidence are reviewed by someone other than
+   their author.
+4. The unsuppressed report of every run is kept, and the exception is re-verified
+   with its controls after changing Qt, libc, any pinned library or Valgrind.
+
+`.github/scripts/qt-6.8.3-webengine.supp` is such an exception for Qt 6.8.3:
+global WebEngine context initialisation (including the first fontconfig
+population and WebEngineCore uninitialised-value records), the xcb `writev`
+syscall-parameter record, `QWebEngineProfile` construction and destruction,
+`QWebEngineView::setHtml` followed by deletion (including Qt's post-routines at
+`~QApplication`), the QCss parser's invalid read (Qt's AES `qHash` reads up to
+16 bytes of a short key; whether that crosses the allocation depends on heap
+layout), connection records of widgets that are still alive at exit
+(`QAbstractSpinBox::setLineEdit`, `QComboBox::insertItem`, `QMenu::addMenu`) and
+thread-local storage of Qt threads still running at exit. Two chains under
+`QWebEngineProfile(const QString &)` (`newFallbackSurface`, `QOffscreenSurface`)
+match definitely **and** indirectly lost records: they are one lost structure,
+but which of its blocks Memcheck reports as the root varies between runs. For
+every gate and fixture run, `qt-6.8.3-webengine-control/check_widened.py` must
+confirm on the unsuppressed report that they match only single blocks of the
+sizes the controls produced. `.github/scripts/qt-6.8.3-webengine-appdir-glib.supp`
+holds the stanzas through the AppImage's bundled glib and is pinned to that glib
+build; use it only for the extracted-AppDir UI gate, never for fixtures that load
+the system glib.
+
+The stanzas were generated with `--gen-suppressions=all` from pure-Qt controls,
+offscreen and on xcb in the gate environment; the control program, stanza
+generator and regeneration procedure are in
+`.github/scripts/qt-6.8.3-webengine-control/`. `final_supp.py` classifies and
+rejects stanzas first and then keeps a stanza only if it matches a record of the
+**unsuppressed** gate and fixture reports offline, or Valgrind credited it in a
+run with the candidate files. Never prune by Valgrind's suppression counts alone:
+Valgrind credits only the first matching stanza, so a broad stanza hides the
+specific ones it shadows. Pass the files with
+`--suppressions` to the QtTest runner or, for the UI gate,
+`GC_UI_MEMCHECK_SUPPRESSIONS=<file>` (an `os.pathsep`-separated list). Report
+such a run as **passed with a reviewed Qt exception**, with the matched
+suppression names and counts. After changing Qt, libc, any pinned library or
+Valgrind, both runners refuse the files; regenerate them from the controls, run
+the gate and fixtures with and without them, and have the result reviewed again.
 
 ### Packaged application memory checks
 
